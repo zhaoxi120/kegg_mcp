@@ -30,7 +30,7 @@ jobs:
           version: "0.11.28"
 
       - name: Synchronize locked environment
-        run: uv sync --frozen --no-python-downloads
+        run: uv sync --frozen
 
       - name: Lint
         run: uv run --frozen ruff check .
