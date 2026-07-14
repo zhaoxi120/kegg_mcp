@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible defect in a supported project workflow.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets, licensed KEGG payloads, model weights, or private biological data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the observed behavior and why it is incorrect.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide a small synthetic example and the exact commands used.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Version or revision
+      placeholder: Package version, Git tag, or commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system and Python version. Redact usernames and local paths.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data-safety confirmation
+      options:
+        - label: I used synthetic or redistributable input and removed secrets and private data.
+          required: true

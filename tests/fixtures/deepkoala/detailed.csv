@@ -1,0 +1,7 @@
+name,predict_label,probability,threshold,annotate,start,end,note
+protein-1,K00001,0.49,0.50,*,1,100,marker wins
+protein-2,K00002,0.50,0.50,,2,50,threshold equality
+protein-3,K00003,0.51,0.50,,3,40,above threshold
+protein-4,K00004,0.49,0.50,,4,60,below threshold
+protein-5,,0.10,0.50,,,,missing prediction
+protein-6,BAD,0.99,0.50,*,,,invalid prediction

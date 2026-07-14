@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kegg-mcp"
+version = "0.1.0"
+description = "Local-first MCP server for KEGG-aware analysis of KO annotations"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = "MIT"
+keywords = ["bioinformatics", "KEGG", "KO", "MCP"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "mcp>=1.27,<2",
+    "pydantic>=2.12,<3",
+]
+
+[project.urls]
+Repository = "https://github.com/zhaoxi120/kegg_mcp"
+Issues = "https://github.com/zhaoxi120/kegg_mcp/issues"
+Changelog = "https://github.com/zhaoxi120/kegg_mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+kegg-mcp = "kegg_mcp.mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411,<2",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.15.21,<0.16",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+venv = ".venv"
+venvPath = "."
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers", "-ra"]
+testpaths = ["tests"]
