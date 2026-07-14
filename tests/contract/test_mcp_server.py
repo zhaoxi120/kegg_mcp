@@ -1,0 +1,865 @@
+"""MCP 1.x discovery, execution, error, and resource contracts."""
+
+from __future__ import annotations
+
+import base64
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft202012Validator
+from mcp import types
+from mcp.shared.exceptions import McpError
+from mcp.shared.memory import create_connected_server_and_client_session
+from pydantic import AnyUrl
+
+from kegg_mcp.kegg import (
+    CachePolicy,
+    GetRequest,
+    GetResult,
+    KeggClient,
+    KeggClientConfig,
+    KeggEntryRef,
+    KeggGetDatabase,
+    KeggRequestOptions,
+    LinkRequest,
+    LinkResult,
+    ResponseOrigin,
+    RetrievalEndpointClass,
+)
+from kegg_mcp.kegg.cache import SQLiteKeggCache
+from kegg_mcp.kegg.contracts import (
+    PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    AccessMode,
+    CacheLookupState,
+    KeggBatchProvenance,
+    KeggOperation,
+    KeggPairRow,
+)
+from kegg_mcp.kegg.operations import prepare_get
+from kegg_mcp.kegg.parsers import parse_flat_file_response
+from kegg_mcp.mcp.server import MAX_INLINE_RESOURCE_BYTES, TOOL_NAMES, McpRuntime, create_server
+from kegg_mcp.services import ResultArtifactInput, ResultStoreLimits, SQLiteResultStore
+
+_NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+
+
+def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
+    return KeggBatchProvenance(
+        operation=operation,
+        request_key_sha256=marker * 64,
+        access_mode=AccessMode.PUBLIC_ACADEMIC,
+        retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        origin=ResponseOrigin.NETWORK,
+        cache_lookup_state=CacheLookupState.MISS,
+        retrieved_at=_NOW,
+        served_at=_NOW,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        response_sha256=marker * 64,
+        response_bytes=256,
+        parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
+        parser_version=PARSER_VERSION,
+        database_release="synthetic-contract-release",
+        attempt_count=1,
+        is_stale=False,
+    )
+
+
+class _FakeReferenceClient:
+    def __init__(self) -> None:
+        self._config = KeggClientConfig()
+
+    @property
+    def config(self) -> KeggClientConfig:
+        return self._config
+
+    def get(
+        self,
+        request: GetRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> GetResult:
+        del options
+        first = request.entries[0]
+        if first.database is KeggGetDatabase.MODULE:
+            body = (
+                b"ENTRY       M00001            Module\n"
+                b"NAME        Synthetic module\n"
+                b"DEFINITION  K00001 K00002\n"
+                b"///\n"
+            )
+            marker = "1"
+        elif first.database is KeggGetDatabase.PATHWAY:
+            body = (
+                b"ENTRY       ko00010                    Pathway\n"
+                b"NAME        Synthetic pathway\n"
+                b"CLASS       Metabolism; Carbohydrate metabolism\n"
+                b"///\n"
+            )
+            marker = "2"
+        else:
+            entries = b"".join(
+                (
+                    f"ENTRY       {entry.identifier}            KO\n"
+                    f"NAME        Synthetic {entry.identifier}\n"
+                    + "".join(
+                        f"F{index:03d}        Synthetic field {index}\n" for index in range(70)
+                    )
+                    + "///\n"
+                ).encode("ascii")
+                for entry in request.entries
+            )
+            body = entries
+            marker = "4"
+        return GetResult(
+            request=request,
+            documents=(parse_flat_file_response(body),),
+            missing_entries=(),
+            batches=(_provenance(KeggOperation.GET, marker),),
+        )
+
+    def link(
+        self,
+        request: LinkRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> LinkResult:
+        del options
+        if request.relationship.value == "pathway_to_ko":
+            source = request.source_identifiers[0]
+            rows = (
+                KeggPairRow(line_number=1, source_id=f"path:{source}", target_id="ko:K00001"),
+                KeggPairRow(line_number=2, source_id=f"path:{source}", target_id="ko:K00003"),
+            )
+        else:
+            rows = tuple(
+                KeggPairRow(
+                    line_number=index,
+                    source_id=f"ko:{ko_id}",
+                    target_id=f"path:ko{index:05d}",
+                )
+                for index, ko_id in enumerate(request.source_identifiers, start=1)
+            )
+        return LinkResult(
+            request=request,
+            rows=rows,
+            batches=(_provenance(KeggOperation.LINK, "3"),),
+        )
+
+
+def _runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRuntime:
+    return McpRuntime(
+        client=KeggClient(KeggClientConfig(cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")))),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id=scope_id,
+    )
+
+
+def _fake_runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRuntime:
+    return McpRuntime(
+        client=_FakeReferenceClient(),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id=scope_id,
+    )
+
+
+def _tool_by_name(tools: list[types.Tool], name: str) -> types.Tool:
+    return next(tool for tool in tools if tool.name == name)
+
+
+def _validate_result(tool: types.Tool, result: types.CallToolResult) -> None:
+    assert result.structuredContent is not None
+    assert tool.outputSchema is not None
+    Draft202012Validator(tool.outputSchema).validate(  # pyright: ignore[reportUnknownMemberType]
+        result.structuredContent
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: Path) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        assert tuple(tool.name for tool in tools) == TOOL_NAMES
+        for tool in tools:
+            assert tool.title
+            assert tool.description
+            assert tool.inputSchema.get("additionalProperties") is False
+            assert tool.outputSchema is not None
+            assert tool.annotations is not None
+            assert tool.annotations.destructiveHint is False
+        status = _tool_by_name(tools, "get_server_status")
+        assert status.annotations is not None
+        assert status.annotations.readOnlyHint is True
+        assert status.annotations.idempotentHint is True
+        assert status.annotations.openWorldHint is False
+        for name in (
+            "analyze_ko_annotations",
+            "get_kegg_entries",
+            "map_ko_ids",
+            "analyze_modules",
+            "analyze_pathways",
+            "compare_ko_sets",
+        ):
+            annotations = _tool_by_name(tools, name).annotations
+            assert annotations is not None
+            assert annotations.readOnlyHint is False
+            assert annotations.openWorldHint is True
+
+        normalize_schema = _tool_by_name(tools, "normalize_ko_annotations").inputSchema
+        normalize_defs = normalize_schema["$defs"]
+        import_properties = normalize_defs["ImportLimits"]["properties"]
+        assert {
+            name: import_properties[name]["maximum"]
+            for name in (
+                "max_bytes",
+                "max_rows",
+                "max_columns",
+                "max_field_length",
+            )
+        } == {
+            "max_bytes": 5_000_000,
+            "max_rows": 100_000,
+            "max_columns": 64,
+            "max_field_length": 16_384,
+        }
+        evidence_value_schema = normalize_defs["EvidenceField"]["properties"]["value"]
+        evidence_string_schema = next(
+            alternative
+            for alternative in evidence_value_schema["anyOf"]
+            if alternative.get("type") == "string"
+        )
+        assert evidence_string_schema["maxLength"] == 16_384
+        mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
+        assert mapping_schema["properties"]["preview_limit"]["maximum"] == 200
+        entries_output_schema = _tool_by_name(tools, "get_kegg_entries").outputSchema
+        assert entries_output_schema is not None
+        assert (
+            entries_output_schema["$defs"]["KeggBatchProvenance"]["properties"]["http_metadata"][
+                "maxItems"
+            ]
+            == 16
+        )
+
+        module_schema = _tool_by_name(tools, "analyze_modules").inputSchema
+        module_defs = module_schema["$defs"]
+        assert (
+            module_defs["ReferenceLoadingLimits"]["properties"]["max_total_kegg_requests"][
+                "maximum"
+            ]
+            == 100
+        )
+        assert (
+            module_defs["ModuleParseLimits"]["properties"]["max_definition_bytes"]["maximum"]
+            == 65_536
+        )
+
+        pathway_schema = _tool_by_name(tools, "analyze_pathways").inputSchema
+        assert (
+            pathway_schema["$defs"]["PathwayCoverageLimits"]["properties"]["max_reference_kos"][
+                "maximum"
+            ]
+            == 100_000
+        )
+        comparison_schema = _tool_by_name(tools, "compare_ko_sets").inputSchema
+        comparison_defs = comparison_schema["$defs"]
+        assert (
+            comparison_defs["ComparisonPreviewLimits"]["properties"]["max_ko_ids"]["maximum"] == 100
+        )
+        assert (
+            comparison_defs["ComparisonLimits"]["properties"]["max_total_records"]["maximum"]
+            == 500_000
+        )
+        assert (
+            comparison_defs["FunctionalComparisonLimits"]["properties"]["max_modules"]["maximum"]
+            == 100
+        )
+
+        entries_output_defs = entries_output_schema["$defs"]
+        assert (
+            entries_output_defs["KeggEntryPreview"]["properties"]["field_names"]["maxItems"] == 64
+        )
+        entries_result_properties = entries_output_defs["KeggEntriesServiceResult"]["properties"]
+        assert entries_result_properties["missing_identifiers"]["maxItems"] == 50
+        assert entries_result_properties["previews"]["maxItems"] == 50
+        assert entries_result_properties["provenance"]["maxItems"] == 5
+
+        normalize_output = _tool_by_name(tools, "normalize_ko_annotations").outputSchema
+        assert normalize_output is not None
+        normalize_output_defs = normalize_output["$defs"]
+        status_counts_schema = normalize_output_defs["ImportSummary"]["properties"]["status_counts"]
+        assert status_counts_schema["minItems"] == 5
+        assert status_counts_schema["maxItems"] == 5
+        error_properties = normalize_output_defs["ErrorDetail"]["properties"]
+        assert error_properties["safe_details"]["maxItems"] == 32
+
+        module_output = _tool_by_name(tools, "analyze_modules").outputSchema
+        assert module_output is not None
+        primitive_properties = module_output["$defs"]["PrimitiveAnalysisResult"]["properties"]
+        assert primitive_properties["module_previews"]["maxItems"] == 25
+        assert primitive_properties["pathway_previews"]["maxItems"] == 25
+        assert primitive_properties["caveats"]["maxItems"] == 3
+        assert primitive_properties["reference_provenance"]["maxItems"] == 100
+
+        mapping_output = _tool_by_name(tools, "map_ko_ids").outputSchema
+        assert mapping_output is not None
+        mapping_properties = mapping_output["$defs"]["KoMappingServiceResult"]["properties"]
+        assert mapping_properties["row_preview"]["maxItems"] == 200
+        assert mapping_properties["provenance"]["maxItems"] == 10
+
+        comparison_output = _tool_by_name(tools, "compare_ko_sets").outputSchema
+        assert comparison_output is not None
+        comparison_output_defs = comparison_output["$defs"]
+        assert comparison_output_defs["KoPreview"]["properties"]["ko_ids"]["maxItems"] == 100
+        class_properties = comparison_output_defs["KoClassComparisonSummary"]["properties"]
+        assert class_properties["set_specific"]["maxItems"] == 10
+        assert class_properties["partially_shared_patterns_preview"]["maxItems"] == 256
+        membership_properties = comparison_output_defs["KoMembershipPatternPreview"]["properties"]
+        assert membership_properties["member_set_indexes"]["maxItems"] == 10
+        assert membership_properties["member_labels"]["maxItems"] == 10
+        assert membership_properties["member_labels"]["items"]["maxLength"] == 128
+
+        status_output = _tool_by_name(tools, "get_server_status").outputSchema
+        assert status_output is not None
+        status_properties = status_output["$defs"]["ServerStatusResult"]["properties"]
+        assert status_properties["supported_input_formats"]["maxItems"] == 4
+        assert status_properties["supported_tools"]["maxItems"] == 8
+
+        resources = (await session.list_resources()).resources
+        assert {str(resource.uri) for resource in resources} == {
+            "ko-analysis://status",
+            "ko-analysis://cache/info",
+        }
+        templates = (await session.list_resource_templates()).resourceTemplates
+        assert {template.uriTemplate for template in templates} == {
+            "ko-analysis://results/{result_id}",
+            "ko-analysis://results/{result_id}/{section}",
+            "ko-analysis://results/{result_id}/{section}/{offset}/{limit}",
+            "kegg-cache://entries/{database}/{identifier}",
+        }
+
+
+@pytest.mark.asyncio
+async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path: Path) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        status = await session.call_tool("get_server_status", {})
+        _validate_result(_tool_by_name(tools, "get_server_status"), status)
+        assert status.isError is False
+        assert status.structuredContent is not None
+        status_data = status.structuredContent["result"]["data"]
+        assert status_data["transport"] == "stdio"
+        assert status_data["access_mode"] == "offline_cache"
+        assert status_data["connectivity"] == "not_probed"
+        assert status_data["inspection_status"] == "not_probed"
+        assert status_data["entry_count"] is None
+        assert status_data["stored_payload_bytes"] is None
+        assert status_data["newest_entry_age_seconds"] is None
+        serialized_status = json.dumps(status.structuredContent)
+        assert "/" not in status_data.get("cache_location", "")
+        assert "rest.kegg.jp" not in serialized_status
+        assert "KEGG_MCP_" not in serialized_status
+
+        normalized = await session.call_tool(
+            "normalize_ko_annotations",
+            {"text": "K00844\nko:K01810\ninvalid"},
+        )
+        _validate_result(_tool_by_name(tools, "normalize_ko_annotations"), normalized)
+        assert normalized.isError is False
+        assert normalized.structuredContent is not None
+        data = normalized.structuredContent["result"]["data"]
+        assert data["import_summary"]["input_rows"] == 3
+        assert data["import_summary"]["emitted_records"] == 3
+        assert data["result"]["result_id"].startswith("res_")
+        uri = normalized.structuredContent["result"]["resource_uri"]
+        assert uri == f"ko-analysis://results/{data['result']['result_id']}"
+
+        index = await session.read_resource(AnyUrl(uri))
+        index_content = index.contents[0]
+        assert isinstance(index_content, types.TextResourceContents)
+        index_data = json.loads(index_content.text)
+        assert index_data["artifacts"][0]["section"] == "dataset"
+        dataset_resource = await session.read_resource(AnyUrl(index_data["section_uris"][0]))
+        dataset_content = dataset_resource.contents[0]
+        assert isinstance(dataset_content, types.TextResourceContents)
+        assert (
+            json.loads(dataset_content.text)["dataset_id"] == data["import_summary"]["dataset_id"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path: Path) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        invalid = await session.call_tool(
+            "normalize_ko_annotations",
+            {"text": "K00844", "unexpected": True},
+        )
+        _validate_result(_tool_by_name(tools, "normalize_ko_annotations"), invalid)
+        assert invalid.isError is True
+        assert invalid.structuredContent is not None
+        assert invalid.structuredContent["ok"] is False
+        assert invalid.structuredContent["error"]["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+
+        offline_miss = await session.call_tool(
+            "get_kegg_entries",
+            {"entries": [{"database": "ko", "identifier": "K00844"}]},
+        )
+        _validate_result(_tool_by_name(tools, "get_kegg_entries"), offline_miss)
+        assert offline_miss.isError is True
+        assert offline_miss.structuredContent is not None
+        assert offline_miss.structuredContent["error"]["code"] == "OFFLINE_CACHE_MISS"
+
+        metadata_value = "x" * 16_384
+        bounded_metadata = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844",
+                "source": {
+                    "source_name": "manual",
+                    "source_metadata": [{"name": "note", "value": metadata_value}],
+                },
+            },
+        )
+        _validate_result(_tool_by_name(tools, "normalize_ko_annotations"), bounded_metadata)
+        assert bounded_metadata.isError is False
+        assert bounded_metadata.structuredContent is not None
+        assert metadata_value not in json.dumps(bounded_metadata.structuredContent)
+        metadata_uri = bounded_metadata.structuredContent["result"]["resource_uri"]
+        metadata_index = await session.read_resource(AnyUrl(metadata_uri))
+        metadata_index_content = metadata_index.contents[0]
+        assert isinstance(metadata_index_content, types.TextResourceContents)
+        metadata_index_data = json.loads(metadata_index_content.text)
+        metadata_dataset = await session.read_resource(
+            AnyUrl(metadata_index_data["section_uris"][0])
+        )
+        metadata_dataset_content = metadata_dataset.contents[0]
+        assert isinstance(metadata_dataset_content, types.TextResourceContents)
+        assert metadata_value in metadata_dataset_content.text
+        retained_id = bounded_metadata.structuredContent["result"]["data"]["result"]["result_id"]
+        compared = await session.call_tool(
+            "compare_ko_sets",
+            {
+                "inputs": [
+                    {"label": "retained", "source": {"result_id": retained_id}},
+                    {"label": "inline", "source": {"ko_text": "K01810"}},
+                ]
+            },
+        )
+        _validate_result(_tool_by_name(tools, "compare_ko_sets"), compared)
+        assert compared.isError is False
+        assert compared.structuredContent is not None
+        assert metadata_value not in json.dumps(compared.structuredContent)
+        comparison_uri = compared.structuredContent["result"]["resource_uri"]
+        comparison_index = await session.read_resource(AnyUrl(comparison_uri))
+        comparison_index_content = comparison_index.contents[0]
+        assert isinstance(comparison_index_content, types.TextResourceContents)
+        comparison_detail_uri = json.loads(comparison_index_content.text)["section_uris"][0]
+        comparison_detail = await session.read_resource(AnyUrl(comparison_detail_uri))
+        comparison_detail_content = comparison_detail.contents[0]
+        assert isinstance(comparison_detail_content, types.TextResourceContents)
+        assert metadata_value in comparison_detail_content.text
+        oversized_metadata = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844",
+                "source": {
+                    "source_name": "manual",
+                    "source_metadata": [{"name": "note", "value": "x" * 16_385}],
+                },
+            },
+        )
+        assert oversized_metadata.isError is True
+        assert oversized_metadata.structuredContent is not None
+        assert oversized_metadata.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+
+        relaxed_limits = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844",
+                "import_limits": {
+                    "max_bytes": 5_000_000,
+                    "max_rows": 100_001,
+                    "max_columns": 64,
+                    "max_field_length": 16_384,
+                },
+            },
+        )
+        assert relaxed_limits.isError is True
+
+        relaxed_network_budget = await session.call_tool(
+            "analyze_modules",
+            {
+                "source": {"ko_text": "K00844"},
+                "module_ids": ["M00001"],
+                "reference_limits": {"max_total_kegg_requests": 101},
+            },
+        )
+        assert relaxed_network_budget.isError is True
+
+
+@pytest.mark.asyncio
+async def test_high_level_schema_accepts_table_input_and_rejects_organism_context(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "text": "sequence,ko\nseq-1,K00844",
+                    "input_format": "generic_csv",
+                    "column_mapping": {"sequence_id": "sequence", "ko_id": "ko"},
+                    "decision_policy": "user_supplied_ko_v1",
+                },
+                "module_ids": ["M00001"],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
+        assert result.isError is True
+        assert result.structuredContent is not None
+        assert result.structuredContent["error"]["code"] == "OFFLINE_CACHE_MISS"
+
+        conflicting_context = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {"text": "K00844"},
+                "analysis_unit": "metagenomic_community",
+                "module_ids": ["M00001"],
+            },
+        )
+        assert conflicting_context.isError is True
+        assert conflicting_context.structuredContent is not None
+        assert conflicting_context.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+
+        ignored_preview = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {"text": "K00844", "preview_limit": 1},
+                "module_ids": ["M00001"],
+            },
+        )
+        assert ignored_preview.isError is True
+        assert ignored_preview.structuredContent is not None
+        assert ignored_preview.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+
+        organism = await session.call_tool(
+            "analyze_pathways",
+            {
+                "source": {"ko_text": "K00844"},
+                "pathways": [{"pathway_id": "hsa00010", "reference_namespace": "organism"}],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_pathways"), organism)
+        assert organism.isError is True
+        assert organism.structuredContent is not None
+        assert organism.structuredContent["error"]["code"] == ("ANALYSIS_CONFIGURATION_INVALID")
+
+
+@pytest.mark.asyncio
+async def test_fake_reference_client_exercises_all_live_dependent_success_outputs(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_fake_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        high_level = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "text": "sequence,ko\nseq-1,K00001\nseq-2,K00002",
+                    "input_format": "generic_csv",
+                    "column_mapping": {"sequence_id": "sequence", "ko_id": "ko"},
+                    "decision_policy": "user_supplied_ko_v1",
+                },
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010", "reference_namespace": "ko"}],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), high_level)
+        assert high_level.isError is False
+        assert high_level.structuredContent is not None
+        high_data = high_level.structuredContent["result"]["data"]
+        assert tuple(item["section"] for item in high_data["artifacts"]) == (
+            "structured",
+            "summary",
+            "annotations",
+        )
+        assert high_data["import_summary"]["input_rows"] == 2
+        assert high_data["execution"]["service_name"] == "kegg_mcp_annotation_analysis"
+        assert len(high_data["reference_provenance"]) == 3
+
+        entries = await session.call_tool(
+            "get_kegg_entries",
+            {"entries": [{"database": "ko", "identifier": "K00001"}]},
+        )
+        _validate_result(_tool_by_name(tools, "get_kegg_entries"), entries)
+        assert entries.isError is False
+        assert entries.structuredContent is not None
+        entries_data = entries.structuredContent["result"]["data"]
+        assert entries_data["returned_count"] == 1
+        assert len(entries_data["previews"][0]["field_names"]) == 64
+        assert entries_data["previews"][0]["field_names_truncated"] is True
+
+        mapping = await session.call_tool(
+            "map_ko_ids",
+            {"ko_ids": ["K00001"], "target": "pathway"},
+        )
+        _validate_result(_tool_by_name(tools, "map_ko_ids"), mapping)
+        assert mapping.isError is False
+
+        modules = await session.call_tool(
+            "analyze_modules",
+            {"source": {"ko_text": "K00001\nK00002"}, "module_ids": ["M00001"]},
+        )
+        _validate_result(_tool_by_name(tools, "analyze_modules"), modules)
+        assert modules.isError is False
+        assert modules.structuredContent is not None
+        assert (
+            modules.structuredContent["result"]["data"]["module_previews"][0]["strict_is_complete"]
+            is True
+        )
+
+        pathways = await session.call_tool(
+            "analyze_pathways",
+            {
+                "source": {"ko_text": "K00001"},
+                "pathways": [{"pathway_id": "ko00010", "reference_namespace": "ko"}],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_pathways"), pathways)
+        assert pathways.isError is False
+        assert pathways.structuredContent is not None
+        assert (
+            pathways.structuredContent["result"]["data"]["pathway_previews"][0]["coverage_ratio"]
+            == 0.5
+        )
+
+
+@pytest.mark.asyncio
+async def test_functional_compare_uses_shared_references_and_bounded_differences(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_fake_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        compared = await session.call_tool(
+            "compare_ko_sets",
+            {
+                "inputs": [
+                    {
+                        "label": "complete-module",
+                        "source": {"ko_text": "K00001\nK00002"},
+                    },
+                    {
+                        "label": "complete-pathway",
+                        "source": {"ko_text": "K00001\nK00003"},
+                    },
+                ],
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010", "reference_namespace": "ko"}],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "compare_ko_sets"), compared)
+        assert compared.isError is False
+        assert compared.structuredContent is not None
+        functional = compared.structuredContent["result"]["data"]["functional_summary"]
+        assert functional["module_target_count"] == 1
+        assert functional["strict_module_differences"] == ["M00001"]
+        assert functional["pathway_target_count"] == 1
+        assert functional["strict_pathway_differences"] == ["ko00010"]
+
+
+@pytest.mark.asyncio
+async def test_compare_supports_reusable_dataset_and_bounded_functional_summary(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        first = await session.call_tool("normalize_ko_annotations", {"text": "K00844\nK01810"})
+        assert first.structuredContent is not None
+        retained_id = first.structuredContent["result"]["data"]["result"]["result_id"]
+        ignored_context = await session.call_tool(
+            "analyze_modules",
+            {
+                "source": {
+                    "result_id": retained_id,
+                    "analysis_unit": "metagenomic_community",
+                },
+                "module_ids": ["M00001"],
+            },
+        )
+        assert ignored_context.isError is True
+        assert ignored_context.structuredContent is not None
+        assert ignored_context.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+        compared = await session.call_tool(
+            "compare_ko_sets",
+            {
+                "inputs": [
+                    {"label": "retained", "source": {"result_id": retained_id}},
+                    {"label": "inline", "source": {"ko_text": "K00844\nK01623"}},
+                ]
+            },
+        )
+        _validate_result(_tool_by_name(tools, "compare_ko_sets"), compared)
+        assert compared.isError is False
+        assert compared.structuredContent is not None
+        summary = compared.structuredContent["result"]["data"]["functional_summary"]
+        assert summary == {
+            "module_target_count": 0,
+            "strict_module_differences": [],
+            "lenient_module_differences": [],
+            "pathway_target_count": 0,
+            "strict_pathway_differences": [],
+            "lenient_pathway_differences": [],
+        }
+
+
+@pytest.mark.asyncio
+async def test_large_resource_requires_ranges_and_reconstructs_exact_bytes(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    payload = bytes(range(256)) * 700
+    metadata = runtime.result_store.create(
+        runtime.scope_id,
+        (
+            ResultArtifactInput(
+                section="large",
+                mime_type="application/octet-stream",
+                content=payload,
+            ),
+        ),
+    )
+    server = create_server(runtime)
+    async with create_connected_server_and_client_session(server) as session:
+        direct = await session.read_resource(
+            AnyUrl(f"ko-analysis://results/{metadata.result_id}/large")
+        )
+        content = direct.contents[0]
+        assert isinstance(content, types.TextResourceContents)
+        notice = json.loads(content.text)
+        assert notice["kind"] == "artifact_requires_pagination"
+        assert notice["maximum_range_bytes"] == MAX_INLINE_RESOURCE_BYTES
+
+        reconstructed = bytearray()
+        next_uri: str | None = notice["next_uri"]
+        while next_uri is not None:
+            page_result = await session.read_resource(AnyUrl(next_uri))
+            page_content = page_result.contents[0]
+            assert isinstance(page_content, types.TextResourceContents)
+            page = json.loads(page_content.text)
+            reconstructed.extend(base64.b64decode(page["content_base64"], validate=True))
+            next_uri = page["next_uri"]
+        assert bytes(reconstructed) == payload
+
+
+@pytest.mark.asyncio
+async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result_quota(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    config = KeggClientConfig(cache=CachePolicy(path=str(cache_path)))
+    request = GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),))
+    prepared = prepare_get(request, config.limits)[0]
+    SQLiteKeggCache(cache_path).write(
+        KeggOperation.GET,
+        prepared.normalized_request_key,
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=(b"ENTRY       K00001            KO\nNAME        Cached synthetic entry\n///\n"),
+        retrieved_at=_NOW,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        parser_version=PARSER_VERSION,
+        database_release="cached-contract-release",
+    )
+    runtime = McpRuntime(
+        client=KeggClient(config),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="cache-contract-scope",
+    )
+    server = create_server(runtime)
+    async with create_connected_server_and_client_session(server) as session:
+        assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
+        resource = await session.read_resource(AnyUrl("kegg-cache://entries/ko/K00001"))
+        content = resource.contents[0]
+        assert isinstance(content, types.TextResourceContents)
+        value = json.loads(content.text)
+        assert value["returned_count"] == 1
+        assert value["provenance"][0]["origin"] == "cache"
+        assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
+
+        cache_info = await session.read_resource(AnyUrl("ko-analysis://cache/info"))
+        info_content = cache_info.contents[0]
+        assert isinstance(info_content, types.TextResourceContents)
+        info = json.loads(info_content.text)
+        assert info["cache_endpoint_class"] == "public_academic"
+        serialized = json.dumps(info)
+        assert str(cache_path) not in serialized
+        assert PUBLIC_KEGG_ENDPOINT_FINGERPRINT not in serialized
+
+
+@pytest.mark.asyncio
+async def test_resource_validation_scoping_and_protocol_errors(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    metadata = runtime.result_store.create(
+        "other-scope",
+        (ResultArtifactInput(section="detail", mime_type="text/plain", content=b"private"),),
+    )
+    server = create_server(runtime)
+    async with create_connected_server_and_client_session(server) as session:
+        with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
+            await session.read_resource(AnyUrl(f"ko-analysis://results/{metadata.result_id}"))
+        invalid_uris = (
+            "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail%2Fpart",
+            "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail?offset=0",
+            (
+                "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail/"
+                "999999999999999999999999/1"
+            ),
+            "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail/0/99999",
+        )
+        for uri in invalid_uris:
+            with pytest.raises(McpError, match="INVALID_RESOURCE_URI"):
+                await session.read_resource(AnyUrl(uri))
+        with pytest.raises(McpError, match="Unknown MCP tool name"):
+            await session.call_tool("not_a_tool", {})
+
+
+@pytest.mark.asyncio
+async def test_expired_resource_is_not_found_without_leaking_store_details(tmp_path: Path) -> None:
+    store_path = tmp_path / "private-results.sqlite3"
+    store = SQLiteResultStore(store_path, limits=ResultStoreLimits(retention_seconds=1))
+    expired = store.create(
+        "contract-scope",
+        (ResultArtifactInput(section="detail", mime_type="text/plain", content=b"expired"),),
+        now=datetime(2000, 1, 1, tzinfo=UTC),
+    )
+    runtime = McpRuntime(
+        client=KeggClient(KeggClientConfig(cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")))),
+        result_store=store,
+        scope_id="contract-scope",
+    )
+    server = create_server(runtime)
+
+    async with create_connected_server_and_client_session(server) as session:
+        with pytest.raises(McpError, match="RESULT_NOT_FOUND") as error:
+            await session.read_resource(AnyUrl(f"ko-analysis://results/{expired.result_id}/detail"))
+
+    serialized = str(error.value)
+    assert str(store_path) not in serialized
+    assert "expired" not in serialized

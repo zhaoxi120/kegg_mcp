@@ -1,0 +1,251 @@
+"""Immutable contracts for deterministic in-memory report artifacts."""
+
+from __future__ import annotations
+
+import hashlib
+from enum import StrEnum
+from typing import Annotated, Literal, Self
+
+from pydantic import ConfigDict, Field, field_validator, model_validator
+
+from kegg_mcp.analysis.comparison import KoSetComparisonSummary
+from kegg_mcp.analysis.contracts import PairedModuleEvaluation
+from kegg_mcp.analysis.functional_comparison import (
+    ModuleComparisonResult,
+    PathwayComparisonResult,
+)
+from kegg_mcp.analysis.pathway_coverage import PathwayCoverageResult
+from kegg_mcp.domain.annotations import (
+    JSON_SCHEMA_DIALECT,
+    AnnotationDataset,
+    FrozenModel,
+    validate_utf8_text,
+)
+from kegg_mcp.execution import AnalysisExecutionProvenance
+
+REPORT_FORMAT_NAME = "kegg_mcp_analysis_report"
+REPORT_FORMAT_VERSION = "2"
+REPORT_RENDERER_NAME = "kegg_mcp_reporting"
+REPORT_RENDERER_VERSION = "1"
+
+Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
+
+
+class ReportSection(StrEnum):
+    """Stable logical names for the three MVP report artifacts."""
+
+    STRUCTURED = "structured"
+    SUMMARY = "summary"
+    ANNOTATIONS = "annotations"
+
+
+class ReportLimits(FrozenModel):
+    """Serializable hard bounds and Markdown preview limits for one render."""
+
+    max_input_rows: int = Field(default=100_000, strict=True, gt=0, le=10_000_000)
+    max_annotation_records: int = Field(
+        default=100_000,
+        strict=True,
+        ge=0,
+        le=10_000_000,
+    )
+    max_source_entries: int = Field(default=10_000, strict=True, gt=0, le=1_000_000)
+    max_module_targets: int = Field(default=1_000, strict=True, ge=0, le=100_000)
+    max_pathway_targets: int = Field(default=1_000, strict=True, ge=0, le=100_000)
+    max_total_targets: int = Field(default=2_000, strict=True, ge=0, le=200_000)
+    max_warning_entries: int = Field(default=10_000, strict=True, ge=0, le=1_000_000)
+    max_structured_json_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        strict=True,
+        gt=0,
+        le=512 * 1024 * 1024,
+    )
+    max_markdown_bytes: int = Field(
+        default=64 * 1024,
+        strict=True,
+        ge=1_024,
+        le=16 * 1024 * 1024,
+    )
+    max_annotation_csv_bytes: int = Field(
+        default=128 * 1024 * 1024,
+        strict=True,
+        gt=0,
+        le=1024 * 1024 * 1024,
+    )
+    max_markdown_sources: int = Field(default=10, strict=True, ge=0, le=10_000)
+    max_markdown_module_targets: int = Field(default=25, strict=True, ge=0, le=10_000)
+    max_markdown_pathway_targets: int = Field(default=25, strict=True, ge=0, le=10_000)
+    max_markdown_comparison_targets: int = Field(
+        default=25,
+        strict=True,
+        ge=0,
+        le=10_000,
+    )
+    max_markdown_warnings: int = Field(default=20, strict=True, ge=0, le=10_000)
+
+
+class ReportInput(FrozenModel):
+    """One dataset and optional bounded M4 analyses supplied in caller order."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        allow_inf_nan=False,
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "$id": "urn:kegg-mcp:schema:report-input:2",
+            "$schema": JSON_SCHEMA_DIALECT,
+        },
+    )
+
+    dataset: AnnotationDataset
+    execution: AnalysisExecutionProvenance | None = None
+    module_evaluations: tuple[PairedModuleEvaluation, ...] = ()
+    pathway_coverages: tuple[PathwayCoverageResult, ...] = ()
+    ko_comparison: KoSetComparisonSummary | None = None
+    module_comparison: ModuleComparisonResult | None = None
+    pathway_comparison: PathwayComparisonResult | None = None
+
+    @model_validator(mode="after")
+    def validate_primary_dataset_analyses(self) -> Self:
+        module_ids = tuple(item.strict.module_id for item in self.module_evaluations)
+        if len(module_ids) != len(set(module_ids)):
+            raise ValueError("module_evaluations must contain unique MODULE targets")
+        pathway_keys = tuple(
+            (item.pathway_id, item.evidence_mode) for item in self.pathway_coverages
+        )
+        if len(pathway_keys) != len(set(pathway_keys)):
+            raise ValueError(
+                "pathway_coverages must contain unique pathway and evidence-mode targets"
+            )
+        if any(
+            item.strict.dataset_id != self.dataset.dataset_id for item in self.module_evaluations
+        ):
+            raise ValueError("module evaluations must identify the primary report dataset")
+        if any(item.dataset_id != self.dataset.dataset_id for item in self.pathway_coverages):
+            raise ValueError("pathway coverage results must identify the primary report dataset")
+        return self
+
+
+class StructuredReport(FrozenModel):
+    """Canonical complete storage payload before JSON encoding."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        allow_inf_nan=False,
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "$id": "urn:kegg-mcp:schema:structured-report:2",
+            "$schema": JSON_SCHEMA_DIALECT,
+        },
+    )
+
+    format_name: Literal["kegg_mcp_analysis_report"] = REPORT_FORMAT_NAME
+    format_version: Literal["2"] = REPORT_FORMAT_VERSION
+    renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
+    renderer_version: Literal["1"] = REPORT_RENDERER_VERSION
+    limits: ReportLimits
+    report: ReportInput
+
+
+class ReportArtifact(FrozenModel):
+    """One content-addressed UTF-8 report artifact held entirely in memory."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        allow_inf_nan=False,
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "$id": "urn:kegg-mcp:schema:report-artifact:1",
+            "$schema": JSON_SCHEMA_DIALECT,
+        },
+    )
+
+    section: ReportSection
+    mime_type: Literal["application/json", "text/markdown", "text/csv"]
+    utf8_byte_size: NonNegativeCount
+    sha256: Sha256
+    content: str
+    truncated: bool
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        return validate_utf8_text(value, field_name="report artifact content")
+
+    @model_validator(mode="after")
+    def validate_content_metadata(self) -> Self:
+        expected_mime_types = {
+            ReportSection.STRUCTURED: "application/json",
+            ReportSection.SUMMARY: "text/markdown",
+            ReportSection.ANNOTATIONS: "text/csv",
+        }
+        if self.mime_type != expected_mime_types[self.section]:
+            raise ValueError("artifact MIME type is incompatible with its logical section")
+        encoded = self.content.encode("utf-8")
+        if self.utf8_byte_size != len(encoded):
+            raise ValueError("utf8_byte_size must equal the encoded content length")
+        if self.sha256 != hashlib.sha256(encoded).hexdigest():
+            raise ValueError("sha256 must identify the exact UTF-8 artifact content")
+        if self.section is not ReportSection.SUMMARY and self.truncated:
+            raise ValueError("complete structured and annotation artifacts cannot be truncated")
+        return self
+
+
+class RenderedReport(FrozenModel):
+    """Complete deterministic artifact bundle returned by the pure renderer."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        allow_inf_nan=False,
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "$id": "urn:kegg-mcp:schema:rendered-report:1",
+            "$schema": JSON_SCHEMA_DIALECT,
+        },
+    )
+
+    renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
+    renderer_version: Literal["1"] = REPORT_RENDERER_VERSION
+    limits: ReportLimits
+    artifacts: Annotated[tuple[ReportArtifact, ...], Field(min_length=3, max_length=3)]
+
+    @model_validator(mode="after")
+    def validate_bundle(self) -> Self:
+        if tuple(item.section for item in self.artifacts) != tuple(ReportSection):
+            raise ValueError("artifacts must use canonical structured, summary, annotation order")
+        size_limits = {
+            ReportSection.STRUCTURED: self.limits.max_structured_json_bytes,
+            ReportSection.SUMMARY: self.limits.max_markdown_bytes,
+            ReportSection.ANNOTATIONS: self.limits.max_annotation_csv_bytes,
+        }
+        if any(item.utf8_byte_size > size_limits[item.section] for item in self.artifacts):
+            raise ValueError("artifact content exceeds its serialized report limit")
+        return self
+
+
+__all__ = [
+    "REPORT_FORMAT_NAME",
+    "REPORT_FORMAT_VERSION",
+    "REPORT_RENDERER_NAME",
+    "REPORT_RENDERER_VERSION",
+    "AnalysisExecutionProvenance",
+    "RenderedReport",
+    "ReportArtifact",
+    "ReportInput",
+    "ReportLimits",
+    "ReportSection",
+    "StructuredReport",
+]

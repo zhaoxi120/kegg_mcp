@@ -1,0 +1,53 @@
+# Python environments and bytecode
+.venv/
+__pycache__/
+*.py[cod]
+
+# Build and package artifacts
+build/
+dist/
+*.egg-info/
+
+# Test, type-checker, and linter state
+.coverage
+.pytest_cache/
+.ruff_cache/
+.pyright/
+htmlcov/
+
+# Local application state and biological data
+.kegg-cache/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+results/
+
+# Local configuration, logs, models, profiles, and large biological inputs
+.env
+.env.*
+*.env
+*.log
+*.bin
+*.ckpt
+*.h3f
+*.h3i
+*.h3m
+*.h3p
+*.hmm
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.faa
+*.fasta
+*.fna
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/

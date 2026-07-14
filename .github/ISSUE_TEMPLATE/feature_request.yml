@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose one focused capability or public contract change.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the bioinformatics workflow or user decision this request should support.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe inputs, outputs, failure behavior, and the affected architectural layer.
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Primary layer
+      options:
+        - Domain or schema
+        - Importer
+        - KEGG client or cache
+        - Analysis
+        - Service or result store
+        - Reporting
+        - MCP transport or contract
+        - Codex Skill
+        - Documentation or tooling
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Scientific and external-system considerations
+      description: Identify provenance, uncertainty, KEGG rights, rate limits, or interpretation risks.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This request focuses on one layer or one explicit integration contract.
+          required: true
+        - label: This request does not require redistributing KEGG data, KOfam profiles, or model weights.
+          required: true
