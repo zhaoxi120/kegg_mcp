@@ -6,7 +6,7 @@ from kegg_mcp.kegg import (
     KeggClientConfig,
     KeggEntryRef,
     KeggGetDatabase,
-    OfflineCacheAccess,
+    PublicAcademicAccess,
 )
 
 
@@ -15,5 +15,5 @@ def test_public_client_contracts_are_importable_from_kegg_package() -> None:
     request = GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),))
 
     assert KeggClient
-    assert isinstance(config.access, OfflineCacheAccess)
+    assert isinstance(config.access, PublicAcademicAccess)
     assert request.entries[0].identifier == "K00001"

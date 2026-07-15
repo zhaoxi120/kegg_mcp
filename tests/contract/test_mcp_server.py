@@ -27,6 +27,7 @@ from kegg_mcp.kegg import (
     LinkResult,
     ResponseOrigin,
     RetrievalEndpointClass,
+    RetryPolicy,
 )
 from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
@@ -40,6 +41,7 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.kegg.operations import prepare_get
 from kegg_mcp.kegg.parsers import parse_flat_file_response
+from kegg_mcp.kegg.transport import TransportError, TransportErrorKind, TransportResponse
 from kegg_mcp.mcp.server import (
     MAX_INLINE_RESOURCE_BYTES,
     TOOL_NAMES,
@@ -154,6 +156,18 @@ class _FakeReferenceClient:
         )
 
 
+class _UnavailableTransport:
+    def request(
+        self,
+        url: str,
+        *,
+        timeout_seconds: float,
+        max_response_bytes: int,
+    ) -> TransportResponse:
+        del url, timeout_seconds, max_response_bytes
+        raise TransportError(TransportErrorKind.CONNECTION, transient=False)
+
+
 def _runtime(
     tmp_path: Path,
     *,
@@ -161,7 +175,13 @@ def _runtime(
     allowed_roots: tuple[str, ...] = (),
 ) -> McpRuntime:
     return McpRuntime(
-        client=KeggClient(KeggClientConfig(cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")))),
+        client=KeggClient(
+            KeggClientConfig(
+                cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")),
+                retry=RetryPolicy(max_retries=0),
+            ),
+            transport=_UnavailableTransport(),
+        ),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id=scope_id,
         allowed_roots=allowed_roots,
@@ -325,7 +345,8 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert status.structuredContent is not None
         status_data = status.structuredContent["result"]["data"]
         assert status_data["transport"] == "stdio"
-        assert status_data["access_mode"] == "offline_cache"
+        assert status_data["access_mode"] == "public_academic"
+        assert status_data["network_enabled"] is True
         assert status_data["file_handoff_enabled"] is False
         assert status_data["allowed_root_count"] == 0
         assert status_data["connectivity"] == "not_probed"
@@ -342,7 +363,7 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         _validate_result(_tool_by_name(tools, "probe_kegg_connectivity"), probe)
         assert probe.isError is False
         assert probe.structuredContent is not None
-        assert probe.structuredContent["result"]["data"]["state"] == "disabled"
+        assert probe.structuredContent["result"]["data"]["state"] == "connection_failure"
 
         normalized = await session.call_tool(
             "normalize_ko_annotations",
@@ -392,14 +413,14 @@ async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path:
         assert invalid_details["stage"] == "input_validation"
         assert invalid_details["field_path"] == "unexpected"
 
-        offline_miss = await session.call_tool(
+        request_failure = await session.call_tool(
             "get_kegg_entries",
             {"entries": [{"database": "ko", "identifier": "K00844"}]},
         )
-        _validate_result(_tool_by_name(tools, "get_kegg_entries"), offline_miss)
-        assert offline_miss.isError is True
-        assert offline_miss.structuredContent is not None
-        assert offline_miss.structuredContent["error"]["code"] == "OFFLINE_CACHE_MISS"
+        _validate_result(_tool_by_name(tools, "get_kegg_entries"), request_failure)
+        assert request_failure.isError is True
+        assert request_failure.structuredContent is not None
+        assert request_failure.structuredContent["error"]["code"] == "KEGG_REQUEST_FAILED"
 
         metadata_value = "x" * 16_384
         bounded_metadata = await session.call_tool(
@@ -513,7 +534,7 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
         _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
         assert result.isError is True
         assert result.structuredContent is not None
-        assert result.structuredContent["error"]["code"] == "OFFLINE_CACHE_MISS"
+        assert result.structuredContent["error"]["code"] == "KEGG_REQUEST_FAILED"
 
         conflicting_context = await session.call_tool(
             "analyze_ko_annotations",

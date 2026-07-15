@@ -59,7 +59,7 @@ def _retrieval(
     cached = origin is ResponseOrigin.CACHE
     return KeggBatchProvenance(
         operation=operation,
-        access_mode=AccessMode.OFFLINE_CACHE if cached else AccessMode.PUBLIC_ACADEMIC,
+        access_mode=AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
         endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=origin,

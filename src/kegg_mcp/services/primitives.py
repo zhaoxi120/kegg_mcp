@@ -75,10 +75,8 @@ from kegg_mcp.kegg import (
     KeggInfoDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
-    LicensedAccess,
     LinkRequest,
     LinkResult,
-    OfflineCacheAccess,
     PublicAcademicAccess,
     RetrievalEndpointClass,
 )
@@ -578,7 +576,6 @@ class ServerStatusResult(FrozenModel):
 class ConnectivityState(StrEnum):
     """Operator-facing result of one explicit low-cost KEGG preflight."""
 
-    DISABLED = "disabled"
     REACHABLE = "reachable"
     DNS_FAILURE = "dns_failure"
     CONNECTION_FAILURE = "connection_failure"
@@ -979,19 +976,12 @@ def read_cached_kegg_entry(
     *,
     client: KeggPrimitiveClient,
 ) -> CachedKeggEntryServiceResult:
-    """Read one GET entry through an offline-only view of the configured cache namespace."""
-    access = client.config.access
-    if isinstance(access, PublicAcademicAccess):
-        offline_access = OfflineCacheAccess()
-    elif isinstance(access, LicensedAccess):
-        offline_access = OfflineCacheAccess(
-            retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
-            endpoint_label=access.endpoint_label,
-        )
-    else:
-        offline_access = access
-    offline_client = KeggClient(client.config.model_copy(update={"access": offline_access}))
-    fetched = offline_client.get(request, options=KeggRequestOptions(allow_stale=True))
+    """Read one GET entry from the configured cache without network fallback."""
+    cache_client = KeggClient(client.config)
+    fetched = cache_client.get(
+        request,
+        options=KeggRequestOptions(refresh=False, allow_stale=True, cache_only=True),
+    )
     previews = _entry_previews(fetched, request)
     return CachedKeggEntryServiceResult(
         requested_count=len(request.entries),
@@ -1249,19 +1239,15 @@ def get_server_status_service(
     """Return redacted configuration facts without probing or revealing paths."""
     access = client.config.access
     cache_endpoint_class = (
-        access.retrieval_endpoint_class
-        if isinstance(access, OfflineCacheAccess)
-        else (
-            RetrievalEndpointClass.PUBLIC_ACADEMIC
-            if isinstance(access, PublicAcademicAccess)
-            else RetrievalEndpointClass.LICENSED
-        )
+        RetrievalEndpointClass.PUBLIC_ACADEMIC
+        if isinstance(access, PublicAcademicAccess)
+        else RetrievalEndpointClass.LICENSED
     )
     return ServerStatusResult(
         server_version=server_version,
         access_mode=access.mode,
         cache_endpoint_class=cache_endpoint_class,
-        network_enabled=access.mode is not AccessMode.OFFLINE_CACHE,
+        network_enabled=True,
         academic_use_confirmed=access.mode is AccessMode.PUBLIC_ACADEMIC,
         licensed_use_confirmed=cache_endpoint_class is RetrievalEndpointClass.LICENSED,
         file_handoff_enabled=allowed_root_count > 0,
@@ -1281,22 +1267,10 @@ def probe_kegg_connectivity_service(
     checked_now = (now or datetime.now(UTC)).astimezone(UTC)
     access = client.config.access
     endpoint_class = (
-        access.retrieval_endpoint_class
-        if isinstance(access, OfflineCacheAccess)
-        else (
-            RetrievalEndpointClass.PUBLIC_ACADEMIC
-            if isinstance(access, PublicAcademicAccess)
-            else RetrievalEndpointClass.LICENSED
-        )
+        RetrievalEndpointClass.PUBLIC_ACADEMIC
+        if isinstance(access, PublicAcademicAccess)
+        else RetrievalEndpointClass.LICENSED
     )
-    if isinstance(access, OfflineCacheAccess):
-        return ConnectivityProbeResult(
-            state=ConnectivityState.DISABLED,
-            access_mode=access.mode,
-            endpoint_class=endpoint_class,
-            probed_at=checked_now,
-            suggested_action="Configure authorized live KEGG access to enable connectivity.",
-        )
     try:
         result = client.info(
             InfoRequest(database=KeggInfoDatabase.KEGG),

@@ -109,7 +109,7 @@ class Transport(Protocol):
 
 
 class UrlOpener(Protocol):
-    """Narrow opener interface used to isolate HTTP in offline unit tests."""
+    """Narrow opener interface used to isolate HTTP in unit tests."""
 
     def open(
         self,

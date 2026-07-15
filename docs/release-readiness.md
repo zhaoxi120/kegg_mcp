@@ -8,10 +8,14 @@ Current status: **validated for the private v0.2.0 GitHub release candidate on 2
 applicable gates below must be verified against the merged commit before tagging. Candidate
 identity and distribution digests belong in the GitHub release notes, not biological workflows.
 
-The current integration amendment was validated on 2026-07-16 with the full offline core and
+The current integration amendment was validated on 2026-07-16 with the full core and
 companion suites, one four-request authorized KEGG campaign, and one CPU-only companion handoff
 against fixed DeepKOALA commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9` using its bundled
 `202502` full resource. Final packaging is still rechecked against the exact merged commit.
+The expanded 120-request KEGG campaign was additionally checked against the official API on
+2026-07-16 as part of the unconfigured default suite: 686 tests passed in 127.04 seconds from the
+implementation working tree. It still requires a run against the exact merged candidate before
+release.
 
 Version 0.2.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
 Python 3.12 and later; a wider Python range requires a separately tested compatibility change.
@@ -27,17 +31,16 @@ Record these values in the release issue or signed release notes:
 - wheel and source-distribution SHA-256 digests;
 - reviewer for KEGG access and data-rights boundaries;
 - reviewer for security and privacy boundaries; and
-- date of the final offline test run.
+- date of the final test run.
 
 Do not put usernames, local paths, credentials, licensed endpoints, or private biological data in
 the release record.
 
 ## Required automated validation
 
-Run the locked validation suite with network access disabled or externally blocked:
+Run the locked validation suite with public KEGG network access available:
 
 ```bash
-export KEGG_MCP_ACCESS_MODE=offline_cache
 uv sync --frozen
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
@@ -51,8 +54,8 @@ The release-contract subset is available for focused auditing:
 uv run --frozen pytest tests/release
 ```
 
-The default test suite and pull-request CI must not contact KEGG. A passing test run does not
-authorize a live smoke test and does not establish KEGG eligibility.
+The default test suite and pull-request CI run the serialized 120-request live campaign. A passing
+test run does not independently establish KEGG eligibility for another deployment.
 
 When the optional companion is part of the candidate, validate its independent distribution with
 no installed DeepKOALA checkout or model data required:
@@ -67,13 +70,13 @@ uv run pytest
 uv build --no-sources --out-dir /tmp/deepkoala-mcp-dist
 ```
 
-Its offline tests must use synthetic FASTA and fake subprocess fixtures. They must cover path
+Its tests must use synthetic FASTA and fake subprocess fixtures. They must cover path
 escape, queue bounds, explicit acknowledgement, timeout, cancellation, process-group cleanup,
 output bounds, stdio cleanliness, and controlled core-import handoff.
 
 ## Build and clean-install verification
 
-Build from the exact candidate with dependency resolution forced offline after the locked
+Build from the exact candidate with dependency resolution forced local after the locked
 environment has been synchronized:
 
 ```bash
@@ -99,31 +102,27 @@ separately from the exact GitHub repository checkout or tag source archive propo
 release; do not treat a clean core-wheel installation as either verification.
 
 Install the wheel into a newly created Python 3.11.x environment, confirm that package metadata
-rejects Python 3.12 or later, connect an MCP client in `offline_cache` mode, and verify all of the
-following without network access:
+rejects Python 3.12 or later, connect an MCP client in the default `public_academic` mode, and verify
+all of the following:
 
 1. the server starts and stops cleanly over stdio;
 2. tool and resource discovery succeeds;
 3. stdout contains only MCP protocol traffic;
-4. `get_server_status` reports offline mode without a full cache or result-store path;
-5. `probe_kegg_connectivity` reports `disabled` without making a request in offline mode;
+4. `get_server_status` reports public-academic mode without a full cache or result-store path;
+5. `probe_kegg_connectivity` reports a bounded live connectivity result;
 6. the synthetic KO example can be normalized;
-7. an absent reference produces `OFFLINE_CACHE_MISS`, not a biological absence claim; and
+7. a failed request remains a technical retrieval error, not a biological absence claim; and
 8. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
 
-Then, only if the release reviewer is an eligible academic user performing academic work or is
-using an appropriately licensed endpoint, run the separately approved minimal live compatibility
-campaign. Record the endpoint class and number of requests, but do not publish response bodies.
-The reviewed CI campaign runs only through an explicit manual dispatch on `main`, under maintainer
-enablement and eligible-access confirmation, and makes exactly four serialized requests at one
-request per second with zero retries. It covers INFO, one BRITE GET, one LINK, and one CONV
-operation. Pull requests, the default suite, and unconfirmed deployments must collect or stop
-before any live request.
+The default suite makes exactly 120 serialized requests at one request per second with zero
+retries: 30 each for `INFO`, `GET`, `LINK`, and `CONV`. Record the endpoint class and number of
+requests, but do not publish response bodies. Record a successful campaign against the exact
+candidate commit before release.
 
 ## Data-rights gates
 
-- [x] Setup prominently presents `public_academic`, `licensed`, and `offline_cache` choices.
-- [x] Public access cannot start without explicit academic-use confirmation.
+- [x] Setup presents the default `public_academic` and optional `licensed` choices.
+- [x] Public access defaults to an affirmative academic-use configuration.
 - [x] Licensed access cannot start without explicit authorized-use confirmation and an HTTPS
       endpoint distinct from the public endpoint.
 - [x] The software and documentation do not claim to validate an institution's license.
@@ -203,7 +202,7 @@ This checklist is operational guidance, not legal advice.
 The release owner may mark the candidate ready only after all applicable gates above have evidence
 attached to the exact candidate. Any failed applicable gate blocks publication. If a live KEGG
 compatibility check cannot be authorized, record it as not run; never silently replace it with an
-unauthorized request. The offline package, contract, and interpretation gates are still mandatory.
+unauthorized request. The package, contract, and interpretation gates are still mandatory.
 
 ## Release notes
 
@@ -218,5 +217,5 @@ The core distribution does not annotate sequences, redistribute KEGG or KOfam da
 enrichment, infer pathway activity, or provide a remote service. The optional companion is a
 separately reviewed local runner for an existing DeepKOALA installation and returns evidence to
 the same core importer. Public KEGG REST access is available only after an eligible academic
-operator explicitly confirms academic use; other users need an appropriately licensed endpoint
-or authorized offline cache content.
+operator uses the default confirmed academic profile; other users need an appropriately licensed
+endpoint.

@@ -29,8 +29,7 @@ codex mcp add kegg-mcp \
 codex mcp list
 ```
 
-For internal iteration, replace those two live-access variables with
-`KEGG_MCP_ACCESS_MODE=offline_cache` and do not set an academic confirmation.
+Those two variables may be omitted because they match the project defaults.
 
 ### The executable is missing or the client cannot start it
 
@@ -54,10 +53,9 @@ environment values or private paths.
 
 ### Configuration is invalid
 
-Run `kegg-mcp doctor --json`. Select exactly one documented access mode:
+Run `kegg-mcp doctor --json`. Select one documented access mode:
 
-- `offline_cache` requires no live-use confirmation;
-- `public_academic` requires `KEGG_MCP_ACADEMIC_USE_CONFIRMED=true`; or
+- `public_academic` is the default and treats academic use as confirmed; or
 - `licensed` requires an authorized HTTPS endpoint and
   `KEGG_MCP_LICENSED_USE_CONFIRMED=true`.
 
@@ -84,16 +82,11 @@ beneath an allowed root for stable cross-process handoff.
 
 ## KEGG access failures
 
-### `OFFLINE_CACHE_MISS`
+### `CACHE_ENTRY_NOT_FOUND`
 
-The selected local cache namespace does not contain the required authorized response. This is a
-technical data-availability state, not evidence that a KO, MODULE, pathway, or function is absent.
-Use authorized cached content or enable an eligible live mode at deployment.
-
-### `KEGG_USAGE_NOT_CONFIGURED`
-
-The operation needs live retrieval but the deployment is offline. Confirm access rights before
-changing modes. The MIT source-code license does not grant rights to KEGG content.
+An explicit cache-resource read has no matching cached response. This is a technical
+data-availability state, not evidence that a KO, MODULE, pathway, or function is absent. Fetch the
+entry through an ordinary network-enabled operation.
 
 ### DNS, connection, authorization, or rate-limit failures
 

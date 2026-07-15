@@ -2,7 +2,7 @@
 
 Status: approved as a development baseline after the corrections recorded below.
 Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
-implemented and verified with offline tests. Version 0.2.0 supports Python 3.11.x only.
+implemented and verified. Version 0.2.0 supports Python 3.11.x only.
 Last reviewed: 2026-07-16.
 
 ## Version 0.2 workflow-remediation amendment
@@ -27,9 +27,8 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
   pathway rendering remains an independent MCP and Skill.
 - The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
   and can write a concise versioned output bundle beneath configured allowed roots.
-- Default tests and pull-request CI remain offline. A separately enabled, manually dispatched
-  main-only job may run one serialized four-request campaign after explicit eligible-access
-  confirmation and must not upload KEGG payloads.
+- Default tests and pull-request CI run one serialized 120-request live KEGG campaign and must not
+  upload KEGG payloads.
 
 ## Table of contents
 
@@ -58,7 +57,7 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
 
 ## 1. Executive decision
 
-The original proposal has a sound product boundary and a sensible local-first architecture. It should proceed as one repository containing a reusable Python core, a stdio MCP server, a repository-scoped Codex Skill, tests, and user documentation.
+The original proposal has a sound product boundary and a sensible local-stdio architecture. It should proceed as one repository containing a reusable Python core, a stdio MCP server, a repository-scoped Codex Skill, tests, and user documentation.
 
 It was not ready to serve as an implementation specification without revision. The largest gaps were not cosmetic: they affected KEGG usage rights, rate limiting, module semantics, pathway denominators, multiple KO assignments per sequence, DeepKOALA decision mapping, large MCP results, and duplication between the Skill and the core library.
 
@@ -184,7 +183,7 @@ normalization.
 - JSON-compatible structured results and Markdown summaries.
 - stdio MCP transport.
 - One repository-scoped Codex Skill with workflow and interpretation references.
-- Local cache and offline reuse of previously retrieved entries.
+- Local cache and explicit cache-only reuse of previously retrieved entries.
 
 ### 5.2 Explicitly outside the MVP
 
@@ -383,7 +382,7 @@ AnalysisProvenance
   evidence_mode
   input_dataset_ids
   input_paths
-  kegg_endpoint_class       public_academic | licensed | offline_cache
+  kegg_endpoint_class       public_academic | licensed
   kegg_retrieved_at
   kegg_release_by_database  value or unknown
   cache_state
@@ -396,11 +395,10 @@ AnalysisProvenance
 
 The public `rest.kegg.jp` service is available only for academic use by academic users. Non-academic users must configure a licensed service or must use only data they are authorized to use. The software must show this constraint during setup and in the user documentation.
 
-Before enabling live access, configuration must record one of:
+Configuration records one of:
 
-- `public_academic`: the operator confirms eligible academic use;
-- `licensed`: the operator supplies an authorized endpoint/configuration; or
-- `offline_cache`: live access disabled.
+- `public_academic`: the default, with academic use confirmed;
+- `licensed`: the operator supplies an authorized endpoint/configuration.
 
 This is not legal advice and the project must not claim to validate an organization's license.
 
@@ -415,7 +413,7 @@ This is not legal advice and the project must not claim to validate an organizat
 - Bounded identifier count for `link`, `conv`, and service-level operations.
 - Stable User-Agent containing project version and a documentation URL, not personal information.
 - Structured parsing of tab-delimited, flat-file, and `info` responses.
-- Offline mode that never attempts a network connection.
+- Explicit cache-only reads that never attempt a network connection.
 - Response-size limits and bounded cache metadata.
 
 ### 8.3 Supported MVP operations
@@ -667,7 +665,7 @@ Compare stored or inline datasets using compatible policy and KEGG provenance.
 
 #### `get_server_status`
 
-Return server version, transport, supported formats, tool capabilities, offline/live state, redacted cache status, KEGG eligibility configuration, and connectivity. Do not reveal secrets or full local paths.
+Return server version, transport, supported formats, tool capabilities, access state, redacted cache status, KEGG eligibility configuration, and connectivity. Do not reveal secrets or full local paths.
 
 ### 12.4 Resources and result lifecycle
 
@@ -921,13 +919,12 @@ AMBIGUOUS_COLUMN_MAPPING
 MISSING_REQUIRED_COLUMN
 UNSUPPORTED_INPUT_FORMAT
 INPUT_LIMIT_EXCEEDED
-KEGG_USAGE_NOT_CONFIGURED
 KEGG_REQUEST_FAILED
 KEGG_RATE_LIMITED
 KEGG_ENTRY_NOT_FOUND
 KEGG_PARSE_FAILED
 CACHE_FAILED
-OFFLINE_CACHE_MISS
+CACHE_ENTRY_NOT_FOUND
 MODULE_DEFINITION_INVALID
 MODULE_REFERENCE_CYCLE
 MODULE_NOT_EVALUABLE
@@ -978,7 +975,7 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 - Duplicate and conflict handling.
 - KEGG flat-file, tabular, and `info` parsing.
 - Request batching and process-wide rate limiting.
-- Cache freshness, stale offline use, and corruption.
+- Cache freshness, explicitly allowed stale cache-only use, and corruption.
 - Module tokenizer, precedence, nesting, alternatives, complexes, optional nodes, references, cycles, and unsupported tokens.
 - Exact module completion and block coverage.
 - Pathway namespace and denominator behavior.
@@ -990,7 +987,7 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Importer -> dataset -> analysis -> report.
 - KEGG client against a local mock server.
-- Cache hit, refresh, expiry, offline miss, and transient retry.
+- Cache hit, refresh, expiry, cache-only miss, and transient retry.
 - Stored-result creation, scoped retrieval, pagination, expiry, and cleanup.
 - Service-layer high-level workflow using mocked KEGG responses.
 
@@ -1009,10 +1006,9 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Use synthetic or independently authored small fixtures.
 - Do not commit bulk KEGG responses, pathway images, KGML collections, KOfam profiles, model weights, or large FASTA files.
-- Do not run live KEGG requests in the default suite or pull-request CI.
-- The dedicated compatibility job may run only through an explicit manual dispatch on `main`,
-  under maintainer enablement and eligible-access confirmation, as one serialized fixed
-  four-request campaign at one request per second with zero retries and no uploaded payloads.
+- Run one serialized fixed 120-request campaign in the default suite and pull-request CI. It makes
+  30 requests for each of `INFO`, `GET`, `LINK`, and `CONV` at one request per second with zero
+  retries and no uploaded payloads.
 - Keep any additional opt-in live smoke test local, rate-limited, eligibility-gated, and tolerant
   of current database content.
 - Do not use strict snapshots of full live KEGG entries because database content changes.
@@ -1036,7 +1032,7 @@ Success requires correct routing, minimal necessary clarification, no KO guessin
 
 ### Milestone 0: governance and project initialization
 
-Status as of 2026-07-14: the MIT source-code license, Python package foundation, locked development environment, offline test, quality-tool configuration, CI workflow, contribution guide, security policy, and issue templates are implemented and locally verified. Milestone 0 is complete.
+Status as of 2026-07-14: the MIT source-code license, Python package foundation, locked development environment, quality-tool configuration, CI workflow, contribution guide, security policy, and issue templates are implemented and locally verified. Milestone 0 is complete.
 
 Tasks:
 
@@ -1045,7 +1041,7 @@ Tasks:
 - create the Python project and package metadata;
 - configure uv, ruff, pyright, pytest, and CI;
 - add contribution, security, and issue templates; and
-- keep default and pull-request CI free of live KEGG calls.
+- keep the default and pull-request live campaign fixed at 120 serialized KEGG calls.
 
 Acceptance:
 
@@ -1063,7 +1059,7 @@ All pass on a minimal tested package.
 
 Status as of 2026-07-14: the immutable evidence contracts, versioned decision policies, plain KO,
 generic CSV/TSV, and DeepKOALA detailed importers, structured import reports, and deterministic KO
-evidence views are implemented and locally verified with offline tests. Milestone 1 is complete.
+evidence views are implemented and locally verified with injected-input tests. Milestone 1 is complete.
 
 Tasks:
 
@@ -1086,8 +1082,8 @@ Acceptance:
 
 Status as of 2026-07-14: the eligibility gate, typed and bounded KEGG operations, process-wide
 rate limiting, safe transport and retries, strict response parsing, endpoint-scoped local cache,
-offline behavior, and retrieval provenance are implemented and locally verified with offline
-tests. Milestone 2 is complete.
+cache-only behavior, and retrieval provenance are implemented and verified. Milestone 2 is
+complete.
 
 Tasks:
 
@@ -1095,15 +1091,15 @@ Tasks:
 - implement typed `info`, `get`, `link`, and selected `conv` operations;
 - enforce rate and batch limits;
 - parse supported response formats;
-- implement cache and offline mode; and
+- implement cache and explicit cache-only reads; and
 - record retrieval provenance.
 
 Acceptance:
 
 - `get` batches never exceed ten entries;
 - the process cannot exceed the configured maximum rate;
-- no live call occurs in offline mode;
-- standard tests use a mock server only; and
+- cache-only reads never make a live call;
+- standard tests include one bounded live campaign and otherwise use injected transports; and
 - cache failures cannot be mistaken for missing biology.
 
 ### Milestone 3: module parser and evaluator
@@ -1111,7 +1107,7 @@ Acceptance:
 Status as of 2026-07-14: the lossless bounded tokenizer, source-spanned AST and parser, local
 M-number reference resolver, exact completion, project-defined top-level block coverage, bounded
 minimal missing alternatives, optional-component summaries, and paired strict/lenient evidence
-evaluation are implemented and locally verified with offline synthetic tests. Milestone 3 is
+evaluation are implemented and locally verified with synthetic tests. Milestone 3 is
 complete.
 
 Tasks:
@@ -1134,7 +1130,7 @@ Acceptance:
 Status as of 2026-07-14: typed PATHWAY LINK/GET reference construction, explicit namespaces and
 CLASS-derived scope, bounded strict/lenient pathway KO coverage, complete deterministic multi-set
 KO membership partitions, and shared-reference MODULE and pathway outcome comparisons are
-implemented and locally verified with offline synthetic tests. Milestone 4 is complete.
+implemented and locally verified with synthetic tests. Milestone 4 is complete.
 
 Tasks:
 
@@ -1154,7 +1150,7 @@ Acceptance:
 
 Status as of 2026-07-14: typed MODULE and pathway reference loading, the bounded plain-KO
 one-call analysis service, deterministic structured JSON/Markdown/annotation CSV artifacts, and a
-scope-isolated SQLite result store are implemented and locally verified with offline synthetic
+scope-isolated SQLite result store are implemented and locally verified with synthetic
 tests. The store defaults to 24-hour retention, a 512 MiB logical artifact-payload quota, a 640 MiB
 main-database page cap, and a 10,000-result cap; it supports bounded metadata pagination, artifact
 byte-range reads, explicit deletion, and cleanup without silently evicting active cross-scope
@@ -1183,8 +1179,8 @@ Acceptance:
 Status as of 2026-07-15: the local stdio server, all nine approved tools, explicit input/output
 schemas, structured success and repairable-error envelopes, tool annotations, fixed status/cache
 resources, and four validated resource templates are implemented and locally verified with
-offline contract tests. Each stdio process generates one opaque result scope. Large sections use
-bounded byte-range resources, and cached-entry resources are offline-only. Protocol stdout remains
+injected contract tests. Each stdio process generates one opaque result scope. Large sections use
+bounded byte-range resources, and cached-entry resources are cache-only. Protocol stdout remains
 clean. Status and cache-info reads are side-effect-free: they do not open SQLite to collect
 statistics, and instead return `null` values with `inspection_status=not_probed`. Milestone 6 is
 complete.
@@ -1236,7 +1232,7 @@ Acceptance:
 
 Status as of 2026-07-15: installation and MCP configuration guidance, redistributable synthetic KO
 examples, data-rights and security review checklists, an English changelog and release notes, and
-offline wheel/source-distribution audit tests are implemented. Versions 0.1.0 and 0.2.0 are scoped
+local wheel/source-distribution audit tests are implemented. Versions 0.1.0 and 0.2.0 are scoped
 to Python 3.11.x only. Release preparation and Milestone 8 are complete. The repository is private; before
 any future public supported release, GitHub private vulnerability reporting must be enabled and
 verified.
@@ -1256,7 +1252,7 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 ## 19. Initial issue backlog
 
 1. Choose the source-code license and document KEGG data-rights boundaries.
-2. Initialize the Python package, quality tools, and offline-only CI.
+2. Initialize the Python package, quality tools, and CI.
 3. Define `SourceProvenance`, `AnnotationRecord`, and `AnnotationDataset` schemas.
 4. Define versioned decision policies and strict/lenient evidence views.
 5. Implement K-number validation and plain KO-list import.
@@ -1264,7 +1260,7 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 7. Implement DeepKOALA detailed-output import, including multi-domain rows.
 8. Define typed KEGG request and response contracts.
 9. Implement eligibility configuration, rate limiting, batching, and retries.
-10. Implement the SQLite cache and offline behavior.
+10. Implement the SQLite cache and explicit cache-only behavior.
 11. Implement KEGG flat-file, tabular, and `info` parsers.
 12. Implement approved KO relationship mappings.
 13. Specify module grammar, precedence, and diagnostics.
@@ -1303,7 +1299,7 @@ The first release is blocked until all of the following are true:
 - Large MCP results are bounded and retrievable safely.
 - Tool outputs conform to declared schemas and stdio stdout is clean.
 - Reports do not claim pathway activity, flux, phenotype, or statistical significance from KO presence alone.
-- All default CI tests run without live KEGG access.
+- Default CI runs the fixed 120-request live KEGG campaign.
 - All tracked repository content is in English.
 - Version 0.1.x package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.
@@ -1316,10 +1312,9 @@ The implementation milestones resolved the original open decisions as follows:
 
 1. **Source-code license:** project source code uses the MIT License. It grants no rights to KEGG
    content, KOfam profiles, model artifacts, or other third-party data.
-2. **KEGG configuration:** the environment contract selects `offline_cache`, `public_academic`, or
-   `licensed`. Live modes require explicit use confirmation, and licensed mode also requires an
-   authorized HTTPS endpoint. Offline mode can select the licensed cache namespace only when both
-   the licensed endpoint and licensed-use confirmation are supplied; network access remains off.
+2. **KEGG configuration:** the environment contract defaults to confirmed `public_academic` access
+   or selects `licensed`, which requires explicit use confirmation and an authorized HTTPS
+   endpoint. Explicit cache-only resource reads never fall back to the network.
 3. **Request rate:** the default is two requests per second with no burst, and configuration cannot
    exceed three requests per second.
 4. **Bounds:** schemas enforce five million inline bytes, 100,000 imported rows, 100 K numbers per

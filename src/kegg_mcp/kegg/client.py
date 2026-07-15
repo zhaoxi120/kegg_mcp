@@ -31,7 +31,6 @@ from kegg_mcp.kegg.contracts import (
     KeggPairDocument,
     KeggPairRow,
     KeggRequestOptions,
-    LicensedAccess,
     LinkRequest,
     LinkResult,
     PublicAcademicAccess,
@@ -100,27 +99,18 @@ class KeggClient:
 
         access = config.access
         if isinstance(access, PublicAcademicAccess):
-            self._endpoint: str | None = access.endpoint
+            self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.PUBLIC_ACADEMIC
             self._endpoint_label = PUBLIC_KEGG_ENDPOINT_LABEL
-        elif isinstance(access, LicensedAccess):
+        else:
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.LICENSED
             self._endpoint_label = access.endpoint_label
-        else:
-            self._endpoint = None
-            self._retrieval_endpoint_class = access.retrieval_endpoint_class
-            self._endpoint_label = access.endpoint_label
-
-        if self._endpoint is None:
-            self._transport = transport
-            self._mandatory_rate_limiter: RateLimiter | None = None
-        else:
-            self._transport = transport or HttpsTransport()
-            self._mandatory_rate_limiter = ProcessWideRateLimiter(
-                self._endpoint_label,
-                config.limits.requests_per_second,
-            )
+        self._transport = transport or HttpsTransport()
+        self._mandatory_rate_limiter = ProcessWideRateLimiter(
+            self._endpoint_label,
+            config.limits.requests_per_second,
+        )
         self._additional_rate_limiter = rate_limiter
 
     @property
@@ -353,15 +343,6 @@ class KeggClient:
         info_request: InfoRequest | None = None,
     ) -> _ExecutedBatch:
         now = self._read_clock()
-        if self._endpoint is None and options.refresh:
-            fail(
-                ErrorCode.KEGG_USAGE_NOT_CONFIGURED,
-                "A cache refresh cannot run while KEGG access is offline.",
-                suggested_action=(
-                    "Disable refresh or configure an authorized live KEGG access mode."
-                ),
-            )
-
         if options.refresh:
             cache_state = CacheLookupState.REFRESH_BYPASS
         else:
@@ -401,14 +382,11 @@ class KeggClient:
                 else CacheLookupState.MISS
             )
 
-        if self._endpoint is None:
+        if options.cache_only:
             fail(
-                ErrorCode.OFFLINE_CACHE_MISS,
-                "The requested KEGG response is unavailable under the offline cache policy.",
-                suggested_action=(
-                    "Allow stale data explicitly or populate this cache namespace using authorized "
-                    "live access."
-                ),
+                ErrorCode.CACHE_ENTRY_NOT_FOUND,
+                "The requested KEGG response is unavailable in the selected cache namespace.",
+                suggested_action="Fetch the entry through an ordinary network-enabled request.",
                 safe_details=(SafeDetail(name="cache_state", value=cache_state.value),),
             )
 
@@ -533,12 +511,6 @@ class KeggClient:
         raise AssertionError("unsupported prepared response parser")
 
     def _request_with_retries(self, prepared: PreparedRequest) -> tuple[TransportResponse, int]:
-        if (
-            self._endpoint is None
-            or self._transport is None
-            or self._mandatory_rate_limiter is None
-        ):
-            raise AssertionError("network execution requires live access dependencies")
         url = f"{self._endpoint}{prepared.path}"
         if len(url.encode("ascii")) > self._config.limits.max_url_bytes:
             fail(

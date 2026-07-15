@@ -121,7 +121,7 @@ def _provenance(operation: KeggOperation, *, stale: bool = False) -> KeggBatchPr
     expires_at = _NOW + timedelta(days=1)
     return KeggBatchProvenance(
         operation=operation,
-        access_mode=AccessMode.OFFLINE_CACHE,
+        access_mode=AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
         endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE,

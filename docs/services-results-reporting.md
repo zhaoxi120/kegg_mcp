@@ -75,8 +75,8 @@ reference K numbers, exclusions, response bytes, and request count are bounded; 
 stops before the next request whenever the required metric is already known.
 
 The injected client preserves the Milestone 2 access gate, process-wide request rate, batching,
-cache, offline behavior, and retrieval provenance. The Milestone 5 default test suite uses
-synthetic in-process clients and makes no live KEGG requests.
+cache-only behavior, and retrieval provenance. Milestone 5 tests use synthetic in-process clients;
+the repository-wide default suite additionally runs the bounded live campaign.
 
 ## Report artifacts
 
@@ -164,7 +164,7 @@ Milestone 5 unit and integration tests use synthetic KEGG responses and temporar
 stores. They cover typed reference traversal, missing and malformed responses, report size and
 preview limits, conservative report language, cross-scope isolation, expiry, capacity failure,
 pagination, byte-range reconstruction, explicit deletion, and the complete plain-KO one-call flow.
-The default validation suite makes no live requests and does not require network access.
+The default validation suite includes the bounded 120-request live KEGG campaign.
 
 Live behavior, when used outside the default test suite, is controlled by the injected Milestone 2
 client. Public `rest.kegg.jp` access remains restricted to academic use by academic users, must use

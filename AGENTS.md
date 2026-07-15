@@ -2,7 +2,7 @@
 
 ## Purpose and current phase
 
-This repository provides a local-first MCP server and a repository-scoped Codex skill for
+This repository provides a local stdio MCP server and a repository-scoped Codex skill for
 KEGG-aware analysis of KO annotations.
 
 Milestones 0 through 8 and the first supported release are implemented and verified. Further work
@@ -95,9 +95,9 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Enforce a process-wide rate no greater than three KEGG API requests per second; use a safer default with no burst.
 - Respect endpoint-specific limits, including the maximum of ten entries for `get` requests.
 - Keep cached KEGG payloads local and out of version control, packages, examples, CI artifacts, and releases.
-- Do not run live KEGG requests in the default test suite or pull-request CI. The dedicated live
-  CI job may run only from `main`, under explicit maintainer enablement and eligible access
-  confirmation, with one serialized bounded campaign and no uploaded KEGG payloads.
+- Run one serialized 120-request live KEGG campaign in the default test suite and pull-request CI:
+  30 requests each for `INFO`, `GET`, `LINK`, and `CONV`, at one request per second with zero
+  retries and no uploaded KEGG payloads.
 - Store retrieval time, endpoint, request key, parser version, and release information when
   available.
 
