@@ -19,14 +19,18 @@ An MCP configuration object was pasted into a shell. JSON and TOML configuration
 content, not shell commands. Register the server with the client command shown in
 `docs/installation.md`, or place the configuration in the exact file required by the client.
 
-For Codex, prefer:
+For an eligible academic user acceptance session, prefer:
 
 ```bash
 codex mcp add kegg-mcp \
-  --env KEGG_MCP_ACCESS_MODE=offline_cache \
+  --env KEGG_MCP_ACCESS_MODE=public_academic \
+  --env KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
   -- /absolute/path/to/.venv/bin/kegg-mcp
 codex mcp list
 ```
+
+For internal iteration, replace those two live-access variables with
+`KEGG_MCP_ACCESS_MODE=offline_cache` and do not set an academic confirmation.
 
 ### The executable is missing or the client cannot start it
 

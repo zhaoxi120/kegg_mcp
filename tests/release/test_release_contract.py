@@ -167,9 +167,11 @@ def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
 
 
 def test_rights_and_release_status_are_prominent() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
     changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     for required in ("public_academic", "licensed", "offline_cache"):
         assert required in installation
@@ -185,6 +187,12 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "network access remains disabled" in installation
     assert "Ordinary tool calls do not expose a" in installation
     assert "KEGG_MCP_ALLOWED_ROOTS" in installation
+    assert "KEGG_MCP_ACCESS_MODE=public_academic" in readme
+    assert "KEGG_MCP_ACADEMIC_USE_CONFIRMED=true" in readme
+    assert "export KEGG_MCP_ACCESS_MODE=offline_cache" in readme
+    assert "KEGG_MCP_ACCESS_MODE: offline_cache" in ci
+    assert "probe connectivity once" in installation
+    assert "Retrieve only KO entry `K00844`" in installation
     assert "Current status:" in readiness
     assert "exact commit" in readiness
     normalized_changelog = re.sub(r"\s+", " ", changelog.lower())

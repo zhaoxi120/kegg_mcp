@@ -14,6 +14,10 @@ uv run kegg-mcp
 The default access mode is `offline_cache`. Server logs and configuration failures are written to
 stderr; stdout is reserved for MCP protocol messages.
 
+The user-acceptance deployment profile may explicitly select `public_academic` after the operator
+confirms eligible academic use. Internal development, pytest, and CI remain explicitly
+`offline_cache`; the server does not infer a profile from its host or caller.
+
 Use the side-effect-free operator diagnostic before client startup:
 
 ```text

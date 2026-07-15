@@ -354,3 +354,5 @@ The default unit and integration test suites must not make live KEGG requests. N
 tested with injected transports or a local mock server, fixed clocks, deterministic sleepers, and
 temporary local caches. Any manual live compatibility check must be opt-in, must use an explicitly
 eligible access mode, and must remain within the same process-wide and endpoint-specific limits.
+CI and internal iteration explicitly set `KEGG_MCP_ACCESS_MODE=offline_cache`; an eligible
+academic user-acceptance profile explicitly sets `public_academic` plus the required confirmation.
