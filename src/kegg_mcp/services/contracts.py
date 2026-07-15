@@ -39,12 +39,6 @@ class PlainKoAnalysisRequest(FrozenModel):
     """One bounded plain-KO import and its requested KEGG analysis targets."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:plain-ko-analysis-request:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -170,12 +164,6 @@ class PlainKoAnalysisResult(FrozenModel):
     """Bounded direct response with full artifacts retained in the scoped store."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:plain-ko-analysis-result:1",
             "$schema": JSON_SCHEMA_DIALECT,

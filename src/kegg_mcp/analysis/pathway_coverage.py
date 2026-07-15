@@ -304,12 +304,6 @@ class PathwayCoverageResult(FrozenModel):
     """Bounded result of a deterministic unique-KO intersection."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:pathway-coverage-result:2",
             "$schema": JSON_SCHEMA_DIALECT,

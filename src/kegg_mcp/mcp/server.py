@@ -56,7 +56,6 @@ from kegg_mcp.mcp.contracts import (
     StatusToolEnvelope,
     constrain_mcp_input_schema,
     constrain_mcp_output_schema,
-    options,
 )
 from kegg_mcp.services import (
     KeggConnectivityClient,
@@ -177,7 +176,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     scope_id=state.scope_id,
                     pathway_evidence_mode=supplied.pathway_evidence_mode,
                     allow_global_or_overview=supplied.allow_global_or_overview,
-                    options=options(False, False),
                     output_directory=_resolve_output_directory(
                         supplied.output_directory or normalization.output_directory,
                         state.allowed_roots,
@@ -212,7 +210,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -229,7 +226,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -247,7 +243,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -264,7 +259,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     scope_id=state.scope_id,
                     evidence_mode=supplied.evidence_mode,
                     allow_global_or_overview=supplied.allow_global_or_overview,
-                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -283,7 +277,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     module_ids=supplied.module_ids,
                     pathways=supplied.pathways,
-                    options=options(False, False),
                     allow_global_or_overview=supplied.allow_global_or_overview,
                 )
                 return _success(

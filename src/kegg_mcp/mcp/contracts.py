@@ -21,7 +21,7 @@ from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
-from kegg_mcp.kegg import KeggEntryRef, KeggRequestOptions
+from kegg_mcp.kegg import KeggEntryRef
 from kegg_mcp.services import (
     DEFAULT_IMPORT_LIMITS,
     AnnotationInputFormat,
@@ -281,11 +281,6 @@ StatusToolEnvelope = ToolEnvelope[ServerStatusResult]
 ConnectivityToolEnvelope = ToolEnvelope[ConnectivityProbeResult]
 
 
-def options(refresh: bool, allow_stale: bool) -> KeggRequestOptions:
-    """Build the typed cache policy shared by transport adapters."""
-    return KeggRequestOptions(refresh=refresh, allow_stale=allow_stale)
-
-
 def constrain_mcp_input_schema(schema: dict[str, object]) -> None:
     """Advertise the same hard maxima enforced by the MCP request validators."""
     module_limits = ModuleAnalysisLimits()
@@ -425,5 +420,4 @@ __all__ = [
     "ToolPayload",
     "constrain_mcp_input_schema",
     "constrain_mcp_output_schema",
-    "options",
 ]

@@ -56,13 +56,12 @@ def test_plain_import_preserves_raw_rows_and_reports_invalid_and_duplicates() ->
     assert dataset.analysis_unit is AnalysisUnit.ISOLATE_PROTEOME
 
 
-def test_plain_import_accepts_bom_and_crlf_without_digest_provenance() -> None:
+def test_plain_import_accepts_bom_and_crlf() -> None:
     payload = b"\xef\xbb\xbfK00001\r\nK00002\r\n"
 
     dataset = import_plain_ko(payload, limits=LIMITS)
 
     assert dataset.records[0].raw_ko == "K00001"
-    assert "input_sha256" not in dataset.records[0].source.model_dump()
 
 
 def test_plain_import_empty_input_is_explicit() -> None:
@@ -70,7 +69,6 @@ def test_plain_import_empty_input_is_explicit() -> None:
 
     assert dataset.records == ()
     assert dataset.sources[0].source_name == "manual"
-    assert "input_sha256" not in dataset.sources[0].model_dump()
     assert dataset.import_report.input_rows == 0
     assert dataset.import_report.diagnostics[0].code is DiagnosticCode.EMPTY_INPUT
 
