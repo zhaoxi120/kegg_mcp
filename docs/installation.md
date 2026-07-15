@@ -1,7 +1,7 @@
 # Installation and operation
 
 KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs deterministic local
-analysis, and retrieves KEGG references only under an explicitly configured access mode. The core
+analysis, and retrieves KEGG references through public-academic access by default. The core
 server does not run DeepKOALA or another sequence annotator. An optional independently installed
 CPU-only companion can run an existing local DeepKOALA installation and hand detailed CSV to the
 core importer.
@@ -23,10 +23,10 @@ DeepKOALA, model weights, and KOfam profiles are not server dependencies.
 
 ## Install from a source checkout
 
-From the repository root, create the locked environment and run the offline tests:
+From the repository root, create the locked environment and run the default test suite, including
+its 120-request live KEGG campaign:
 
 ```bash
-export KEGG_MCP_ACCESS_MODE=offline_cache
 uv sync --frozen
 uv run --frozen pytest
 ```
@@ -68,58 +68,24 @@ The server reads configuration from its process environment. The files under `ex
 are reviewable templates; the server does not automatically load `.env` files. Put only the
 selected variables in the MCP client's environment configuration.
 
-The supported operating profiles are deliberately separate:
+The supported operating profiles are:
 
-- academic user acceptance configures `public_academic`, confirms academic use, probes once, and
-  checks one requested KEGG entry;
-- licensed user acceptance configures the operator's authorized endpoint;
-- internal iteration, the default pytest suite, and pull-request CI explicitly configure
-  `offline_cache`; and
-- an unconfigured server still falls back to `offline_cache`.
+- unconfigured operation defaults to `public_academic` with academic use confirmed;
+- licensed operation configures the operator's authorized endpoint; and
+- internal iteration, the default pytest suite, and pull-request CI run the same bounded live
+  campaign.
 
 The project never infers a live-access right from a username, institution, host, or execution
 context.
 
-The dedicated live compatibility workflow is a separate exception to the offline CI default. It
-runs only through an explicit manual dispatch on `main`, only when the maintainer enables it and
-confirms an eligible academic or licensed access profile, and issues one serialized four-request
-campaign without uploading KEGG payloads. Pull requests and ordinary test runs never enable it.
-
-### Offline cache, the package and internal-development default
-
-With no access variables, the server uses `offline_cache` and never attempts a network
-connection. The explicit equivalent is:
-
-```text
-KEGG_MCP_ACCESS_MODE=offline_cache
-```
-
-Local KO normalization does not need KEGG data. MODULE and pathway analysis in offline mode needs
-previously cached references from an access mode that the operator was authorized to use. A cache
-miss returns `OFFLINE_CACHE_MISS`; it does not mean that a KO, MODULE, pathway, or biological
-function is absent.
-
-An offline cache is tied to the endpoint class and configured endpoint label that produced it. Do not
-copy or redistribute cached KEGG payloads unless you have independent permission to do so.
-
-The default offline configuration selects the public-academic cache namespace. To reuse a local
-cache previously populated through one authorized licensed endpoint, select its namespace without
-enabling network access:
-
-```text
-KEGG_MCP_ACCESS_MODE=offline_cache
-KEGG_MCP_LICENSED_ENDPOINT=https://kegg.example.edu/api
-KEGG_MCP_LICENSED_USE_CONFIRMED=true
-```
-
-The endpoint is validated and its non-sensitive deployment label selects the licensed cache
-namespace; network access remains disabled. Both licensed values are required together in this
-configuration, and a missing or invalid value prevents server startup. Keep the endpoint private
-even though no live request is made.
+Default and pull-request CI issue one serialized 120-request campaign without uploading KEGG
+payloads. It makes 30 requests for each supported operation at one request per second with zero
+retries.
 
 ### Public academic access
 
-Use this mode only when the operator is an academic user and the work is academic use:
+This is the default mode and assumes the operator is an academic user performing academic work.
+The following explicit configuration is equivalent to leaving both variables unset:
 
 ```text
 KEGG_MCP_ACCESS_MODE=public_academic
@@ -129,7 +95,7 @@ KEGG_MCP_ACADEMIC_USE_CONFIRMED=true
 The public endpoint is fixed to `https://rest.kegg.jp`; it cannot be replaced in this mode. The
 client defaults to two requests per second without burst and cannot be configured above three
 requests per second. KEGG GET requests contain at most ten entries. One MCP analysis call may
-need several rate-limited KEGG requests, depending on its targets and cache state.
+need several rate-limited KEGG requests, depending on its targets and batching.
 
 ### Licensed access
 
@@ -148,8 +114,8 @@ private endpoint values in repository files, screenshots, reports, or support re
 
 The confirmation records the operator's assertion; this project does not determine whether an
 institution or activity is eligible or licensed. If an authorized service requires an
-authentication mechanism this release does not support, do not place credentials in the URL.
-Keep live access disabled and request a separately reviewed integration.
+authentication mechanism this release does not support, do not place credentials in the URL or
+start the server; request a separately reviewed integration.
 
 ### Optional local storage locations
 
@@ -269,8 +235,8 @@ at a Bash prompt. A generic client configuration for a wheel installation looks 
 ```
 
 MCP client configuration formats differ; translate the `command` and `env` fields without adding
-a shell wrapper. Operators who are not eligible academic users must select `licensed` or
-`offline_cache` instead. For a source checkout, either use the absolute `.venv/bin/kegg-mcp` path
+a shell wrapper. Operators who are not eligible academic users must select `licensed`. For a source
+checkout, either use the absolute `.venv/bin/kegg-mcp` path
 or set the command to the absolute `uv` executable with arguments equivalent to
 `run --frozen --directory /absolute/path/to/kegg_mcp kegg-mcp`.
 
@@ -347,7 +313,7 @@ and the normalized accepted KO view `K00001`, `K00002`. User-supplied K numbers 
 annotations under a named policy; they are not treated as experimental validation. Invalid and
 duplicate evidence remains represented in the full normalized result.
 
-This step is local and must work in `offline_cache` mode without a network connection.
+This normalization step is local and does not itself require a KEGG request.
 The response supplies an opaque result ID and base resource URI; its `dataset` section contains the
 complete retained normalized dataset. A staged `analyze_modules`, `analyze_pathways`, or
 `compare_ko_sets` request can refer to that result ID within the same scope.
@@ -448,20 +414,20 @@ By default, results expire after 24 hours. The store limits logical artifact pay
 the main database to 640 MiB, and active results to 10,000. Capacity failures do not silently evict
 another active scope's result.
 
-## Use live access sparingly
+## Use live access responsibly
 
-- Normalize and validate requests before enabling live access.
+- Normalize and validate inputs before requesting KEGG references.
 - Request only the MODULE and pathway identifiers needed for the analysis.
-- Reuse fresh authorized local cache entries instead of forcing refresh.
-- Do not run live requests in the default test suite or pull-request CI. Use only the explicitly
-  enabled, main-only compatibility job described in `tests/live/README.md`.
+- Use the cache-only entry resource only when an explicit local read is intended.
+- Keep the default and pull-request campaign fixed at the budget documented in
+  `tests/live/README.md`.
 - Do not publish KEGG response bodies or cache databases when reporting a problem.
 - Record the endpoint class, retrieval time, readable request key, parser version, cache
   state, and database release when available.
 
-Any additional manual live compatibility check requires separate operator authorization. It
-should use the smallest target set, count requests, obey the process-wide limiter, and tolerate
-current database content rather than snapshotting full responses.
+Any additional manual live compatibility check should use the smallest target set, count requests,
+obey the process-wide limiter, and tolerate current database content rather than snapshotting full
+responses.
 
 ## Troubleshooting
 
@@ -469,14 +435,9 @@ See the dedicated [troubleshooting guide](troubleshooting.md) first for client d
 common mistake of pasting configuration JSON into Bash, redacted diagnostics, allowed roots,
 process-scoped result IDs, protocol stdout, and safe support reports.
 
-`KEGG_USAGE_NOT_CONFIGURED`
-: A network-dependent operation is disabled by deployment configuration. Select an eligible live
-  mode once at deployment, or use authorized cached data. Ordinary tool calls do not expose a
-  refresh flag.
-
-`OFFLINE_CACHE_MISS`
-: Offline mode has no matching authorized cached response. Enable an eligible live mode or use a
-  cache you are authorized to retain; do not report the result as biological absence.
+`CACHE_ENTRY_NOT_FOUND`
+: An explicit cache-resource read has no matching cached response. Fetch the entry through an
+  ordinary network-enabled request; do not report the result as biological absence.
 
 `KEGG_REQUEST_FAILED` or `KEGG_RATE_LIMITED`
 : Preserve the structured error, reduce or retry the bounded request as suggested, and avoid

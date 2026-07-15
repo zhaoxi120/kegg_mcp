@@ -35,7 +35,6 @@ from kegg_mcp.kegg.contracts import (
     KeggOperation,
     KeggRequestOptions,
     LinkRequest,
-    OfflineCacheAccess,
     PublicAcademicAccess,
     ResponseOrigin,
     RetrievalEndpointClass,
@@ -101,7 +100,7 @@ class BombTransport:
         max_response_bytes: int,
     ) -> TransportResponse:
         del url, timeout_seconds, max_response_bytes
-        raise AssertionError("offline mode attempted network access")
+        raise AssertionError("cache-only request attempted network access")
 
 
 class RecordingLimiter:
@@ -181,19 +180,6 @@ def _public_config(
     )
 
 
-def _offline_config(
-    cache_path: Path,
-    *,
-    ttl_seconds: int = 60,
-    limits: KeggClientLimits | None = None,
-) -> KeggClientConfig:
-    return KeggClientConfig(
-        access=OfflineCacheAccess(),
-        cache=CachePolicy(path=str(cache_path), ttl_seconds=ttl_seconds),
-        limits=limits or KeggClientLimits(),
-    )
-
-
 def _clock(value: datetime) -> Callable[[], datetime]:
     return lambda: value
 
@@ -232,15 +218,18 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     )
 
     network_result = live.info(request)
-    offline_result = KeggClient(
-        _offline_config(cache_path),
+    cached_result = KeggClient(
+        _public_config(cache_path),
         transport=BombTransport(),
         clock=_clock(_NOW + timedelta(seconds=1)),
-    ).info(request)
+    ).info(
+        request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
 
     assert network_result.batch.origin is ResponseOrigin.NETWORK
     assert network_result.batch.access_mode is AccessMode.PUBLIC_ACADEMIC
-    assert network_result.batch.cache_lookup_state is CacheLookupState.MISS
+    assert network_result.batch.cache_lookup_state is CacheLookupState.REFRESH_BYPASS
     assert network_result.batch.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
     assert network_result.batch.endpoint_label == PUBLIC_KEGG_ENDPOINT_LABEL
     assert network_result.batch.response_bytes == len(_INFO_BODY)
@@ -251,14 +240,14 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     assert network_result.batch.expires_at == _NOW + timedelta(seconds=60)
     assert network_result.batch.attempt_count == 1
     assert network_result.document.release == "116.0+/07-13, Jul 26"
-    assert offline_result.batch.origin is ResponseOrigin.CACHE
-    assert offline_result.batch.access_mode is AccessMode.OFFLINE_CACHE
-    assert offline_result.batch.cache_lookup_state is CacheLookupState.FRESH_HIT
-    assert offline_result.batch.http_metadata == network_result.batch.http_metadata
-    assert offline_result.batch.attempt_count == 0
-    assert offline_result.document == network_result.document
+    assert cached_result.batch.origin is ResponseOrigin.CACHE
+    assert cached_result.batch.access_mode is AccessMode.PUBLIC_ACADEMIC
+    assert cached_result.batch.cache_lookup_state is CacheLookupState.FRESH_HIT
+    assert cached_result.batch.http_metadata == network_result.batch.http_metadata
+    assert cached_result.batch.attempt_count == 0
+    assert cached_result.document == network_result.document
     assert limiter.acquire_count == 1
-    assert _NoWaitMandatoryLimiter.instances[-1].acquire_count == 1
+    assert sum(instance.acquire_count for instance in _NoWaitMandatoryLimiter.instances) == 1
     assert len(transport.urls) == 1
 
 
@@ -285,13 +274,14 @@ def test_multi_entry_get_populates_single_entry_and_arbitrary_subset_cache(tmp_p
     )
 
     live.get(GetRequest(entries=entries))
-    offline = KeggClient(
-        _offline_config(cache_path),
+    cached = KeggClient(
+        _public_config(cache_path),
         transport=BombTransport(),
         clock=_clock(_NOW + timedelta(seconds=1)),
     )
-    single = offline.get(GetRequest(entries=(entries[1],)))
-    subset = offline.get(GetRequest(entries=(entries[2], entries[0])))
+    cache_only = KeggRequestOptions(refresh=False, cache_only=True)
+    single = cached.get(GetRequest(entries=(entries[1],)), options=cache_only)
+    subset = cached.get(GetRequest(entries=(entries[2], entries[0])), options=cache_only)
 
     assert single.batches[0].origin is ResponseOrigin.CACHE
     assert all(isinstance(document, KeggFlatFileDocument) for document in subset.documents)
@@ -334,10 +324,13 @@ def test_relationship_cache_key_is_independent_of_identifier_order(tmp_path: Pat
         clock=_clock(_NOW),
     ).link(first)
     reused = KeggClient(
-        _offline_config(cache_path),
+        _public_config(cache_path),
         transport=BombTransport(),
         clock=_clock(_NOW + timedelta(seconds=1)),
-    ).link(reversed_request)
+    ).link(
+        reversed_request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
 
     assert reused.batches[0].origin is ResponseOrigin.CACHE
     assert [(row.source_id, row.target_id) for row in reused.rows] == [
@@ -346,22 +339,9 @@ def test_relationship_cache_key_is_independent_of_identifier_order(tmp_path: Pat
     ]
 
 
-def test_offline_miss_never_calls_injected_transport(tmp_path: Path) -> None:
+def test_cache_only_miss_never_calls_injected_transport(tmp_path: Path) -> None:
     client = KeggClient(
-        _offline_config(tmp_path / "missing.sqlite3"),
-        transport=BombTransport(),
-        clock=_clock(_NOW),
-    )
-
-    with pytest.raises(KeggMcpError) as caught:
-        client.info(InfoRequest(database=KeggInfoDatabase.KO))
-
-    assert caught.value.detail.code is ErrorCode.OFFLINE_CACHE_MISS
-
-
-def test_offline_refresh_is_rejected_before_cache_or_network_use(tmp_path: Path) -> None:
-    client = KeggClient(
-        _offline_config(tmp_path / "offline.sqlite3"),
+        _public_config(tmp_path / "missing.sqlite3"),
         transport=BombTransport(),
         clock=_clock(_NOW),
     )
@@ -369,13 +349,13 @@ def test_offline_refresh_is_rejected_before_cache_or_network_use(tmp_path: Path)
     with pytest.raises(KeggMcpError) as caught:
         client.info(
             InfoRequest(database=KeggInfoDatabase.KO),
-            options=KeggRequestOptions(refresh=True),
+            options=KeggRequestOptions(refresh=False, cache_only=True),
         )
 
-    assert caught.value.detail.code is ErrorCode.KEGG_USAGE_NOT_CONFIGURED
+    assert caught.value.detail.code is ErrorCode.CACHE_ENTRY_NOT_FOUND
 
 
-def test_stale_cache_requires_explicit_permission_in_offline_mode(tmp_path: Path) -> None:
+def test_stale_cache_requires_explicit_permission_for_cache_only_reads(tmp_path: Path) -> None:
     cache_path = tmp_path / "stale.sqlite3"
     request = InfoRequest(database=KeggInfoDatabase.KO)
     live = KeggClient(
@@ -386,19 +366,22 @@ def test_stale_cache_requires_explicit_permission_in_offline_mode(tmp_path: Path
     )
     live.info(request)
     stale_client = KeggClient(
-        _offline_config(cache_path, ttl_seconds=10),
+        _public_config(cache_path, ttl_seconds=10),
         transport=BombTransport(),
         clock=_clock(_NOW + timedelta(seconds=10)),
     )
 
     with pytest.raises(KeggMcpError) as caught:
-        stale_client.info(request)
+        stale_client.info(
+            request,
+            options=KeggRequestOptions(refresh=False, cache_only=True),
+        )
     stale_result = stale_client.info(
         request,
-        options=KeggRequestOptions(allow_stale=True),
+        options=KeggRequestOptions(refresh=False, allow_stale=True, cache_only=True),
     )
 
-    assert caught.value.detail.code is ErrorCode.OFFLINE_CACHE_MISS
+    assert caught.value.detail.code is ErrorCode.CACHE_ENTRY_NOT_FOUND
     assert stale_result.batch.is_stale is True
     assert stale_result.batch.origin is ResponseOrigin.CACHE
 
@@ -421,16 +404,19 @@ def test_live_refresh_bypasses_and_replaces_a_fresh_cache_entry(tmp_path: Path) 
         rate_limiter=RecordingLimiter(),
         clock=_clock(_NOW + timedelta(seconds=1)),
     ).info(request, options=KeggRequestOptions(refresh=True))
-    offline = KeggClient(
-        _offline_config(cache_path),
+    cached = KeggClient(
+        _public_config(cache_path),
         transport=BombTransport(),
         clock=_clock(_NOW + timedelta(seconds=2)),
-    ).info(request)
+    ).info(
+        request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
 
     assert refreshed.batch.origin is ResponseOrigin.NETWORK
     assert refreshed.batch.cache_lookup_state is CacheLookupState.REFRESH_BYPASS
     assert refreshed.document.release == "117.0+/07-13, Jul 26"
-    assert offline.document == refreshed.document
+    assert cached.document == refreshed.document
     assert len(refresh_transport.urls) == 1
 
 
@@ -452,7 +438,7 @@ def test_live_stale_policy_can_refetch_or_explicitly_serve_without_network(
         transport=BombTransport(),
         rate_limiter=RecordingLimiter(),
         clock=_clock(_NOW + timedelta(seconds=10)),
-    ).info(request, options=KeggRequestOptions(allow_stale=True))
+    ).info(request, options=KeggRequestOptions(refresh=False, allow_stale=True))
 
     assert stale.batch.origin is ResponseOrigin.CACHE
     assert stale.batch.cache_lookup_state is CacheLookupState.STALE_HIT
@@ -468,7 +454,7 @@ def test_live_stale_policy_can_refetch_or_explicitly_serve_without_network(
     ).info(request)
 
     assert refetched.batch.origin is ResponseOrigin.NETWORK
-    assert refetched.batch.cache_lookup_state is CacheLookupState.STALE_DISALLOWED
+    assert refetched.batch.cache_lookup_state is CacheLookupState.REFRESH_BYPASS
     assert len(transport.urls) == 1
 
 
@@ -787,12 +773,12 @@ def test_client_rechecks_fake_transport_response_size_before_parsing(tmp_path: P
     assert _read_public_cache(cache_path, prepared, now=_NOW).state is CacheReadState.MISS
 
 
-def test_offline_client_rechecks_cached_response_size_under_current_limit(
+def test_cache_only_read_rechecks_cached_response_size_under_current_limit(
     tmp_path: Path,
 ) -> None:
     cache_path = tmp_path / "oversized-cache.sqlite3"
     limits = KeggClientLimits(max_response_bytes=10)
-    config = _offline_config(cache_path, limits=limits)
+    config = _public_config(cache_path, limits=limits)
     request = InfoRequest(database=KeggInfoDatabase.KO)
     prepared = prepare_info(request, config.limits)[0]
     cache = SQLiteKeggCache(cache_path)
@@ -814,7 +800,10 @@ def test_offline_client_rechecks_cached_response_size_under_current_limit(
             cache=cache,
             transport=BombTransport(),
             clock=_clock(_NOW),
-        ).info(request)
+        ).info(
+            request,
+            options=KeggRequestOptions(refresh=False, cache_only=True),
+        )
 
     assert caught.value.detail.code is ErrorCode.CACHE_FAILED
 
@@ -923,7 +912,7 @@ def test_unexpected_conversion_target_fails_before_cache_write(
 def test_cached_parser_failure_is_reported_as_cache_failure(tmp_path: Path) -> None:
     cache_path = tmp_path / "bad-parser.sqlite3"
     request = InfoRequest(database=KeggInfoDatabase.KO)
-    config = _offline_config(cache_path)
+    config = _public_config(cache_path)
     prepared = prepare_info(request, config.limits)[0]
     cache = SQLiteKeggCache(cache_path)
     cache.write(
@@ -940,7 +929,10 @@ def test_cached_parser_failure_is_reported_as_cache_failure(tmp_path: Path) -> N
     client = KeggClient(config, cache=cache, transport=BombTransport(), clock=_clock(_NOW))
 
     with pytest.raises(KeggMcpError) as caught:
-        client.info(request)
+        client.info(
+            request,
+            options=KeggRequestOptions(refresh=False, cache_only=True),
+        )
 
     assert caught.value.detail.code is ErrorCode.CACHE_FAILED
 
@@ -955,7 +947,10 @@ def test_live_cache_read_failure_does_not_fall_back_to_network(tmp_path: Path) -
     )
 
     with pytest.raises(KeggMcpError) as caught:
-        client.info(InfoRequest(database=KeggInfoDatabase.KO))
+        client.info(
+            InfoRequest(database=KeggInfoDatabase.KO),
+            options=KeggRequestOptions(refresh=False),
+        )
 
     assert caught.value.detail.code is ErrorCode.CACHE_FAILED
     assert transport.urls == []

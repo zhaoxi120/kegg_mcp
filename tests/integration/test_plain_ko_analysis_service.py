@@ -203,7 +203,11 @@ def test_one_call_service_retains_complete_artifacts_and_returns_bounded_preview
     assert execution["service_name"] == "kegg_mcp_plain_ko_analysis"
     assert execution["service_version"] == "1"
     assert execution["import_limits"] == request.import_limits.model_dump(mode="json")
-    assert execution["kegg_request_options"] == {"allow_stale": False, "refresh": True}
+    assert execution["kegg_request_options"] == {
+        "allow_stale": False,
+        "cache_only": False,
+        "refresh": True,
+    }
     assert execution["reference_loading_limits"] == request.reference_limits.model_dump(mode="json")
     assert execution["direct_result_limits"] == result.limits.model_dump(mode="json")
     assert structured["report"]["dataset"]["analysis_unit"] == "metagenomic_community"

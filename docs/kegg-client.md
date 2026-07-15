@@ -28,14 +28,12 @@ decimal value after the `ncbi-geneid:` prefix. The
 [IUBMB enzyme nomenclature rules](https://iubmb.qmul.ac.uk/enzyme/rules.html) define the four-part
 EC number form and the use of a hyphen for a missing classification level.
 
-The project enforces an explicit configuration choice before any live request:
+The project defaults to public-academic live access:
 
-- `public_academic` requires `academic_use_confirmed=True` and always uses
+- `public_academic` defaults `academic_use_confirmed=True` and always uses
   `https://rest.kegg.jp`.
 - `licensed` requires `authorized_use_confirmed=True`, a caller-supplied authorized HTTPS endpoint,
   and a non-sensitive logical endpoint label.
-- `offline_cache` disables network access and selects an existing cache namespace by endpoint class
-  and a non-sensitive endpoint label.
 
 These fields record an operator assertion. The project does not determine whether an organization
 or activity is academic, does not inspect a license, and does not validate that a caller is legally
@@ -43,22 +41,18 @@ authorized to use an endpoint. This documentation is not legal advice.
 
 ## Configuration
 
-`KeggClientConfig` is an immutable, strict Pydantic model. Its default is intentionally
-network-disabled:
+`KeggClientConfig` is an immutable, strict Pydantic model. Its default is public-academic network
+access:
 
 ```python
 from kegg_mcp.kegg.contracts import KeggClientConfig
 
 config = KeggClientConfig()
-assert config.access.mode == "offline_cache"
+assert config.access.mode == "public_academic"
+assert config.access.academic_use_confirmed is True
 ```
 
-The default offline namespace represents payloads originally retrieved from the official public
-academic endpoint. A licensed cache namespace retains the original endpoint class and a
-deployment-controlled non-sensitive endpoint label. This prevents unrelated endpoint
-configurations from sharing one cache key without exposing the endpoint URL.
-
-Live public access must be selected explicitly:
+The equivalent explicit construction is:
 
 ```python
 from kegg_mcp.kegg.contracts import KeggClientConfig, PublicAcademicAccess
@@ -260,11 +254,10 @@ silently reinterpreted.
 
 - a response is fresh only while `now < expires_at`;
 - `refresh=False` permits a fresh cache hit;
-- `refresh=True` bypasses even a fresh hit and therefore requires live access;
+- `refresh=True` is the default and bypasses even a fresh hit;
 - a stale response is served only when `allow_stale=True`;
-- an offline miss or a stale response that is not explicitly allowed returns
-  `OFFLINE_CACHE_MISS`; and
-- offline mode never calls the HTTP transport.
+- `cache_only=True` requires `refresh=False`, never calls the HTTP transport, and returns
+  `CACHE_ENTRY_NOT_FOUND` on a miss or disallowed stale entry.
 
 Network responses are parsed and reconciled with their typed request before being committed to the
 cache. The active response-size bound is rechecked for both injected transports and cached payloads,
@@ -299,8 +292,7 @@ safe details, and a suggested action:
 | Code | Meaning |
 | --- | --- |
 | `INPUT_LIMIT_EXCEEDED` | Identifier count or prepared request size exceeds a configured bound. |
-| `KEGG_USAGE_NOT_CONFIGURED` | An operation requires live access but the configured mode does not authorize it. |
-| `OFFLINE_CACHE_MISS` | No permitted cached response can satisfy an offline operation. |
+| `CACHE_ENTRY_NOT_FOUND` | No permitted cached response can satisfy an explicit cache-only read. |
 | `KEGG_ENTRY_NOT_FOUND` | The endpoint returned a deterministic not-found response. |
 | `KEGG_RATE_LIMITED` | Bounded retries ended with a rate-limit response. |
 | `KEGG_REQUEST_FAILED` | A deterministic request error or exhausted transport retry could not produce a response. |
@@ -352,12 +344,7 @@ behavior.
 
 ## Test policy
 
-The default unit and integration test suites must not make live KEGG requests. Network behavior is
-tested with injected transports or a local mock server, fixed clocks, deterministic sleepers, and
-temporary local caches. Any manual live compatibility check must be opt-in, must use an explicitly
-eligible access mode, and must remain within the same process-wide and endpoint-specific limits.
-Default CI, pull-request CI, and internal iteration explicitly set
-`KEGG_MCP_ACCESS_MODE=offline_cache`. A separately enabled, manually dispatched job on `main` may
-run the four-request compatibility check under an explicitly confirmed eligible access mode. It
-uses one request per second, zero retries, a temporary cache, and no uploaded KEGG payloads. An eligible
-academic user-acceptance profile explicitly sets `public_academic` plus the required confirmation.
+The default pytest suite and pull-request CI include the 120-request live compatibility campaign.
+It makes 30 real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, uses one request per
+second, zero retries, a temporary cache, and no uploaded KEGG payloads. Other unit and integration
+network behavior uses injected transports or local mock servers.

@@ -13,12 +13,11 @@ After installing the project, configure an MCP client to run:
 uv run kegg-mcp
 ```
 
-The default access mode is `offline_cache`. Server logs and configuration failures are written to
+The default access mode is confirmed `public_academic`. Server logs and configuration failures are written to
 stderr; stdout is reserved for MCP protocol messages.
 
-The user-acceptance deployment profile may explicitly select `public_academic` after the operator
-confirms eligible academic use. Internal development, default pytest, and pull-request CI remain
-explicitly `offline_cache`; the server does not infer a profile from its host or caller.
+Internal development, default pytest, and pull-request CI use the same public-academic default and
+run the bounded 120-request compatibility campaign.
 
 Use the side-effect-free operator diagnostic before client startup:
 
@@ -35,23 +34,22 @@ default stdio command.
 
 | Environment variable | Meaning |
 | --- | --- |
-| `KEGG_MCP_ACCESS_MODE` | `offline_cache` (default), `public_academic`, or `licensed` |
-| `KEGG_MCP_ACADEMIC_USE_CONFIRMED` | Must equal `true` before public academic access is enabled |
+| `KEGG_MCP_ACCESS_MODE` | `public_academic` (default) or `licensed` |
+| `KEGG_MCP_ACADEMIC_USE_CONFIRMED` | Defaults to `true`; an explicit value other than `true` is rejected |
 | `KEGG_MCP_LICENSED_ENDPOINT` | Authorized HTTPS endpoint for licensed access |
-| `KEGG_MCP_LICENSED_USE_CONFIRMED` | Must equal `true` before licensed access or licensed-cache reuse is enabled |
+| `KEGG_MCP_LICENSED_USE_CONFIRMED` | Must equal `true` before licensed access is enabled |
 | `KEGG_MCP_CACHE_PATH` | Optional absolute path to the user-local KEGG cache |
 | `KEGG_MCP_RESULT_STORE_PATH` | Optional absolute path to the user-local retained-result database |
 | `KEGG_MCP_ALLOWED_ROOTS` | Path-separated existing directories allowed for file input and output bundles |
 
 The public KEGG REST service is limited to academic use by academic users. Other deployments must
-use an appropriately licensed endpoint or an authorized local cache. The live client defaults to
+use an appropriately licensed endpoint. The live client defaults to
 two requests per second with no burst, enforces a hard process-wide maximum no greater than three
 requests per second, and batches `get` requests at no more than ten entries.
 
-To reuse a licensed cache without enabling network access, keep
-`KEGG_MCP_ACCESS_MODE=offline_cache` and provide both licensed variables. The endpoint is used only
-to select the matching cache namespace; no live request is made. Cache payloads and retained
-results are local data and must not be committed, packaged, or attached to CI artifacts.
+Cache payloads and retained results are local data and must not be committed, packaged, or attached
+to CI artifacts. Ordinary KEGG operations refresh from the network by default; the cached-entry
+resource remains a cache-only read and never falls back to the network.
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
@@ -79,7 +77,7 @@ The server exposes nine tools:
   pathway namespace; omitted `mapNNNNN` input is canonicalized to the `koNNNNN` reference view.
 - `compare_ko_sets`: calculate deterministic set differences for two to ten datasets, with optional
   shared-reference MODULE or pathway comparisons.
-- `probe_kegg_connectivity`: make one explicit low-cost INFO request and classify disabled, DNS,
+- `probe_kegg_connectivity`: make one explicit low-cost INFO request and classify DNS,
   connection, or authorization/configuration outcomes.
 - `get_server_status`: return redacted access, capability, and result-retention information.
 
@@ -159,8 +157,6 @@ codes rather than `CACHE_FAILED`. Invalid or unauthorized resource URIs use MCP 
 Endpoint URLs, environment values, credentials, raw tables, and cache payloads are not included in
 status or error output.
 
-The default test suite and pull-request CI are offline and must not contact KEGG. The dedicated
-live compatibility job runs only through a manual dispatch on `main`, under explicit maintainer
-enablement and eligible academic or licensed access confirmation. It is serialized, fixed at four
-requests with zero retries, and uploads no KEGG payloads. Additional manual checks should use only
-the minimum explicit requests.
+The default test suite and pull-request CI run one serialized campaign fixed at 120 requests (30
+for each supported operation) with zero retries and no uploaded KEGG payloads. Additional manual
+checks should use only the minimum explicit requests.

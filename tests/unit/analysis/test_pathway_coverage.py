@@ -69,7 +69,7 @@ def _provenance(
     expires_at = _NOW + timedelta(days=1)
     return KeggBatchProvenance(
         operation=operation,
-        access_mode=AccessMode.OFFLINE_CACHE if stale else AccessMode.PUBLIC_ACADEMIC,
+        access_mode=AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
         endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE if stale else ResponseOrigin.NETWORK,

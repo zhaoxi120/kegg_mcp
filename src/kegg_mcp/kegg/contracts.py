@@ -36,7 +36,6 @@ class AccessMode(StrEnum):
 
     PUBLIC_ACADEMIC = "public_academic"
     LICENSED = "licensed"
-    OFFLINE_CACHE = "offline_cache"
 
 
 class RetrievalEndpointClass(StrEnum):
@@ -47,10 +46,10 @@ class RetrievalEndpointClass(StrEnum):
 
 
 class PublicAcademicAccess(FrozenModel):
-    """Explicit operator confirmation for the academic public API."""
+    """Academic public API access enabled by the project default."""
 
     mode: Literal[AccessMode.PUBLIC_ACADEMIC] = AccessMode.PUBLIC_ACADEMIC
-    academic_use_confirmed: Literal[True]
+    academic_use_confirmed: Literal[True] = True
     endpoint: Literal["https://rest.kegg.jp"] = PUBLIC_KEGG_ENDPOINT
 
 
@@ -130,30 +129,8 @@ class LicensedAccess(FrozenModel):
         return normalized
 
 
-class OfflineCacheAccess(FrozenModel):
-    """Network-disabled access to one explicitly selected cache namespace."""
-
-    mode: Literal[AccessMode.OFFLINE_CACHE] = AccessMode.OFFLINE_CACHE
-    retrieval_endpoint_class: RetrievalEndpointClass = RetrievalEndpointClass.PUBLIC_ACADEMIC
-    endpoint_label: str = Field(default=PUBLIC_KEGG_ENDPOINT_LABEL, min_length=1, max_length=100)
-
-    @field_validator("endpoint_label")
-    @classmethod
-    def validate_endpoint_label(cls, value: str) -> str:
-        return LicensedAccess.validate_endpoint_label(value)
-
-    @model_validator(mode="after")
-    def require_public_namespace_consistency(self) -> Self:
-        if (
-            self.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
-            and self.endpoint_label != PUBLIC_KEGG_ENDPOINT_LABEL
-        ):
-            raise ValueError("public cache access requires the public-academic endpoint label")
-        return self
-
-
 KeggAccess = Annotated[
-    PublicAcademicAccess | LicensedAccess | OfflineCacheAccess,
+    PublicAcademicAccess | LicensedAccess,
     Field(discriminator="mode"),
 ]
 
@@ -220,7 +197,7 @@ class KeggClientConfig(FrozenModel):
         },
     )
 
-    access: KeggAccess = Field(default_factory=OfflineCacheAccess)
+    access: KeggAccess = Field(default_factory=PublicAcademicAccess)
     limits: KeggClientLimits = Field(default_factory=KeggClientLimits)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     cache: CachePolicy = Field(default_factory=CachePolicy)
@@ -512,8 +489,15 @@ class ConvRequest(FrozenModel):
 class KeggRequestOptions(FrozenModel):
     """Per-call cache behavior."""
 
-    refresh: bool = False
+    refresh: bool = True
     allow_stale: bool = False
+    cache_only: bool = False
+
+    @model_validator(mode="after")
+    def reject_refresh_for_cache_only_reads(self) -> Self:
+        if self.refresh and self.cache_only:
+            raise ValueError("cache_only requests cannot refresh from the network")
+        return self
 
 
 MAX_HTTP_METADATA_ITEMS = 16
@@ -609,8 +593,6 @@ class KeggBatchProvenance(FrozenModel):
             and self.served_at < self.expires_at
         ):
             raise ValueError("stale cache responses must be served at or after expiry")
-        if self.access_mode is AccessMode.OFFLINE_CACHE and self.origin is ResponseOrigin.NETWORK:
-            raise ValueError("offline access cannot produce a network response")
         if (
             self.access_mode is AccessMode.PUBLIC_ACADEMIC
             and self.retrieval_endpoint_class is not RetrievalEndpointClass.PUBLIC_ACADEMIC

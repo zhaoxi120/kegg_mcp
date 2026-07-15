@@ -13,17 +13,30 @@ from kegg_mcp.kegg.contracts import (
     KeggEntryRef,
     KeggGetDatabase,
     KeggLinkRelationship,
+    KeggRequestOptions,
     LicensedAccess,
     LinkRequest,
-    OfflineCacheAccess,
     PublicAcademicAccess,
 )
 
 
-def test_client_defaults_to_network_disabled_cache_access() -> None:
+def test_client_defaults_to_confirmed_public_academic_access() -> None:
     config = KeggClientConfig()
 
-    assert isinstance(config.access, OfflineCacheAccess)
+    assert isinstance(config.access, PublicAcademicAccess)
+    assert config.access.academic_use_confirmed is True
+
+
+def test_request_options_default_to_network_refresh() -> None:
+    options = KeggRequestOptions()
+
+    assert options.refresh is True
+    assert options.cache_only is False
+
+
+def test_cache_only_requests_reject_network_refresh() -> None:
+    with pytest.raises(ValidationError):
+        KeggRequestOptions(cache_only=True)
 
 
 def test_public_access_requires_literal_academic_confirmation() -> None:
@@ -118,11 +131,6 @@ def test_sensitive_configuration_values_are_hidden_in_validation_errors() -> Non
 
     assert secret not in str(endpoint_error.value)
     assert secret not in str(cache_error.value)
-
-
-def test_offline_public_namespace_cannot_impersonate_another_endpoint() -> None:
-    with pytest.raises(ValidationError):
-        OfflineCacheAccess(endpoint_label="other")
 
 
 @pytest.mark.parametrize(

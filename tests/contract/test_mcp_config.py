@@ -1,45 +1,35 @@
-"""Environment configuration contracts for offline and authorized KEGG modes."""
+"""Environment configuration contracts for public and licensed KEGG modes."""
 
 import os
 from pathlib import Path
 
 import pytest
 
-from kegg_mcp.kegg import AccessMode, RetrievalEndpointClass
+from kegg_mcp.kegg import AccessMode
 from kegg_mcp.mcp.config import load_runtime_config
 
 
-def test_empty_environment_is_network_disabled() -> None:
+def test_empty_environment_defaults_to_confirmed_public_academic_access() -> None:
     config = load_runtime_config({"HOME": "/tmp/test-home"})
-    assert config.kegg.access.mode is AccessMode.OFFLINE_CACHE
+    assert config.kegg.access.mode is AccessMode.PUBLIC_ACADEMIC
+    assert config.kegg.access.academic_use_confirmed is True
 
 
-def test_public_academic_requires_literal_confirmation() -> None:
+def test_public_academic_defaults_confirmation_but_rejects_explicit_false() -> None:
     with pytest.raises(ValueError, match="ACADEMIC_USE_CONFIRMED"):
-        load_runtime_config({"KEGG_MCP_ACCESS_MODE": "public_academic"})
-    config = load_runtime_config(
-        {
-            "KEGG_MCP_ACCESS_MODE": "public_academic",
-            "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true",
-        }
-    )
+        load_runtime_config(
+            {
+                "KEGG_MCP_ACCESS_MODE": "public_academic",
+                "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "false",
+            }
+        )
+    config = load_runtime_config({"KEGG_MCP_ACCESS_MODE": "public_academic"})
     assert config.kegg.access.mode is AccessMode.PUBLIC_ACADEMIC
 
 
-def test_licensed_endpoint_can_be_reopened_in_offline_cache_mode() -> None:
-    environment = {
-        "KEGG_MCP_ACCESS_MODE": "offline_cache",
-        "KEGG_MCP_LICENSED_ENDPOINT": "https://licensed.example.test/kegg",
-        "KEGG_MCP_LICENSED_USE_CONFIRMED": "true",
-    }
-    config = load_runtime_config(environment)
-    assert config.kegg.access.mode is AccessMode.OFFLINE_CACHE
-    assert config.kegg.access.retrieval_endpoint_class is RetrievalEndpointClass.LICENSED
-    assert config.kegg.access.endpoint_label == "licensed-endpoint"
-    with pytest.raises(ValueError, match="both licensed endpoint and confirmation"):
-        load_runtime_config(
-            {"KEGG_MCP_LICENSED_ENDPOINT": environment["KEGG_MCP_LICENSED_ENDPOINT"]}
-        )
+def test_removed_offline_cache_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="public_academic or licensed"):
+        load_runtime_config({"KEGG_MCP_ACCESS_MODE": "offline_cache"})
 
 
 def test_licensed_live_mode_requires_endpoint_and_confirmation() -> None:

@@ -1,12 +1,12 @@
 # KEGG MCP
 
-KEGG MCP is a local-first MCP server and repository-scoped Codex Skill for turning KEGG
+KEGG MCP is a local stdio MCP server and repository-scoped Codex Skill for turning KEGG
 Orthology (KO) annotations into traceable KEGG mappings, module evaluations, pathway coverage
 summaries, and cautious biological interpretations. This repository is the canonical source for
 the project.
 
 > Project status: Version 0.2.0 implements the reviewed workflow remediation and is verified with
-> offline tests. This release supports and is tested only on Python 3.11.x.
+> automated tests. This release supports and is tested only on Python 3.11.x.
 
 ## Intended users
 
@@ -30,8 +30,6 @@ locked environment and an allowed demo root:
 ```bash
 uv sync --frozen
 mkdir -p /tmp/kegg-mcp-demo
-KEGG_MCP_ACCESS_MODE=public_academic \
-KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
 KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
 .venv/bin/kegg-mcp doctor
 ```
@@ -40,8 +38,6 @@ Register the absolute stdio command with Codex, then restart Codex:
 
 ```bash
 codex mcp add kegg-mcp \
-  --env KEGG_MCP_ACCESS_MODE=public_academic \
-  --env KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
   --env KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
   -- /absolute/path/to/kegg_mcp/.venv/bin/kegg-mcp
 codex mcp list
@@ -54,29 +50,27 @@ Then try this first prompt:
 > identifier, name, database release when available, and whether it came from network or cache.
 > Stop after this single entry and do not run pathway discovery.
 
-The connectivity probe makes one low-cost live request. The single content lookup is cached and
-may be served locally on later checks. JSON or TOML MCP snippets are configuration file content,
-not Bash commands. See [installation](docs/installation.md) for access modes and
+The connectivity probe makes one low-cost live request. Ordinary KEGG operations refresh from the
+network by default and retain a local cache copy for provenance and explicit cache-resource reads.
+JSON or TOML MCP snippets are configuration file content, not Bash commands. See
+[installation](docs/installation.md) for access modes and
 [troubleshooting](docs/troubleshooting.md) if discovery fails.
 
 ## Internal development profile
 
-Internal iteration, the default test suite, and pull-request CI stay explicitly offline so
-repeated development does not contact KEGG:
+Internal iteration, the default test suite, and pull-request CI include the bounded live KEGG
+campaign:
 
 ```bash
-export KEGG_MCP_ACCESS_MODE=offline_cache
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen pyright
 uv run --frozen pytest
 ```
 
-The package-level fallback also remains `offline_cache` when no access environment is supplied.
-Only the explicitly configured academic user-test profile defaults to live access. A separately
-enabled, manually dispatched main-only job performs one serialized four-request campaign; it is
-never part of pull-request validation. See `tests/live/README.md` for its authorization and
-request budget.
+The package default is confirmed `public_academic` access. Every default pytest run, including pull
+requests, performs one serialized campaign of 30 real requests for each supported operation, 120
+requests total. See `tests/live/README.md` for its controls and budget.
 
 ## Current implementation
 
@@ -92,12 +86,12 @@ The Python package currently provides:
   domain coordinates;
 - deterministic strict and lenient KO views in which rejected predictions never enter lenient
   analysis;
-- explicit public-academic, licensed-endpoint, and network-disabled KEGG access configuration;
+- default public-academic access and optional licensed-endpoint configuration;
 - typed, bounded KEGG `info`, selected `get`, selected `link`, and selected `conv` services;
 - a process-wide no-burst rate limiter, bounded retries, safe HTTPS transport, and strict text
   parsers;
 - a parser-validated, endpoint-labelled SQLite cache with entry-level GET reuse, canonical
-  relationship keys, explicit freshness, and offline behavior;
+  relationship keys, explicit freshness, and cache-only resource reads;
 - a lossless, bounded KEGG MODULE tokenizer and parser with source spans, explicit unsupported
   nodes, top-level blocks, optional terms, nested expressions, and M-number references;
 - pure exact-completion and project-defined block-coverage evaluation with bounded minimal missing
@@ -122,13 +116,13 @@ The Python package currently provides:
 - a backward-compatible CLI with explicit `serve` and side-effect-free, redacted
   `doctor [--json]` deployment diagnostics;
 - two fixed status resources and four validated resource templates for scoped results, bounded
-  result ranges, and offline-only reads of configured cache entries;
+  result ranges, and cache-only reads of configured entries;
 - side-effect-free status and cache-info reads that redact local paths and report SQLite
   statistics as `null` with `inspection_status=not_probed`, plus file-handoff readiness and an
   allowed-root count, rather than opening a database or exposing configured paths;
 - an instruction-only `kegg-ko-analysis` Skill for existing KO evidence and optional companion
   handoff, with confidence, MODULE/pathway interpretation, and reporting references; and
-- redistributable synthetic examples, installation guidance, release gates, and offline package
+- redistributable synthetic examples, installation guidance, release gates, and local package
   audit tests.
 
 Importers accept UTF-8 content. The MCP boundary may read a controlled absolute annotation path
@@ -176,7 +170,7 @@ database probes. The server exposes:
 - `get_server_status`.
 
 Fixed resources are `ko-analysis://status` and `ko-analysis://cache/info`. Validated templates
-cover a result index, a result section, a bounded result byte range, and an offline-only cached
+cover a result index, a result section, a bounded result byte range, and a cache-only cached
 KEGG entry. Each stdio server process generates an opaque scope, so retained results are not
 readable from another process scope. See the [installation and operation guide](docs/installation.md)
 for exact access-mode configuration, calls, and result retrieval.
@@ -289,7 +283,7 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── services/                     # Reference loading, orchestration, and result storage
 │   └── mcp/                          # Stdio tools, resources, schemas, and configuration
 ├── .agents/skills/kegg-ko-analysis/  # KO-analysis-only Codex Skill and references
-└── tests/                            # Unit, integration, MCP, Skill, release, and opt-in live tests
+└── tests/                            # Unit, integration, MCP, Skill, release, and default live tests
 ```
 
 ## Language policy

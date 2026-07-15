@@ -9,14 +9,12 @@ protein sequence, secret, or private biological data.
 - `plain-ko/ko-list.txt` demonstrates prefix normalization, duplicate reporting, and one invalid
   row without asserting biological meaning.
 - `plain-ko/clean-ko-list.txt` is a minimal syntactically valid input for an analysis request.
-- `config/` contains access-mode environment templates. Copy only the template matching the
-  rights and network mode you are authorized to use. The `public-academic` template is the
-  user-acceptance profile for an eligible academic user; the `offline` template is the internal
-  iteration and CI profile.
+- `config/` contains explicit public-academic and licensed environment templates. Public-academic
+  access is also the unconfigured default.
 
 The K numbers are syntax examples. They are annotations supplied for analysis, not experimental
 validation, and the files do not claim that the identifiers belong to one real organism or
 sample.
 
 See `docs/installation.md` for installation, MCP client configuration, tool calls, result
-retrieval, and offline behavior.
+retrieval, and cache behavior.

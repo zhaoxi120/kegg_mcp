@@ -19,7 +19,6 @@ def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None
     exit_code = cli.main(
         ["doctor", "--json"],
         environment={
-            "KEGG_MCP_ACCESS_MODE": "offline_cache",
             "KEGG_MCP_ALLOWED_ROOTS": str(shared),
         },
         stdout=output,
@@ -29,8 +28,8 @@ def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None
     assert exit_code == 0
     assert document["status"] == "ok"
     assert document["configuration_valid"] is True
-    assert document["access_mode"] == "offline_cache"
-    assert document["network_enabled"] is False
+    assert document["access_mode"] == "public_academic"
+    assert document["network_enabled"] is True
     assert document["file_handoff_enabled"] is True
     assert document["allowed_root_count"] == 1
     assert document["allowed_root_paths"] == "redacted"
@@ -44,7 +43,7 @@ def test_doctor_reports_disabled_file_handoff_without_roots() -> None:
 
     exit_code = cli.main(
         ["doctor"],
-        environment={"KEGG_MCP_ACCESS_MODE": "offline_cache"},
+        environment={},
         stdout=output,
     )
 

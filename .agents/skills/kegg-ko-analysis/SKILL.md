@@ -31,7 +31,7 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
   staged workflow. Let the tools perform validation, normalization, and analysis exactly once.
 - Use `probe_kegg_connectivity` before a network-dependent workflow when connectivity is unknown.
   Treat disabled access or a failed probe as a deployment issue, not a biological result.
-- Use `get_server_status` only when configuration, offline state, or KEGG eligibility is relevant.
+- Use `get_server_status` only when configuration, access state, or KEGG eligibility is relevant.
   KEGG academic or licensed authorization is deployment configuration and is never a per-task
   confirmation.
 - Follow discovered tool schemas. Do not fabricate parameters, identifiers, result sections, or

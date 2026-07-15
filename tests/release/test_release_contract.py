@@ -1,4 +1,4 @@
-"""Offline release and distribution policy checks."""
+"""Release and distribution policy checks."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "examples" / "README.md",
     PROJECT_ROOT / "examples" / "plain-ko" / "ko-list.txt",
     PROJECT_ROOT / "examples" / "plain-ko" / "clean-ko-list.txt",
-    PROJECT_ROOT / "examples" / "config" / "offline.env.example",
     PROJECT_ROOT / "examples" / "config" / "public-academic.env.example",
     PROJECT_ROOT / "examples" / "config" / "licensed.env.example",
 )
@@ -123,15 +122,12 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
         assert "SQLite format 3" not in content
 
 
-def test_access_examples_require_explicit_rights_and_use_no_secrets() -> None:
-    offline = (PROJECT_ROOT / "examples/config/offline.env.example").read_text(encoding="utf-8")
+def test_access_examples_record_rights_and_use_no_secrets() -> None:
     academic = (PROJECT_ROOT / "examples/config/public-academic.env.example").read_text(
         encoding="utf-8"
     )
     licensed = (PROJECT_ROOT / "examples/config/licensed.env.example").read_text(encoding="utf-8")
 
-    assert "KEGG_MCP_ACCESS_MODE=offline_cache" in offline
-    assert "CONFIRMED=true" not in offline
     assert "KEGG_MCP_ACCESS_MODE=public_academic" in academic
     assert "KEGG_MCP_ACADEMIC_USE_CONFIRMED=true" in academic
     assert "KEGG_MCP_ACCESS_MODE=licensed" in licensed
@@ -179,24 +175,17 @@ def test_rights_and_release_status_are_prominent() -> None:
     changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-    for required in ("public_academic", "licensed", "offline_cache"):
+    for required in ("public_academic", "licensed"):
         assert required in installation
+    assert "offline_cache" not in installation
     assert "Python 3.11.x" in installation
     assert "https://www.kegg.jp/kegg/rest/" in installation
     assert "https://www.kegg.jp/kegg/legal.html" in installation
-    offline_licensed = (
-        "KEGG_MCP_ACCESS_MODE=offline_cache\n"
-        "KEGG_MCP_LICENSED_ENDPOINT=https://kegg.example.edu/api\n"
-        "KEGG_MCP_LICENSED_USE_CONFIRMED=true"
-    )
-    assert offline_licensed in installation
-    assert "network access remains disabled" in installation
-    assert "Ordinary tool calls do not expose a" in installation
     assert "KEGG_MCP_ALLOWED_ROOTS" in installation
-    assert "KEGG_MCP_ACCESS_MODE=public_academic" in readme
-    assert "KEGG_MCP_ACADEMIC_USE_CONFIRMED=true" in readme
-    assert "export KEGG_MCP_ACCESS_MODE=offline_cache" in readme
-    assert "KEGG_MCP_ACCESS_MODE: offline_cache" in ci
+    assert "confirmed `public_academic`" in readme
+    assert "KEGG_MCP_ACCESS_MODE: public_academic" in ci
+    assert 'KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"' in ci
+    assert "120 live KEGG requests" in ci
     assert "probe connectivity once" in installation
     assert "Retrieve only KO entry `K00844`" in installation
     assert "Current status:" in readiness

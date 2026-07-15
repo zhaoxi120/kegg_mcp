@@ -123,7 +123,7 @@ class McpRuntime:
 
 
 def build_runtime(config: McpRuntimeConfig | None = None) -> McpRuntime:
-    """Construct the default user-local offline-safe runtime."""
+    """Construct the default user-local public-academic runtime."""
     effective = config or load_runtime_config()
     return McpRuntime(
         client=KeggClient(effective.kegg),
@@ -134,7 +134,7 @@ def build_runtime(config: McpRuntimeConfig | None = None) -> McpRuntime:
 
 
 def create_server(runtime: McpRuntime | None = None) -> Server[object]:
-    """Create one MCP server; dependencies can be injected by offline contract tests."""
+    """Create one MCP server; dependencies can be injected by contract tests."""
     state = runtime or build_runtime()
     server: Server[object] = Server(
         SERVER_NAME,

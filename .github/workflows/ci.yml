@@ -6,12 +6,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      run_kegg_live:
-        description: Run the explicitly authorized four-request KEGG campaign
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -25,7 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      KEGG_MCP_ACCESS_MODE: offline_cache
+      KEGG_MCP_ACCESS_MODE: public_academic
+      KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"
 
     steps:
       - name: Check out repository
@@ -50,7 +45,7 @@ jobs:
       - name: Type-check
         run: uv run --frozen pyright
 
-      - name: Test
+      - name: Test, including 120 live KEGG requests
         run: uv run --frozen pytest
 
   validate-deepkoala-companion:
@@ -87,48 +82,3 @@ jobs:
 
       - name: Test companion
         run: uv run --frozen pytest
-
-  validate-kegg-live:
-    name: Validate bounded KEGG live compatibility
-    needs:
-      - validate
-      - validate-deepkoala-companion
-    if: >-
-      vars.KEGG_MCP_LIVE_TESTS_ENABLED == 'true' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.run_kegg_live == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    environment:
-      name: kegg-live
-    concurrency:
-      group: kegg-live-api
-      cancel-in-progress: false
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-          python-version: "3.11"
-          version: "0.11.28"
-
-      - name: Synchronize locked environment
-        run: uv sync --frozen
-
-      - name: Run four-request KEGG compatibility check
-        env:
-          KEGG_MCP_ACCESS_MODE: ${{ vars.KEGG_MCP_ACCESS_MODE }}
-          KEGG_MCP_ACADEMIC_USE_CONFIRMED: ${{ vars.KEGG_MCP_ACADEMIC_USE_CONFIRMED }}
-          KEGG_MCP_LICENSED_ENDPOINT: ${{ secrets.KEGG_MCP_LICENSED_ENDPOINT }}
-          KEGG_MCP_LICENSED_USE_CONFIRMED: ${{ vars.KEGG_MCP_LICENSED_USE_CONFIRMED }}
-        run: >-
-          uv run --frozen pytest
-          tests/live/test_kegg_api_live.py
-          --run-kegg-live
-          -m live_kegg
-          -q

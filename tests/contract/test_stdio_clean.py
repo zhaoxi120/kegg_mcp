@@ -14,7 +14,8 @@ from kegg_mcp.mcp.server import SERVER_INSTRUCTIONS
 @pytest.mark.asyncio
 async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path: Path) -> None:
     environment = dict(os.environ)
-    environment["KEGG_MCP_ACCESS_MODE"] = "offline_cache"
+    environment["KEGG_MCP_ACCESS_MODE"] = "public_academic"
+    environment["KEGG_MCP_ACADEMIC_USE_CONFIRMED"] = "true"
     environment["KEGG_MCP_CACHE_PATH"] = str(tmp_path / "cache.sqlite3")
     environment["KEGG_MCP_RESULT_STORE_PATH"] = str(tmp_path / "results.sqlite3")
     parameters = StdioServerParameters(

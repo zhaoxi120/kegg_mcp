@@ -28,8 +28,8 @@ infer implementation quality from popularity or copy product-specific features i
 High-adoption repositories put a short, client-specific path before generic configuration. They
 also supply a first prompt that proves discovery without requiring the user to understand the MCP
 protocol. KEGG MCP therefore documents a Codex CLI registration command, a discovery check, and a
-bounded live content check for eligible academic acceptance. The same documentation keeps a
-separate explicit offline profile for internal iteration and CI.
+bounded live content check for eligible academic acceptance. Internal iteration and CI use the
+same bounded public-academic campaign.
 
 ### Separate operator diagnostics from protocol traffic
 
@@ -81,8 +81,8 @@ The benchmark produced the following bounded changes:
 - `kegg-mcp doctor [--json]` validates deployment configuration without network or database probes;
 - status includes `file_handoff_enabled` and `allowed_root_count` but never root paths;
 - initialization instructions explain the supported workflow and interpretation boundaries;
-- installation starts with a Codex CLI command, a bounded academic live check, and a separate
-  offline internal profile; and
+- installation starts with a Codex CLI command and a bounded academic live check used by the
+  default test profile; and
 - troubleshooting has a stable, privacy-preserving support checklist.
 
 These changes do not alter the nine-tool biological analysis surface, KEGG rate limits, access
