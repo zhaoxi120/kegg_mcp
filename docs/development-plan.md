@@ -57,7 +57,7 @@ This document resolves those gaps and is the implementation baseline. It intenti
 | Skill design | A normalization script inside the Skill would duplicate core logic. | Make the initial Skill instruction-only. It selects workflows and calls MCP tools; deterministic normalization stays in the core package. |
 | MCP output | Full annotation and missing-KO lists could exceed client context limits. | Return a bounded summary and preview, plus a scoped `result_id`, resource link, or paginated continuation. |
 | MCP schemas | Tool names and examples were given without complete protocol contracts. | Define input/output JSON Schemas, structured content, tool annotations, execution errors, pagination, and result retention before implementation. |
-| Repository files | The planned tree implied generated files and empty code before implementation. | During the design phase, keep only reviewed English documentation and repository guidance. Add each directory with its first tested artifact. |
+| Repository files | The planned tree implied generated files and empty code before implementation. | Keep tracked and published documentation in English. Local Simplified Chinese references use the ignored `*.zh-CN.md` convention and remain untracked and non-normative. Add each source directory only with its first tested artifact. |
 
 ## 3. Product definition
 
@@ -67,19 +67,23 @@ Convert KO annotation evidence into traceable KEGG mappings, exact module evalua
 
 ### 3.2 Product boundary
 
-The MCP server answers:
+The core `kegg-mcp` server answers:
 
 > What do these supplied KO annotations map to in KEGG, which KEGG module requirements do they satisfy, and what limited functional statements are supported?
 
 The Codex Skill answers:
 
-> What data does the user currently have, which workflow should be used, which external annotation step is needed, and how should the structured result be explained?
+> What data does the user currently have, which workflow should be used, which configured MCP service or external annotation step is needed, and how should the structured result be explained?
 
 An external annotation program such as DeepKOALA answers:
 
 > Which KO assignments does this protein sequence support under that program's model and decision policy?
 
-These responsibilities must remain separate.
+The optional `deepkoala-mcp` companion now implements bounded local job execution around that
+external program as a separately installed service. It has not received independent release
+sign-off and is not part of the signed core v0.1.0 release. The Skill may orchestrate the
+companion, and the core server may import its result, but neither the Skill nor the core server
+owns DeepKOALA inference. These responsibilities must remain separate.
 
 ### 3.3 Product principles
 
@@ -118,11 +122,15 @@ No sequence-annotation guidance should be shown unless requested.
 1. Confirm that the input is protein FASTA rather than nucleotide FASTA.
 2. Determine whether sequences are expected to be complete, fragmented, or potentially multi-domain.
 3. Explain annotation-tool options and trade-offs.
-4. Provide an external local command when the user chooses a tool.
-5. Ask the user to retain a detailed machine-readable result and the tool/model version.
-6. Continue with Workflow B when the result becomes available.
+4. If the optional separately installed companion MCP is discovered, explicitly configured, and
+   chosen, show its execution notice and submit the bounded job to that service. Otherwise provide
+   an external local command.
+5. Retain detailed machine-readable output, the command, tool/model version, effective device,
+   weight source, and execution date when available.
+6. Continue with Workflow B through the existing importer when the result becomes available.
 
-The MCP server must not execute the external annotator.
+The core `kegg-mcp` server must not execute the external annotator. The Skill must not implement
+or launch inference itself. Only the separately installed companion MCP runner may own execution.
 
 #### Workflow D: compare KO sets
 
@@ -179,6 +187,7 @@ Candidates require separate design decisions and must not leak into MVP interfac
 - enrichment with an explicit background universe;
 - KGML-based topology summaries;
 - plugin packaging for distribution;
+- independent release review for the implemented optional DeepKOALA companion MCP server;
 - Streamable HTTP transport with authentication and access control; and
 - non-KEGG pathway backends.
 
@@ -187,6 +196,12 @@ Candidates require separate design decisions and must not leak into MVP interfac
 ### 6.1 Single-repository decision
 
 Keep the MCP server, reusable core, repository-scoped Skill, documentation, and tests in one repository until their release cycles or licenses diverge. This keeps the workflow, tool schemas, and interpretation policy aligned.
+
+The implemented DeepKOALA companion is maintained in this repository under an explicit maintainer
+request with a separate install, entry point, environment, process, and release boundary. It must
+not add DeepKOALA or accelerator dependencies to the core `kegg-mcp` distribution. Split it into
+another repository if dependency, license, security, or release-cycle divergence makes that
+boundary unclear.
 
 Split only when one of these becomes true:
 
@@ -706,11 +721,15 @@ It should not trigger for general gene-expression analysis, nucleotide assembly,
 - Recommend an annotation workflow only when KO assignments are absent.
 - Explain tool trade-offs and avoid presenting DeepKOALA as the only valid option.
 - Request detailed, versioned output from external annotators.
+- Discover and orchestrate an optional annotation companion MCP only when the client explicitly
+  configures it and the user chooses it.
 - Call the high-level MCP tool for common workflows and primitives for advanced workflows.
 - Explain strict versus lenient evidence.
 - Distinguish module completion from pathway coverage.
 - Surface provenance, stale-cache state, and biological limitations.
 - Never guess a KO from a protein or gene name.
+- Never implement annotation inference, subprocess execution, weight management, or job scheduling
+  inside the Skill.
 
 ### 13.4 Skill metadata
 
@@ -726,15 +745,19 @@ Generate and validate the Skill using the current official Skill tooling at impl
 
 ## 14. DeepKOALA guidance
 
-DeepKOALA remains an external optional annotator. Its interface is versioned independently, so commands and output fields must be checked against the official repository when the reference is written.
+DeepKOALA remains an optional annotator external to the core `kegg-mcp` server. Its interface is
+versioned independently, so commands and output fields must be checked against the official
+repository when the reference is written. The separately installed `deepkoala-mcp` companion now
+controls its process under bounded local contracts, but it is not part of the signed core v0.1.0
+release and the Skill remains instruction and orchestration only.
 
 ### 14.1 Documentation-derived baseline
 
-As retrieved on 2026-07-14, the official documentation describes:
+As retrieved on 2026-07-15, the official documentation describes:
 
 ```bash
-python3 -m deepkoala.cli -i proteins.fasta -o results.csv --model full --detail
-python3 -m deepkoala.cli -i fragments.fasta -o results.csv --model frag --detail
+python3 -m deepkoala.cli -i proteins.fasta -o results.csv --model full --detail --device auto
+python3 -m deepkoala.cli -i fragments.fasta -o results.csv --model frag --detail --device auto
 ```
 
 - Use `full` for expected complete proteins.
@@ -747,19 +770,21 @@ The documented format was checked separately on 2026-07-14 against official Deep
 weights, explicit CPU execution, two compute threads, and zero data-loader workers. Both models
 produced detailed output that the importer accepted without schema repair. The check did not add
 DeepKOALA code, weights, dependencies, or generated output to this repository and is not part of
-the default test suite. DeepKOALA remains an external, independently versioned contract; the MCP
-server never executes it.
+the default test suite. DeepKOALA remains an external, independently versioned contract; the core
+`kegg-mcp` server never executes it.
 
 ### 14.2 Importer interface contract
 
-The first DeepKOALA integration is an import-only interface. The MCP server accepts previously generated output and must never launch DeepKOALA, load its models, inspect GPU availability, or depend on its Python runtime.
+The first DeepKOALA integration is an import-only interface. The core `kegg-mcp` server accepts previously generated output and must never launch DeepKOALA, load its models, inspect GPU availability, or depend on its Python runtime.
 
 Importer input:
 
-- detailed CSV content supplied inline, through a client-provided resource, or through an explicitly allowed local path;
-- a declared source type of `deepkoala_detailed` unless signature detection is unambiguous;
+- detailed CSV content supplied inline through the core service boundary after any client-owned
+  resource has been read and verified by that client;
+- an explicit `input_format="deepkoala_detailed"` selection;
 - optional caller-supplied provenance such as DeepKOALA version, model type, model artifact identifier, command, and execution time; and
-- the repository's versioned decision-policy identifier.
+- the repository's versioned DeepKOALA decision policy, selected by the importer rather than by
+  the caller.
 
 Importer output:
 
@@ -804,6 +829,130 @@ Do not label every below-threshold prediction `uncertain` and do not include it 
 - Multi-domain proteins may require domain-aware analysis.
 - Results from different model/database versions should not be compared without preserving those versions.
 - CPU compatibility does not guarantee acceptable performance for every dataset size or machine.
+
+### 14.5 Implemented optional local companion (unreleased)
+
+This section records the post-MVP implementation checked against the official DeepKOALA
+documentation on 2026-07-15. The `companions/deepkoala-mcp/` tree is an independent Python
+distribution and stdio entry point. It is implemented and tested, but it has not received its own
+release sign-off and is not part of the signed core v0.1.0 release.
+
+The candidate is POSIX-only because its bounded cancellation, timeout, and shutdown contract
+requires process-group ownership and its output-byte contract requires a process file-size limit.
+Startup fails before configured path handling or private state creation when those controls are
+unavailable.
+
+The companion runner controls DeepKOALA as an MCP-side process, not as Skill code or as part of the
+core `kegg-mcp` process. It has its own installation, configuration, process lifecycle, lock file,
+tests, and release review. Its lightweight distribution depends on MCP and Pydantic only; it does
+not add DeepKOALA, PyTorch, weights, KOfam profiles, or HMMER to the core runtime or distribution.
+The pipeline is:
+
+```text
+protein FASTA -> optional DeepKOALA runner -> detailed CSV plus provenance -> kegg-mcp importer
+```
+
+The implemented initial contract uses these defaults and hard limits:
+
+| Setting | Runner default | Required behavior |
+| --- | --- | --- |
+| `device` | `auto` | Resolve and pin DeepKOALA's reported device during preparation. The notice warns that `auto` may select an available GPU. Use explicit `cpu` when GPU use is not authorized. |
+| `weight_source` | `github_bundled` | Use weights already present in the configured DeepKOALA checkout. `user_provided` is an explicit provenance label, not a download request. |
+| `model_date` | `latest` within installed resources | Resolve the DeepKOALA `--date` value and record the actual model date; never report only `latest` in final provenance. |
+| `model` | `full` | Allow an explicit `frag` selection for fragmented proteins and metagenomic gene predictions. |
+| `detail` | `true` | Always request detailed output so probabilities, thresholds, and source decisions remain importable. |
+| `batch_size` | `32` | Omit the command override unless requested, while displaying the effective DeepKOALA default. |
+| `num_workers` | `2` | Omit the command override unless requested, while displaying the effective DeepKOALA default. |
+| `topk` | `1` | Omit the command override unless requested, while displaying the effective DeepKOALA default. |
+| `multi` | `false` | Reject `true`; HMMER and KOfam profile execution is outside the initial security contract. |
+| `cpu_threads` | `2` | Pin the child process's supported CPU thread controls to the configured bounded value. |
+| `max_concurrent_jobs` | `1` | Enforce one independent DeepKOALA process as a hard initial-contract maximum. This is not an inference batch-size setting. |
+| `max_queue_size` | `32` | Reject submission when the bounded process-local queue is full. |
+
+`batch_size` and job concurrency are different controls. `batch_size` is the number of sequences
+processed in one inference batch inside a single DeepKOALA process; it affects throughput and
+device memory. `max_concurrent_jobs` is the number of independent FASTA annotation processes that
+the runner may execute simultaneously. The initial companion does not accept values above one
+because separate processes would load multiple model copies and compete for the same CPU, GPU,
+and memory resources.
+
+The stdio service exposes exactly six tools:
+
+| Tool | Contract |
+| --- | --- |
+| `get_deepkoala_runner_status` | Return path-free installation readiness, defaults, bounds, supported models/devices, and scheduler counts. |
+| `prepare_deepkoala_job` | Validate and privately stage one bounded protein FASTA source, resolve the installed runtime and model artifacts, and return an execution notice without inference. |
+| `submit_deepkoala_job` | Start or queue only the exact prepared plan after `acknowledged=true` and a matching `notice_sha256`; idempotent replay is scoped to that plan. |
+| `get_deepkoala_job` | Return current lifecycle state and, after success, a source-agnostic core importer handoff. |
+| `cancel_deepkoala_job` | Cancel a queued job or terminate and reap a running process group. |
+| `delete_deepkoala_job` | Delete one terminal job and its retained local artifacts; retries are recognized only within the bounded process-local tombstone window. |
+
+Preparation and submission are deliberately separate. `prepare_deepkoala_job` returns a
+time-limited `plan_id`, canonical notice digest, non-sequence FASTA summary and digest, and the full
+notice without starting DeepKOALA. A client must display that notice and obtain explicit user
+acknowledgement. `submit_deepkoala_job` requires the same `plan_id`, exact `notice_sha256`, and
+literal `acknowledged=true`. Expired, changed, or unacknowledged plans do not execute.
+
+The notice contains:
+
+- the requested and resolved model date and requested and resolved device;
+- a warning that `device=auto` may use an available GPU, when applicable;
+- the weight source (`github_bundled` or an explicit user-provided source) and resolved weight
+  version when available;
+- the SHA-256 identity and size of the configured interpreter, DeepKOALA source tree, model
+  weights, and model configuration;
+- the FASTA SHA-256 digest, byte and residue counts, sequence count, and length range without
+  sequence content or local paths;
+- the effective DeepKOALA `batch_size`, `num_workers`, `topk`, and `multi` settings;
+- `cpu_threads`, timeout, the hard one-job limit, and the planned running or queued disposition;
+- a statement that installed weights are used as-is and are never downloaded or replaced; and
+- the updated-weight location: <https://www.genome.jp/ftp/db/deepkoala/>.
+
+The companion accepts at most 5,000,000 FASTA bytes, 5,000,000 residues, 100,000 sequences,
+100,000 residues per sequence, and 1,024 bytes per header. Output is limited to 5,000,000 bytes and
+100,000 rows; sanitized diagnostics are limited to 65,536 bytes. Default timeout is 3,600 seconds,
+prepared plans expire after 600 seconds, and terminal artifacts are retained for 86,400 seconds
+unless explicitly deleted or removed by cleanup. Status reports the effective sequence-count,
+residue-count, per-sequence, and header limits after any configured reductions. Job summaries mark
+bounded diagnostic tails with `diagnostics_truncated=true`, which requires a terminal
+`diagnostic_uri`.
+
+The output-byte bound is installed as `RLIMIT_FSIZE` before the upstream CLI is loaded and is
+revalidated after exit. This prevents a malformed or faulty child from writing an unbounded result
+before post-process validation can reject it.
+
+The runner uses a fixed argument vector without `shell=True`, validates allowed-root file intake
+against traversal and symlink escape, copies input into a private state directory, bounds both
+diagnostic streams, and never returns full sequences or local paths. It rechecks the staged FASTA,
+configured interpreter, DeepKOALA source, weights, and model configuration against the notice
+identities at submission, immediately before launch, and again after a successful process exit.
+Cancellation and timeout terminate and reap the process group; cleanup tracks retryable failures
+rather than reporting false deletion.
+
+Explicit deletion retains at most the 1,024 most recent job identifiers as process-local
+tombstones. A repeated delete is recognized only inside that bounded window; tombstone eviction or
+process restart results in `JOB_NOT_FOUND`, so the tool does not claim unconditional idempotence.
+
+Successful output, provenance, and sanitized diagnostics are scoped to the companion process under
+`deepkoala-job://jobs/{job_id}/{section}`. Direct resource reads are limited to 64 KiB. Larger
+artifacts return a pagination notice and binary-safe ranges of at most 1 MiB, each carrying
+`content_base64`, the artifact SHA-256, total size, and continuation URI. The client must decode and
+assemble ranges in order and verify the declared total bytes and digest against the successful job
+summary. It must then pass the verified CSV inline to core `normalize_ko_annotations` with
+`input_format=deepkoala_detailed` and the returned `source_provenance_template`. The core server
+cannot dereference another server's session-private companion URI, and the companion does not
+introduce a second normalization policy.
+
+On 2026-07-15, a manual CPU-only smoke check exercised this implemented preparation, submission,
+execution, detailed-output validation, and result lifecycle against official DeepKOALA commit
+`bebbe0c43f50a26488f7092f6b355aae870a4ed9`. It used the checkout-bundled `202502` full and fragment
+weights, the existing Python 3.11/PyTorch `2.9.1+cu130` environment with
+`torch.cuda.is_available() == false`, `device=cpu`, two CPU threads, `batch_size=1`,
+`num_workers=0`, `topk=1`, and `multi=false`. Both models completed without a GPU, download, new
+environment, or repository-tracked output and produced schema-valid detailed rows. Both terminal
+jobs were deleted and the temporary state root was empty afterward. This smoke check is
+compatibility evidence only, is outside the default offline suite, and does not grant the companion
+release sign-off or establish biological correctness.
 
 ## 15. Reporting and provenance
 
@@ -945,8 +1094,10 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Use synthetic or independently authored small fixtures.
 - Do not commit bulk KEGG responses, pathway images, KGML collections, KOfam profiles, model weights, or large FASTA files.
-- Do not run live KEGG requests in normal CI.
-- Keep any opt-in live smoke test local, rate-limited, eligibility-gated, and tolerant of current database content.
+- Do not run live KEGG requests in normal or pull-request CI.
+- Keep any opt-in live compatibility campaign local or in a dedicated main-only CI job that
+  is explicitly enabled, serialized, rate-limited, eligibility-gated, bounded, and tolerant of
+  current database content.
 - Do not use strict snapshots of full live KEGG entries because database content changes.
 
 ### 17.5 Skill evaluation
@@ -977,7 +1128,7 @@ Tasks:
 - create the Python project and package metadata;
 - configure uv, ruff, pyright, pytest, and CI;
 - add contribution, security, and issue templates; and
-- keep CI free of live KEGG calls.
+- keep default and pull-request CI free of live KEGG calls.
 
 Acceptance:
 
@@ -1236,6 +1387,8 @@ The first release is blocked until all of the following are true:
 - Reports do not claim pathway activity, flux, phenotype, or statistical significance from KO presence alone.
 - All default CI tests run without live KEGG access.
 - All tracked repository content is in English.
+- Local Simplified Chinese references match `*.zh-CN.md`, remain ignored and untracked, and are
+  absent from GitHub, packages, releases, examples, and CI artifacts.
 - Version 0.1.x package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.
 - The private-release security policy documents a collaborator-only reporting boundary; GitHub
@@ -1270,6 +1423,14 @@ The implementation milestones resolved the original open decisions as follows:
    package metadata excludes Python 3.12 and later.
 10. **Server and Skill identity:** the stdio server name, console command, and Skill MCP dependency
     value are all `kegg-mcp`.
+11. **DeepKOALA execution boundary:** automatic FASTA-to-KO execution is implemented post-MVP as a
+    separately installed companion MCP server and runner process with its own review boundary. The
+    implementation has not received release sign-off and is not part of core v0.1.0. The Skill may
+    orchestrate it, and the core server imports its detailed result, but neither contains inference
+    or job-control logic.
+12. **Documentation language:** tracked and published repository content is English. Local
+    Simplified Chinese references use `*.zh-CN.md`, remain ignored and untracked, and are
+    non-normative; publishing one requires an explicit file-specific maintainer request.
 
 ## 22. Primary references
 
@@ -1282,6 +1443,7 @@ External behavior is time-sensitive. Recheck these primary sources during the re
 - [KEGG MODULE entry help](https://www.kegg.jp/kegg/document/help_bget_module.html)
 - [DeepKOALA GenomeNet page](https://www.genome.jp/tools/deepkoala/)
 - [DeepKOALA official repository](https://github.com/zhaoxi120/deepkoala)
+- [DeepKOALA updated weights directory](https://www.genome.jp/ftp/db/deepkoala/)
 - [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 - [MCP resources specification](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
 - [OpenAI Codex Skill documentation](https://developers.openai.com/codex/skills)

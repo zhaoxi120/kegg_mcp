@@ -14,7 +14,10 @@ description: Route protein FASTA, K numbers, KO annotation tables, KEGG module o
    workflow, and ask only for information that changes the route or interpretation.
 3. If K numbers are absent, explain external annotation choices using
    [annotation-tools.md](references/annotation-tools.md). Read
-   [deepkoala.md](references/deepkoala.md) only when DeepKOALA is chosen or supplied.
+   [deepkoala.md](references/deepkoala.md) only when DeepKOALA is chosen or supplied. If a
+   separately installed DeepKOALA companion MCP is discovered and explicitly configured, offer it
+   as one execution route; otherwise provide external-run guidance. Never infer that the companion
+   is available merely because this Skill or the core server is installed.
 4. If K numbers are already present, skip sequence-annotation guidance and use the MCP server.
 
 ## Use the MCP server
@@ -24,10 +27,29 @@ description: Route protein FASTA, K numbers, KO annotation tables, KEGG module o
   `analyze_pathways`, or `compare_ko_sets` only when the user needs the corresponding primitive or
   an advanced staged workflow. Let the tools perform validation, normalization, and analysis.
 - Use `get_server_status` only when configuration, offline state, or KEGG eligibility is relevant.
+- Do not send FASTA to the core `kegg-mcp` server. The optional `deepkoala-mcp` companion is a
+  separately installed service that is implemented in this repository but not part of the signed
+  core v0.1.0 release.
+- When `deepkoala-mcp` is discovered, configured, and selected, call
+  `get_deepkoala_runner_status`, then `prepare_deepkoala_job`. Show the complete execution notice
+  to the user. Call `submit_deepkoala_job` only after explicit acknowledgement, using the returned
+  `plan_id` and exact `notice_sha256`; never synthesize or reuse confirmation for a changed notice.
+- Poll with `get_deepkoala_job`. Use `cancel_deepkoala_job` only when the user requests
+  cancellation, and use `delete_deepkoala_job` only after a terminal job's retained artifacts are
+  no longer needed.
+- On success, read the scoped companion output and provenance resources. Follow pagination, decode
+  each range's `content_base64`, assemble the bytes in order, verify the declared total byte count
+  and SHA-256 digest, and pass the verified detailed CSV inline to core
+  `normalize_ko_annotations` with
+  `input_format=deepkoala_detailed` and the returned source-provenance template. Do not pass a
+  companion resource URI to the core server as though one MCP server could dereference another
+  server's private resource.
 - Follow the discovered tool schemas. Do not fabricate parameters, identifiers, result sections,
   or successful retrievals.
 - Retrieve full artifacts through the returned result resource when a bounded preview is
   insufficient. Treat result identifiers as opaque and session-scoped.
+- Never implement DeepKOALA inference, subprocess execution, job scheduling, weight installation,
+  or KO normalization inside the Skill.
 
 ## Interpret the result
 

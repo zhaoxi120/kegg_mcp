@@ -8,10 +8,19 @@ Choose the route from evidence already supplied. Do not ask the user to restate 
 2. Establish the analysis unit and whether proteins are expected to be complete, fragmented, or
    multi-domain. Ask only when this cannot be inferred and would change tool or model selection.
 3. Offer external annotation choices; do not present DeepKOALA as the only option.
-4. Request detailed machine-readable output plus the command, software version, model or database
-   version, and execution date.
-5. Do not send FASTA to the MCP server and do not execute an annotator through it. Resume with the
-   annotation-table route after KO evidence is available.
+4. If a separately installed DeepKOALA companion MCP is discovered, explicitly configured, and
+   chosen, read `deepkoala.md`, inspect runner status, prepare the job without inference, show the
+   complete execution notice, and submit only after the user explicitly acknowledges its exact
+   digest. Otherwise provide an external command for the selected annotator.
+5. Request detailed machine-readable output plus the command, software version, model or database
+   version, execution date, and effective device and weight source when applicable.
+6. Do not send FASTA to the MCP server named `kegg-mcp` and do not execute an annotator through the
+   core server. Resume with the annotation-table route after KO evidence is available. The
+   optional companion is a distinct MCP service, not a Skill implementation or a core tool.
+7. For a successful companion job, read and paginate its scoped output resource, decode the
+   base64-encoded ranges, verify the declared byte count and SHA-256 digest, and submit the verified
+   detailed CSV plus returned source-provenance template to the core importer. Do not assume that
+   the core server can read a private resource owned by another MCP server.
 
 ## Plain K numbers
 

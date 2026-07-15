@@ -233,6 +233,16 @@ evidence. `score_type` is recorded as `probability`; a present threshold uses `t
 The importer accepts previously generated output only. It does not import DeepKOALA code, load a
 model, inspect a GPU, execute an annotation command, or infer a missing model version.
 
+The implemented, separately installed `deepkoala-mcp` companion returns a handoff containing its
+scoped detailed-CSV resource URI, `input_format=deepkoala_detailed`, a core payload-size bound, and
+a source-provenance template. That URI remains private to the companion MCP process; the core
+server cannot dereference it. The client must read the companion resource, follow bounded
+pagination when required, decode each range's `content_base64`, assemble bytes in order, verify the
+successful job's declared byte count and SHA-256 digest, decode the verified CSV as UTF-8, and
+provide it inline as `text` with the returned template as `source` to
+`normalize_ko_annotations`. The companion does not introduce a second DeepKOALA-specific
+normalization path, and this importer remains independent of runner and Skill availability.
+
 The fixture contract was reviewed against the external documentation on 2026-07-14. A separate
 manual compatibility check was also performed on 2026-07-14 against official DeepKOALA commit
 `bebbe0c43f50a26488f7092f6b355aae870a4ed9`. The check used the repository-bundled `202502` full
@@ -241,6 +251,15 @@ CPU selection, two compute threads, and zero data-loader workers. Both bundled w
 and completed inference, and a generated detailed top-k CSV imported without schema repair. This
 manual check did not add DeepKOALA code, weights, dependencies, or generated output to this
 repository and is not part of the default test suite.
+
+On 2026-07-15, a separate CPU-only companion smoke check used the same official commit and bundled
+`202502` full and fragment weights with the existing Python 3.11/PyTorch `2.9.1+cu130`
+environment, `torch.cuda.is_available() == false`, `device=cpu`, two CPU threads,
+`batch_size=1`, `num_workers=0`, `topk=1`, and `multi=false`. Both model jobs completed through the
+companion lifecycle and produced schema-valid detailed CSV without downloading weights, creating
+an environment, or using a GPU. Both jobs were deleted and the temporary state root was empty; no
+generated output was retained in the repository. This manual evidence does not change the import
+schema, is not part of the default suite, and is not companion release sign-off.
 
 ## Duplicate and conflict reporting
 

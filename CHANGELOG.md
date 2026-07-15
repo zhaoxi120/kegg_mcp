@@ -6,7 +6,35 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Added an optional, independently installed `deepkoala-mcp` 0.1.0 candidate with six bounded
+  stdio tools for redacted status, two-phase job preparation and acknowledged submission, job
+  polling, cancellation, and terminal deletion.
+- Added scoped detailed-CSV, provenance, and sanitized-diagnostic resources with bounded byte-range
+  pagination and a source-agnostic handoff to the existing core DeepKOALA importer.
+- Added CPU-bounded runner controls, one-job concurrency, queue and retention limits,
+  identity-bound execution-artifact rechecks, and separate offline tests and packaging metadata.
+- Added explicit effective FASTA structure limits and diagnostic-truncation state to companion
+  status/job contracts, and documented the bounded process-local deletion tombstone window.
+
+### Documentation
+
+- Added an English repository capabilities and usage guide for the first supported release.
+- Defined `*.zh-CN.md` as a local-only, ignored convention for non-normative Simplified Chinese
+  reference documents that are not published to GitHub or included in distributions.
+- Documented installation and operation of the separately configured DeepKOALA companion while
+  keeping it explicitly outside the supported core 0.1.0 release.
+
+### Security
+
+- Kept DeepKOALA, PyTorch, model code, and model artifacts outside the core package and process;
+  the companion uses an absolute external interpreter and never downloads or replaces weights.
+- Added private FASTA staging, allowed-root and symlink enforcement, fixed argument-vector process
+  launch without a shell, a pre-execution hard output-file limit, bounded sanitized diagnostics,
+  and digest acknowledgement before inference.
+- Made the companion candidate fail closed before path handling or state creation on runtimes
+  without the required POSIX process-group and file-size-limit support.
 
 ## [0.1.0] - 2026-07-15
 

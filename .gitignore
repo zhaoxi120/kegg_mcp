@@ -47,6 +47,9 @@ results/
 *.fasta
 *.fna
 
+# Local-only translated documentation
+*.zh-CN.md
+
 # Editor and operating-system files
 .DS_Store
 .idea/

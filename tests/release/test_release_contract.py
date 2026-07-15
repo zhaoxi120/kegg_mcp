@@ -268,6 +268,7 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
             _assert_safe_archive_name(name)
             assert wheel.getinfo(name).file_size <= 5 * 1024 * 1024
         assert "kegg_mcp/mcp/server.py" in names
+        assert all("deepkoala_mcp" not in PurePosixPath(name).parts for name in names)
         entry_points_name = next(
             name for name in names if name.endswith(".dist-info/entry_points.txt")
         )
@@ -294,6 +295,12 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
             _assert_safe_archive_name(member.name)
             assert member.size <= 5 * 1024 * 1024
         regular_members = tuple(member for member in members if member.isfile())
+        assert all(
+            "companions" not in PurePosixPath(member.name).parts for member in regular_members
+        )
+        assert all(
+            "deepkoala_mcp" not in PurePosixPath(member.name).parts for member in regular_members
+        )
         license_members = tuple(
             member for member in regular_members if PurePosixPath(member.name).name == "LICENSE"
         )

@@ -1,8 +1,8 @@
 # Installation and operation
 
 KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs deterministic local
-analysis, and retrieves KEGG references only under an explicitly configured access mode. It does
-not run DeepKOALA or another sequence annotator.
+analysis, and retrieves KEGG references only under an explicitly configured access mode. The core
+server does not run DeepKOALA or another sequence annotator.
 
 Version 0.1.0 is distributed through the private GitHub repository and its release artifacts; it
 has not been published to a package registry. Install from the exact `v0.1.0` source checkout or
@@ -17,7 +17,7 @@ from a release wheel after verifying its published SHA-256 digest.
   endpoint.
 
 The source development workflow uses [uv](https://docs.astral.sh/uv/). GPU access, PyTorch,
-DeepKOALA, model weights, and KOfam profiles are not server dependencies.
+DeepKOALA, model weights, and KOfam profiles are not core server dependencies.
 
 ## Install from a source checkout
 
@@ -178,6 +178,170 @@ can be invoked explicitly as `$kegg-mcp`; implicit invocation is enabled for KO/
 Skill chooses workflows and explains results, while deterministic normalization and analysis
 remain in the server. A wheel installation supplies the server command but does not install this
 repository-scoped Skill.
+
+## Install the optional DeepKOALA companion candidate
+
+The repository contains an independently installed `deepkoala-mcp` 0.1.0 candidate. It is
+unreleased and is not part of the supported core 0.1.0 release. It has its own distribution,
+lock file, Python environment, stdio entry point, runner lifecycle, tests, and release review. It
+is not another tool inside the eight-tool core process, and installing either distribution does
+not install the other one.
+
+This candidate supports POSIX platforms only. It requires process-group support so cancellation,
+timeout, and server shutdown can terminate and reap the complete external job, plus file-size-limit
+support to bound output before upstream code runs. An unsupported runtime fails startup before
+configured paths are handled or companion state is created.
+
+The companion package has only lightweight MCP and validation dependencies. DeepKOALA, PyTorch,
+weights, HMMER, and KOfam remain external and are never dependencies of the core wheel. From the
+repository root, install the companion separately:
+
+```bash
+uv sync --project companions/deepkoala-mcp --frozen
+```
+
+The companion executable is then available at
+`companions/deepkoala-mcp/.venv/bin/deepkoala-mcp`. It requires an existing official DeepKOALA
+checkout and an existing Python 3.11 interpreter in which that checkout's PyTorch runtime works.
+It never installs, downloads, updates, or replaces DeepKOALA code or model resources.
+
+On a module-based system, resolve the execution interpreter before configuring the MCP client:
+
+```bash
+module load pytorch
+command -v python
+```
+
+Record the returned absolute path in `DEEPKOALA_MCP_PYTHON`. Do not make the MCP command run
+`module load`, activate an environment, or invoke another shell wrapper. An MCP process does not
+reliably receive interactive module state, and the runner uses a fixed argument vector without
+`shell=True`.
+
+### Configure the companion environment
+
+Required and principal variables are:
+
+| Environment variable | Meaning |
+| --- | --- |
+| `DEEPKOALA_MCP_CHECKOUT` | Required absolute path to the existing official DeepKOALA checkout. |
+| `DEEPKOALA_MCP_PYTHON` | Required absolute executable in the external DeepKOALA/PyTorch environment. |
+| `DEEPKOALA_MCP_STATE_ROOT` | Required dedicated absolute private state directory; if it exists, it must be owned by the current user with mode `0700`. |
+| `DEEPKOALA_MCP_ALLOWED_ROOTS` | Optional OS-path-separator list of existing absolute roots allowed for `fasta_path` input. |
+| `DEEPKOALA_MCP_WEIGHT_SOURCE` | `github_bundled` (default) or `user_provided`; records provenance and never triggers a download. |
+| `DEEPKOALA_MCP_CPU_THREADS` | External-process thread limit; default `2`, range 1-32. |
+| `DEEPKOALA_MCP_MAX_CONCURRENT_JOBS` | Fixed at `1` in this candidate. |
+| `DEEPKOALA_MCP_MAX_QUEUE_SIZE` | Default and hard maximum `32`. |
+| `DEEPKOALA_MCP_DEFAULT_TIMEOUT_SECONDS` | Default `3600`, maximum `86400`. |
+| `DEEPKOALA_MCP_PLAN_TTL_SECONDS` | Prepared-plan lifetime; default `600`, maximum `86400`. |
+| `DEEPKOALA_MCP_RETENTION_SECONDS` | Terminal-artifact retention; default `86400`, maximum `2592000`. |
+
+`DEEPKOALA_MCP_MAX_INPUT_BYTES`, `DEEPKOALA_MCP_MAX_OUTPUT_BYTES`,
+`DEEPKOALA_MCP_MAX_DIAGNOSTIC_BYTES`, `DEEPKOALA_MCP_MAX_SEQUENCES`,
+`DEEPKOALA_MCP_MAX_RESIDUES`, `DEEPKOALA_MCP_MAX_SEQUENCE_LENGTH`, and
+`DEEPKOALA_MCP_MAX_HEADER_LENGTH` may lower, but never raise, their hard bounds. The default hard
+input and output limits are 5,000,000 bytes, diagnostics are capped at 65,536 bytes, the sequence
+count is capped at 100,000, and a sequence is capped at 100,000 residues.
+The runner applies the effective output limit as `RLIMIT_FSIZE` before loading the upstream CLI and
+revalidates the resulting file after execution.
+
+The state root must not overlap the checkout or an allowed input root. An inline FASTA is accepted
+without an allowed root. A `fasta_path` must be an absolute regular file beneath one configured
+allowed root; traversal, symlinks, identity changes during intake, and oversized files are
+rejected. Every accepted input is copied into private companion state before execution.
+
+Register the two stdio servers independently. For example:
+
+```json
+{
+  "mcpServers": {
+    "kegg-mcp": {
+      "command": "/absolute/path/to/core/.venv/bin/kegg-mcp",
+      "env": {
+        "KEGG_MCP_ACCESS_MODE": "offline_cache"
+      }
+    },
+    "deepkoala-mcp": {
+      "command": "/absolute/path/to/kegg_mcp/companions/deepkoala-mcp/.venv/bin/deepkoala-mcp",
+      "env": {
+        "DEEPKOALA_MCP_CHECKOUT": "/absolute/path/to/DeepKOALA",
+        "DEEPKOALA_MCP_PYTHON": "/absolute/path/to/pytorch/bin/python",
+        "DEEPKOALA_MCP_STATE_ROOT": "/absolute/private/path/deepkoala-mcp",
+        "DEEPKOALA_MCP_ALLOWED_ROOTS": "/absolute/private/path/fasta-inputs",
+        "DEEPKOALA_MCP_WEIGHT_SOURCE": "github_bundled",
+        "DEEPKOALA_MCP_CPU_THREADS": "2"
+      }
+    }
+  }
+}
+```
+
+### Run one acknowledged job
+
+The companion exposes six tools:
+
+```text
+get_deepkoala_runner_status
+prepare_deepkoala_job
+submit_deepkoala_job
+get_deepkoala_job
+cancel_deepkoala_job
+delete_deepkoala_job
+```
+
+First call `get_deepkoala_runner_status` with `{}` to inspect the redacted structural inventory and
+bounds. A structurally ready status is not an executable model check. Then call
+`prepare_deepkoala_job` with exactly one of inline `fasta_text` or an allowlisted absolute
+`fasta_path`; preparation is the authoritative preflight for the selected model, date, device, and
+artifact identities. It privately stages and validates the input but does not run DeepKOALA, and
+returns a prepared plan, expiry, structured execution notice, and `notice_sha256`.
+
+Preparation hashes the selected artifacts and executes the bounded device probe, but it does not
+load the model or prove that the installed weights and configuration are semantically valid. A
+submitted inference can therefore still fail safely after acknowledgement.
+
+Display the complete notice to the user. It records the FASTA digest and summary, configured
+interpreter identity, DeepKOALA source identity, model and configuration identities, weight
+source, resolved model date, requested and resolved device, execution settings, queue disposition,
+and the upstream updated-weight location. `device=auto` may select an available GPU. For CPU-only
+execution, prepare with `device="cpu"`; a conservative diagnostic job can also use
+`batch_size=1`, `num_workers=0`, and `DEEPKOALA_MCP_CPU_THREADS=2`.
+
+Only after explicit acknowledgement, call `submit_deepkoala_job` with the returned `plan_id`, the
+exact `notice_sha256`, and `acknowledged=true`. Changed inputs or execution artifacts invalidate
+the plan. Job concurrency is fixed at one; additional jobs may enter the bounded queue. Poll with
+`get_deepkoala_job`, cancel only when required, and delete terminal artifacts when they are no
+longer needed.
+
+When the execution queue is already full, preparation returns `QUEUE_FULL` without staging a new
+FASTA. A queue-capacity race discovered after preflight is also cleaned before the error is
+returned; retry only after a queued job finishes or is cancelled.
+
+Runner status returns the effective `max_sequences`, `max_residues`, `max_sequence_length`, and
+`max_header_length` values, including any administrator-configured reductions. Job summaries also
+return `diagnostics_truncated`; when true, the terminal `diagnostic_uri` contains only the bounded
+sanitized tail.
+
+A delete can be retried only within the bounded process-local tombstone window for the 1,024 most
+recently deleted job identifiers. After eviction or a companion restart, the same retry returns
+`JOB_NOT_FOUND`; clients must not assume unconditional delete idempotence.
+
+The candidate supports `full` and `frag`, always requests detailed CSV, and rejects `multi=true`.
+It uses only resources already installed under the checkout. No tool or configuration value
+downloads weights.
+
+### Transfer successful output to the core importer
+
+Successful job state includes a scoped output URI, output SHA-256 digest, provenance URI, and a
+source-provenance handoff template. Read the `output` resource. If it returns an
+`artifact_requires_pagination` notice, follow the byte-range URIs, base64-decode and concatenate
+the pages in order, and verify the complete SHA-256 digest. Range pages are limited to 1 MiB.
+
+The core server cannot dereference a private resource owned by another stdio server. The MCP client
+or Skill must pass the verified decoded CSV inline to `normalize_ko_annotations` with
+`input_format="deepkoala_detailed"` and pass the companion's `source_provenance_template` as the
+core `source` object. The existing core importer and named policy then preserve raw source
+evidence and derive accepted or rejected records. The companion never interprets a prediction as
+experimental validation.
 
 ## Verify discovery and status
 

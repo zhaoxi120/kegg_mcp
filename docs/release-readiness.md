@@ -88,8 +88,9 @@ following without network access:
 
 Then, only if the release reviewer is an eligible academic user performing academic work or is
 using an appropriately licensed endpoint, run the separately approved minimal live smoke test.
-Record the endpoint class and number of requests, but do not publish response bodies. A live smoke
-test must remain outside CI and the default test suite.
+Record the endpoint class and number of requests, but do not publish response bodies. The smoke
+test remains outside the default test suite. A guarded live CI compatibility campaign does not by
+itself authorize or replace this release-specific review.
 
 ## Data-rights gates
 
@@ -103,6 +104,8 @@ test must remain outside CI and the default test suite.
       tracked or packaged.
 - [x] No DeepKOALA weight, KOfam profile, annotation database, or third-party model code is tracked
       or packaged.
+- [x] Local `*.zh-CN.md` reference documents are ignored and absent from GitHub, Python
+      distributions, source archives, release artifacts, examples, and CI artifacts.
 - [x] Local cached payloads are excluded from version control, examples, CI artifacts, and
       releases.
 - [x] External-system statements cite the KEGG API and legal pages with a retrieval date.
@@ -165,6 +168,79 @@ This checklist is operational guidance, not legal advice.
       against the exact candidate.
 - [x] The Skill never guesses a KO from a sequence, gene name, or protein name.
 
+## Unreleased DeepKOALA companion change control
+
+Current status: the optional `deepkoala-mcp` companion is implemented under an explicit maintainer
+request as a separate distribution, stdio entry point, environment contract, runner process, lock
+file, test suite, and artifact boundary. It has not received independent release sign-off and is
+not part of the signed core v0.1.0 candidate. Its presence in the repository does not alter any
+completed checkbox or sign-off above.
+
+The implementation exposes exactly six schema-defined tools:
+`get_deepkoala_runner_status`, `prepare_deepkoala_job`, `submit_deepkoala_job`,
+`get_deepkoala_job`, `cancel_deepkoala_job`, and `delete_deepkoala_job`. Preparation privately
+stages and hashes bounded FASTA without inference. Submission requires literal
+`acknowledged=true`, the same time-limited `plan_id`, and the exact notice SHA-256 after the client
+has displayed the complete notice and obtained explicit user confirmation.
+
+The current implementation provides the following release evidence, which must be reverified
+against an exact companion candidate:
+
+- its distribution depends on MCP and Pydantic only and excludes the core package, DeepKOALA,
+  PyTorch, weights, KOfam profiles, HMMER, generated FASTA, and generated results;
+- it declares a POSIX-only platform contract and fails startup before path handling or state
+  creation when required process-group or file-size-limit operations are unavailable;
+- it always requests detailed output, rejects `multi=true`, never downloads or replaces weights,
+  fixes `cpu_threads=2` by default, and enforces `max_concurrent_jobs=1` as a hard limit;
+- it uses fixed argument vectors without `shell=True`, a pre-execution hard output-file limit,
+  private state, allowed-root and symlink validation, process-group cancellation and timeout,
+  bounded sanitized diagnostics, retention, explicit terminal deletion, and retryable cleanup;
+- status, notices, errors, and provenance expose path-free identities and hashes rather than local
+  paths, environment values, sequence content, or secrets;
+- input and output are capped at 5,000,000 bytes, diagnostics at 65,536 bytes, direct resource
+  content at 64 KiB, and binary-safe resource ranges at 1 MiB; status exposes effective FASTA
+  structure limits, and job summaries explicitly mark truncated diagnostic tails;
+- successful jobs expose detailed output, provenance, and diagnostics only through opaque,
+  process-scoped resources, plus a source-agnostic core importer handoff; and
+- on 2026-07-15, both bundled `202502` full and fragment models completed an explicit CPU-only
+  smoke run against official DeepKOALA commit
+  `bebbe0c43f50a26488f7092f6b355aae870a4ed9` using the existing Python 3.11/PyTorch
+  `2.9.1+cu130` environment, `torch.cuda.is_available() == false`, two CPU threads,
+  `batch_size=1`, `num_workers=0`, `topk=1`, and no download or new environment. Both terminal
+  jobs were deleted and the temporary state root was empty afterward.
+
+Terminal deletion is safely replayable only for the 1,024 most recent process-local tombstones.
+The delete tool must not advertise unconditional idempotence because eviction or process restart
+causes a later retry to return `JOB_NOT_FOUND`.
+
+Before an independent companion release, run its locked validation from its own project root:
+
+```bash
+cd companions/deepkoala-mcp
+uv sync --frozen
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen pyright
+uv run --frozen pytest
+uv build --offline --no-python-downloads --no-sources --no-progress --no-create-gitignore \
+  --out-dir dist
+```
+
+The companion release remains blocked until the exact candidate receives independent dependency,
+license, security/privacy, process-isolation, clean-install, distribution-content, MCP stdio, and
+full/fragment CPU compatibility review. Any authorized accelerator test must be separately
+approved and must verify device disclosure and resource contention; the existing CPU smoke is not
+GPU evidence. Inspect companion wheel and source archives independently and record their hashes.
+Never add them to the signed core v0.1.0 artifact set retroactively.
+
+The Skill may orchestrate the companion only after MCP discovery, explicit configuration, and user
+selection. It must not implement inference, subprocess control, weight installation, or silent
+downloads. On success, the client must decode `content_base64`, assemble any paginated companion
+output in order, verify its total byte count and SHA-256 digest, and pass the verified detailed CSV
+plus the returned source-provenance template to the existing core importer. The core server cannot
+dereference a session-private resource owned by another MCP server, and the companion must not
+replace the existing normalization policy.
+
 ## Release sign-off
 
 The release owner may mark the candidate ready only after all applicable gates above have evidence
@@ -181,7 +257,8 @@ The exact GitHub repository checkout or tag source archive also provides a repos
 Skill that selects workflows and explains evidence limits; the Python wheel and source
 distribution do not install that Skill.
 
-The release does not annotate sequences, redistribute KEGG or KOfam data, run enrichment, infer
-pathway activity, or provide a remote service. Public KEGG REST access is available only after an
+The signed core v0.1.0 release does not annotate sequences, redistribute KEGG or KOfam data, run
+enrichment, infer pathway activity, or provide a remote service. The unreleased optional companion
+does not change that release statement. Public KEGG REST access is available only after an
 eligible academic operator explicitly confirms academic use; other users need an appropriately
 licensed endpoint or authorized offline cache content.

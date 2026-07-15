@@ -1,7 +1,13 @@
 # External annotation tools
 
-Use an external annotator only when the user lacks KO assignments. The MCP server imports results;
-it does not install, download, or execute these tools.
+Use an external annotator only when the user lacks KO assignments. The core MCP server imports
+results; it does not install, download, or execute these tools.
+
+The repository now contains an optional, separately installed `deepkoala-mcp` companion server
+and runner process. It has not been included in the signed core v0.1.0 release and is not available
+merely because this Skill or `kegg-mcp` is installed. The Skill may orchestrate it only after MCP
+discovery, explicit configuration, and user selection; the Skill must not contain inference,
+subprocess, weight-management, or scheduling code.
 
 ## Selection factors
 

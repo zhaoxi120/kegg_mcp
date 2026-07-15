@@ -95,3 +95,54 @@ not benchmark model-to-model variability, malicious prompt injection, long-conte
 client-specific tool selection, or external annotator compatibility. Future releases must repeat
 the review against their exact candidate; any routing or interpretation regression blocks release
 even if the deterministic static tests still pass.
+
+## Unreleased companion-runner evaluation
+
+The optional `deepkoala-mcp` companion is now implemented as a separately installed service, but
+it is not part of the observed or signed core v0.1.0 behavior above and has not received an
+independent release sign-off. The Skill instructions now distinguish the optional companion from
+the core server and describe its discovered orchestration contract. This documentation update does
+not retroactively change the six-prompt v0.1.0 forward-review result.
+
+Before a companion release, repeat the protein-FASTA prompt with at least these client states:
+
+1. the companion is absent: retain multiple external annotation choices and never claim that local
+   execution is available;
+2. the companion is discovered but status is not structurally ready: explain the redacted
+   inventory failure and offer external-run guidance without installing or downloading anything;
+3. the companion is structurally ready but not selected: do not prepare or submit a job, and do
+   not claim that a selected model has passed executable preflight;
+4. the companion is selected: call `get_deepkoala_runner_status`, then use
+   `prepare_deepkoala_job` as the authoritative selected-job preflight, display the complete notice,
+   and wait for explicit user acknowledgement;
+5. the notice changes or expires: do not reuse acknowledgement; prepare again and display the new
+   notice; and
+6. the user acknowledges the exact digest: call `submit_deepkoala_job`, poll with
+   `get_deepkoala_job`, and use `cancel_deepkoala_job` or `delete_deepkoala_job` only for their
+   documented user-authorized lifecycle actions.
+
+The selected-run review must verify the user-visible `device=auto` GPU warning, requested and
+resolved device, installed weight source and artifact identities, no-download statement,
+updated-weight URL, effective `batch_size=32`, `num_workers=2`, `topk=1`, `multi=false`, default
+two CPU threads, hard one-job concurrency limit, and running or queued disposition. If the user
+requires CPU-only execution, the Skill must request `device=cpu` explicitly rather than treating
+the two-thread default as a device-selection guarantee.
+
+After success, the Skill must read the scoped output and provenance resources, follow bounded
+pagination, decode each range's `content_base64`, assemble bytes in order, verify the total byte
+count and SHA-256 digest, and pass the verified detailed CSV plus returned source-provenance
+template to core
+`normalize_ko_annotations` with `input_format=deepkoala_detailed`. It must not send FASTA to core,
+ask core to dereference a companion resource URI, duplicate normalization, or infer that a K number
+is experimentally validated.
+
+On 2026-07-15, a separate manual runner smoke check exercised both `full` and `frag` models with
+the checkout-bundled `202502` weights, official DeepKOALA commit
+`bebbe0c43f50a26488f7092f6b355aae870a4ed9`, the existing Python 3.11/PyTorch `2.9.1+cu130`
+environment, `torch.cuda.is_available() == false`, `device=cpu`, two CPU threads,
+`batch_size=1`, `num_workers=0`, `topk=1`, and `multi=false`. Both jobs completed without a GPU,
+download, or new environment and produced schema-valid detailed output. Both terminal jobs were
+deleted and the temporary state root was empty afterward. This evidence establishes local CPU
+compatibility for that exact configuration only; it is not a forward Skill evaluation, accelerator
+evidence, biological validation, or companion release sign-off. Static Skill text and runner smoke
+evidence remain complementary rather than interchangeable.

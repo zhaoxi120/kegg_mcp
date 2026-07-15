@@ -14,6 +14,8 @@ specification is `docs/development-plan.md`.
 
 - Communicate plans, progress updates, questions, and review summaries with the maintainer in Simplified Chinese unless asked otherwise.
 - Write every tracked repository file in English, including documentation, source comments, test names, fixtures, configuration comments, and examples.
+- Local Simplified Chinese reference documents may use the `*.zh-CN.md` suffix. They must remain ignored and untracked, are non-normative, and must not be linked from tracked documentation or included in GitHub, packages, releases, examples, or CI artifacts. The corresponding English document is the source of truth.
+- Publishing a Chinese document requires an explicit maintainer request that overrides the local-only rule for that specific file.
 - Write GitHub issues, pull requests, commit messages, and release notes in English.
 - Use established KEGG identifiers and biological terminology; do not translate identifiers or invent synonyms.
 
@@ -39,8 +41,10 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 ## Scope boundaries
 
 - DeepKOALA, KofamScan, BlastKOALA, GhostKOALA, and similar programs are external annotation tools.
-- Do not add their model code, weights, databases, inference logic, or runtime dependencies to this project.
-- Do not execute external annotation tools from the MCP server.
+- Do not add their model code, weights, databases, inference logic, or runtime dependencies to the core `kegg-mcp` package or server.
+- The core `kegg-mcp` server must not execute external annotation tools.
+- Any future automatic DeepKOALA execution must be implemented as a separately installed, explicitly configured companion MCP server and runner process with its own entry point, environment, lifecycle, and release review. It is an MCP-side capability, not Skill implementation code, and requires an assigned issue before implementation.
+- The Skill may discover and orchestrate an available companion MCP server, but it must not implement inference, launch annotation subprocesses itself, manage weights, or silently install or download dependencies.
 - Do not download or redistribute KOfam profiles or KEGG datasets.
 - Do not add enrichment, differential-abundance statistics, pathway image generation, a web UI, multi-user hosting, or remote HTTP transport to the MVP.
 - Keep generic KO input support; never make the core schema DeepKOALA-specific.
@@ -49,7 +53,8 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 
 - Keep domain, importer, KEGG client, analysis, and reporting code independent of MCP transport.
 - MCP tools must call public service-layer functions rather than reimplementing analysis.
-- The Skill should orchestrate the MCP tools and explain workflows; it must not duplicate deterministic normalization or analysis code.
+- The Skill should orchestrate the core MCP tools and, when explicitly available, an optional companion runner; it must not duplicate deterministic normalization, analysis, inference, or job-control code.
+- A companion runner must return detailed annotation output and provenance through the existing source-agnostic importer boundary rather than introducing a second KO normalization policy.
 - Keep raw source evidence immutable. Derive normalized decisions using a named and versioned policy.
 - Allow multiple KO records for one sequence, including top-k and multi-domain results.
 - Treat a KO set as a derived view of annotation records, not as the primary evidence model.
@@ -77,7 +82,9 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Enforce a process-wide rate no greater than three KEGG API requests per second; use a safer default with no burst.
 - Respect endpoint-specific limits, including the maximum of ten entries for `get` requests.
 - Keep cached KEGG payloads local and out of version control, packages, examples, CI artifacts, and releases.
-- Do not run live KEGG requests in the default test suite or CI.
+- Do not run live KEGG requests in the default test suite or pull-request CI. The dedicated live
+  CI job may run only from `main`, under explicit maintainer enablement and eligible access
+  confirmation, with one serialized bounded campaign and no uploaded KEGG payloads.
 - Store retrieval time, endpoint, request key, response hash, parser version, and release information when available.
 
 ## MCP and security invariants
@@ -121,4 +128,5 @@ Before completing an implementation task, verify:
 - KEGG licensing, rate limits, and cache boundaries remain enforced;
 - MCP outputs are bounded, typed, and safe for local use;
 - tests cover failure and uncertainty paths, not only the happy path; and
-- all tracked content is in English.
+- all tracked content is in English, while any local `*.zh-CN.md` reference remains ignored and
+  excluded from distribution.

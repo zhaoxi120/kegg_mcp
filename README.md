@@ -7,7 +7,9 @@ the project.
 
 > Project status: Version 0.1.0 is the first supported private GitHub release. Milestones 0 through
 > 8 are implemented and verified with offline tests. This release supports and is tested only on
-> Python 3.11.x.
+> Python 3.11.x. The repository also contains an optional, independently installed
+> `deepkoala-mcp` 0.1.0 candidate; that companion is unreleased and is not part of the supported
+> core 0.1.0 release.
 
 ## Intended users
 
@@ -103,6 +105,21 @@ KEGG entry. Each stdio server process generates an opaque scope, so retained res
 readable from another process scope. See the [installation and operation guide](docs/installation.md)
 for exact access-mode configuration, calls, and result retrieval.
 
+### Optional DeepKOALA companion candidate
+
+The independently installed `deepkoala-mcp` candidate exposes six additional tools:
+`get_deepkoala_runner_status`, `prepare_deepkoala_job`, `submit_deepkoala_job`,
+`get_deepkoala_job`, `cancel_deepkoala_job`, and `delete_deepkoala_job`. Preparation validates and
+privately stages FASTA without inference; submission requires the exact notice digest and explicit
+acknowledgement. Detailed CSV, provenance, and sanitized diagnostics are exposed through scoped
+resources with bounded pagination. The client verifies and transfers successful detailed CSV to
+the core importer; the two servers do not share or dereference each other's private resources.
+
+The companion has one-job concurrency, rejects `multi=true`, never downloads weights, and can be
+forced to CPU with `device="cpu"` and a small configured thread limit. The candidate is POSIX-only
+because its process lifecycle requires process-group support. See its
+[independent installation and operation guide](companions/deepkoala-mcp/README.md).
+
 ## Repository-scoped Codex Skill
 
 The instruction-only Skill is located at `.agents/skills/kegg-mcp/` and declares the actual
@@ -110,6 +127,13 @@ The instruction-only Skill is located at `.agents/skills/kegg-mcp/` and declares
 MODULE/pathway questions, and deterministic KO-set comparisons without duplicating normalization
 or analysis code. It never assigns a KO from a sequence or name and keeps exact MODULE completion
 separate from descriptive pathway KO coverage.
+
+Automatic DeepKOALA execution is not a Skill implementation responsibility. The repository now
+contains an optional, separately installed companion MCP server and runner process under
+`companions/deepkoala-mcp/`. When that service is explicitly configured and discovered, the Skill
+may display its execution notice, call it, and pass the resulting detailed table to the core
+`kegg-mcp` importer. The companion remains an unreleased 0.1.0 candidate; it is not included in or
+supported as part of the core 0.1.0 release.
 
 Deterministic static tests cover the Skill's instruction contract; they do not execute a language
 model. The six required prompts also have a recorded independent forward/manual review in the
@@ -119,9 +143,10 @@ v0.1.0 candidate for publication sign-off. Synthetic inputs and access-mode temp
 
 ## Distribution boundary
 
-The Python wheel and Python source distribution contain the MCP Python server, package metadata,
-and required license notices. They do not install the repository-scoped Skill or ship the complete
-repository documentation and examples.
+The core Python wheel and source distribution contain the core MCP Python server, package
+metadata, and required license notices. They do not install the repository-scoped Skill, the
+optional DeepKOALA companion, or the complete repository documentation and examples. The companion
+has its own distribution metadata, lock file, environment, entry point, and release review.
 
 Use `.agents/skills/kegg-mcp/` from an exact GitHub repository checkout or tag source archive when
 the Codex Skill is required. That Skill can depend on a separately installed `kegg-mcp` Python
@@ -140,7 +165,7 @@ The implemented MVP can:
 - compare KO sets descriptively; and
 - return structured MCP results plus concise Markdown reports.
 
-The MVP does not run sequence annotation software, perform enrichment or differential-abundance statistics, redistribute KEGG datasets, generate pathway images, host a public annotation service, or infer pathway activity from KO presence alone.
+The core MVP does not run sequence annotation software, perform enrichment or differential-abundance statistics, redistribute KEGG datasets, generate pathway images, host a public annotation service, or infer pathway activity from KO presence alone. The unreleased DeepKOALA runner candidate is an opt-in companion MCP service, not an expansion of the core server process.
 
 ## Important KEGG usage constraint
 
@@ -152,6 +177,7 @@ See the [KEGG API page](https://www.kegg.jp/kegg/rest/) and [KEGG legal notice](
 
 ## Development documentation
 
+- [Repository capabilities and usage guide](docs/capabilities-and-usage.md)
 - [Installation and operation](docs/installation.md)
 - [MCP server tools, resources, and configuration](docs/mcp-server.md)
 - [Release-readiness checklist](docs/release-readiness.md)
@@ -174,9 +200,12 @@ The development plan records the reviewed architecture, data contracts, biologic
 ├── CHANGELOG.md
 ├── README.md
 ├── SECURITY.md
+├── companions/
+│   └── deepkoala-mcp/                # Optional independent companion distribution
 ├── examples/                         # Redistributable KO inputs and access templates
 ├── docs/
 │   ├── development-plan.md
+│   ├── capabilities-and-usage.md
 │   ├── installation.md
 │   ├── import-contracts.md
 │   ├── kegg-client.md
@@ -202,7 +231,11 @@ The development plan records the reviewed architecture, data contracts, biologic
 
 ## Language policy
 
-Maintainer collaboration may be conducted in Simplified Chinese. All repository-tracked files, code identifiers, comments, examples, issue text, pull request text, and release material should be written in English.
+Maintainer collaboration may be conducted in Simplified Chinese. All tracked files, code
+identifiers, comments, examples, issue text, pull request text, and release material are written in
+English. Local Simplified Chinese reference documents use the `*.zh-CN.md` suffix, remain
+gitignored and untracked, and are not uploaded to GitHub or included in packages, releases,
+examples, or CI artifacts. Their English counterparts are normative.
 
 ## License
 

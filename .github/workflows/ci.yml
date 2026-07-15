@@ -5,13 +5,14 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -43,3 +44,80 @@ jobs:
 
       - name: Test
         run: uv run --frozen pytest
+
+  validate-deepkoala-companion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: companions/deepkoala-mcp
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          cache-dependency-glob: "companions/deepkoala-mcp/uv.lock"
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Synchronize companion locked environment
+        run: uv sync --frozen
+
+      - name: Lint companion
+        run: uv run --frozen ruff check .
+
+      - name: Check companion formatting
+        run: uv run --frozen ruff format --check .
+
+      - name: Type-check companion
+        run: uv run --frozen pyright
+
+      - name: Test companion
+        run: uv run --frozen pytest
+
+  validate-kegg-live:
+    name: Validate KEGG live compatibility
+    needs: validate
+    if: >-
+      vars.KEGG_MCP_LIVE_TESTS_ENABLED == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: kegg-live
+    concurrency:
+      group: kegg-live-api
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Run bounded KEGG live compatibility campaign
+        env:
+          KEGG_MCP_ACCESS_MODE: ${{ vars.KEGG_MCP_ACCESS_MODE }}
+          KEGG_MCP_ACADEMIC_USE_CONFIRMED: ${{ vars.KEGG_MCP_ACADEMIC_USE_CONFIRMED }}
+          KEGG_MCP_LICENSED_ENDPOINT: ${{ secrets.KEGG_MCP_LICENSED_ENDPOINT }}
+          KEGG_MCP_LICENSED_USE_CONFIRMED: ${{ vars.KEGG_MCP_LICENSED_USE_CONFIRMED }}
+        run: >-
+          uv run --frozen pytest
+          tests/live/test_kegg_api_live.py
+          --run-kegg-live
+          -m live_kegg
+          -q

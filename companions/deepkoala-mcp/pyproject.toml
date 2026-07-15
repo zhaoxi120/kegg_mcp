@@ -3,16 +3,17 @@ requires = ["setuptools>=80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kegg-mcp"
+name = "deepkoala-mcp"
 version = "0.1.0"
-description = "Local-first MCP server for KEGG-aware analysis of KO annotations"
+description = "Local stdio MCP companion for bounded DeepKOALA execution"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 license = "MIT"
-keywords = ["bioinformatics", "KEGG", "KO", "MCP"]
+keywords = ["bioinformatics", "DeepKOALA", "KEGG", "MCP"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
 ]
@@ -24,13 +25,13 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/zhaoxi120/kegg_mcp"
 Issues = "https://github.com/zhaoxi120/kegg_mcp/issues"
-Changelog = "https://github.com/zhaoxi120/kegg_mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
-kegg-mcp = "kegg_mcp.mcp.server:main"
+deepkoala-mcp = "deepkoala_mcp.server:main"
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4.26,<5",
     "pyright>=1.1.411,<2",
     "pytest>=9.1.1,<10",
     "pytest-asyncio>=1.4,<2",
@@ -60,7 +61,4 @@ venvPath = "."
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
-markers = [
-    "live_kegg: explicitly authorized, rate-limited compatibility tests against a live KEGG endpoint",
-]
 testpaths = ["tests"]

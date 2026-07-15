@@ -1,6 +1,6 @@
 # KEGG Client and Cache Contract
 
-Status: Milestone 2 client-layer contract as implemented on 2026-07-14.
+Status: Client-layer contract as implemented on 2026-07-15.
 
 This document describes the typed KEGG request contracts, access eligibility gate, bounded request
 preparation, response parsing, local cache, and retrieval provenance. It does not describe module
@@ -27,6 +27,10 @@ defines GeneID as a stable numeric identifier; this contract therefore accepts o
 decimal value after the `ncbi-geneid:` prefix. The
 [IUBMB enzyme nomenclature rules](https://iubmb.qmul.ac.uk/enzyme/rules.html) define the four-part
 EC number form and the use of a hyphen for a missing classification level.
+The [KEGG Mapping documentation](https://www.kegg.jp/kegg/kegg1b.html) defines the first-column
+`A`, `B`, `C`, and later markers used by BRITE htext hierarchy levels. A live compatibility check
+retrieved `br08901` and the API manual example `br08301` on 2026-07-15. Both used a metadata header,
+an explicit `!` separator, and a compact root marker such as `AMetabolism` or `A1 ...`.
 
 The project enforces an explicit configuration choice before any live request:
 
@@ -207,9 +211,12 @@ silently reinterpret malformed output:
   terminator are required. A whitespace-only successful body represents zero returned entries;
   malformed indentation and unterminated content are errors.
 - BRITE hierarchy htext preserves ordered lines and requires a documented root `A` hierarchy
-  level; metadata headers such as `+C`, `+D`, or `+E` are retained but not assumed to have one
-  fixed depth. A blank successful body remains empty so the client can reconcile it against the
-  requested entry. BRITE HTML tables are intentionally not parsed by this contract.
+  level. Spaced, numbered, and tagged roots remain accepted directly. A compact root whose label
+  immediately follows `A` is accepted only inside the current API envelope containing a `+<level>`
+  tab-delimited metadata header and an explicit `!` separator. Metadata headers such as `+C`, `+D`,
+  or `+E` are retained but not assumed to have one fixed depth. A blank successful body remains
+  empty so the client can reconcile it against the requested entry. BRITE HTML tables are
+  intentionally not parsed by this contract.
 
 Parsing a response is separate from interpreting biology. A missing entry, a source-rejected
 annotation, or an empty LINK result must not be presented as experimental evidence that a function
@@ -243,9 +250,10 @@ schema, timestamp ordering, parser version, metadata shape, and response checksu
 a payload. A malformed row or checksum mismatch is `CACHE_FAILED`, never a cache miss or biological
 absence.
 
-The current parser contract version is `3`. It records nested flat-file field indentation
-explicitly and applies the current identifier reconciliation rules before cache use. Cache rows
-produced under an incompatible parser version fail closed instead of being silently reinterpreted.
+The current parser contract version is `4`. It records nested flat-file field indentation,
+recognizes current compact BRITE root markers only inside a validated htext envelope, and applies
+the current identifier reconciliation rules before cache use. Cache rows produced under an
+incompatible parser version fail closed instead of being silently reinterpreted.
 
 `CachePolicy.ttl_seconds` defaults to 604,800 seconds (seven days). At lookup time:
 
@@ -345,5 +353,7 @@ behavior.
 
 The default unit and integration test suites must not make live KEGG requests. Network behavior is
 tested with injected transports or a local mock server, fixed clocks, deterministic sleepers, and
-temporary local caches. Any manual live compatibility check must be opt-in, must use an explicitly
-eligible access mode, and must remain within the same process-wide and endpoint-specific limits.
+temporary local caches. Live compatibility checks are a separate opt-in campaign, whether run
+locally or by the guarded `kegg-live` CI job. They require an explicitly eligible access mode,
+run only from `main`, remain serialized and bounded, and never run for pull requests. They use the
+same process-wide and endpoint-specific limits and do not upload response bodies or cache files.
