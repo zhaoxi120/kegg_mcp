@@ -97,6 +97,23 @@ def import_generic_table(
                 )
             )
             continue
+        protein_name = (
+            _required_text(values[mapping.protein_name]).strip() or None
+            if mapping.protein_name is not None
+            else None
+        )
+        if protein_name is not None and len(protein_name) > 1_000:
+            skipped_rows += 1
+            unparsed_rows.append(evidence)
+            diagnostics.append(
+                ImportDiagnostic(
+                    code=DiagnosticCode.ROW_SKIPPED,
+                    message="The mapped protein name exceeds 1,000 characters.",
+                    row_number=evidence.row_number,
+                    field=mapping.protein_name,
+                )
+            )
+            continue
         if mapping.sample_id is None:
             sample_id = default_sample_id
         else:
@@ -208,6 +225,7 @@ def import_generic_table(
                 record_id=f"record-{len(records) + 1:06d}",
                 sample_id=sample_id,
                 sequence_id=sequence_id,
+                protein_name=protein_name,
                 ko_id=ko_id,
                 raw_ko=raw_ko,
                 raw_decision=raw_decision,

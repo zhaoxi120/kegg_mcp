@@ -37,12 +37,18 @@ Every reference and result records one `PathwayReferenceNamespace`:
 | `map` | `mapNNNNN` | KO-only evidence with an explicitly selected map reference. |
 | `organism` | a canonical organism code followed by five digits, such as `hsa00010` | A compatible organism-gene context for the same code. |
 
+At the MCP boundary, `PathwaySpec` infers namespace from `pathway_id`. An omitted namespace on
+`mapNNNNN` is canonicalized to the default `koNNNNN` reference view. Explicit conflicts fail at the
+field boundary, and equivalent `ko`/`map` pathway numbers are rejected as duplicates. KO-to-pathway
+mapping previews include `pathway_number`, `namespace`, and `paired_reference_id`; summary counts
+are deduplicated by pathway number so paired views cannot inflate the result.
+
 An organism reference is not inferred from a dataset's K numbers or taxon identifier. Evaluation
 requires `PathwayInputKind.ORGANISM_GENE_CONTEXT`, an `OrganismGeneContext` containing the exact
-KEGG organism code plus a SHA-256 digest and positive count for the qualified gene identifiers,
-and an `AnnotationDataset` for an isolate genome or isolate proteome. The reference, dataset, and
-gene-context organism codes must match exactly. The digest and count are bounded caller-provided
-provenance; they do not turn KO-only evidence into organism-specific gene evidence by themselves.
+KEGG organism code and positive qualified-gene count, and an `AnnotationDataset` for an isolate
+genome or isolate proteome. The reference, dataset, and gene-context organism codes must match
+exactly. These fields do not turn KO-only evidence into organism-specific gene evidence by
+themselves.
 
 Pooled, MAG, mixed, and unknown analysis units must use a `ko` or `map` reference. This prevents a
 community KO union or other incompatible unit from being presented as one organism pathway.
@@ -83,9 +89,8 @@ Strict and lenient calculations are separate:
 - rejected, unclassified, and invalid records enter neither mode.
 
 Source-rejected predictions are not silently promoted to lenient evidence. The result records the
-named decision policy, evidence mode, selected-KO digest, and reference-KO digest. A caller can
-recompute the exact set calculation from the retained immutable dataset and pathway reference and
-verify that it used the same digests.
+named decision policy, evidence mode, selected and reference KO sets, and their exact counts. A
+caller can recompute the set calculation from the retained immutable dataset and pathway reference.
 
 ### Result bounds and provenance
 
@@ -97,12 +102,11 @@ exclusions, dataset sources, provenance batches, and retained CLASS lines before
 result construction.
 
 LINK denominator provenance and GET metadata provenance remain separate. Each retained
-`KeggBatchProvenance` includes the operation, request-key digest, access and endpoint class,
-endpoint fingerprint, retrieval and serving times, response digest and byte count, parser name and
-version, database release when available, response origin, cache lookup state, expiry, and stale
-status. A cached reference therefore retains the original retrieval facts and emits a warning when
-served stale. Raw responses, endpoint URLs, credentials, and local cache paths are not serialized
-by the analysis result.
+`KeggBatchProvenance` includes the operation, readable request key, access and endpoint class,
+endpoint label, retrieval and serving times, response byte count, parser name and version, database
+release when available, response origin, cache lookup state, expiry, and stale status. A cached
+reference therefore retains the original retrieval facts and emits a warning when served stale.
+Raw responses, endpoint URLs, credentials, and local cache paths are not serialized by the result.
 
 Every evaluated result includes an analysis-unit-specific warning. Isolate genome, isolate
 proteome, MAG, pangenome, metagenomic-community, mixed, and unknown inputs have different
@@ -141,11 +145,10 @@ exceeded. `KoSetComparisonDetail` therefore contains the complete bounded partit
 silently truncated detail object.
 
 `summarize_ko_comparison` converts that detail into a `KoSetComparisonSummary` with exact counts,
-bounded lexical KO previews, a bounded membership-pattern preview, explicit truncation, and a
-SHA-256 digest of the complete detail. The digest identifies the in-memory detail used to make the
-summary. It is not a result identifier and cannot be dereferenced in Milestone 4.
+bounded lexical KO previews, a bounded membership-pattern preview, and explicit truncation. The
+complete in-memory detail is passed directly rather than identified by a workflow digest.
 
-Each dataset retains its label, input index, dataset evidence digest, decision policy, analysis
+Each dataset retains its label, input index, dataset identifier, decision policy, analysis
 unit, taxonomic context, sample labels, source provenance, record count, and four KO-class counts.
 Different annotation-pipeline, analysis-unit, or taxonomic provenance produces explicit warnings
 without changing deterministic set arithmetic. Mixed or unknown units, pooled community or
@@ -159,13 +162,13 @@ denominators, retrieval provenance, algorithm versions, or limits would confound
 differences with reference differences.
 
 `compare_module_graphs` evaluates each dataset in strict and lenient modes against the same
-`ResolvedModuleGraph`. It preserves the shared definition digest, definition provenance,
+`ResolvedModuleGraph`. It preserves the shared definition and its provenance,
 calculation method, and analysis limits, and reports ordered outcome/status membership without
 renaming a difference as a biological change.
 
 `compare_pathway_references` evaluates every dataset in strict and lenient modes against each
 supplied immutable `PathwayKoReference` and the same `PathwayCoverageLimits`. Each target retains
-the complete bounded reference, unique-KO denominator digest, LINK and GET provenance, calculation
+the complete bounded reference, unique-KO denominator, LINK and GET provenance, calculation
 method, and limits. Ordered outcomes report detected-reference-KO counts, denominator counts,
 ratios, statuses, and whether those summaries differ. The function reuses `compare_ko_datasets`
 for compatible-policy validation, dataset provenance, and analysis-context warnings; it does not

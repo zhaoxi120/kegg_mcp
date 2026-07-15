@@ -19,7 +19,6 @@ from kegg_mcp.analysis.comparison import (
     KoPreview,
     KoSetComparisonDetail,
     KoSetComparisonSummary,
-    annotation_dataset_digest,
     compare_ko_datasets,
     summarize_ko_comparison,
 )
@@ -207,7 +206,6 @@ __all__ = [
     "SetPathwayOutcome",
     "SourceSpan",
     "UncertainSupport",
-    "annotation_dataset_digest",
     "build_pathway_reference",
     "compare_ko_datasets",
     "compare_module_graphs",

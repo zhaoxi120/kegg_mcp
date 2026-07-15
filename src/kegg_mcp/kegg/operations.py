@@ -151,7 +151,7 @@ def prepare_link(request: LinkRequest, limits: KeggClientLimits) -> tuple[Prepar
     _require_identifier_limit(len(request.source_identifiers), limits)
     target = _LINK_TARGETS[request.relationship]
     prepared: list[PreparedRequest] = []
-    for batch in _batches(request.source_identifiers, limits.relation_batch_size):
+    for batch in _batches(tuple(sorted(request.source_identifiers)), limits.relation_batch_size):
         source_prefix = (
             "path" if request.relationship is KeggLinkRelationship.PATHWAY_TO_KO else "ko"
         )
@@ -175,7 +175,7 @@ def prepare_conv(request: ConvRequest, limits: KeggClientLimits) -> tuple[Prepar
     """Prepare selected-entry CONV batches for one approved direction."""
     _require_identifier_limit(len(request.source_identifiers), limits)
     prepared: list[PreparedRequest] = []
-    for batch in _batches(request.source_identifiers, limits.relation_batch_size):
+    for batch in _batches(tuple(sorted(request.source_identifiers)), limits.relation_batch_size):
         prepared.append(
             _prepared(
                 KeggOperation.CONV,

@@ -7,7 +7,8 @@ import json
 import re
 import secrets
 from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from pathlib import Path
+from typing import Any, NoReturn, TypeVar, cast
 
 import anyio
 from mcp import types
@@ -19,6 +20,7 @@ from pydantic import AnyUrl, BaseModel, ValidationError
 
 from kegg_mcp import __version__
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
+from kegg_mcp.importers import SourceProvenanceInput
 from kegg_mcp.kegg import (
     GetRequest,
     KeggBriteEntryKind,
@@ -37,6 +39,7 @@ from kegg_mcp.mcp.contracts import (
     CacheInfoResource,
     CompareKoSetsInput,
     CompareToolEnvelope,
+    ConnectivityToolEnvelope,
     EntriesToolEnvelope,
     GetKeggEntriesInput,
     GetServerStatusInput,
@@ -44,9 +47,11 @@ from kegg_mcp.mcp.contracts import (
     MapKoIdsInput,
     MappingToolEnvelope,
     NormalizeAnnotationsRequest,
+    NormalizeKoAnnotationsInput,
     NormalizeToolEnvelope,
     OversizedArtifactNotice,
     PrimitiveAnalysisToolEnvelope,
+    ProbeKeggConnectivityInput,
     ResultResourceIndex,
     StatusToolEnvelope,
     constrain_mcp_input_schema,
@@ -54,6 +59,7 @@ from kegg_mcp.mcp.contracts import (
     options,
 )
 from kegg_mcp.services import (
+    KeggConnectivityClient,
     KeggPrimitiveClient,
     ResultStoreError,
     SQLiteResultStore,
@@ -64,6 +70,7 @@ from kegg_mcp.services import (
     get_server_status_service,
     map_ko_identifiers,
     normalize_annotations,
+    probe_kegg_connectivity_service,
     read_cached_kegg_entry,
     retrieve_kegg_entries,
 )
@@ -78,6 +85,7 @@ TOOL_NAMES = (
     "analyze_modules",
     "analyze_pathways",
     "compare_ko_sets",
+    "probe_kegg_connectivity",
     "get_server_status",
 )
 
@@ -102,6 +110,7 @@ class McpRuntime:
     client: KeggPrimitiveClient
     result_store: SQLiteResultStore
     scope_id: str
+    allowed_roots: tuple[str, ...] = ()
 
 
 def build_runtime(config: McpRuntimeConfig | None = None) -> McpRuntime:
@@ -111,6 +120,7 @@ def build_runtime(config: McpRuntimeConfig | None = None) -> McpRuntime:
         client=KeggClient(effective.kegg),
         result_store=SQLiteResultStore(effective.result_store_path),
         scope_id=f"stdio-{secrets.token_urlsafe(24)}",
+        allowed_roots=effective.allowed_roots,
     )
 
 
@@ -138,7 +148,9 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
             if name == "analyze_ko_annotations":
                 supplied = _parse(AnalyzeKoAnnotationsInput, arguments)
                 if supplied.annotations is not None:
-                    normalization = supplied.annotations
+                    normalization = _materialize_annotation_file(
+                        supplied.annotations.to_service_request(), state.allowed_roots
+                    )
                 else:
                     if supplied.ko_text is None:
                         raise AssertionError(
@@ -158,7 +170,11 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     scope_id=state.scope_id,
                     pathway_evidence_mode=supplied.pathway_evidence_mode,
                     allow_global_or_overview=supplied.allow_global_or_overview,
-                    options=options(supplied.refresh, supplied.allow_stale),
+                    options=options(False, False),
+                    output_directory=_resolve_output_directory(
+                        supplied.output_directory or normalization.output_directory,
+                        state.allowed_roots,
+                    ),
                 )
                 return _success(
                     result,
@@ -166,11 +182,16 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     result.result.result_id,
                 )
             if name == "normalize_ko_annotations":
-                supplied = _parse(NormalizeAnnotationsRequest, arguments)
+                supplied = _parse(NormalizeKoAnnotationsInput, arguments)
+                service_request = supplied.to_service_request()
+                materialized = _materialize_annotation_file(service_request, state.allowed_roots)
                 result = normalize_annotations(
-                    supplied,
+                    materialized,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
+                    output_directory=_resolve_output_directory(
+                        supplied.output_directory, state.allowed_roots
+                    ),
                 )
                 return _success(
                     result,
@@ -184,7 +205,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(supplied.refresh, supplied.allow_stale),
+                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -201,8 +222,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(supplied.refresh, supplied.allow_stale),
-                    preview_limit=supplied.preview_limit,
+                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -220,9 +240,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     scope_id=state.scope_id,
-                    options=options(supplied.refresh, supplied.allow_stale),
-                    reference_limits=supplied.reference_limits,
-                    analysis_limits=supplied.analysis_limits,
+                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -239,9 +257,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     scope_id=state.scope_id,
                     evidence_mode=supplied.evidence_mode,
                     allow_global_or_overview=supplied.allow_global_or_overview,
-                    options=options(supplied.refresh, supplied.allow_stale),
-                    reference_limits=supplied.reference_limits,
-                    pathway_limits=supplied.pathway_limits,
+                    options=options(False, False),
                 )
                 return _success(
                     result,
@@ -260,14 +276,8 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     module_ids=supplied.module_ids,
                     pathways=supplied.pathways,
-                    options=options(supplied.refresh, supplied.allow_stale),
-                    reference_limits=supplied.reference_limits,
-                    module_limits=supplied.module_limits,
-                    pathway_limits=supplied.pathway_limits,
-                    functional_limits=supplied.functional_limits,
+                    options=options(False, False),
                     allow_global_or_overview=supplied.allow_global_or_overview,
-                    limits=supplied.limits,
-                    preview_limits=supplied.preview_limits,
                 )
                 return _success(
                     result,
@@ -286,6 +296,13 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     supported_tools=TOOL_NAMES,
                 )
                 return _success(result, "Returned redacted local server status.")
+            if name == "probe_kegg_connectivity":
+                _parse(ProbeKeggConnectivityInput, arguments)
+                result = probe_kegg_connectivity_service(cast(KeggConnectivityClient, state.client))
+                return _success(
+                    result,
+                    f"KEGG connectivity preflight completed: {result.state.value}.",
+                )
             raise ValueError("Unknown MCP tool name.")
         except ValidationError as error:
             return _error(
@@ -294,9 +311,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     message="The tool input did not satisfy its explicit schema.",
                     recoverable=True,
                     suggested_action="Correct the supplied fields using the tool input schema.",
-                    safe_details=(
-                        SafeDetail(name="validation_issue_count", value=str(error.error_count())),
-                    ),
+                    safe_details=_validation_error_details(error),
                 )
             )
         except KeggMcpError as error:
@@ -304,7 +319,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
         except ResultStoreError:
             return _error(
                 ErrorDetail(
-                    code=ErrorCode.CACHE_FAILED,
+                    code=ErrorCode.RESULT_STORE_FAILED,
                     message="The local retained-result store could not be used safely.",
                     recoverable=True,
                     suggested_action="Check local storage permissions and retry.",
@@ -445,7 +460,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                         result_id=result_id,
                         section=section,
                         mime_type=page.mime_type,
-                        sha256=page.sha256,
                         total_bytes=page.total_bytes,
                         offset=page.offset,
                         returned_bytes=page.returned_bytes,
@@ -481,7 +495,6 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                         section=section,
                         mime_type=page.mime_type,
                         total_bytes=page.total_bytes,
-                        sha256=page.sha256,
                         next_uri=(
                             f"ko-analysis://results/{result_id}/{section}/0/"
                             f"{MAX_INLINE_RESOURCE_BYTES}"
@@ -526,7 +539,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
             ) from None
         except ResultStoreError:
             detail = ErrorDetail(
-                code=ErrorCode.CACHE_FAILED,
+                code=ErrorCode.RESULT_STORE_FAILED,
                 message="The local retained-result store could not be used safely.",
                 recoverable=True,
                 suggested_action="Check local storage permissions and retry.",
@@ -563,13 +576,13 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
 
 
 def _tool_definitions() -> list[types.Tool]:
-    mutating = types.ToolAnnotations(
-        readOnlyHint=False,
+    deterministic = types.ToolAnnotations(
+        readOnlyHint=True,
         destructiveHint=False,
-        idempotentHint=False,
+        idempotentHint=True,
         openWorldHint=False,
     )
-    open_world = mutating.model_copy(update={"openWorldHint": True})
+    open_world = deterministic.model_copy(update={"openWorldHint": True})
     status = types.ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -582,7 +595,8 @@ def _tool_definitions() -> list[types.Tool]:
             "Analyze KO annotations",
             (
                 "Normalize an inline KO list or supported annotation table and run requested "
-                "MODULE and pathway analyses in one call."
+                "MODULE and pathway analyses in one call; when no target is supplied, discover "
+                "reference pathways from accepted K numbers."
             ),
             AnalyzeKoAnnotationsInput,
             PrimitiveAnalysisToolEnvelope,
@@ -595,9 +609,9 @@ def _tool_definitions() -> list[types.Tool]:
                 "Normalize an inline plain, generic table, or DeepKOALA detailed payload "
                 "and retain it."
             ),
-            NormalizeAnnotationsRequest,
+            NormalizeKoAnnotationsInput,
             NormalizeToolEnvelope,
-            mutating,
+            deterministic,
         ),
         _tool(
             "get_kegg_entries",
@@ -640,6 +654,17 @@ def _tool_definitions() -> list[types.Tool]:
             "Compute deterministic KO set differences without statistical interpretation.",
             CompareKoSetsInput,
             CompareToolEnvelope,
+            open_world,
+        ),
+        _tool(
+            "probe_kegg_connectivity",
+            "Probe KEGG connectivity",
+            (
+                "Run one explicit low-cost KEGG INFO preflight and classify network or "
+                "deployment failures before analysis."
+            ),
+            ProbeKeggConnectivityInput,
+            ConnectivityToolEnvelope,
             open_world,
         ),
         _tool(
@@ -692,6 +717,133 @@ def _remove_nested_schema_identities(value: object) -> None:
 
 def _parse(model: type[_M], arguments: dict[str, Any]) -> _M:
     return model.model_validate_json(json.dumps(arguments, ensure_ascii=False))
+
+
+def _validation_error_details(error: ValidationError) -> tuple[SafeDetail, ...]:
+    details = [SafeDetail(name="stage", value="input_validation")]
+    for issue in error.errors(include_input=False, include_url=False)[:8]:
+        location = ".".join(str(part) for part in issue.get("loc", ())) or "$"
+        details.append(SafeDetail(name="field_path", value=location[:1_000]))
+        details.append(
+            SafeDetail(name="issue_type", value=str(issue.get("type", "invalid"))[:1_000])
+        )
+    details.append(SafeDetail(name="validation_issue_count", value=str(error.error_count())))
+    return tuple(details)
+
+
+def _materialize_annotation_file(
+    request: NormalizeAnnotationsRequest,
+    allowed_roots: tuple[str, ...],
+) -> NormalizeAnnotationsRequest:
+    """Load one shared file after canonical allowed-root and size validation."""
+    if request.file_path is None:
+        return request
+    path = _resolve_existing_file(request.file_path, allowed_roots)
+    try:
+        content = path.read_bytes()
+    except OSError:
+        raise KeggMcpError(
+            ErrorDetail(
+                code=ErrorCode.INVALID_ANNOTATION_TABLE,
+                message="The configured annotation file could not be read.",
+                recoverable=True,
+                suggested_action="Check file permissions and retry within an allowed root.",
+            )
+        ) from None
+    if len(content) > request.import_limits.max_bytes:
+        raise KeggMcpError(
+            ErrorDetail(
+                code=ErrorCode.INPUT_LIMIT_EXCEEDED,
+                message="The annotation file exceeds the configured input size limit.",
+                recoverable=True,
+                suggested_action="Provide a smaller annotation file.",
+                safe_details=(
+                    SafeDetail(name="max_bytes", value=str(request.import_limits.max_bytes)),
+                    SafeDetail(name="actual_bytes", value=str(len(content))),
+                ),
+            )
+        )
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise KeggMcpError(
+            ErrorDetail(
+                code=ErrorCode.UNSUPPORTED_INPUT_FORMAT,
+                message="The annotation file is not valid UTF-8 text.",
+                recoverable=True,
+                suggested_action="Convert the file to UTF-8 and retry.",
+            )
+        ) from None
+    source = request.source or SourceProvenanceInput(source_name="file_handoff")
+    source_path = (
+        str(_resolve_existing_file(source.input_path, allowed_roots))
+        if source.input_path is not None
+        else str(path)
+    )
+    return request.model_copy(
+        update={
+            "text": text,
+            "file_path": None,
+            "source": source.model_copy(update={"input_path": source_path}),
+        }
+    )
+
+
+def _resolve_existing_file(value: str, allowed_roots: tuple[str, ...]) -> Path:
+    candidate = Path(value)
+    if not candidate.is_absolute() or ".." in candidate.parts or not allowed_roots:
+        _raise_disallowed_path("file_path")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        _raise_disallowed_path("file_path")
+    if not resolved.is_file() or not _within_allowed_root(resolved, allowed_roots):
+        _raise_disallowed_path("file_path")
+    return resolved
+
+
+def _resolve_output_directory(
+    value: str | None,
+    allowed_roots: tuple[str, ...],
+) -> Path | None:
+    if value is None:
+        return None
+    candidate = Path(value)
+    if not candidate.is_absolute() or ".." in candidate.parts or not allowed_roots:
+        _raise_disallowed_path("output_directory")
+    missing_parts: list[str] = []
+    ancestor = candidate
+    while not ancestor.exists():
+        missing_parts.append(ancestor.name)
+        if ancestor.parent == ancestor:
+            _raise_disallowed_path("output_directory")
+        ancestor = ancestor.parent
+    try:
+        resolved_ancestor = ancestor.resolve(strict=True)
+    except OSError:
+        _raise_disallowed_path("output_directory")
+    if not resolved_ancestor.is_dir():
+        _raise_disallowed_path("output_directory")
+    resolved = resolved_ancestor.joinpath(*reversed(missing_parts))
+    if not _within_allowed_root(resolved, allowed_roots):
+        _raise_disallowed_path("output_directory")
+    return resolved
+
+
+def _within_allowed_root(path: Path, allowed_roots: tuple[str, ...]) -> bool:
+    return any(path == Path(root) or path.is_relative_to(root) for root in allowed_roots)
+
+
+def _raise_disallowed_path(field: str) -> NoReturn:
+    raise KeggMcpError(
+        ErrorDetail(
+            code=ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            message="A local handoff path is outside the configured allowed roots.",
+            recoverable=True,
+            suggested_action="Use an absolute path beneath KEGG_MCP_ALLOWED_ROOTS.",
+            safe_details=(SafeDetail(name="field", value=field),),
+        )
+    )
 
 
 def _success(

@@ -73,7 +73,12 @@ def _candidate_files() -> tuple[Path, ...]:
         capture_output=True,
         text=True,
     )
-    return tuple(PROJECT_ROOT / relative for relative in completed.stdout.split("\0") if relative)
+    return tuple(
+        path
+        for relative in completed.stdout.split("\0")
+        if relative
+        if (path := PROJECT_ROOT / relative).is_file()
+    )
 
 
 def _assert_safe_archive_name(name: str) -> None:
@@ -89,7 +94,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.1.0"
+    assert project["version"] == "0.2.0"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
     assert scripts == {"kegg-mcp": "kegg_mcp.mcp.server:main"}
@@ -176,12 +181,12 @@ def test_rights_and_release_status_are_prominent() -> None:
     )
     assert offline_licensed in installation
     assert "network access remains disabled" in installation
-    assert "An offline request tried to force `refresh=true`" in installation
-    assert "startup configuration failures" in installation
+    assert "Ordinary tool calls do not expose a" in installation
+    assert "KEGG_MCP_ALLOWED_ROOTS" in installation
     assert "Current status:" in readiness
     assert "exact commit" in readiness
     normalized_changelog = re.sub(r"\s+", " ", changelog.lower())
-    assert "## [0.1.0] - 2026-07-15" in changelog
+    assert "## [0.2.0] - 2026-07-15" in changelog
     assert "## [unreleased]" in normalized_changelog
 
 
@@ -191,7 +196,7 @@ def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review(
     assert "not a runtime LLM evaluation" in record
     assert "independent forward/manual review" in record
     assert record.count("Observed route: passed.") == 6
-    assert "exact v0.1.0 candidate" in re.sub(r"\s+", " ", record)
+    assert "exact v0.2.0 candidate" in re.sub(r"\s+", " ", record)
 
 
 def test_distribution_boundary_is_explicit() -> None:

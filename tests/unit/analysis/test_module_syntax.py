@@ -1,6 +1,5 @@
 """Unit tests for lossless KEGG MODULE tokenization and parsing."""
 
-import hashlib
 from unittest.mock import patch
 
 import pytest
@@ -240,12 +239,12 @@ def test_structural_errors_return_no_ast(
     assert "".join(token.lexeme for token in result.tokens) == definition
 
 
-def test_parser_hashes_the_exact_utf8_definition() -> None:
+def test_parser_retains_the_exact_utf8_definition() -> None:
     definition = " K00001\r\n"
 
     result = parse_module_definition(definition)
 
-    assert result.definition_sha256 == hashlib.sha256(definition.encode("utf-8")).hexdigest()
+    assert "".join(token.lexeme for token in result.tokens) == definition
     assert result.ast is not None
     assert (result.ast.span.start_offset, result.ast.span.end_offset) == (0, len(definition))
     assert (result.ast.span.start_line, result.ast.span.start_column) == (1, 1)
@@ -268,7 +267,6 @@ def test_definition_byte_limit_is_fatal_and_keeps_the_source_lossless() -> None:
 def test_byte_limit_constructs_one_token_and_one_span_for_a_large_input() -> None:
     definition = "x" * 100_000
     limits = ModuleParseLimits(max_definition_bytes=5)
-    expected_digest = hashlib.sha256(definition.encode("utf-8")).hexdigest()
     scan_source = module_syntax._scan_source  # pyright: ignore[reportPrivateUsage]
 
     with (
@@ -282,7 +280,6 @@ def test_byte_limit_constructs_one_token_and_one_span_for_a_large_input() -> Non
     ):
         result = parse_module_definition(definition, limits=limits)
 
-    assert result.definition_sha256 == expected_digest
     assert token_constructor.call_count == 1
     assert span_constructor.call_count == 1
     assert source_scanner.call_count == 1

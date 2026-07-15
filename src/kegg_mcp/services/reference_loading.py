@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Annotated, NoReturn, Protocol, Self
+from collections.abc import Mapping, Sequence
+from typing import Annotated, NoReturn, Protocol, Self, cast
 
 from pydantic import ConfigDict, Field, ValidationError, model_validator
 
@@ -72,7 +72,7 @@ class KeggReferenceClient(Protocol):
 
 
 class PathwaySpec(FrozenModel):
-    """One exact KEGG pathway identifier and its caller-selected namespace."""
+    """One KEGG pathway with namespace inferred from a single identifier."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -82,7 +82,24 @@ class PathwaySpec(FrozenModel):
     )
 
     pathway_id: str = Field(min_length=7, max_length=9)
-    reference_namespace: PathwayReferenceNamespace
+    reference_namespace: PathwayReferenceNamespace = PathwayReferenceNamespace.KO
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_namespace(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        supplied = dict(cast(Mapping[str, object], value))
+        pathway_id = supplied.get("pathway_id")
+        if not isinstance(pathway_id, str) or "reference_namespace" in supplied:
+            return supplied
+        prefix = pathway_id[:-5]
+        if prefix in {"ko", "map"}:
+            supplied["pathway_id"] = f"ko{pathway_id[-5:]}"
+            supplied["reference_namespace"] = PathwayReferenceNamespace.KO
+        elif is_kegg_organism_code(prefix):
+            supplied["reference_namespace"] = PathwayReferenceNamespace.ORGANISM
+        return supplied
 
     @model_validator(mode="after")
     def require_matching_namespace(self) -> Self:
@@ -98,6 +115,25 @@ class PathwaySpec(FrozenModel):
         if not matches:
             raise ValueError("pathway_id is incompatible with reference_namespace")
         return self
+
+    @property
+    def pathway_number(self) -> str:
+        """Return the shared five-digit pathway number used for deduplication."""
+        return self.pathway_id[-5:]
+
+    @property
+    def namespace(self) -> str:
+        """Return the inferred namespace as a stable serialized string."""
+        return self.reference_namespace.value
+
+    @property
+    def paired_reference_id(self) -> str | None:
+        """Return the paired ko/map view when the reference has one."""
+        if self.reference_namespace is PathwayReferenceNamespace.KO:
+            return f"map{self.pathway_number}"
+        if self.reference_namespace is PathwayReferenceNamespace.MAP:
+            return f"ko{self.pathway_number}"
+        return None
 
 
 def load_module_graphs(
@@ -371,11 +407,11 @@ def _validate_pathway_specs(
             "max_pathway_specs",
             limits.max_pathway_specs,
         )
-    pathway_ids = tuple(spec.pathway_id for spec in specs)
-    if len(pathway_ids) != len(set(pathway_ids)):
+    pathway_numbers = tuple(spec.pathway_number for spec in specs)
+    if len(pathway_numbers) != len(set(pathway_numbers)):
         _fail_configuration(
-            "Pathway reference specifications must use unique pathway identifiers.",
-            "Remove duplicate pathway specifications while preserving caller order.",
+            "Pathway reference specifications must use unique pathway numbers.",
+            "Remove duplicate ko/map views while preserving caller order.",
         )
 
 

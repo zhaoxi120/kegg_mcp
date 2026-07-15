@@ -6,7 +6,7 @@ model, or contacted KEGG.
 
 ## Method
 
-On 2026-07-15, the independent forward/manual review was repeated against the exact v0.1.0
+On 2026-07-15, the independent forward/manual review was repeated against the exact v0.2.0
 candidate and its actual MCP schemas. All six routes passed. The reviewer inspected the selected
 route, necessary clarification, tool choice, refusal boundary, interpretation language, and
 relevant Skill references.
@@ -22,13 +22,11 @@ that every model or client will behave identically.
 
 Prompt: `I have a protein FASTA file and want to analyze metabolic functions.`
 
-Expected route: recognize that KO assignments are absent; confirm only information that changes
-the annotation route; present multiple external annotation options; request detailed,
-machine-readable, versioned output; do not send FASTA to the MCP server or guess K numbers.
+Expected route: recognize that KO assignments are absent; stop the KO-analysis Skill; route to an
+independent annotation Skill and MCP; do not send FASTA to the core server or guess K numbers.
 
-Observed route: passed. The Skill selects the protein-FASTA workflow, reads annotation-tool
-guidance, treats DeepKOALA as one option rather than the only option, and resumes MCP analysis only
-after KO evidence exists.
+Observed route: passed. The Skill states its boundary, routes annotation outside the core MCP, and
+resumes only from a controlled versioned annotation file after KO evidence exists.
 
 ### Detailed DeepKOALA output for MODULE analysis
 
@@ -39,9 +37,9 @@ thresholds, versions, repeated rows, and domain coordinates; evaluate strict evi
 never reclassify every below-threshold row as uncertain; keep exact completion separate from block
 coverage.
 
-Observed route: passed. The Skill selects the annotation-table route, uses the detailed
-DeepKOALA and confidence references, delegates normalization to MCP, and applies conservative
-MODULE interpretation.
+Observed route: passed. The Skill selects the annotation-table route, delegates parsing and
+normalization to the core MCP, and applies the confidence and conservative MODULE interpretation
+rules without embedding a DeepKOALA execution workflow.
 
 ### One KO column and carbon-metabolism coverage
 
@@ -90,7 +88,7 @@ an MCP result.
 
 ## Limitations and release use
 
-This forward review covers the exact v0.1.0 release candidate. It used no live KEGG request and did
+This forward review covers the exact v0.2.0 release candidate. It used no live KEGG request and did
 not benchmark model-to-model variability, malicious prompt injection, long-context degradation,
 client-specific tool selection, or external annotator compatibility. Future releases must repeat
 the review against their exact candidate; any routing or interpretation regression blocks release

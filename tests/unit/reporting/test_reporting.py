@@ -1,7 +1,6 @@
 """Tests for deterministic bounded in-memory reporting."""
 
 import csv
-import hashlib
 import inspect
 import io
 import json
@@ -41,7 +40,7 @@ from kegg_mcp.importers import (
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     KeggBatchProvenance,
@@ -122,16 +121,14 @@ def _provenance(operation: KeggOperation, *, stale: bool = False) -> KeggBatchPr
     expires_at = _NOW + timedelta(days=1)
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256=("1" if operation is KeggOperation.LINK else "3") * 64,
         access_mode=AccessMode.OFFLINE_CACHE,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE,
         cache_lookup_state=(CacheLookupState.STALE_HIT if stale else CacheLookupState.FRESH_HIT),
         retrieved_at=_NOW,
         served_at=expires_at + timedelta(hours=1) if stale else _NOW + timedelta(hours=1),
         expires_at=expires_at,
-        response_sha256=("2" if operation is KeggOperation.LINK else "4") * 64,
         response_bytes=123,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -217,7 +214,7 @@ def _schema_property_names(node: object) -> set[str]:
     return set()
 
 
-def test_canonical_artifacts_round_trip_with_exact_digests_and_provenance() -> None:
+def test_canonical_artifacts_round_trip_with_exact_sizes_and_provenance() -> None:
     report = _complete_report_input()
 
     first = render_report(report)
@@ -233,13 +230,12 @@ def test_canonical_artifacts_round_trip_with_exact_digests_and_provenance() -> N
     for artifact in first.artifacts:
         encoded = artifact.content.encode("utf-8")
         assert artifact.utf8_byte_size == len(encoded)
-        assert artifact.sha256 == hashlib.sha256(encoded).hexdigest()
     structured_artifact = _artifact(first, ReportSection.STRUCTURED)
     structured = StructuredReport.model_validate_json(structured_artifact.content)
     assert structured.report == report
     assert structured.limits == first.limits
     assert structured.report.pathway_coverages[0].reference_link_provenance[0].is_stale
-    assert structured.report.module_evaluations[0].strict.definition_sha256
+    assert structured.report.module_evaluations[0].strict.module_id == "M00001"
     assert RenderedReport.model_validate_json(first.model_dump_json()) == first
 
 

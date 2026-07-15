@@ -1,6 +1,5 @@
 """Tests for scoped, bounded, atomic local result persistence."""
 
-import hashlib
 import os
 import re
 import sqlite3
@@ -101,9 +100,6 @@ def test_multiple_artifacts_round_trip_with_complete_immutable_metadata(tmp_path
     )
     assert tuple(item.byte_size for item in page.items) == tuple(
         len(artifact.content) for artifact in artifacts
-    )
-    assert tuple(item.sha256 for item in page.items) == tuple(
-        hashlib.sha256(artifact.content).hexdigest() for artifact in artifacts
     )
     with pytest.raises(ValidationError):
         created.total_bytes = 0
@@ -438,7 +434,7 @@ def test_sqlite_failure_after_first_artifact_rolls_back_the_entire_result(
         connection.execute(
             """
             CREATE TRIGGER reject_second_artifact
-            BEFORE INSERT ON result_artifacts
+            BEFORE INSERT ON result_artifacts_v2
             WHEN NEW.section = 'reject.json'
             BEGIN
                 SELECT RAISE(ABORT, 'sensitive payload path must never escape');
@@ -459,7 +455,7 @@ def test_sqlite_failure_after_first_artifact_rolls_back_the_entire_result(
     assert store.list_results("scope", now=_NOW).total_items == 0
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM stored_results").fetchone() == (0,)
-        assert connection.execute("SELECT COUNT(*) FROM result_artifacts").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM result_artifacts_v2").fetchone() == (0,)
 
 
 def test_explicit_delete_returns_counts_and_then_hides_the_identifier(tmp_path: Path) -> None:
@@ -628,7 +624,6 @@ def test_public_contracts_reject_extra_fields_and_encode_bytes_safely() -> None:
         result_id="res_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         section="binary.dat",
         mime_type="application/octet-stream",
-        sha256="0" * 64,
         total_bytes=2,
         offset=0,
         limit=2,

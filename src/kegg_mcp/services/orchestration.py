@@ -149,7 +149,6 @@ def analyze_plain_ko(
             section=artifact.section.value,
             mime_type=artifact.mime_type,
             byte_size=artifact.utf8_byte_size,
-            sha256=artifact.sha256,
         )
         for artifact in rendered.artifacts
     )

@@ -26,11 +26,10 @@ one or more MODULE or pathway targets, KEGG request options, and serializable an
 limits. The caller separately supplies a validated result scope, a typed KEGG reference client,
 and a result store.
 
-The retained structured artifact records the one-call service name and version, importer limits,
-KEGG refresh and stale-cache options, every reference-loading aggregate limit, direct-result
-preview limits, renderer name and version, and the report limits. Module and pathway results retain
-their calculation parameters and versions. These values exclude the raw KO payload and local store
-path.
+The retained structured artifact records the one-call service name and version, deployment-owned
+import and reference limits, direct-result preview limits, renderer name and version, and report
+limits. Module and pathway results retain their calculation parameters and versions. Ordinary MCP
+input does not expose refresh, stale-cache, or internal limit tuning.
 
 The service performs these operations in order:
 
@@ -64,14 +63,14 @@ and its reachable MODULE references. Retrieval rounds, root count, total entries
 occurrences are bounded, and each typed GET contains at most ten entries. Aggregate KEGG request
 count and response bytes are bounded across the complete one-call workflow. A missing requested
 root is an error. Missing reachable references,
-cycles, parser diagnostics, source hashes, retrieval timestamps, cache state, and KEGG release
-metadata when available remain explicit in the resolved graph and its provenance.
+cycles, parser diagnostics, exact source definitions, retrieval timestamps, cache state, and KEGG
+release metadata when available remain explicit in the resolved graph and its provenance.
 
-`load_pathway_references` accepts ordered `PathwaySpec` values. Each specification binds an exact
-pathway identifier to its `ko`, `map`, or organism reference namespace. The loader uses the typed
+`load_pathway_references` accepts ordered `PathwaySpec` values. Each specification infers and
+validates its namespace from the pathway identifier; omitted `map` input is canonicalized to the
+default `ko` reference view, and paired views with the same pathway number are rejected. The loader uses the typed
 `PATHWAY_TO_KO` link relationship and a typed pathway `get` request, then delegates denominator and
-metadata validation to the Milestone 4 pathway reference builder. It does not infer a namespace
-from user intent or silently substitute a different denominator. Aggregate relationship rows,
+metadata validation to the Milestone 4 pathway reference builder. Aggregate relationship rows,
 reference K numbers, exclusions, response bytes, and request count are bounded; a limit failure
 stops before the next request whenever the required metric is already known.
 
@@ -90,8 +89,8 @@ three UTF-8 artifacts in stable order:
 | `summary` | `text/markdown` | Concise evidence-aware report with bounded target, source, warning, and byte previews; truncation is explicit. |
 | `annotations` | `text/csv` | Complete flat annotation-record export within the configured CSV byte limit. Nested analysis structures remain in JSON rather than being flattened lossily. |
 
-Each artifact records its exact UTF-8 byte size and SHA-256 digest. JSON serialization is canonical
-and rejects non-finite values. The CSV renderer uses a stable column order, embeds nested evidence
+Each artifact records its exact UTF-8 byte size. JSON serialization is canonical and rejects
+non-finite values. The CSV renderer uses a stable column order, embeds nested evidence
 and source values as canonical JSON cells, and guards cells that could be interpreted as spreadsheet
 formulas. Structured JSON and annotation CSV fail on their configured hard size limits instead of
 returning partial content. Only the Markdown preview can be truncated, and its truncation notice
@@ -101,8 +100,10 @@ The renderer can also serialize the Milestone 4 KO-set, MODULE-outcome, and path
 comparison contracts when supplied directly through `ReportInput`. The plain-KO one-call service
 currently supplies its primary dataset, MODULE evaluations, and pathway coverage results.
 
-Reports are rendered in memory and are written only to the configured result store. Milestone 5
-does not accept an arbitrary report destination path.
+Reports are rendered in memory. The MCP high-level workflow may additionally write a concise bundle
+to an allowed-root `output_directory`: normalized annotations, protein-to-KO mapping, MODULE and
+pathway tables, Markdown report, canonical renderer input, and a versioned manifest. Safe atomic
+file writes reject symlinks and report a dedicated output error.
 
 ## Scoped SQLite result store
 
@@ -153,9 +154,9 @@ Pagination and byte-range offsets are validated before SQLite binding. They must
 and must leave room for the configured page or range limit within SQLite's signed 64-bit integer
 range; oversized values fail with a bounded `INPUT_LIMIT_EXCEEDED` error.
 
-Artifact metadata includes section, MIME type, byte size, and SHA-256 digest. Range responses retain
-the total size and digest so a caller can reconstruct and verify the immutable artifact without
-requiring an unbounded inline response.
+Artifact metadata includes section, MIME type, and byte size. Range responses retain total size and
+ordered offsets so a caller can reconstruct content without requiring an unbounded inline response;
+the reconstructed content is validated with its declared parser or schema.
 
 ## Testing and external access
 
@@ -177,7 +178,7 @@ The Milestone 5 service and storage layer itself does not provide:
 - stdio MCP transport, tool registration, tool annotations, or protocol error mapping;
 - MCP resource templates, result resource URIs, or client/session transport scope derivation;
 - a repository-scoped Codex Skill; or
-- arbitrary filesystem report export.
+- unrestricted filesystem report export.
 
 Milestones 6 and 7 now provide the MCP and Skill layers. The MCP implementation calls these public
 service and storage interfaces rather than reimplementing normalization, analysis, reporting, or

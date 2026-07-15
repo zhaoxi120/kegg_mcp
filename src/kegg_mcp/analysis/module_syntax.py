@@ -17,7 +17,6 @@ are grammar whitespace; every other Unicode whitespace character is unsupported.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Never
 
@@ -48,7 +47,7 @@ _EXPLICIT_LEXEMES: dict[str, ModuleTokenKind] = {
 }
 _LOGICAL_WHITESPACE = frozenset({" ", "\t", "\r", "\n"})
 _UNICODE_LINE_BREAKS = frozenset({"\n", "\u0085", "\u2028", "\u2029"})
-_HASH_CHUNK_CODE_POINTS = 4_096
+_SCAN_CHUNK_CODE_POINTS = 4_096
 _FACTOR_STARTS = frozenset(
     {
         ModuleTokenKind.KO,
@@ -63,7 +62,6 @@ _FACTOR_STARTS = frozenset(
 class _Tokenization:
     tokens: tuple[ModuleToken, ...]
     definition_bytes: int
-    definition_sha256: str
     source_span: SourceSpan
     definition_limit_exceeded: bool = False
     token_limit_exceeded: bool = False
@@ -72,7 +70,6 @@ class _Tokenization:
 @dataclass(frozen=True, slots=True)
 class _SourceScan:
     definition_bytes: int
-    definition_sha256: str
     source_span: SourceSpan
 
 
@@ -115,21 +112,18 @@ def _advance_position(
 
 def _scan_source(definition: str) -> _SourceScan:
     """Compute bounded-memory UTF-8 metadata before token allocation."""
-    digest = hashlib.sha256()
     definition_bytes = 0
-    for start in range(0, len(definition), _HASH_CHUNK_CODE_POINTS):
-        chunk = definition[start : start + _HASH_CHUNK_CODE_POINTS]
+    for start in range(0, len(definition), _SCAN_CHUNK_CODE_POINTS):
+        chunk = definition[start : start + _SCAN_CHUNK_CODE_POINTS]
         try:
             encoded = chunk.encode("utf-8")
         except UnicodeEncodeError as error:
             raise ValueError("module definition must be valid UTF-8 text") from error
         definition_bytes += len(encoded)
-        digest.update(encoded)
 
     end_line, end_column = _advance_position(definition, 0, len(definition), 1, 1)
     return _SourceScan(
         definition_bytes=definition_bytes,
-        definition_sha256=digest.hexdigest(),
         source_span=SourceSpan(
             start_offset=0,
             end_offset=len(definition),
@@ -266,7 +260,6 @@ def _tokenize(definition: str, limits: ModuleParseLimits) -> _Tokenization:
         return _Tokenization(
             tokens=tokens,
             definition_bytes=source.definition_bytes,
-            definition_sha256=source.definition_sha256,
             source_span=source.source_span,
             definition_limit_exceeded=True,
         )
@@ -279,7 +272,6 @@ def _tokenize(definition: str, limits: ModuleParseLimits) -> _Tokenization:
     return _Tokenization(
         tokens=tokens,
         definition_bytes=source.definition_bytes,
-        definition_sha256=source.definition_sha256,
         source_span=source.source_span,
         token_limit_exceeded=token_limit_exceeded,
     )
@@ -683,7 +675,6 @@ def parse_module_definition(
     """
     effective_limits = limits if limits is not None else ModuleParseLimits()
     tokenization = _tokenize(definition, effective_limits)
-    digest = tokenization.definition_sha256
     source_span = tokenization.source_span
     diagnostics: list[ModuleParseDiagnostic] = []
 
@@ -697,7 +688,6 @@ def parse_module_definition(
             )
         )
         return _result(
-            digest=digest,
             tokens=tokenization.tokens,
             ast=None,
             node_count=0,
@@ -715,7 +705,6 @@ def parse_module_definition(
             )
         )
         return _result(
-            digest=digest,
             tokens=tokenization.tokens,
             ast=None,
             node_count=0,
@@ -735,7 +724,6 @@ def parse_module_definition(
             )
         )
         return _result(
-            digest=digest,
             tokens=tokenization.tokens,
             ast=None,
             node_count=0,
@@ -773,7 +761,6 @@ def parse_module_definition(
             )
         )
         return _result(
-            digest=digest,
             tokens=tokenization.tokens,
             ast=None,
             node_count=0,
@@ -790,7 +777,6 @@ def parse_module_definition(
             )
         )
         return _result(
-            digest=digest,
             tokens=tokenization.tokens,
             ast=None,
             node_count=0,
@@ -799,7 +785,6 @@ def parse_module_definition(
         )
 
     return _result(
-        digest=digest,
         tokens=tokenization.tokens,
         ast=ast,
         node_count=parser.node_count,
@@ -810,7 +795,6 @@ def parse_module_definition(
 
 def _result(
     *,
-    digest: str,
     tokens: tuple[ModuleToken, ...],
     ast: ModuleDefinitionAst | None,
     node_count: int,
@@ -818,7 +802,6 @@ def _result(
     limits: ModuleParseLimits,
 ) -> ModuleParseResult:
     return ModuleParseResult(
-        definition_sha256=digest,
         parser_name=MODULE_PARSER_NAME,
         parser_version=MODULE_PARSER_VERSION,
         tokens=tokens,

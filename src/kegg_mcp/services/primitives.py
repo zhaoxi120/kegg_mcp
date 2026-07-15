@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
+import csv
+import io
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import Field, model_validator
@@ -25,7 +27,6 @@ from kegg_mcp.analysis import (
     PathwayCoverageLimits,
     PathwayCoverageParameters,
     PathwayCoverageResult,
-    annotation_dataset_digest,
     compare_ko_datasets,
     compare_module_graphs,
     compare_pathway_references,
@@ -45,9 +46,10 @@ from kegg_mcp.domain.annotations import (
     ScoreType,
     SourceProvenance,
     ThresholdRule,
+    try_normalize_ko_id,
 )
 from kegg_mcp.domain.decisions import CANONICAL_SOURCE_STATUS_V1, USER_SUPPLIED_KO_V1
-from kegg_mcp.domain.errors import ErrorCode, fail
+from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
 from kegg_mcp.execution import (
     ANNOTATION_ANALYSIS_SERVICE_NAME,
     AnalysisExecutionProvenance,
@@ -66,8 +68,11 @@ from kegg_mcp.kegg import (
     AccessMode,
     GetRequest,
     GetResult,
+    InfoRequest,
+    InfoResult,
     KeggClientConfig,
     KeggGetDatabase,
+    KeggInfoDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
     LicensedAccess,
@@ -82,13 +87,18 @@ from kegg_mcp.kegg.contracts import (
     KeggBatchProvenance,
     KeggFlatFileDocument,
     KeggPairRow,
-    endpoint_fingerprint,
+    is_kegg_pathway_identifier,
 )
 from kegg_mcp.reporting import ReportInput, ReportLimits, render_report
 from kegg_mcp.services.contracts import (
     ImportSummary,
     ModuleAnalysisPreview,
     PathwayAnalysisPreview,
+)
+from kegg_mcp.services.output_bundle import (
+    OutputBundle,
+    write_analysis_bundle,
+    write_normalization_bundle,
 )
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
@@ -155,6 +165,20 @@ class KeggPrimitiveClient(Protocol):
         *,
         options: KeggRequestOptions | None = None,
     ) -> LinkResult: ...
+
+
+class KeggConnectivityClient(Protocol):
+    """Small client surface used only by the explicit connectivity probe."""
+
+    @property
+    def config(self) -> KeggClientConfig: ...
+
+    def info(
+        self,
+        request: InfoRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> InfoResult: ...
 
 
 class _SharedReferenceBudgetClient:
@@ -226,7 +250,9 @@ class GenericDecisionPolicy(StrEnum):
 class NormalizeAnnotationsRequest(FrozenModel):
     """One bounded inline annotation payload and explicit importer configuration."""
 
-    text: str = Field(min_length=1, max_length=5_000_000)
+    text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
+    file_path: str | None = Field(default=None, min_length=1, max_length=4_096)
+    output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
     input_format: AnnotationInputFormat = AnnotationInputFormat.PLAIN_KO
     import_limits: ImportLimits = DEFAULT_IMPORT_LIMITS
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
@@ -246,14 +272,12 @@ class NormalizeAnnotationsRequest(FrozenModel):
 
     @model_validator(mode="after")
     def validate_format_configuration(self) -> Self:
+        if (self.text is None) == (self.file_path is None):
+            raise ValueError("provide exactly one of text or file_path")
         is_generic = self.input_format in {
             AnnotationInputFormat.GENERIC_CSV,
             AnnotationInputFormat.GENERIC_TSV,
         }
-        if is_generic and self.column_mapping is None:
-            raise ValueError("generic tables require an explicit column_mapping")
-        if is_generic and self.decision_policy is None:
-            raise ValueError("generic tables require an explicit decision_policy")
         if not is_generic and (self.column_mapping is not None or self.decision_policy is not None):
             raise ValueError("column_mapping and decision_policy are valid only for generic tables")
         for name in ("max_bytes", "max_rows", "max_columns", "max_field_length"):
@@ -297,7 +321,7 @@ class AnnotationSourceSummary(FrozenModel):
     model_name: str | None = Field(default=None, max_length=256)
     model_version: str | None = Field(default=None, max_length=256)
     annotation_date: datetime | None = None
-    input_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    input_path: str | None = Field(default=None, max_length=4_096)
     importer_name: str = Field(min_length=1, max_length=100)
     importer_version: str = Field(min_length=1, max_length=32)
 
@@ -306,7 +330,6 @@ class AnnotationProvenanceSummary(FrozenModel):
     """Bounded dataset, policy, and annotation-source provenance."""
 
     dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-    dataset_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     decision_policy: DecisionPolicyReference
     analysis_unit: AnalysisUnit
     taxon_id: int | None = Field(default=None, strict=True, gt=0)
@@ -334,6 +357,8 @@ class NormalizeAnnotationsResult(FrozenModel):
         tuple[ImportDiagnostic, ...], Field(max_length=MAX_NORMALIZATION_PREVIEW)
     ]
     diagnostics_truncated: bool
+    column_mapping_inferred: bool = False
+    output_bundle: OutputBundle | None = None
 
 
 class DatasetSource(FrozenModel):
@@ -380,6 +405,7 @@ class PrimitiveAnalysisResult(FrozenModel):
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_DIRECT_REFERENCE_BATCHES)
     ] = ()
     execution: AnalysisExecutionProvenance | None = None
+    output_bundle: OutputBundle | None = None
 
 
 class KeggEntryPreview(FrozenModel):
@@ -426,15 +452,31 @@ class CachedKeggEntryServiceResult(FrozenModel):
     ]
 
 
+class PathwayMappingRow(FrozenModel):
+    """One KO-to-pathway relationship with explicit paired-view identity."""
+
+    source_ko_id: str = Field(pattern=r"^K[0-9]{5}$")
+    target_id: str = Field(pattern=r"^(?:ko|map)[0-9]{5}$")
+    pathway_number: str = Field(pattern=r"^[0-9]{5}$")
+    namespace: Literal["ko", "map"]
+    paired_reference_id: str = Field(pattern=r"^(?:ko|map)[0-9]{5}$")
+
+
 class KoMappingServiceResult(FrozenModel):
-    """Bounded LINK preview with the complete typed result retained locally."""
+    """Bounded LINK preview with explicit ko/map pathway identity when applicable."""
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
     relationship: KeggLinkRelationship
     source_identifier_count: int = Field(strict=True, ge=1, le=100)
     row_count: int = Field(strict=True, ge=0)
-    row_preview: Annotated[tuple[KeggPairRow, ...], Field(max_length=MAX_MAPPING_PREVIEW_ROWS)]
+    raw_relationship_row_count: int = Field(strict=True, ge=0)
+    unique_ko_pathway_count: int = Field(default=0, strict=True, ge=0)
+    unique_map_pathway_count: int = Field(default=0, strict=True, ge=0)
+    unique_pathway_number_count: int = Field(default=0, strict=True, ge=0)
+    row_preview: Annotated[
+        tuple[KeggPairRow | PathwayMappingRow, ...], Field(max_length=MAX_MAPPING_PREVIEW_ROWS)
+    ]
     preview_truncated: bool
     provenance: Annotated[
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_MAPPING_PROVENANCE_BATCHES)
@@ -470,7 +512,6 @@ class KoSetComparisonPreview(FrozenModel):
         Field(min_length=2, max_length=MAX_COMPARISON_INPUTS),
     ]
     partitions: Annotated[tuple[KoClassComparisonSummary, ...], Field(min_length=4, max_length=4)]
-    detail_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     calculation_method: CalculationMethodReference
     warnings: Annotated[tuple[ComparisonWarning, ...], Field(max_length=MAX_COMPARISON_WARNINGS)]
     detail_limits: ComparisonLimits
@@ -526,10 +567,31 @@ class ServerStatusResult(FrozenModel):
         tuple[AnnotationInputFormat, ...], Field(max_length=len(AnnotationInputFormat))
     ] = tuple(AnnotationInputFormat)
     supported_tools: Annotated[
-        tuple[Annotated[str, Field(min_length=1, max_length=100)], ...], Field(max_length=8)
+        tuple[Annotated[str, Field(min_length=1, max_length=100)], ...], Field(max_length=16)
     ]
     result_retention_seconds: int = Field(strict=True, gt=0)
     result_quota_bytes: int = Field(strict=True, gt=0)
+
+
+class ConnectivityState(StrEnum):
+    """Operator-facing result of one explicit low-cost KEGG preflight."""
+
+    DISABLED = "disabled"
+    REACHABLE = "reachable"
+    DNS_FAILURE = "dns_failure"
+    CONNECTION_FAILURE = "connection_failure"
+    AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
+
+
+class ConnectivityProbeResult(FrozenModel):
+    """Redacted connectivity outcome without endpoint URLs or environment values."""
+
+    state: ConnectivityState
+    access_mode: AccessMode
+    endpoint_class: RetrievalEndpointClass
+    probed_at: datetime
+    error_code: ErrorCode | None = None
+    suggested_action: str | None = Field(default=None, max_length=1_000)
 
 
 def normalize_annotations(
@@ -537,10 +599,16 @@ def normalize_annotations(
     *,
     result_store: SQLiteResultStore,
     scope_id: str,
+    output_directory: Path | None = None,
 ) -> NormalizeAnnotationsResult:
     """Normalize one inline payload and retain its complete typed dataset."""
     dataset = _import_dataset(request)
     content = dataset.model_dump_json().encode("utf-8")
+    output_bundle = (
+        write_normalization_bundle(dataset, output_directory)
+        if output_directory is not None
+        else None
+    )
     metadata = result_store.create(
         scope_id,
         (
@@ -564,6 +632,12 @@ def normalize_annotations(
         diagnostic_count=len(dataset.import_report.diagnostics),
         diagnostic_preview=diagnostics,
         diagnostics_truncated=len(diagnostics) < len(dataset.import_report.diagnostics),
+        column_mapping_inferred=(
+            request.input_format
+            in {AnnotationInputFormat.GENERIC_CSV, AnnotationInputFormat.GENERIC_TSV}
+            and request.column_mapping is None
+        ),
+        output_bundle=output_bundle,
     )
 
 
@@ -582,14 +656,9 @@ def analyze_annotation_targets(
     module_limits: ModuleAnalysisLimits | None = None,
     pathway_limits: PathwayCoverageLimits | None = None,
     report_limits: ReportLimits | None = None,
+    output_directory: Path | None = None,
 ) -> PrimitiveAnalysisResult:
     """Normalize any supported inline format and analyze all selected targets in one call."""
-    if not module_ids and not pathways:
-        fail(
-            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-            "At least one MODULE or pathway target is required.",
-            suggested_action="Supply one or more explicit MODULE or pathway identifiers.",
-        )
     effective_report_limits = report_limits or ReportLimits()
     _validate_report_capacity(effective_report_limits, result_store)
     result_store.list_results(scope_id, limit=1)
@@ -597,12 +666,24 @@ def analyze_annotation_targets(
     effective_options = options or KeggRequestOptions()
     effective_reference_limits = reference_limits or ReferenceLoadingLimits()
     budgeted_client = _SharedReferenceBudgetClient(client, effective_reference_limits)
-    graphs = load_module_graphs(
-        budgeted_client,
-        module_ids,
-        options=effective_options,
-        limits=effective_reference_limits,
-        analysis_limits=module_limits,
+    discovery_provenance: tuple[KeggBatchProvenance, ...] = ()
+    if not module_ids and not pathways:
+        pathways, discovery_provenance = _discover_reference_pathways(
+            dataset,
+            client=budgeted_client,
+            options=effective_options,
+            limits=effective_reference_limits,
+        )
+    graphs = (
+        load_module_graphs(
+            budgeted_client,
+            module_ids,
+            options=effective_options,
+            limits=effective_reference_limits,
+            analysis_limits=module_limits,
+        )
+        if module_ids
+        else ()
     )
     modules = tuple(evaluate_module_pair(graph, dataset, module_limits) for graph in graphs)
     references = load_pathway_references(
@@ -644,6 +725,18 @@ def analyze_annotation_targets(
         ),
         limits=effective_report_limits,
     )
+    output_bundle = None
+    if output_directory is not None:
+        summary_artifact = next(
+            artifact for artifact in rendered.artifacts if artifact.section.value == "summary"
+        )
+        output_bundle = write_analysis_bundle(
+            dataset,
+            modules,
+            coverages,
+            analysis_report=summary_artifact.content,
+            output_directory=output_directory,
+        )
     stored_inputs = tuple(
         ResultArtifactInput(
             section=artifact.section.value,
@@ -658,7 +751,6 @@ def analyze_annotation_targets(
             section=artifact.section.value,
             mime_type=artifact.mime_type,
             byte_size=artifact.utf8_byte_size,
-            sha256=artifact.sha256,
         )
         for artifact in rendered.artifacts
     )
@@ -686,8 +778,13 @@ def analyze_annotation_targets(
         warning_count=len(warnings),
         warnings=warning_preview,
         warnings_truncated=len(warning_preview) < len(warnings),
-        reference_provenance=_reference_provenance(modules, coverages),
+        reference_provenance=_reference_provenance(
+            modules,
+            coverages,
+            additional=discovery_provenance,
+        ),
         execution=execution,
+        output_bundle=output_bundle,
     )
 
 
@@ -887,7 +984,7 @@ def read_cached_kegg_entry(
     elif isinstance(access, LicensedAccess):
         offline_access = OfflineCacheAccess(
             retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
-            endpoint_fingerprint=endpoint_fingerprint(access.endpoint),
+            endpoint_label=access.endpoint_label,
         )
     else:
         offline_access = access
@@ -926,7 +1023,22 @@ def map_ko_identifiers(
             suggested_action=f"Choose preview_limit between 0 and {MAX_MAPPING_PREVIEW_ROWS}.",
         )
     mapped = client.link(request, options=options)
-    payload = mapped.model_dump_json().encode("utf-8")
+    pathway_rows = (
+        tuple(_pathway_mapping_row(row) for row in mapped.rows)
+        if request.relationship is KeggLinkRelationship.KO_TO_PATHWAY
+        else ()
+    )
+    payload = (
+        _json_bytes(
+            {
+                "relationship": request.relationship.value,
+                "rows": [row.model_dump(mode="json") for row in pathway_rows],
+                "provenance": [batch.model_dump(mode="json") for batch in mapped.batches],
+            }
+        )
+        if pathway_rows
+        else mapped.model_dump_json().encode("utf-8")
+    )
     stored = result_store.create(
         scope_id,
         (
@@ -935,16 +1047,52 @@ def map_ko_identifiers(
             ),
         ),
     )
-    rows = mapped.rows[:preview_limit]
+    rows = (pathway_rows or mapped.rows)[:preview_limit]
+    pathway_numbers = {row.pathway_number for row in pathway_rows}
     return KoMappingServiceResult(
         result=stored,
         artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
         relationship=request.relationship,
         source_identifier_count=len(request.source_identifiers),
         row_count=len(mapped.rows),
+        raw_relationship_row_count=len(mapped.rows),
+        unique_ko_pathway_count=len(pathway_numbers),
+        unique_map_pathway_count=len(pathway_numbers),
+        unique_pathway_number_count=len(pathway_numbers),
         row_preview=tuple(rows),
         preview_truncated=len(rows) < len(mapped.rows),
         provenance=tuple(mapped.batches),
+    )
+
+
+def _pathway_mapping_row(row: KeggPairRow) -> PathwayMappingRow:
+    source_value = row.source_id.rsplit(":", 1)[-1]
+    target_value = row.target_id.rsplit(":", 1)[-1]
+    ko_id, _ = try_normalize_ko_id(source_value)
+    if ko_id is None or not is_kegg_pathway_identifier(target_value):
+        fail(
+            ErrorCode.KEGG_PARSE_FAILED,
+            "A KO-to-pathway relationship row has incompatible identifiers.",
+            suggested_action="Refresh the typed KEGG LINK response and retry.",
+        )
+    prefix = target_value[:-5]
+    if prefix == "ko":
+        namespace: Literal["ko", "map"] = "ko"
+    elif prefix == "map":
+        namespace = "map"
+    else:
+        fail(
+            ErrorCode.KEGG_PARSE_FAILED,
+            "A KO-to-pathway relationship row uses an unsupported namespace.",
+            suggested_action="Use reference ko/map pathway relationships for KO evidence.",
+        )
+    paired_prefix = "map" if namespace == "ko" else "ko"
+    return PathwayMappingRow(
+        source_ko_id=ko_id,
+        target_id=target_value,
+        pathway_number=target_value[-5:],
+        namespace=namespace,
+        paired_reference_id=f"{paired_prefix}{target_value[-5:]}",
     )
 
 
@@ -1119,7 +1267,64 @@ def get_server_status_service(
     )
 
 
+def probe_kegg_connectivity_service(
+    client: KeggConnectivityClient,
+    *,
+    now: datetime | None = None,
+) -> ConnectivityProbeResult:
+    """Probe a typed INFO endpoint once and classify failures before biological analysis."""
+    checked_now = (now or datetime.now(UTC)).astimezone(UTC)
+    access = client.config.access
+    endpoint_class = (
+        access.retrieval_endpoint_class
+        if isinstance(access, OfflineCacheAccess)
+        else (
+            RetrievalEndpointClass.PUBLIC_ACADEMIC
+            if isinstance(access, PublicAcademicAccess)
+            else RetrievalEndpointClass.LICENSED
+        )
+    )
+    if isinstance(access, OfflineCacheAccess):
+        return ConnectivityProbeResult(
+            state=ConnectivityState.DISABLED,
+            access_mode=access.mode,
+            endpoint_class=endpoint_class,
+            probed_at=checked_now,
+            suggested_action="Configure authorized live KEGG access to enable connectivity.",
+        )
+    try:
+        result = client.info(
+            InfoRequest(database=KeggInfoDatabase.KEGG),
+            options=KeggRequestOptions(refresh=True),
+        )
+    except KeggMcpError as error:
+        details = {item.name: item.value for item in error.detail.safe_details}
+        transport_kind = details.get("transport_kind")
+        if transport_kind == "dns":
+            state = ConnectivityState.DNS_FAILURE
+        elif transport_kind == "connection":
+            state = ConnectivityState.CONNECTION_FAILURE
+        else:
+            state = ConnectivityState.AUTHORIZATION_CONFIGURATION_FAILURE
+        return ConnectivityProbeResult(
+            state=state,
+            access_mode=access.mode,
+            endpoint_class=endpoint_class,
+            probed_at=checked_now,
+            error_code=error.detail.code,
+            suggested_action=error.detail.suggested_action,
+        )
+    return ConnectivityProbeResult(
+        state=ConnectivityState.REACHABLE,
+        access_mode=access.mode,
+        endpoint_class=endpoint_class,
+        probed_at=result.batch.served_at,
+    )
+
+
 def _import_dataset(request: NormalizeAnnotationsRequest) -> AnnotationDataset:
+    if request.text is None:
+        raise AssertionError("file-backed requests must be materialized before service execution")
     if request.input_format is AnnotationInputFormat.PLAIN_KO:
         return import_plain_ko(
             request.text,
@@ -1140,11 +1345,20 @@ def _import_dataset(request: NormalizeAnnotationsRequest) -> AnnotationDataset:
             kegg_organism_code=request.kegg_organism_code,
             source=request.source,
         )
-    if request.column_mapping is None or request.decision_policy is None:
-        raise AssertionError("generic request validation omitted importer configuration")
+    mapping = request.column_mapping or _infer_generic_column_mapping(
+        request.text,
+        delimiter=("," if request.input_format is AnnotationInputFormat.GENERIC_CSV else "\t"),
+    )
+    selected_policy = request.decision_policy
+    if selected_policy is None:
+        selected_policy = (
+            GenericDecisionPolicy.CANONICAL_SOURCE_STATUS_V1
+            if mapping.raw_decision is not None
+            else GenericDecisionPolicy.USER_SUPPLIED_KO_V1
+        )
     policy = (
         USER_SUPPLIED_KO_V1
-        if request.decision_policy is GenericDecisionPolicy.USER_SUPPLIED_KO_V1
+        if selected_policy is GenericDecisionPolicy.USER_SUPPLIED_KO_V1
         else CANONICAL_SOURCE_STATUS_V1
     )
     dialect = (
@@ -1155,7 +1369,7 @@ def _import_dataset(request: NormalizeAnnotationsRequest) -> AnnotationDataset:
     return import_generic_table(
         request.text,
         dialect=dialect,
-        mapping=request.column_mapping,
+        mapping=mapping,
         policy=policy,
         limits=request.import_limits,
         analysis_unit=request.analysis_unit,
@@ -1163,6 +1377,57 @@ def _import_dataset(request: NormalizeAnnotationsRequest) -> AnnotationDataset:
         taxon_id=request.taxon_id,
         kegg_organism_code=request.kegg_organism_code,
         source=request.source,
+    )
+
+
+def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumnMapping:
+    """Infer only unambiguous common generic-table column names and echo them in the dataset."""
+    try:
+        header = next(csv.reader(io.StringIO(text), delimiter=delimiter, strict=True))
+    except (StopIteration, csv.Error):
+        fail(
+            ErrorCode.INVALID_ANNOTATION_TABLE,
+            "The generic annotation table does not contain a readable header.",
+            suggested_action="Provide a UTF-8 CSV or TSV file with one header row.",
+        )
+    normalized: dict[str, list[str]] = {}
+    for column in header:
+        normalized.setdefault(column.strip().casefold(), []).append(column)
+
+    def select(logical_name: str, aliases: tuple[str, ...], *, required: bool) -> str | None:
+        matches = [value for alias in aliases for value in normalized.get(alias, ())]
+        if len(matches) > 1:
+            fail(
+                ErrorCode.AMBIGUOUS_COLUMN_MAPPING,
+                f"More than one common column matches {logical_name}.",
+                suggested_action=f"Supply column_mapping.{logical_name} explicitly.",
+            )
+        if not matches and required:
+            fail(
+                ErrorCode.MISSING_REQUIRED_COLUMN,
+                f"No common column name matches {logical_name}.",
+                suggested_action=f"Supply column_mapping.{logical_name} explicitly.",
+            )
+        return matches[0] if matches else None
+
+    sequence_id = select(
+        "sequence_id",
+        ("sequence_id", "protein_id", "seq_id", "query_id", "gene_id"),
+        required=True,
+    )
+    ko_id = select("ko_id", ("ko_id", "ko", "k_number", "kegg_orthology"), required=True)
+    if sequence_id is None or ko_id is None:
+        raise AssertionError("required generic-column inference returned no column")
+    return GenericColumnMapping(
+        sequence_id=sequence_id,
+        ko_id=ko_id,
+        protein_name=select(
+            "protein_name", ("protein_name", "protein", "description"), required=False
+        ),
+        sample_id=select("sample_id", ("sample_id", "sample"), required=False),
+        raw_decision=select(
+            "raw_decision", ("raw_decision", "decision", "status", "annotate"), required=False
+        ),
     )
 
 
@@ -1251,10 +1516,13 @@ def _pathway_preview(item: PathwayCoverageResult) -> PathwayAnalysisPreview:
 def _reference_provenance(
     modules: tuple[PairedModuleEvaluation, ...],
     pathways: tuple[PathwayCoverageResult, ...],
+    *,
+    additional: tuple[KeggBatchProvenance, ...] = (),
 ) -> tuple[KeggBatchProvenance, ...]:
-    batches = [
+    batches = list(additional)
+    batches.extend(
         batch for module in modules for batch in module.strict.reference_retrieval_provenance
-    ]
+    )
     batches.extend(
         batch
         for pathway in pathways
@@ -1278,6 +1546,71 @@ def _reference_provenance(
             suggested_action="Request fewer MODULE or pathway references.",
         )
     return tuple(unique)
+
+
+def _discover_reference_pathways(
+    dataset: AnnotationDataset,
+    *,
+    client: _SharedReferenceBudgetClient,
+    options: KeggRequestOptions,
+    limits: ReferenceLoadingLimits,
+) -> tuple[tuple[PathwaySpec, ...], tuple[KeggBatchProvenance, ...]]:
+    """Discover canonical KO-reference pathways once from accepted annotation evidence."""
+    ko_ids = tuple(
+        sorted(
+            {
+                record.ko_id
+                for record in dataset.records
+                if record.ko_id is not None
+                and record.normalized_status is NormalizedStatus.ACCEPTED
+            }
+        )
+    )
+    if not ko_ids:
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "Automatic pathway discovery requires at least one accepted K number.",
+            suggested_action="Provide accepted KO evidence or explicit MODULE/pathway targets.",
+        )
+    numbers: set[str] = set()
+    provenance: list[KeggBatchProvenance] = []
+    for start in range(0, len(ko_ids), 100):
+        result = client.link(
+            LinkRequest(
+                relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+                source_identifiers=ko_ids[start : start + 100],
+            ),
+            options=options,
+        )
+        provenance.extend(result.batches)
+        for row in result.rows:
+            target = row.target_id.rsplit(":", 1)[-1]
+            if not is_kegg_pathway_identifier(target) or target[:-5] not in {"ko", "map"}:
+                fail(
+                    ErrorCode.KEGG_PARSE_FAILED,
+                    "Automatic pathway discovery returned an unsupported pathway namespace.",
+                    suggested_action="Refresh the typed KO-to-pathway relationship and retry.",
+                )
+            numbers.add(target[-5:])
+    if not numbers:
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "No reference pathway could be discovered from the accepted K numbers.",
+            suggested_action="Supply explicit pathway or MODULE targets for this KO set.",
+        )
+    if len(numbers) > limits.max_pathway_specs:
+        fail(
+            ErrorCode.INPUT_LIMIT_EXCEEDED,
+            "Automatic pathway discovery exceeded the deployment pathway bound.",
+            suggested_action=(
+                "Supply an explicit subset of pathway identifiers or raise the deployment-owned "
+                "reference limit after capacity review."
+            ),
+        )
+    return (
+        tuple(PathwaySpec(pathway_id=f"ko{number}") for number in sorted(numbers)),
+        tuple(provenance),
+    )
 
 
 def _analysis_warnings(
@@ -1316,7 +1649,7 @@ def _annotation_source_summary(source: SourceProvenance) -> AnnotationSourceSumm
         model_name=source.model_name,
         model_version=source.model_version,
         annotation_date=source.annotation_date,
-        input_sha256=source.input_sha256,
+        input_path=source.input_path,
         importer_name=source.importer_name,
         importer_version=source.importer_version,
     )
@@ -1329,7 +1662,6 @@ def _annotation_provenance(dataset: AnnotationDataset) -> AnnotationProvenanceSu
     )
     return AnnotationProvenanceSummary(
         dataset_id=dataset.dataset_id,
-        dataset_sha256=annotation_dataset_digest(dataset),
         decision_policy=dataset.import_report.decision_policy,
         analysis_unit=dataset.analysis_unit,
         taxon_id=dataset.taxon_id,
@@ -1353,7 +1685,6 @@ def _comparison_preview(summary: KoSetComparisonSummary) -> KoSetComparisonPrevi
                 label=item.label,
                 annotation=AnnotationProvenanceSummary(
                     dataset_id=item.dataset_id,
-                    dataset_sha256=item.dataset_sha256,
                     decision_policy=item.decision_policy,
                     analysis_unit=item.analysis_unit,
                     taxon_id=item.taxon_id,
@@ -1373,7 +1704,6 @@ def _comparison_preview(summary: KoSetComparisonSummary) -> KoSetComparisonPrevi
     return KoSetComparisonPreview(
         datasets=tuple(datasets),
         partitions=summary.partitions,
-        detail_sha256=summary.detail_sha256,
         calculation_method=summary.calculation_method,
         warnings=summary.warnings,
         detail_limits=summary.detail_limits,
@@ -1392,7 +1722,6 @@ def _artifact_metadata(section: str, mime_type: str, content: bytes) -> ResultAr
         section=section,
         mime_type=mime_type,
         byte_size=len(content),
-        sha256=hashlib.sha256(content).hexdigest(),
     )
 
 

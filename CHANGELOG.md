@@ -8,6 +8,44 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 No changes yet.
 
+## [0.2.0] - 2026-07-15
+
+Workflow-remediation release for stable file handoff and a smaller public MCP contract.
+
+### Added
+
+- Allowed-root file inputs and output-directory bundles with normalized annotations, protein-to-KO
+  mappings, MODULE and pathway tables, a concise report, a renderer handoff, and a manifest.
+- Automatic common-column detection, `protein_name` preservation, automatic reference-pathway
+  discovery from accepted K numbers, and inferred canonical `ko` pathway namespaces.
+- Entry-level GET cache reuse, order-independent relationship cache keys, readable request keys,
+  and an explicit KEGG connectivity probe.
+- Field-path validation details, dedicated result-store and output-write errors, and contract tests
+  for JSON timezones, file handoff, traversal defense, output bundles, and cache reuse.
+
+### Changed
+
+- Deployment configuration owns KEGG access authorization, cache behavior, and service limits;
+  ordinary tool schemas no longer expose `refresh`, `allow_stale`, or internal limit models.
+- Deterministic analysis tools are declared read-only and idempotent. The server now exposes nine
+  tools, including `probe_kegg_connectivity`.
+- Pathway mappings return pathway number, namespace, paired `ko`/`map` identity, and deduplicated
+  counts. Equivalent `ko` and `map` views cannot be double-counted.
+- The repository Skill is now `kegg-ko-analysis` and covers only existing KO evidence. Protein
+  annotation and pathway rendering remain responsibilities of their independent MCPs and Skills.
+
+### Removed
+
+- Input, dataset, KO-set, definition, response, cache, endpoint, result-artifact, and report digest
+  fields from biological workflow contracts and reports.
+- DeepKOALA execution guidance and rendering orchestration from the core repository Skill.
+
+### Security
+
+- Shared input files, original input provenance paths, and output directories must resolve beneath
+  explicitly configured roots; traversal and symlink escapes fail before analysis.
+- DNS and permission failures are terminal transport classes and are not repeatedly retried.
+
 ## [0.1.0] - 2026-07-15
 
 First private GitHub release of the local stdio MCP server and repository-scoped Codex Skill.

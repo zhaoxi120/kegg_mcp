@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
@@ -94,6 +95,19 @@ def validate_logical_input_uri(value: str | None) -> str | None:
     if parsed.query or parsed.fragment:
         raise ValueError("input_uri must not contain query parameters or fragments")
     return value
+
+
+def validate_absolute_input_path(value: str | None) -> str | None:
+    """Validate an absolute local path retained as explicit user-facing provenance."""
+    if value is None:
+        return None
+    validate_utf8_text(value, field_name="input_path")
+    if not value or value != value.strip() or "\x00" in value:
+        raise ValueError("input_path must be a non-empty absolute path")
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("input_path must be absolute and contain no traversal components")
+    return str(path)
 
 
 class NormalizedStatus(StrEnum):
@@ -258,7 +272,7 @@ class SourceProvenance(FrozenModel):
     model_version: str | None = Field(max_length=256)
     annotation_date: datetime | None
     input_uri: str | None = Field(max_length=2_048)
-    input_sha256: str | None = Field(pattern=r"^[a-f0-9]{64}$")
+    input_path: str | None = Field(default=None, max_length=4_096)
     importer_name: str = Field(min_length=1, max_length=100)
     importer_version: str = Field(min_length=1, max_length=32)
     source_metadata: Annotated[tuple[EvidenceField, ...], Field(max_length=128)] = ()
@@ -272,6 +286,11 @@ class SourceProvenance(FrozenModel):
     @classmethod
     def validate_input_uri(cls, value: str | None) -> str | None:
         return validate_logical_input_uri(value)
+
+    @field_validator("input_path")
+    @classmethod
+    def validate_input_path(cls, value: str | None) -> str | None:
+        return validate_absolute_input_path(value)
 
     @field_validator(
         "source_version",
@@ -311,6 +330,7 @@ class AnnotationRecord(FrozenModel):
     record_id: RecordIdentifier
     sample_id: str = Field(min_length=1, max_length=256)
     sequence_id: str | None = Field(max_length=256)
+    protein_name: str | None = Field(default=None, max_length=1_000)
     ko_id: KNumber | None
     raw_ko: str
     raw_decision: str | None
@@ -338,6 +358,13 @@ class AnnotationRecord(FrozenModel):
         if value is None:
             return None
         return normalize_identifier_label(value, field_name="sequence_id")
+
+    @field_validator("protein_name")
+    @classmethod
+    def validate_protein_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_identifier_label(value, field_name="protein_name")
 
     @field_validator("raw_ko", "raw_decision")
     @classmethod

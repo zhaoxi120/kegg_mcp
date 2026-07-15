@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Annotated, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -57,7 +56,6 @@ PATHWAY_COMPARISON_METHOD = "shared_reference_pathway_coverage_comparison"
 PATHWAY_COMPARISON_VERSION = "1"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 
 class FunctionalComparisonLimits(FrozenModel):
@@ -159,7 +157,6 @@ class ModuleTargetComparison(FrozenModel):
 
     module_id: ModuleId
     module_name: str | None = Field(default=None, max_length=1_000)
-    definition_sha256: Sha256
     strict: ModuleModeComparison
     lenient: ModuleModeComparison
     module_calculation_method: CalculationMethodReference
@@ -257,7 +254,6 @@ class SetPathwayOutcome(FrozenModel):
     missing_reference_ko_count: NonNegativeCount
     reference_unique_ko_count: NonNegativeCount
     coverage_ratio: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
-    selected_ko_sha256: Sha256
     warnings: Annotated[tuple[PathwayCoverageWarning, ...], Field(max_length=12)]
 
     @model_validator(mode="after")
@@ -324,7 +320,6 @@ class PathwayTargetComparison(FrozenModel):
     """Strict and lenient outcomes recomputed against one immutable pathway reference."""
 
     reference: PathwayKoReference
-    reference_ko_sha256: Sha256
     strict: PathwayModeComparison
     lenient: PathwayModeComparison
     pathway_calculation_method: CalculationMethodReference
@@ -344,8 +339,6 @@ class PathwayTargetComparison(FrozenModel):
         reference_count = len(self.reference.reference_kos)
         if any(item.reference_unique_ko_count != reference_count for item in outcomes):
             raise ValueError("all pathway outcomes must use the complete shared denominator")
-        if self.reference_ko_sha256 != _pathway_ko_digest(self.reference.reference_kos):
-            raise ValueError("reference_ko_sha256 must identify the complete shared denominator")
         if (
             self.reference.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
             and not self.allow_global_or_overview
@@ -585,7 +578,6 @@ def _compare_one_module(
     identity_fields = (
         "module_id",
         "module_name",
-        "definition_sha256",
         "required_block_count",
         "calculation_method",
         "unresolved_references",
@@ -608,7 +600,6 @@ def _compare_one_module(
     return ModuleTargetComparison(
         module_id=first.module_id,
         module_name=first.module_name,
-        definition_sha256=first.definition_sha256,
         strict=_module_mode_comparison(EvidenceMode.STRICT, labels, strict_results),
         lenient=_module_mode_comparison(EvidenceMode.LENIENT, labels, lenient_results),
         module_calculation_method=first.calculation_method,
@@ -760,7 +751,6 @@ def _compare_one_pathway(
         "excluded_entry_count",
         "relationship_row_count",
         "duplicate_relationship_count",
-        "reference_ko_sha256",
         "reference_link_provenance",
         "reference_metadata_provenance",
         "calculation_method",
@@ -781,7 +771,6 @@ def _compare_one_pathway(
     labels = tuple(item.label for item in inputs)
     return PathwayTargetComparison(
         reference=reference,
-        reference_ko_sha256=first.reference_ko_sha256,
         strict=_pathway_mode_comparison(EvidenceMode.STRICT, labels, strict_results),
         lenient=_pathway_mode_comparison(EvidenceMode.LENIENT, labels, lenient_results),
         pathway_calculation_method=CalculationMethodReference(
@@ -830,7 +819,6 @@ def _pathway_mode_comparison(
             missing_reference_ko_count=result.missing_unique_ko_count,
             reference_unique_ko_count=result.reference_unique_ko_count,
             coverage_ratio=result.coverage_ratio,
-            selected_ko_sha256=result.selected_ko_sha256,
             warnings=result.warnings,
         )
         for index, result in enumerate(results)
@@ -861,14 +849,6 @@ def _pathway_outcome_signature(outcome: SetPathwayOutcome) -> tuple[object, ...]
         outcome.reference_unique_ko_count,
         outcome.coverage_ratio,
     )
-
-
-def _pathway_ko_digest(ko_ids: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for ko_id in ko_ids:
-        digest.update(ko_id.encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
 __all__ = [

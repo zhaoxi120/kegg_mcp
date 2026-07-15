@@ -1,7 +1,5 @@
 """Tests for KEGG access and request contracts."""
 
-import hashlib
-
 import pytest
 from pydantic import ValidationError
 
@@ -124,7 +122,7 @@ def test_sensitive_configuration_values_are_hidden_in_validation_errors() -> Non
 
 def test_offline_public_namespace_cannot_impersonate_another_endpoint() -> None:
     with pytest.raises(ValidationError):
-        OfflineCacheAccess(endpoint_fingerprint=hashlib.sha256(b"other").hexdigest())
+        OfflineCacheAccess(endpoint_label="other")
 
 
 @pytest.mark.parametrize(

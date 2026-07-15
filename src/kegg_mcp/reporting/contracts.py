@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
@@ -28,7 +27,6 @@ REPORT_FORMAT_VERSION = "2"
 REPORT_RENDERER_NAME = "kegg_mcp_reporting"
 REPORT_RENDERER_VERSION = "1"
 
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 
 
@@ -155,7 +153,7 @@ class StructuredReport(FrozenModel):
 
 
 class ReportArtifact(FrozenModel):
-    """One content-addressed UTF-8 report artifact held entirely in memory."""
+    """One bounded UTF-8 report artifact held entirely in memory."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -173,7 +171,6 @@ class ReportArtifact(FrozenModel):
     section: ReportSection
     mime_type: Literal["application/json", "text/markdown", "text/csv"]
     utf8_byte_size: NonNegativeCount
-    sha256: Sha256
     content: str
     truncated: bool
 
@@ -194,8 +191,6 @@ class ReportArtifact(FrozenModel):
         encoded = self.content.encode("utf-8")
         if self.utf8_byte_size != len(encoded):
             raise ValueError("utf8_byte_size must equal the encoded content length")
-        if self.sha256 != hashlib.sha256(encoded).hexdigest():
-            raise ValueError("sha256 must identify the exact UTF-8 artifact content")
         if self.section is not ReportSection.SUMMARY and self.truncated:
             raise ValueError("complete structured and annotation artifacts cannot be truncated")
         return self

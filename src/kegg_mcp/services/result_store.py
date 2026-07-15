@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import secrets
@@ -17,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 
-_SCHEMA_VERSION: Final = 1
+_SCHEMA_VERSION: Final = 2
 _MEBIBYTE: Final = 1024 * 1024
 _GIBIBYTE: Final = 1024 * _MEBIBYTE
 _SQLITE_MAX_INTEGER: Final = (1 << 63) - 1
@@ -47,7 +46,6 @@ HARD_MAX_RANGE_BYTES: Final = 8 * _MEBIBYTE
 _SCOPE_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SECTION_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RESULT_ID_PATTERN: Final = re.compile(r"res_[A-Za-z0-9_-]{32}\Z")
-_SHA256_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _MIME_TYPE_PATTERN: Final = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/"
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}(?:; charset=utf-8)?\Z"
@@ -66,14 +64,13 @@ CREATE TABLE IF NOT EXISTS stored_results (
 """
 
 _CREATE_ARTIFACTS = """
-CREATE TABLE IF NOT EXISTS result_artifacts (
+CREATE TABLE IF NOT EXISTS result_artifacts_v2 (
     result_id TEXT NOT NULL,
     position INTEGER NOT NULL CHECK (position >= 0),
     section TEXT NOT NULL,
     mime_type TEXT NOT NULL,
     content BLOB NOT NULL,
     byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
-    sha256 TEXT NOT NULL,
     PRIMARY KEY (result_id, section),
     UNIQUE (result_id, position),
     FOREIGN KEY (result_id) REFERENCES stored_results (result_id) ON DELETE CASCADE
@@ -102,15 +99,14 @@ INSERT INTO stored_results (
 """
 
 _INSERT_ARTIFACT = """
-INSERT INTO result_artifacts (
+INSERT INTO result_artifacts_v2 (
     result_id,
     position,
     section,
     mime_type,
     content,
-    byte_size,
-    sha256
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+    byte_size
+) VALUES (?, ?, ?, ?, ?, ?)
 """
 
 
@@ -243,7 +239,6 @@ class ResultArtifactMetadata(_StoreModel):
     section: str = Field(min_length=1, max_length=128)
     mime_type: str = Field(min_length=3, max_length=255)
     byte_size: int = Field(strict=True, ge=0, le=HARD_MAX_ARTIFACT_BYTES)
-    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     @field_validator("section")
     @classmethod
@@ -305,7 +300,6 @@ class ResultArtifactRange(_StoreModel):
     result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
     section: str = Field(min_length=1, max_length=128)
     mime_type: str = Field(min_length=3, max_length=255)
-    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     total_bytes: int = Field(strict=True, ge=0, le=HARD_MAX_ARTIFACT_BYTES)
     offset: int = Field(strict=True, ge=0)
     limit: int = Field(strict=True, ge=1, le=HARD_MAX_RANGE_BYTES)
@@ -432,7 +426,6 @@ class SQLiteResultStore:
                                 artifact.mime_type,
                                 sqlite3.Binary(artifact.content),
                                 len(artifact.content),
-                                hashlib.sha256(artifact.content).hexdigest(),
                             ),
                         )
                     connection.commit()
@@ -473,7 +466,7 @@ class SQLiteResultStore:
                         COUNT(a.section),
                         COALESCE(SUM(a.byte_size), 0)
                     FROM stored_results AS r
-                    LEFT JOIN result_artifacts AS a ON a.result_id = r.result_id
+                    LEFT JOIN result_artifacts_v2 AS a ON a.result_id = r.result_id
                     WHERE r.scope_id = ?
                       AND r.result_id = ?
                       AND r.expires_at > ?
@@ -577,8 +570,8 @@ class SQLiteResultStore:
                     _raise_result_not_found()
                 rows = connection.execute(
                     """
-                    SELECT section, mime_type, byte_size, sha256
-                    FROM result_artifacts
+                    SELECT section, mime_type, byte_size
+                    FROM result_artifacts_v2
                     WHERE result_id = ?
                     ORDER BY position
                     LIMIT ? OFFSET ?
@@ -586,7 +579,7 @@ class SQLiteResultStore:
                     (checked_result, checked_limit, checked_offset),
                 ).fetchall()
                 actual_count_row = connection.execute(
-                    "SELECT COUNT(*) FROM result_artifacts WHERE result_id = ?",
+                    "SELECT COUNT(*) FROM result_artifacts_v2 WHERE result_id = ?",
                     (checked_result,),
                 ).fetchone()
                 connection.commit()
@@ -636,10 +629,9 @@ class SQLiteResultStore:
                     SELECT
                         a.mime_type,
                         a.byte_size,
-                        a.sha256,
                         length(a.content),
                         substr(a.content, ? + 1, ?)
-                    FROM result_artifacts AS a
+                    FROM result_artifacts_v2 AS a
                     JOIN stored_results AS r ON r.result_id = a.result_id
                     WHERE r.scope_id = ?
                       AND r.result_id = ?
@@ -660,18 +652,15 @@ class SQLiteResultStore:
         if row is None:
             _raise_result_not_found()
         try:
-            if len(row) != 5:
+            if len(row) != 4:
                 raise _ResultStoreIntegrityError("unexpected artifact row shape")
             mime_type = _validate_mime_type(row[0])
             total_bytes = _decode_nonnegative_integer(row[1])
-            sha256 = row[2]
-            persisted_length = _decode_nonnegative_integer(row[3])
-            content = row[4]
+            persisted_length = _decode_nonnegative_integer(row[2])
+            content = row[3]
             if (
                 total_bytes > HARD_MAX_ARTIFACT_BYTES
                 or persisted_length != total_bytes
-                or not isinstance(sha256, str)
-                or not _SHA256_PATTERN.fullmatch(sha256)
                 or not isinstance(content, bytes)
             ):
                 raise _ResultStoreIntegrityError("invalid artifact metadata")
@@ -683,7 +672,6 @@ class SQLiteResultStore:
             result_id=checked_result,
             section=checked_section,
             mime_type=mime_type,
-            sha256=sha256,
             total_bytes=total_bytes,
             offset=checked_offset,
             limit=checked_limit,
@@ -1142,16 +1130,13 @@ def _decode_result_row(row: tuple[object, ...]) -> ResultMetadata:
 
 
 def _decode_artifact_metadata(row: tuple[object, ...]) -> ResultArtifactMetadata:
-    if len(row) != 4:
+    if len(row) != 3:
         raise _ResultStoreIntegrityError("unexpected artifact metadata row shape")
-    section, mime_type, byte_size, sha256 = row
-    if not isinstance(sha256, str) or not _SHA256_PATTERN.fullmatch(sha256):
-        raise _ResultStoreIntegrityError("invalid artifact checksum")
+    section, mime_type, byte_size = row
     return ResultArtifactMetadata(
         section=_validate_section_name(section),
         mime_type=_validate_mime_type(mime_type),
         byte_size=_decode_nonnegative_integer(byte_size),
-        sha256=sha256,
     )
 
 

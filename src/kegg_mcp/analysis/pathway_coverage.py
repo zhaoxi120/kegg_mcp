@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from enum import StrEnum
 from typing import Annotated, Literal, NoReturn, Self
@@ -46,7 +45,6 @@ _KO_LINK_TARGET = re.compile(r"^ko:(K[0-9]{5})$")
 # KEGG PATHWAY CLASS wording confirmed from public flat files on 2026-07-14.
 _BROAD_PATHWAY_CLASS = "Global and overview maps"
 
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 TaxonId = Annotated[int, Field(strict=True, gt=0)]
@@ -157,7 +155,6 @@ class OrganismGeneContext(FrozenModel):
     """Bounded provenance that KO evidence came from one KEGG organism gene context."""
 
     kegg_organism_code: str = Field(min_length=3, max_length=4)
-    qualified_gene_ids_sha256: Sha256
     qualified_gene_count: PositiveCount
 
     @field_validator("kegg_organism_code")
@@ -352,8 +349,6 @@ class PathwayCoverageResult(FrozenModel):
     exclusions_preview_truncated: bool
     relationship_row_count: NonNegativeCount
     duplicate_relationship_count: NonNegativeCount
-    selected_ko_sha256: Sha256
-    reference_ko_sha256: Sha256
     reference_link_provenance: ReferenceProvenance
     reference_metadata_provenance: ReferenceProvenance
     calculation_method: Literal["unique_detected_kos_over_unique_reference_kos"] = (
@@ -746,8 +741,6 @@ def evaluate_pathway_coverage(
         exclusions_preview_truncated=exclusions_truncated,
         relationship_row_count=reference.relationship_row_count,
         duplicate_relationship_count=reference.duplicate_relationship_count,
-        selected_ko_sha256=_ko_digest(selected),
-        reference_ko_sha256=_ko_digest(reference.reference_kos),
         reference_link_provenance=reference.link_provenance,
         reference_metadata_provenance=reference.metadata_provenance,
         parameters=request,
@@ -1105,14 +1098,6 @@ def _fail_parse(message: str, pathway_id: str) -> NoReturn:
         suggested_action="Refresh the exact PATHWAY flat-file response and retry.",
         safe_details=(SafeDetail(name="pathway_id", value=pathway_id),),
     )
-
-
-def _ko_digest(ko_ids: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for ko_id in ko_ids:
-        digest.update(ko_id.encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
 __all__ = [

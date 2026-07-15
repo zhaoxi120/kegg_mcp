@@ -358,7 +358,6 @@ def _evaluate_mode(
     result = ModuleEvaluationResult(
         module_id=root.definition.module_id,
         module_name=root.definition.module_name,
-        definition_sha256=root.definition.definition_sha256,
         dataset_id=dataset.dataset_id,
         decision_policy=dataset.import_report.decision_policy,
         evidence_mode=evidence_mode,
@@ -394,7 +393,6 @@ def _evaluate_mode(
         provenance=tuple(
             EvaluatedDefinitionProvenance(
                 module_id=item.definition.module_id,
-                definition_sha256=item.definition.definition_sha256,
                 provenance=item.definition.provenance,
             )
             for item in graph.modules

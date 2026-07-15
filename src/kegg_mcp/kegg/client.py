@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import random
 import time
 from collections.abc import Callable
@@ -14,6 +13,7 @@ from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.kegg.cache import CachedResponse, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     CacheLookupState,
     ConvRequest,
     ConvResult,
@@ -37,7 +37,6 @@ from kegg_mcp.kegg.contracts import (
     PublicAcademicAccess,
     ResponseOrigin,
     RetrievalEndpointClass,
-    endpoint_fingerprint,
 )
 from kegg_mcp.kegg.operations import (
     PreparedRequest,
@@ -76,6 +75,7 @@ class RateLimiter(Protocol):
 class _ExecutedBatch:
     document: _ParsedDocument
     provenance: KeggBatchProvenance
+    body: bytes
 
 
 class KeggClient:
@@ -102,15 +102,15 @@ class KeggClient:
         if isinstance(access, PublicAcademicAccess):
             self._endpoint: str | None = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.PUBLIC_ACADEMIC
-            self._endpoint_fingerprint = endpoint_fingerprint(access.endpoint)
+            self._endpoint_label = PUBLIC_KEGG_ENDPOINT_LABEL
         elif isinstance(access, LicensedAccess):
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.LICENSED
-            self._endpoint_fingerprint = endpoint_fingerprint(access.endpoint)
+            self._endpoint_label = access.endpoint_label
         else:
             self._endpoint = None
             self._retrieval_endpoint_class = access.retrieval_endpoint_class
-            self._endpoint_fingerprint = access.endpoint_fingerprint
+            self._endpoint_label = access.endpoint_label
 
         if self._endpoint is None:
             self._transport = transport
@@ -118,7 +118,7 @@ class KeggClient:
         else:
             self._transport = transport or HttpsTransport()
             self._mandatory_rate_limiter = ProcessWideRateLimiter(
-                self._endpoint_fingerprint,
+                self._endpoint_label,
                 config.limits.requests_per_second,
             )
         self._additional_rate_limiter = rate_limiter
@@ -148,11 +148,17 @@ class KeggClient:
         options: KeggRequestOptions | None = None,
     ) -> GetResult:
         """Retrieve selected textual entries and report partial 200 responses explicitly."""
-        prepared_batches = prepare_get(request, self._config.limits)
-        executed_batches = tuple(
-            self._execute(prepared, options or KeggRequestOptions())
-            for prepared in prepared_batches
-        )
+        effective_options = options or KeggRequestOptions()
+        entry_cache_hits = self._read_complete_entry_cache(request, effective_options)
+        if entry_cache_hits is None:
+            prepared_batches = prepare_get(request, self._config.limits)
+            executed_batches = tuple(
+                self._execute(prepared, effective_options) for prepared in prepared_batches
+            )
+            for prepared, executed in zip(prepared_batches, executed_batches, strict=True):
+                self._store_entry_cache_rows(prepared, executed)
+        else:
+            prepared_batches, executed_batches = entry_cache_hits
         documents: list[KeggGetDocument] = []
         returned_keys: set[tuple[KeggGetDatabase, str]] = set()
 
@@ -204,6 +210,93 @@ class KeggClient:
             missing_entries=missing_entries,
             batches=tuple(batch.provenance for batch in executed_batches),
         )
+
+    def _read_complete_entry_cache(
+        self,
+        request: GetRequest,
+        options: KeggRequestOptions,
+    ) -> tuple[tuple[PreparedRequest, ...], tuple[_ExecutedBatch, ...]] | None:
+        if options.refresh or len(request.entries) < 2:
+            return None
+        prepared_entries = tuple(
+            prepare_get(GetRequest(entries=(entry,)), self._config.limits)[0]
+            for entry in request.entries
+        )
+        now = self._read_clock()
+        executed: list[_ExecutedBatch] = []
+        for prepared in prepared_entries:
+            lookup = self._cache.read(
+                prepared.operation,
+                prepared.normalized_request_key,
+                self._retrieval_endpoint_class,
+                self._endpoint_label,
+                now=now,
+                expected_parser_version=PARSER_VERSION,
+            )
+            if lookup.state is CacheReadState.FRESH and lookup.response is not None:
+                executed.append(
+                    self._from_cache(
+                        prepared,
+                        lookup.response,
+                        CacheLookupState.FRESH_HIT,
+                        now,
+                        info_request=None,
+                        is_stale=False,
+                    )
+                )
+            elif (
+                lookup.state is CacheReadState.STALE
+                and options.allow_stale
+                and lookup.response is not None
+            ):
+                executed.append(
+                    self._from_cache(
+                        prepared,
+                        lookup.response,
+                        CacheLookupState.STALE_HIT,
+                        now,
+                        info_request=None,
+                        is_stale=True,
+                    )
+                )
+            else:
+                return None
+        return prepared_entries, tuple(executed)
+
+    def _store_entry_cache_rows(
+        self,
+        prepared: PreparedRequest,
+        executed: _ExecutedBatch,
+    ) -> None:
+        document = executed.document
+        if not isinstance(document, KeggFlatFileDocument) or len(prepared.requested_entries) < 2:
+            return
+        chunks = tuple(
+            chunk.lstrip(b"\r\n") + b"///\n"
+            for chunk in executed.body.split(b"///")
+            if chunk.strip()
+        )
+        if len(chunks) != len(document.entries):
+            return
+        requested_by_identifier = {entry.identifier: entry for entry in prepared.requested_entries}
+        provenance = executed.provenance
+        for parsed_entry, body in zip(document.entries, chunks, strict=True):
+            requested_entry = requested_by_identifier.get(parsed_entry.identifier)
+            if requested_entry is None:
+                continue
+            single = prepare_get(GetRequest(entries=(requested_entry,)), self._config.limits)[0]
+            self._cache.write(
+                single.operation,
+                single.normalized_request_key,
+                self._retrieval_endpoint_class,
+                self._endpoint_label,
+                body=body,
+                retrieved_at=provenance.retrieved_at,
+                expires_at=provenance.expires_at,
+                parser_version=provenance.parser_version,
+                database_release=provenance.database_release,
+                http_metadata=provenance.http_metadata,
+            )
 
     def link(
         self,
@@ -276,7 +369,7 @@ class KeggClient:
                 prepared.operation,
                 prepared.normalized_request_key,
                 self._retrieval_endpoint_class,
-                self._endpoint_fingerprint,
+                self._endpoint_label,
                 now=now,
                 expected_parser_version=PARSER_VERSION,
             )
@@ -329,7 +422,7 @@ class KeggClient:
             prepared.operation,
             prepared.normalized_request_key,
             self._retrieval_endpoint_class,
-            self._endpoint_fingerprint,
+            self._endpoint_label,
             body=response.body,
             retrieved_at=retrieved_at,
             expires_at=expires_at,
@@ -346,7 +439,7 @@ class KeggClient:
             attempt_count=attempt_count,
             is_stale=False,
         )
-        return _ExecutedBatch(document=document, provenance=provenance)
+        return _ExecutedBatch(document=document, provenance=provenance, body=cached.body)
 
     def _from_cache(
         self,
@@ -382,6 +475,7 @@ class KeggClient:
                 attempt_count=0,
                 is_stale=is_stale,
             ),
+            body=cached.body,
         )
 
     def _parse_response(
@@ -461,6 +555,7 @@ class KeggClient:
                 self._additional_rate_limiter.acquire()
             response: TransportResponse | None = None
             terminal_transport_failure = False
+            terminal_transport_kind = None
             try:
                 response = self._transport.request(
                     url,
@@ -472,6 +567,7 @@ class KeggClient:
                     self._wait_before_retry(attempt)
                     continue
                 terminal_transport_failure = True
+                terminal_transport_kind = error.kind
             if terminal_transport_failure:
                 fail(
                     ErrorCode.KEGG_REQUEST_FAILED,
@@ -482,6 +578,14 @@ class KeggClient:
                     safe_details=(
                         SafeDetail(name="operation", value=prepared.operation.value),
                         SafeDetail(name="attempt_count", value=str(attempt)),
+                        SafeDetail(
+                            name="transport_kind",
+                            value=(
+                                "unknown"
+                                if terminal_transport_kind is None
+                                else terminal_transport_kind.value
+                            ),
+                        ),
                     ),
                 )
             if response is None:
@@ -569,18 +673,15 @@ class KeggClient:
     ) -> KeggBatchProvenance:
         return KeggBatchProvenance(
             operation=prepared.operation,
-            request_key_sha256=hashlib.sha256(
-                prepared.normalized_request_key.encode("utf-8")
-            ).hexdigest(),
+            request_key=prepared.normalized_request_key,
             access_mode=self._config.access.mode,
             retrieval_endpoint_class=self._retrieval_endpoint_class,
-            endpoint_fingerprint=self._endpoint_fingerprint,
+            endpoint_label=self._endpoint_label,
             origin=origin,
             cache_lookup_state=cache_state,
             retrieved_at=cached.retrieved_at,
             served_at=served_at,
             expires_at=cached.expires_at,
-            response_sha256=cached.response_sha256,
             response_bytes=len(cached.body),
             parser_name=prepared.parser.value,
             parser_version=cached.parser_version,

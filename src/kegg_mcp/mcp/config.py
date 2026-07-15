@@ -17,7 +17,6 @@ from kegg_mcp.kegg import (
     PublicAcademicAccess,
     RetrievalEndpointClass,
 )
-from kegg_mcp.kegg.contracts import endpoint_fingerprint
 
 ACCESS_MODE_ENV = "KEGG_MCP_ACCESS_MODE"
 ACADEMIC_CONFIRMATION_ENV = "KEGG_MCP_ACADEMIC_USE_CONFIRMED"
@@ -25,6 +24,7 @@ LICENSED_ENDPOINT_ENV = "KEGG_MCP_LICENSED_ENDPOINT"
 LICENSED_CONFIRMATION_ENV = "KEGG_MCP_LICENSED_USE_CONFIRMED"
 CACHE_PATH_ENV = "KEGG_MCP_CACHE_PATH"
 RESULT_STORE_PATH_ENV = "KEGG_MCP_RESULT_STORE_PATH"
+ALLOWED_ROOTS_ENV = "KEGG_MCP_ALLOWED_ROOTS"
 
 
 class McpRuntimeConfig(BaseModel):
@@ -34,6 +34,7 @@ class McpRuntimeConfig(BaseModel):
 
     kegg: KeggClientConfig
     result_store_path: str
+    allowed_roots: tuple[str, ...] = ()
 
 
 def default_result_store_path(environment: Mapping[str, str] | None = None) -> str:
@@ -89,21 +90,46 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRunt
             )
             access = OfflineCacheAccess(
                 retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
-                endpoint_fingerprint=endpoint_fingerprint(licensed.endpoint),
+                endpoint_label=licensed.endpoint_label,
             )
 
     cache_path = values.get(CACHE_PATH_ENV)
     cache = CachePolicy(path=cache_path) if cache_path is not None else CachePolicy()
     result_path = values.get(RESULT_STORE_PATH_ENV, default_result_store_path(values))
+    allowed_roots = _load_allowed_roots(values.get(ALLOWED_ROOTS_ENV))
     return McpRuntimeConfig(
         kegg=KeggClientConfig(access=access, cache=cache),
         result_store_path=result_path,
+        allowed_roots=allowed_roots,
     )
+
+
+def _load_allowed_roots(raw_value: str | None) -> tuple[str, ...]:
+    if raw_value is None or not raw_value.strip():
+        return ()
+    roots: list[str] = []
+    for raw_root in raw_value.split(os.pathsep):
+        if not raw_root:
+            raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an empty path")
+        path = Path(raw_root).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"{ALLOWED_ROOTS_ENV} paths must be absolute")
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as error:
+            raise ValueError(f"{ALLOWED_ROOTS_ENV} paths must exist") from error
+        if not resolved.is_dir():
+            raise ValueError(f"{ALLOWED_ROOTS_ENV} paths must be directories")
+        value = str(resolved)
+        if value not in roots:
+            roots.append(value)
+    return tuple(roots)
 
 
 __all__ = [
     "ACADEMIC_CONFIRMATION_ENV",
     "ACCESS_MODE_ENV",
+    "ALLOWED_ROOTS_ENV",
     "CACHE_PATH_ENV",
     "LICENSED_CONFIRMATION_ENV",
     "LICENSED_ENDPOINT_ENV",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 from collections.abc import Iterable, Sequence
@@ -265,6 +264,11 @@ def _render_annotation_csv(report: ReportInput, limits: ReportLimits) -> str:
 def _markdown_cell(value: object) -> str:
     """Encode untrusted text so Markdown cannot reinterpret it as active syntax."""
     return str(value).translate(_MARKDOWN_TEXT_TRANSLATION)
+
+
+def _markdown_path(value: str) -> str:
+    """Keep ordinary absolute paths readable while neutralizing active Markdown syntax."""
+    return _markdown_cell(value).replace("&#95;", "_")
 
 
 def _ratio(value: float | None) -> str:
@@ -637,13 +641,17 @@ def _append_warnings_and_provenance(
         source_version = source.source_version or "unknown"
         model = source.model_name or "unknown"
         model_version = source.model_version or "unknown"
-        digest = source.input_sha256 or "unknown"
-        logical_name = source.input_uri or "unknown"
+        input_location = source.input_path or source.input_uri or "inline"
+        rendered_input = (
+            _markdown_path(input_location)
+            if source.input_path is not None
+            else _markdown_cell(input_location)
+        )
         lines.append(
             f"- Source: {_markdown_cell(source.source_name)}; software: "
             f"{_markdown_cell(source_version)}; model: {_markdown_cell(model)}; "
-            f"model/database version: {_markdown_cell(model_version)}; logical input: "
-            f"{_markdown_cell(logical_name)}; SHA-256: `{digest}`; importer: "
+            f"model/database version: {_markdown_cell(model_version)}; input: "
+            f"{rendered_input}; importer: "
             f"{_markdown_cell(source.importer_name)} {_markdown_cell(source.importer_version)}."
         )
     if len(selected_sources) < len(report.dataset.sources):
@@ -655,12 +663,12 @@ def _append_warnings_and_provenance(
     if report.execution is None:
         lines.append(
             "\nAvailable serialized source, KEGG retrieval, algorithm, parameter, denominator, "
-            "and definition-digest provenance is retained in the structured JSON artifact."
+            "and retrieval provenance is retained in the structured JSON artifact."
         )
     else:
         lines.append(
             "\nComplete one-call execution parameters plus serialized source, KEGG retrieval, "
-            "algorithm, denominator, and definition-digest provenance are retained in the "
+            "algorithm, denominator, and retrieval provenance are retained in the "
             "structured JSON artifact."
         )
     return truncated
@@ -744,7 +752,6 @@ def _artifact(
         section=section,
         mime_type=mime_type,
         utf8_byte_size=len(encoded),
-        sha256=hashlib.sha256(encoded).hexdigest(),
         content=content,
         truncated=truncated,
     )

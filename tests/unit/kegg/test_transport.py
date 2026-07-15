@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import socket
 import ssl
 import traceback
 from email.message import Message
@@ -267,6 +268,8 @@ def test_transport_rejects_unsupported_or_inconsistent_response_metadata(
     [
         (TimeoutError("private timeout detail"), TransportErrorKind.TIMEOUT, True),
         (URLError("private connection detail"), TransportErrorKind.CONNECTION, True),
+        (URLError(socket.gaierror("private DNS detail")), TransportErrorKind.DNS, False),
+        (URLError(PermissionError("private sandbox detail")), TransportErrorKind.PERMISSION, False),
         (ssl.SSLError("private TLS detail"), TransportErrorKind.TLS, False),
         (
             URLError(ssl.SSLError("private TLS detail")),
