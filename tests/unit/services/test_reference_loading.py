@@ -19,7 +19,7 @@ from kegg_mcp.analysis.pathway_coverage import (
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     GetRequest,
@@ -60,10 +60,9 @@ def _provenance(
     expires_at = retrieved_at + timedelta(days=1)
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256=f"{marker % 16:x}" * 64,
         access_mode=(AccessMode.OFFLINE_CACHE if cached else AccessMode.PUBLIC_ACADEMIC),
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE if cached else ResponseOrigin.NETWORK,
         cache_lookup_state=(
             CacheLookupState.STALE_HIT
@@ -75,7 +74,6 @@ def _provenance(
         retrieved_at=retrieved_at,
         served_at=expires_at + timedelta(hours=1) if stale else retrieved_at,
         expires_at=expires_at,
-        response_sha256=f"{(marker + 8) % 16:x}" * 64,
         response_bytes=100,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -269,7 +267,6 @@ def test_module_loading_recurses_in_root_order_and_retains_batch_provenance() ->
     assert root.provenance.origin is ModuleDefinitionOrigin.KEGG_NETWORK
     assert root.provenance.retrieval is not None
     assert root.provenance.retrieval.retrieved_at == _NOW + timedelta(minutes=2)
-    assert root.provenance.retrieval.response_sha256 == "a" * 64
     assert root.provenance.retrieval.database_release == "Release 116.0+/07-14"
     second_root = graphs[1].modules[0].definition
     assert second_root.provenance.origin is ModuleDefinitionOrigin.KEGG_CACHE
@@ -763,6 +760,17 @@ def test_pathway_spec_rejects_namespace_mismatch(
 ) -> None:
     with pytest.raises(ValidationError):
         PathwaySpec(pathway_id=pathway_id, reference_namespace=namespace)
+
+
+@pytest.mark.parametrize("pathway_id", ["ko00010", "map00010"])
+def test_pathway_spec_infers_canonical_ko_reference(pathway_id: str) -> None:
+    spec = PathwaySpec.model_validate({"pathway_id": pathway_id})
+
+    assert spec.pathway_id == "ko00010"
+    assert spec.reference_namespace is PathwayReferenceNamespace.KO
+    assert spec.pathway_number == "00010"
+    assert spec.namespace == "ko"
+    assert spec.paired_reference_id == "map00010"
 
 
 def test_duplicate_and_excess_pathway_specs_fail_before_io() -> None:

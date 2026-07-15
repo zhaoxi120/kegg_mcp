@@ -1,8 +1,7 @@
-"""Integrity-checked user-local SQLite cache for KEGG response payloads."""
+"""Parser-validated user-local SQLite cache for KEGG response payloads."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -25,20 +24,19 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
 )
 
-_SCHEMA_VERSION: Final = 1
+_SCHEMA_VERSION: Final = 2
 _MAX_REQUEST_KEY_CHARACTERS: Final = 65_536
 _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
-_SHA256_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
+_ENDPOINT_LABEL_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
 
 _CREATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS kegg_responses (
+CREATE TABLE IF NOT EXISTS kegg_responses_v2 (
     operation TEXT NOT NULL,
     normalized_request_key TEXT NOT NULL,
     endpoint_class TEXT NOT NULL,
-    endpoint_fingerprint TEXT NOT NULL,
+    endpoint_label TEXT NOT NULL,
     response_body BLOB NOT NULL,
-    response_sha256 TEXT NOT NULL,
     retrieved_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     parser_version TEXT NOT NULL,
@@ -48,7 +46,7 @@ CREATE TABLE IF NOT EXISTS kegg_responses (
         operation,
         normalized_request_key,
         endpoint_class,
-        endpoint_fingerprint
+        endpoint_label
     )
 ) WITHOUT ROWID
 """
@@ -56,41 +54,38 @@ CREATE TABLE IF NOT EXISTS kegg_responses (
 _READ_RESPONSE = """
 SELECT
     response_body,
-    response_sha256,
     retrieved_at,
     expires_at,
     parser_version,
     database_release,
     http_metadata_json
-FROM kegg_responses
+FROM kegg_responses_v2
 WHERE operation = ?
   AND normalized_request_key = ?
   AND endpoint_class = ?
-  AND endpoint_fingerprint = ?
+  AND endpoint_label = ?
 """
 
 _UPSERT_RESPONSE = """
-INSERT INTO kegg_responses (
+INSERT INTO kegg_responses_v2 (
     operation,
     normalized_request_key,
     endpoint_class,
-    endpoint_fingerprint,
+    endpoint_label,
     response_body,
-    response_sha256,
     retrieved_at,
     expires_at,
     parser_version,
     database_release,
     http_metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (
     operation,
     normalized_request_key,
     endpoint_class,
-    endpoint_fingerprint
+    endpoint_label
 ) DO UPDATE SET
     response_body = excluded.response_body,
-    response_sha256 = excluded.response_sha256,
     retrieved_at = excluded.retrieved_at,
     expires_at = excluded.expires_at,
     parser_version = excluded.parser_version,
@@ -112,7 +107,6 @@ class CachedResponse:
     """One validated successful response retrieved from the local cache."""
 
     body: bytes
-    response_sha256: str
     retrieved_at: datetime
     expires_at: datetime
     parser_version: str
@@ -147,7 +141,7 @@ class SQLiteKeggCache:
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_fingerprint: str,
+        endpoint_label: str,
         *,
         now: datetime,
         expected_parser_version: str,
@@ -158,7 +152,7 @@ class SQLiteKeggCache:
                 operation,
                 normalized_request_key,
                 retrieval_endpoint_class,
-                endpoint_fingerprint,
+                endpoint_label,
             )
             checked_now = _normalize_datetime(now)
             _validate_parser_version(expected_parser_version)
@@ -187,7 +181,7 @@ class SQLiteKeggCache:
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_fingerprint: str,
+        endpoint_label: str,
         *,
         body: bytes,
         retrieved_at: datetime,
@@ -202,7 +196,7 @@ class SQLiteKeggCache:
                 operation,
                 normalized_request_key,
                 retrieval_endpoint_class,
-                endpoint_fingerprint,
+                endpoint_label,
             )
             response = _validate_response_for_write(
                 body=body,
@@ -219,7 +213,6 @@ class SQLiteKeggCache:
         values = (
             *namespace,
             response.body,
-            response.response_sha256,
             _encode_datetime(response.retrieved_at),
             _encode_datetime(response.expires_at),
             response.parser_version,
@@ -327,7 +320,7 @@ class SQLiteKeggCache:
         operation: object,
         normalized_request_key: object,
         retrieval_endpoint_class: object,
-        endpoint_fingerprint: object,
+        endpoint_label: object,
     ) -> tuple[str, str, str, str]:
         if not isinstance(operation, KeggOperation):
             raise TypeError("operation must be a KeggOperation")
@@ -342,15 +335,15 @@ class SQLiteKeggCache:
         ):
             raise ValueError("invalid normalized request key")
         normalized_request_key.encode("utf-8", errors="strict")
-        if not isinstance(endpoint_fingerprint, str) or not _SHA256_PATTERN.fullmatch(
-            endpoint_fingerprint
+        if not isinstance(endpoint_label, str) or not _ENDPOINT_LABEL_PATTERN.fullmatch(
+            endpoint_label
         ):
-            raise ValueError("invalid endpoint fingerprint")
+            raise ValueError("invalid endpoint label")
         return (
             operation.value,
             normalized_request_key,
             retrieval_endpoint_class.value,
-            endpoint_fingerprint,
+            endpoint_label,
         )
 
 
@@ -374,7 +367,6 @@ def _validate_response_for_write(
     checked_metadata = _validate_http_metadata(http_metadata)
     return CachedResponse(
         body=body,
-        response_sha256=hashlib.sha256(body).hexdigest(),
         retrieved_at=checked_retrieved_at,
         expires_at=checked_expires_at,
         parser_version=checked_parser_version,
@@ -384,15 +376,11 @@ def _validate_response_for_write(
 
 
 def _decode_row(raw_row: tuple[object, ...], expected_parser_version: str) -> CachedResponse:
-    if len(raw_row) != 7:
+    if len(raw_row) != 6:
         raise _CacheIntegrityError("unexpected cache row shape")
-    raw_body, raw_sha, raw_retrieved, raw_expires, raw_parser, raw_release, raw_metadata = raw_row
+    raw_body, raw_retrieved, raw_expires, raw_parser, raw_release, raw_metadata = raw_row
     if not isinstance(raw_body, bytes):
         raise _CacheIntegrityError("cache body is not a BLOB")
-    if not isinstance(raw_sha, str) or not _SHA256_PATTERN.fullmatch(raw_sha):
-        raise _CacheIntegrityError("invalid response checksum metadata")
-    if hashlib.sha256(raw_body).hexdigest() != raw_sha:
-        raise _CacheIntegrityError("cache response checksum mismatch")
     if not isinstance(raw_retrieved, str) or not isinstance(raw_expires, str):
         raise _CacheIntegrityError("invalid cache timestamp metadata")
     retrieved_at = _decode_datetime(raw_retrieved)
@@ -410,7 +398,6 @@ def _decode_row(raw_row: tuple[object, ...], expected_parser_version: str) -> Ca
     http_metadata = _decode_http_metadata(raw_metadata)
     return CachedResponse(
         body=raw_body,
-        response_sha256=raw_sha,
         retrieved_at=retrieved_at,
         expires_at=expires_at,
         parser_version=raw_parser,

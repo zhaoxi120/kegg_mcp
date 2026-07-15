@@ -5,9 +5,8 @@ Orthology (KO) annotations into traceable KEGG mappings, module evaluations, pat
 summaries, and cautious biological interpretations. This repository is the canonical source for
 the project.
 
-> Project status: Version 0.1.0 is the first supported private GitHub release. Milestones 0 through
-> 8 are implemented and verified with offline tests. This release supports and is tested only on
-> Python 3.11.x.
+> Project status: Version 0.2.0 implements the reviewed workflow remediation and is verified with
+> offline tests. This release supports and is tested only on Python 3.11.x.
 
 ## Intended users
 
@@ -15,7 +14,6 @@ The project is designed for bioinformatics users who have one of the following:
 
 - a plain list of K numbers;
 - a CSV or TSV annotation table from DeepKOALA, KofamScan, BlastKOALA, GhostKOALA, or another tool;
-- protein FASTA sequences and a need for guidance on obtaining KO assignments first; or
 - two or more KO sets that need a deterministic, non-statistical comparison.
 
 The primary user experience is one high-level analysis request. Lower-level MCP tools remain
@@ -30,7 +28,8 @@ The Python package currently provides:
   and derived KO evidence views;
 - exact K-number validation and explicit `ko:` prefix normalization;
 - newline-delimited plain KO import;
-- generic CSV/TSV import with explicit column mapping and a named decision policy;
+- generic CSV/TSV import with safe common-column inference, explicit overrides, protein names, and
+  named decision policies;
 - import-only support for the documented DeepKOALA detailed CSV fields, including optional
   domain coordinates;
 - deterministic strict and lenient KO views in which rejected predictions never enter lenient
@@ -39,7 +38,8 @@ The Python package currently provides:
 - typed, bounded KEGG `info`, selected `get`, selected `link`, and selected `conv` services;
 - a process-wide no-burst rate limiter, bounded retries, safe HTTPS transport, and strict text
   parsers;
-- an integrity-checked, endpoint-scoped SQLite cache with explicit freshness and offline behavior;
+- a parser-validated, endpoint-labelled SQLite cache with entry-level GET reuse, canonical
+  relationship keys, explicit freshness, and offline behavior;
 - a lossless, bounded KEGG MODULE tokenizer and parser with source spans, explicit unsupported
   nodes, top-level blocks, optional terms, nested expressions, and M-number references;
 - pure exact-completion and project-defined block-coverage evaluation with bounded minimal missing
@@ -52,28 +52,28 @@ The Python package currently provides:
   comparison without statistical or biological change claims;
 - typed, bounded service-layer loading of requested MODULE graphs and pathway references with
   ten-entry GET batching and shared aggregate request and response budgets;
-- one-call plain-KO import, reference loading, MODULE/pathway analysis, report rendering, and scoped
-  result retention with bounded direct previews;
+- one-call KO import, automatic reference-pathway discovery, MODULE/pathway analysis, concise
+  output-directory bundles, and scoped result retention with bounded direct previews;
 - deterministic structured JSON, concise Markdown, and flat annotation CSV report artifacts with
   complete one-call execution provenance and explicit hard limits; and
 - a scope-isolated SQLite result store with 24-hour default retention, a 512 MiB logical payload
   quota, a 640 MiB main-database page cap, a 10,000-result cap, metadata pagination, artifact
   byte-range reads, explicit deletion, and cleanup;
-- a local stdio MCP server exposing eight bounded tools with explicit schemas, structured
+- a local stdio MCP server exposing nine bounded tools with explicit schemas, structured
   success/error envelopes, accurate annotations, and clean protocol stdout;
 - two fixed status resources and four validated resource templates for scoped results, bounded
   result ranges, and offline-only reads of configured cache entries;
 - side-effect-free status and cache-info reads that redact local paths and report SQLite
   statistics as `null` with `inspection_status=not_probed` rather than opening a database;
-- an instruction-only repository-scoped Codex Skill with workflow, annotation-tool, confidence,
+- an instruction-only `kegg-ko-analysis` Skill limited to existing KO evidence, with confidence,
   MODULE/pathway interpretation, and reporting references; and
 - redistributable synthetic examples, installation guidance, release gates, and offline package
   audit tests.
 
-All importers accept inline UTF-8 text or bytes. They do not read arbitrary paths, access KEGG,
-execute DeepKOALA or another annotation program, or infer missing tool versions, model identities,
-model/database versions, annotation dates, or organism metadata. Importer-specific default source
-labels such as `manual`, `unknown`, and `deepkoala` are explicit contract values.
+Importers accept UTF-8 content. The MCP boundary may read a controlled absolute annotation path
+and write a requested output bundle only beneath `KEGG_MCP_ALLOWED_ROOTS`. It does not execute
+DeepKOALA or another annotation program, and it never infers missing tool versions, model
+identities, model/database versions, annotation dates, or organism metadata.
 
 See the [Milestone 1 import contracts](docs/import-contracts.md) for the public API and decision
 rules, and the [Milestone 2 KEGG client contract](docs/kegg-client.md) for access, request, cache,
@@ -94,7 +94,8 @@ The installed stdio entry point is `kegg-mcp`. The server exposes:
 - `map_ko_ids`;
 - `analyze_modules`;
 - `analyze_pathways`;
-- `compare_ko_sets`; and
+- `compare_ko_sets`;
+- `probe_kegg_connectivity`; and
 - `get_server_status`.
 
 Fixed resources are `ko-analysis://status` and `ko-analysis://cache/info`. Validated templates
@@ -105,16 +106,15 @@ for exact access-mode configuration, calls, and result retrieval.
 
 ## Repository-scoped Codex Skill
 
-The instruction-only Skill is located at `.agents/skills/kegg-mcp/` and declares the actual
-`kegg-mcp` stdio dependency. It routes protein FASTA, existing K numbers, annotation tables,
-MODULE/pathway questions, and deterministic KO-set comparisons without duplicating normalization
-or analysis code. It never assigns a KO from a sequence or name and keeps exact MODULE completion
-separate from descriptive pathway KO coverage.
+The instruction-only Skill is located at `.agents/skills/kegg-ko-analysis/` and declares the actual
+`kegg-mcp` stdio dependency. It routes existing K numbers, annotation tables, MODULE/pathway
+questions, and deterministic KO-set comparisons without duplicating normalization or analysis
+code. Protein annotation and pathway rendering belong to independent Skills and MCPs.
 
 Deterministic static tests cover the Skill's instruction contract; they do not execute a language
 model. The six required prompts also have a recorded independent forward/manual review in the
 [Skill evaluation record](docs/skill-evaluation.md). That review was repeated against the exact
-v0.1.0 candidate for publication sign-off. Synthetic inputs and access-mode templates are under
+v0.2.0 candidate for publication sign-off. Synthetic inputs and access-mode templates are under
 `examples/`.
 
 ## Distribution boundary
@@ -123,7 +123,7 @@ The Python wheel and Python source distribution contain the MCP Python server, p
 and required license notices. They do not install the repository-scoped Skill or ship the complete
 repository documentation and examples.
 
-Use `.agents/skills/kegg-mcp/` from an exact GitHub repository checkout or tag source archive when
+Use `.agents/skills/kegg-ko-analysis/` from an exact GitHub repository checkout or tag source archive when
 the Codex Skill is required. That Skill can depend on a separately installed `kegg-mcp` Python
 server, but installing the wheel alone does not make the Skill available to Codex.
 
@@ -196,7 +196,7 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── reporting/                    # Bounded structured, Markdown, and CSV artifacts
 │   ├── services/                     # Reference loading, orchestration, and result storage
 │   └── mcp/                          # Stdio tools, resources, schemas, and configuration
-├── .agents/skills/kegg-mcp/          # Instruction-only Codex Skill and references
+├── .agents/skills/kegg-ko-analysis/  # KO-analysis-only Codex Skill and references
 └── tests/                            # Unit, integration, MCP, Skill, and release tests
 ```
 

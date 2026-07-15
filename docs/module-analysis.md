@@ -47,15 +47,15 @@ as a reaction-module identifier or a token containing `/`, becomes one or more e
 discarded.
 
 Token and AST spans use zero-based, half-open Unicode code-point offsets. Line and column positions
-are one-based and the end position is exclusive. The definition SHA-256 digest covers the exact
-UTF-8 text, including line endings and whitespace.
+are one-based and the end position is exclusive. The exact definition text, including line endings
+and whitespace, remains the evaluation input; no workflow digest is required.
 
 An unsupported token may coexist with a structurally valid AST, but it makes any reachable
 evaluation unsafe. Missing operands, unmatched parentheses, or exceeded parser limits are syntax
 errors and produce no AST.
 
-The parser enforces UTF-8 byte, token, AST-node, and nesting limits. Byte hashing and over-limit
-scanning are incremental. Tokenization stops at the configured token boundary and represents the
+The parser enforces UTF-8 byte, token, AST-node, and nesting limits. UTF-8 byte counting and
+over-limit scanning are incremental. Tokenization stops at the configured token boundary and represents the
 remaining exact text with one bounded token rather than constructing and discarding an unbounded
 intermediate token list.
 
@@ -65,7 +65,7 @@ An `M` number is a reference to another supplied MODULE definition. Resolution u
 memoized depth-first traversal and records edges in source order. It never retrieves a missing
 definition automatically.
 
-The resolver records all reachable definition digests and sanitized provenance. It returns an
+The resolver records all reachable definitions and sanitized provenance. It returns an
 explicit issue for:
 
 - a definition that was not supplied;
@@ -167,13 +167,13 @@ organism, pathway activity, flux, or phenotype.
 
 ## Provenance and bounds
 
-Each analysis serializes the exact root definition digest, every reachable definition digest,
-sanitized retrieval provenance, evidence mode, dataset and decision-policy identity, parser and
-calculation versions, and the effective limits. Raw KEGG payloads, cache paths, endpoints, and
-credentials are not emitted by this layer.
+Each analysis serializes the exact root and reachable definition text, sanitized retrieval
+provenance, evidence mode, dataset and decision-policy identity, parser and calculation versions,
+and the effective limits. Raw KEGG payloads, cache paths, endpoints, and credentials are not
+emitted by this layer.
 
-Definitions obtained from a cache retain retrieval time, response digest, endpoint fingerprint,
-database release when available, and stale status. A stale definition produces an explicit warning.
+Definitions obtained from a cache retain retrieval time, endpoint class and label, database release
+when available, and stale status. A stale definition produces an explicit warning.
 
 ## Public Python surface
 

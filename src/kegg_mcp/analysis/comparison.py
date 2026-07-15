@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from enum import StrEnum
 from typing import Annotated, Self
 
@@ -29,7 +27,6 @@ KO_COMPARISON_VERSION = "1"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 
 class ComparedKoClass(StrEnum):
@@ -99,7 +96,6 @@ class ComparisonDatasetProvenance(FrozenModel):
     input_index: NonNegativeCount
     label: str = Field(min_length=1, max_length=128)
     dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-    dataset_sha256: Sha256
     decision_policy: DecisionPolicyReference
     analysis_unit: AnalysisUnit
     taxon_id: PositiveCount | None
@@ -378,7 +374,6 @@ class KoSetComparisonSummary(FrozenModel):
         tuple[KoClassComparisonSummary, ...],
         Field(min_length=4, max_length=4),
     ]
-    detail_sha256: Sha256
     calculation_method: CalculationMethodReference
     warnings: tuple[ComparisonWarning, ...]
     detail_limits: ComparisonLimits
@@ -408,17 +403,6 @@ class KoSetComparisonSummary(FrozenModel):
         if len(warning_codes) != len(set(warning_codes)):
             raise ValueError("comparison summary warning codes must be unique")
         return self
-
-
-def annotation_dataset_digest(dataset: AnnotationDataset) -> str:
-    """Hash canonical dataset evidence and context while excluding its opaque instance ID."""
-    canonical = json.dumps(
-        dataset.model_dump(mode="json", exclude={"dataset_id"}),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
 
 
 def compare_ko_datasets(
@@ -585,7 +569,6 @@ def summarize_ko_comparison(
     return KoSetComparisonSummary(
         datasets=detail.datasets,
         partitions=tuple(summaries),
-        detail_sha256=_model_digest(detail),
         calculation_method=detail.calculation_method,
         warnings=warnings,
         detail_limits=detail.limits,
@@ -730,7 +713,6 @@ def _dataset_provenance(
         input_index=index,
         label=item.label,
         dataset_id=dataset.dataset_id,
-        dataset_sha256=annotation_dataset_digest(dataset),
         decision_policy=policy,
         analysis_unit=dataset.analysis_unit,
         taxon_id=dataset.taxon_id,
@@ -899,16 +881,6 @@ def _ko_preview(ko_ids: tuple[str, ...], limit: int) -> KoPreview:
     )
 
 
-def _model_digest(model: FrozenModel) -> str:
-    canonical = json.dumps(
-        model.model_dump(mode="json"),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
-
-
 __all__ = [
     "KO_COMPARISON_METHOD",
     "KO_COMPARISON_VERSION",
@@ -928,7 +900,6 @@ __all__ = [
     "KoPreview",
     "KoSetComparisonDetail",
     "KoSetComparisonSummary",
-    "annotation_dataset_digest",
     "compare_ko_datasets",
     "summarize_ko_comparison",
 ]

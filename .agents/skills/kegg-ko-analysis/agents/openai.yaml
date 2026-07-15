@@ -1,7 +1,7 @@
 interface:
   display_name: "KEGG KO Analysis"
-  short_description: "Route KO evidence through cautious KEGG analysis"
-  default_prompt: "Use $kegg-mcp to analyze these KO annotations with explicit provenance and conservative interpretation."
+  short_description: "Route existing KO evidence through cautious KEGG analysis"
+  default_prompt: "Use $kegg-ko-analysis to analyze these KO annotations with explicit provenance and conservative interpretation."
 
 dependencies:
   tools:

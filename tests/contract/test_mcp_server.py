@@ -31,7 +31,7 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     KeggBatchProvenance,
@@ -49,16 +49,15 @@ _NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256=marker * 64,
+        request_key=f"synthetic:{marker}",
         access_mode=AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.NETWORK,
         cache_lookup_state=CacheLookupState.MISS,
         retrieved_at=_NOW,
         served_at=_NOW,
         expires_at=datetime(2099, 1, 1, tzinfo=UTC),
-        response_sha256=marker * 64,
         response_bytes=256,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -94,11 +93,11 @@ class _FakeReferenceClient:
             marker = "1"
         elif first.database is KeggGetDatabase.PATHWAY:
             body = (
-                b"ENTRY       ko00010                    Pathway\n"
-                b"NAME        Synthetic pathway\n"
-                b"CLASS       Metabolism; Carbohydrate metabolism\n"
-                b"///\n"
-            )
+                f"ENTRY       {first.identifier}                    Pathway\n"
+                "NAME        Synthetic pathway\n"
+                "CLASS       Metabolism; Carbohydrate metabolism\n"
+                "///\n"
+            ).encode("ascii")
             marker = "2"
         else:
             entries = b"".join(
@@ -150,11 +149,17 @@ class _FakeReferenceClient:
         )
 
 
-def _runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRuntime:
+def _runtime(
+    tmp_path: Path,
+    *,
+    scope_id: str = "contract-scope",
+    allowed_roots: tuple[str, ...] = (),
+) -> McpRuntime:
     return McpRuntime(
         client=KeggClient(KeggClientConfig(cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")))),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id=scope_id,
+        allowed_roots=allowed_roots,
     )
 
 
@@ -163,6 +168,7 @@ def _fake_runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRun
         client=_FakeReferenceClient(),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id=scope_id,
+        allowed_roots=(str(tmp_path.resolve()),),
     )
 
 
@@ -203,38 +209,21 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "analyze_modules",
             "analyze_pathways",
             "compare_ko_sets",
+            "probe_kegg_connectivity",
         ):
             annotations = _tool_by_name(tools, name).annotations
             assert annotations is not None
-            assert annotations.readOnlyHint is False
+            assert annotations.readOnlyHint is True
+            assert annotations.idempotentHint is True
             assert annotations.openWorldHint is True
 
         normalize_schema = _tool_by_name(tools, "normalize_ko_annotations").inputSchema
-        normalize_defs = normalize_schema["$defs"]
-        import_properties = normalize_defs["ImportLimits"]["properties"]
-        assert {
-            name: import_properties[name]["maximum"]
-            for name in (
-                "max_bytes",
-                "max_rows",
-                "max_columns",
-                "max_field_length",
-            )
-        } == {
-            "max_bytes": 5_000_000,
-            "max_rows": 100_000,
-            "max_columns": 64,
-            "max_field_length": 16_384,
-        }
-        evidence_value_schema = normalize_defs["EvidenceField"]["properties"]["value"]
-        evidence_string_schema = next(
-            alternative
-            for alternative in evidence_value_schema["anyOf"]
-            if alternative.get("type") == "string"
-        )
-        assert evidence_string_schema["maxLength"] == 16_384
+        normalize_properties = normalize_schema["properties"]
+        assert {"text", "file_path", "output_directory"} <= set(normalize_properties)
+        for internal_field in ("limits", "refresh", "allow_stale"):
+            assert internal_field not in normalize_properties
         mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
-        assert mapping_schema["properties"]["preview_limit"]["maximum"] == 200
+        assert set(mapping_schema["properties"]) == {"ko_ids", "target"}
         entries_output_schema = _tool_by_name(tools, "get_kegg_entries").outputSchema
         assert entries_output_schema is not None
         assert (
@@ -244,39 +233,16 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             == 16
         )
 
-        module_schema = _tool_by_name(tools, "analyze_modules").inputSchema
-        module_defs = module_schema["$defs"]
-        assert (
-            module_defs["ReferenceLoadingLimits"]["properties"]["max_total_kegg_requests"][
-                "maximum"
-            ]
-            == 100
-        )
-        assert (
-            module_defs["ModuleParseLimits"]["properties"]["max_definition_bytes"]["maximum"]
-            == 65_536
-        )
-
-        pathway_schema = _tool_by_name(tools, "analyze_pathways").inputSchema
-        assert (
-            pathway_schema["$defs"]["PathwayCoverageLimits"]["properties"]["max_reference_kos"][
-                "maximum"
-            ]
-            == 100_000
-        )
-        comparison_schema = _tool_by_name(tools, "compare_ko_sets").inputSchema
-        comparison_defs = comparison_schema["$defs"]
-        assert (
-            comparison_defs["ComparisonPreviewLimits"]["properties"]["max_ko_ids"]["maximum"] == 100
-        )
-        assert (
-            comparison_defs["ComparisonLimits"]["properties"]["max_total_records"]["maximum"]
-            == 500_000
-        )
-        assert (
-            comparison_defs["FunctionalComparisonLimits"]["properties"]["max_modules"]["maximum"]
-            == 100
-        )
+        for name in (
+            "get_kegg_entries",
+            "analyze_modules",
+            "analyze_pathways",
+            "compare_ko_sets",
+        ):
+            properties = _tool_by_name(tools, name).inputSchema["properties"]
+            assert "refresh" not in properties
+            assert "allow_stale" not in properties
+            assert "limits" not in properties
 
         entries_output_defs = entries_output_schema["$defs"]
         assert (
@@ -326,7 +292,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert status_output is not None
         status_properties = status_output["$defs"]["ServerStatusResult"]["properties"]
         assert status_properties["supported_input_formats"]["maxItems"] == 4
-        assert status_properties["supported_tools"]["maxItems"] == 8
+        assert status_properties["supported_tools"]["maxItems"] == 16
 
         resources = (await session.list_resources()).resources
         assert {str(resource.uri) for resource in resources} == {
@@ -363,6 +329,12 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert "/" not in status_data.get("cache_location", "")
         assert "rest.kegg.jp" not in serialized_status
         assert "KEGG_MCP_" not in serialized_status
+
+        probe = await session.call_tool("probe_kegg_connectivity", {})
+        _validate_result(_tool_by_name(tools, "probe_kegg_connectivity"), probe)
+        assert probe.isError is False
+        assert probe.structuredContent is not None
+        assert probe.structuredContent["result"]["data"]["state"] == "disabled"
 
         normalized = await session.call_tool(
             "normalize_ko_annotations",
@@ -405,6 +377,12 @@ async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path:
         assert invalid.structuredContent is not None
         assert invalid.structuredContent["ok"] is False
         assert invalid.structuredContent["error"]["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+        invalid_details = {
+            item["name"]: item["value"]
+            for item in invalid.structuredContent["error"]["safe_details"]
+        }
+        assert invalid_details["stage"] == "input_validation"
+        assert invalid_details["field_path"] == "unexpected"
 
         offline_miss = await session.call_tool(
             "get_kegg_entries",
@@ -570,6 +548,129 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("annotation_date", ["2026-07-15T10:20:30Z", "2026-07-15T19:20:30+09:00"])
+async def test_file_handoff_json_round_trip_and_normalization_bundle(
+    tmp_path: Path,
+    annotation_date: str,
+) -> None:
+    fasta = tmp_path / "proteins.faa"
+    annotations = tmp_path / "deepkoala_annotations.csv"
+    output = tmp_path / "normalized"
+    fasta.write_text(">protein-1 alpha enzyme\nMAAA\n", encoding="utf-8")
+    annotations.write_text(
+        "sequence_id,protein_name,ko_id\nprotein-1,alpha enzyme,K00001\n",
+        encoding="utf-8",
+    )
+    server = create_server(_runtime(tmp_path, allowed_roots=(str(tmp_path.resolve()),)))
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "file_path": str(annotations),
+                "output_directory": str(output),
+                "input_format": "generic_csv",
+                "source": {
+                    "source_name": "deepkoala",
+                    "source_version": "2025.02",
+                    "model_name": "full",
+                    "annotation_date": annotation_date,
+                    "input_path": str(fasta),
+                },
+            },
+        )
+
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["column_mapping_inferred"] is True
+        assert data["provenance"]["source_preview"][0]["input_path"] == str(fasta)
+        assert data["provenance"]["source_preview"][0]["annotation_date"].endswith(("Z", "+09:00"))
+        bundle = data["output_bundle"]
+        assert bundle["output_directory"] == str(output)
+        assert Path(bundle["normalized_annotations"]).is_file()
+        normalized = Path(bundle["normalized_annotations"]).read_text(encoding="utf-8")
+        assert "protein_name" in normalized
+        assert "alpha enzyme" in normalized
+        manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
+        assert manifest["input_paths"] == [str(fasta)]
+        assert "bundle_manifest.json" in manifest["files"]
+        assert not any("hash" in key or "digest" in key for key in manifest)
+
+
+@pytest.mark.asyncio
+async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
+    tmp_path: Path,
+) -> None:
+    fasta = tmp_path / "proteins.faa"
+    annotations = tmp_path / "deepkoala_annotations.csv"
+    output = tmp_path / "analysis"
+    fasta.write_text(">protein-1 alpha enzyme\nMAAA\n", encoding="utf-8")
+    annotations.write_text(
+        "sequence_id,protein_name,ko_id\nprotein-1,alpha enzyme,K00001\n",
+        encoding="utf-8",
+    )
+    server = create_server(_fake_runtime(tmp_path))
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "file_path": str(annotations),
+                    "input_format": "generic_csv",
+                    "source": {
+                        "source_name": "deepkoala",
+                        "input_path": str(fasta),
+                    },
+                },
+                "output_directory": str(output),
+            },
+        )
+
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["pathway_target_count"] == 1
+        assert data["pathway_previews"][0]["pathway_id"] == "ko00001"
+        report_path = Path(data["output_bundle"]["analysis_report"])
+        assert str(fasta) in report_path.read_text(encoding="utf-8")
+        assert Path(data["output_bundle"]["render_input"]).is_file()
+
+
+@pytest.mark.asyncio
+async def test_file_handoff_rejects_incomplete_csv_and_symlink_escape(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    incomplete = allowed / "incomplete.csv"
+    incomplete.write_text("sequence_id,note\nprotein-1,missing KO\n", encoding="utf-8")
+    outside = tmp_path / "outside.csv"
+    outside.write_text("sequence_id,ko_id\nprotein-1,K00001\n", encoding="utf-8")
+    escaped = allowed / "escaped.csv"
+    escaped.symlink_to(outside)
+    server = create_server(_runtime(tmp_path, allowed_roots=(str(allowed.resolve()),)))
+
+    async with create_connected_server_and_client_session(server) as session:
+        malformed = await session.call_tool(
+            "normalize_ko_annotations",
+            {"file_path": str(incomplete), "input_format": "generic_csv"},
+        )
+        escaped_result = await session.call_tool(
+            "normalize_ko_annotations",
+            {"file_path": str(escaped), "input_format": "generic_csv"},
+        )
+
+        assert malformed.isError is True
+        assert malformed.structuredContent is not None
+        assert malformed.structuredContent["error"]["code"] == "MISSING_REQUIRED_COLUMN"
+        assert escaped_result.isError is True
+        assert escaped_result.structuredContent is not None
+        assert escaped_result.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+
+
+@pytest.mark.asyncio
 async def test_fake_reference_client_exercises_all_live_dependent_success_outputs(
     tmp_path: Path,
 ) -> None:
@@ -620,6 +721,19 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         )
         _validate_result(_tool_by_name(tools, "map_ko_ids"), mapping)
         assert mapping.isError is False
+        assert mapping.structuredContent is not None
+        mapping_data = mapping.structuredContent["result"]["data"]
+        assert mapping_data["raw_relationship_row_count"] == 1
+        assert mapping_data["unique_ko_pathway_count"] == 1
+        assert mapping_data["unique_map_pathway_count"] == 1
+        assert mapping_data["unique_pathway_number_count"] == 1
+        assert mapping_data["row_preview"][0] == {
+            "source_ko_id": "K00001",
+            "target_id": "ko00001",
+            "pathway_number": "00001",
+            "namespace": "ko",
+            "paired_reference_id": "map00001",
+        }
 
         modules = await session.call_tool(
             "analyze_modules",
@@ -780,7 +894,7 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         KeggOperation.GET,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        PUBLIC_KEGG_ENDPOINT_LABEL,
         body=(b"ENTRY       K00001            KO\nNAME        Cached synthetic entry\n///\n"),
         retrieved_at=_NOW,
         expires_at=datetime(2099, 1, 1, tzinfo=UTC),
@@ -810,7 +924,7 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         assert info["cache_endpoint_class"] == "public_academic"
         serialized = json.dumps(info)
         assert str(cache_path) not in serialized
-        assert PUBLIC_KEGG_ENDPOINT_FINGERPRINT not in serialized
+        assert "https://rest.kegg.jp" not in serialized
 
 
 @pytest.mark.asyncio

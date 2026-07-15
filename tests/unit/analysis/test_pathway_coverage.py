@@ -34,7 +34,7 @@ from kegg_mcp.importers import (
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     GetRequest,
@@ -69,16 +69,14 @@ def _provenance(
     expires_at = _NOW + timedelta(days=1)
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256="1" * 64 if operation is KeggOperation.LINK else "3" * 64,
         access_mode=AccessMode.OFFLINE_CACHE if stale else AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE if stale else ResponseOrigin.NETWORK,
         cache_lookup_state=CacheLookupState.STALE_HIT if stale else CacheLookupState.MISS,
         retrieved_at=_NOW,
         served_at=expires_at + timedelta(hours=1) if stale else _NOW,
         expires_at=expires_at,
-        response_sha256="2" * 64 if operation is KeggOperation.LINK else "4" * 64,
         response_bytes=100,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -357,7 +355,6 @@ def test_organism_reference_requires_exact_compatible_isolate_dataset(
             kind=PathwayInputKind.ORGANISM_GENE_CONTEXT,
             organism_gene_context=OrganismGeneContext(
                 kegg_organism_code="hsa",
-                qualified_gene_ids_sha256="5" * 64,
                 qualified_gene_count=10,
             ),
         ),
@@ -394,7 +391,6 @@ def test_organism_reference_fails_closed_for_non_isolate_units(
             kind=PathwayInputKind.ORGANISM_GENE_CONTEXT,
             organism_gene_context=OrganismGeneContext(
                 kegg_organism_code="hsa",
-                qualified_gene_ids_sha256="5" * 64,
                 qualified_gene_count=10,
             ),
         ),
@@ -429,7 +425,6 @@ def test_organism_reference_requires_exact_code_in_all_three_contracts(
             kind=PathwayInputKind.ORGANISM_GENE_CONTEXT,
             organism_gene_context=OrganismGeneContext(
                 kegg_organism_code=context_code,
-                qualified_gene_ids_sha256="5" * 64,
                 qualified_gene_count=10,
             ),
         ),

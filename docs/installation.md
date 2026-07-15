@@ -4,8 +4,8 @@ KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs de
 analysis, and retrieves KEGG references only under an explicitly configured access mode. It does
 not run DeepKOALA or another sequence annotator.
 
-Version 0.1.0 is distributed through the private GitHub repository and its release artifacts; it
-has not been published to a package registry. Install from the exact `v0.1.0` source checkout or
+Version 0.2.0 is distributed through the private GitHub repository and its release artifacts; it
+has not been published to a package registry. Install from the exact `v0.2.0` source checkout or
 from a release wheel after verifying its published SHA-256 digest.
 
 ## Requirements
@@ -46,7 +46,7 @@ in an isolated environment:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install /path/to/kegg_mcp-0.1.0-py3-none-any.whl
+python -m pip install /path/to/kegg_mcp-0.2.0-py3-none-any.whl
 kegg-mcp
 ```
 
@@ -78,7 +78,7 @@ previously cached references from an access mode that the operator was authorize
 miss returns `OFFLINE_CACHE_MISS`; it does not mean that a KO, MODULE, pathway, or biological
 function is absent.
 
-An offline cache is tied to the endpoint class and endpoint fingerprint that produced it. Do not
+An offline cache is tied to the endpoint class and configured endpoint label that produced it. Do not
 copy or redistribute cached KEGG payloads unless you have independent permission to do so.
 
 The default offline configuration selects the public-academic cache namespace. To reuse a local
@@ -91,10 +91,10 @@ KEGG_MCP_LICENSED_ENDPOINT=https://kegg.example.edu/api
 KEGG_MCP_LICENSED_USE_CONFIRMED=true
 ```
 
-The endpoint is validated and used only to derive the licensed cache namespace fingerprint;
-network access remains disabled. Both licensed values are required together in this configuration,
-and a missing or invalid value prevents server startup. Keep the endpoint private even though no
-live request is made.
+The endpoint is validated and its non-sensitive deployment label selects the licensed cache
+namespace; network access remains disabled. Both licensed values are required together in this
+configuration, and a missing or invalid value prevents server startup. Keep the endpoint private
+even though no live request is made.
 
 ### Public academic access
 
@@ -146,6 +146,20 @@ ownership or permissions. Status output reports only redacted logical locations.
 Cached KEGG responses and generated results must remain local. They are excluded from source
 control and must not be placed in examples, CI artifacts, Python packages, or releases.
 
+### Allowed roots for file handoff and output bundles
+
+File input and output-directory workflows are disabled unless the operator configures one or more
+existing shared roots. Separate roots with the platform path separator (`:` on Linux):
+
+```text
+KEGG_MCP_ALLOWED_ROOTS=/absolute/private/input:/absolute/private/results
+```
+
+An input `file_path`, original source `input_path`, and requested `output_directory` must be
+absolute and resolve beneath one of these roots. The server rejects traversal and symlink escapes.
+This deployment setting permits stable file handoff between local MCP processes without making a
+private `result_id` a cross-process contract.
+
 ## Configure an MCP client
 
 Register the server under the exact name `kegg-mcp`. A generic client configuration for a wheel
@@ -172,17 +186,18 @@ the command to the absolute `uv` executable with arguments equivalent to
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
-Codex discovers the repository-scoped Skill at `.agents/skills/kegg-mcp/` while working in an exact
+Codex discovers the repository-scoped Skill at `.agents/skills/kegg-ko-analysis/` while working in an exact
 repository checkout or tag source archive. Its MCP dependency value is also `kegg-mcp`. The Skill
-can be invoked explicitly as `$kegg-mcp`; implicit invocation is enabled for KO/KEGG requests. The
-Skill chooses workflows and explains results, while deterministic normalization and analysis
-remain in the server. A wheel installation supplies the server command but does not install this
-repository-scoped Skill.
+can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is enabled for existing
+KO/KEGG evidence. The Skill chooses workflows and explains results, while deterministic
+normalization and analysis remain in the server. Protein annotation and pathway rendering belong
+to independent Skills and MCPs. A wheel installation supplies the server command but does not
+install this repository-scoped Skill.
 
 ## Verify discovery and status
 
 Restart the MCP client after changing server configuration. Confirm that discovery shows these
-eight tools:
+nine tools:
 
 ```text
 analyze_ko_annotations
@@ -192,6 +207,7 @@ map_ko_ids
 analyze_modules
 analyze_pathways
 compare_ko_sets
+probe_kegg_connectivity
 get_server_status
 ```
 
@@ -206,12 +222,14 @@ Call `get_server_status` with an empty input:
 
 Check the reported access mode and transport. The response should not expose environment values,
 credentials, a licensed endpoint, a username, or a full local path. Connectivity in status is
-configuration state, not proof of KEGG eligibility or current network availability.
+configuration state, not proof of KEGG eligibility or current network availability. Call
+`probe_kegg_connectivity` explicitly before a network-dependent analysis when the current
+connection is unknown.
 
 ## Normalize the synthetic KO list
 
-Read `examples/plain-ko/ko-list.txt` as UTF-8 and call `normalize_ko_annotations`. The tool accepts
-inline content; do not pass an arbitrary server-side path. A minimal request is:
+Read `examples/plain-ko/ko-list.txt` as UTF-8 and call `normalize_ko_annotations`. A minimal inline
+request is:
 
 ```json
 {
@@ -232,19 +250,20 @@ complete retained normalized dataset. A staged `analyze_modules`, `analyze_pathw
 
 ## Run MODULE and pathway analysis
 
-The high-level `analyze_ko_annotations` tool accepts inline KO text and at least one explicit
-MODULE or pathway target. For an eligible live configuration or an authorized cache containing
-the references, a minimal combined request is:
+The high-level `analyze_ko_annotations` tool accepts inline KO text or a controlled annotation
+file. Targets may be explicit; when none are supplied, accepted K numbers are mapped to canonical
+reference pathways within deployment bounds. For an eligible live configuration or an authorized
+cache containing the references, a combined output-directory request is:
 
 ```json
 {
   "ko_text": "K00001\nK00002\nK00003\n",
   "analysis_unit": "isolate_proteome",
+  "output_directory": "/absolute/private/results/example",
   "module_ids": ["M00001"],
   "pathways": [
     {
-      "pathway_id": "ko00010",
-      "reference_namespace": "ko"
+      "pathway_id": "ko00010"
     }
   ]
 }
@@ -254,12 +273,50 @@ The identifiers are demonstration inputs, not a claim that this synthetic set re
 organism. Plain KO input cannot request an organism-specific pathway reference. Global or overview
 maps require explicit opt-in.
 
+For a file handoff from an independently operated annotation MCP, keep both the annotation file and
+original FASTA under `KEGG_MCP_ALLOWED_ROOTS` and use one high-level call:
+
+```json
+{
+  "annotations": {
+    "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
+    "input_format": "deepkoala_detailed",
+    "source": {
+      "source_name": "deepkoala",
+      "input_path": "/absolute/private/input/proteins.faa",
+      "annotation_date": "2026-07-15T09:30:00Z"
+    }
+  },
+  "analysis_unit": "isolate_proteome",
+  "output_directory": "/absolute/private/results/example"
+}
+```
+
+When targets are omitted, accepted K numbers are used to discover bounded canonical reference
+pathways. The independent annotation service owns FASTA execution and its run report; this core
+server only validates and analyzes the resulting annotation evidence.
+
 The bounded direct response includes normalization counts, MODULE and pathway previews, caveats,
 retrieval provenance, an opaque `result_id`, and a server-provided `resource_uri`. Reading that
 resource index provides validated section links. Exact MODULE completion and project block
 coverage are separate values. Pathway coverage is detected unique KOs divided by the recorded
 unique linked-KO denominator; it does not establish pathway presence, completeness, expression,
 activity, flux, phenotype, or statistical significance.
+
+The requested output directory receives stable handoff files:
+
+```text
+normalized_annotations.tsv
+protein_ko_mapping.tsv
+pathway_coverage.tsv
+module_completion.tsv
+analysis_report.md
+render_input.json
+bundle_manifest.json
+```
+
+Use these files between MCP stages. The report records the original absolute input path when it is
+provided as source provenance and does not display workflow digests.
 
 ## Retrieve the full result
 
@@ -294,7 +351,7 @@ another active scope's result.
 - Reuse fresh authorized local cache entries instead of forcing refresh.
 - Do not run live requests in CI or the default test suite.
 - Do not publish KEGG response bodies or cache databases when reporting a problem.
-- Record the endpoint class, retrieval time, request key, response hash, parser version, cache
+- Record the endpoint class, retrieval time, readable request key, parser version, cache
   state, and database release when available.
 
 An optional live compatibility check requires separate operator authorization. It should use the
@@ -304,10 +361,9 @@ content rather than snapshotting full responses.
 ## Troubleshooting
 
 `KEGG_USAGE_NOT_CONFIGURED`
-: An offline request tried to force `refresh=true`, which would require live access. Disable
-  refresh or deliberately configure an authorized live mode. Missing confirmation or endpoint
-  values for a selected live mode are startup configuration failures and prevent the MCP server
-  from starting; they are not returned as this structured tool error.
+: A network-dependent operation is disabled by deployment configuration. Select an eligible live
+  mode once at deployment, or use authorized cached data. Ordinary tool calls do not expose a
+  refresh flag.
 
 `OFFLINE_CACHE_MISS`
 : Offline mode has no matching authorized cached response. Enable an eligible live mode or use a
@@ -322,12 +378,17 @@ content rather than snapshotting full responses.
   reinterpret the result as incomplete.
 
 `PATHWAY_NAMESPACE_MISMATCH`
-: Match `koNNNNN` with `ko`, `mapNNNNN` with `map`, and use organism references only with
-  compatible organism-specific evidence.
+: Remove an explicitly conflicting namespace. An omitted `mapNNNNN` namespace is canonicalized to
+  the `koNNNNN` reference view; organism references still require compatible gene-level evidence.
 
 `RESULT_NOT_FOUND`
 : The result is unknown, expired, deleted, or outside the current scope. Rerun the bounded analysis
   instead of guessing or reusing another session's identifier.
+
+`OUTPUT_WRITE_FAILED` or `RESULT_STORE_FAILED`
+: The requested output bundle or retained-result store could not be written safely. Check the
+  configured allowed root, permissions, and available storage. This is a technical failure, not a
+  biological result.
 
 ## Rights and interpretation notice
 

@@ -10,7 +10,6 @@ from kegg_mcp.analysis.comparison import (
     ComparisonWarningCode,
     KoSetComparisonDetail,
     KoSetComparisonSummary,
-    annotation_dataset_digest,
     compare_ko_datasets,
     summarize_ko_comparison,
 )
@@ -158,7 +157,7 @@ def test_uncertain_record_and_lenient_additional_classes_are_not_conflated() -> 
     assert "K00008" in lenient.partially_shared[0].ko_ids
 
 
-def test_summary_has_exact_counts_bounded_previews_and_stable_detail_digest() -> None:
+def test_summary_has_exact_counts_and_bounded_previews() -> None:
     detail = compare_ko_datasets(_three_inputs())
     summary = summarize_ko_comparison(
         detail,
@@ -175,7 +174,6 @@ def test_summary_has_exact_counts_bounded_previews_and_stable_detail_digest() ->
     assert accepted.set_specific[0].ko_set.count == 2
     assert accepted.set_specific[0].ko_set.ko_ids == ("K00001",)
     assert ComparisonWarningCode.PREVIEW_TRUNCATED in {warning.code for warning in summary.warnings}
-    assert len(summary.detail_sha256) == 64
     assert summary == summarize_ko_comparison(
         detail,
         limits=ComparisonPreviewLimits(max_ko_ids=1, max_membership_patterns=1),
@@ -183,13 +181,14 @@ def test_summary_has_exact_counts_bounded_previews_and_stable_detail_digest() ->
     assert KoSetComparisonSummary.model_validate_json(summary.model_dump_json()) == summary
 
 
-def test_dataset_digest_excludes_only_the_opaque_dataset_instance_id() -> None:
-    dataset = _three_inputs()[0].dataset
-    copied = dataset.model_copy(update={"dataset_id": "dataset-another-instance"})
-    changed = dataset.model_copy(update={"analysis_unit": AnalysisUnit.MAG})
+def test_comparison_provenance_retains_context_without_dataset_digest() -> None:
+    inputs = _three_inputs()
+    dataset = inputs[0].dataset
+    detail = compare_ko_datasets(inputs)
 
-    assert annotation_dataset_digest(dataset) == annotation_dataset_digest(copied)
-    assert annotation_dataset_digest(dataset) != annotation_dataset_digest(changed)
+    assert detail.datasets[0].dataset_id == dataset.dataset_id
+    assert detail.datasets[0].analysis_unit == dataset.analysis_unit
+    assert "dataset_sha256" not in detail.datasets[0].model_dump()
 
 
 def test_decision_policy_mismatch_fails_with_structured_provenance_error() -> None:

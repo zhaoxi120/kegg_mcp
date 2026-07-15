@@ -11,10 +11,23 @@ Lead with a short answer to the user's question, then separate:
 7. caveats, unsupported content, and truncation; and
 8. provenance.
 
-State unknown provenance as unknown or null; never guess it. Include the analysis unit, input
-digest, importer and decision-policy versions, annotation tool/model versions when supplied, KEGG
-retrieval and cache state, namespace and denominator metadata, algorithm versions, and non-default
-parameters. Call out stale cache reuse explicitly.
+State unknown provenance as unknown or null; never guess it. Include the analysis unit, original
+input absolute path when supplied, importer and decision-policy versions, annotation tool/model
+versions when supplied, KEGG retrieval and cache state, namespace and denominator metadata,
+algorithm versions, and non-default parameters. Call out stale cache reuse explicitly. Do not
+request or display input, dataset, response, definition, or artifact digests.
+
+Prefer the concise output bundle for delivery:
+
+```text
+normalized_annotations.tsv
+protein_ko_mapping.tsv
+pathway_coverage.tsv
+module_completion.tsv
+analysis_report.md
+render_input.json
+bundle_manifest.json
+```
 
 Use bounded previews in conversation. Prefer a resource URI returned by a tool over constructing
 one. The server declares these fixed resources and templates:

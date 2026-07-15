@@ -4,14 +4,12 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILL_ROOT = ROOT / ".agents" / "skills" / "kegg-mcp"
+SKILL_ROOT = ROOT / ".agents" / "skills" / "kegg-ko-analysis"
 
 EXPECTED_FILES = {
     "SKILL.md",
     "agents/openai.yaml",
-    "references/annotation-tools.md",
     "references/confidence-policy.md",
-    "references/deepkoala.md",
     "references/module-interpretation.md",
     "references/reporting-policy.md",
     "references/workflow-selection.md",
@@ -25,6 +23,7 @@ PUBLIC_TOOLS = {
     "analyze_modules",
     "analyze_pathways",
     "compare_ko_sets",
+    "probe_kegg_connectivity",
     "get_server_status",
 }
 
@@ -63,10 +62,9 @@ def test_frontmatter_has_only_name_and_trigger_description() -> None:
     _, frontmatter, _ = skill.split("---", maxsplit=2)
     keys = [line.split(":", maxsplit=1)[0] for line in frontmatter.splitlines() if line]
     assert keys == ["name", "description"]
-    assert "name: kegg-mcp" in frontmatter
+    assert "name: kegg-ko-analysis" in frontmatter
 
     positive_triggers = (
-        "protein FASTA",
         "K numbers",
         "KO annotation tables",
         "KEGG module or pathway",
@@ -79,17 +77,19 @@ def test_frontmatter_has_only_name_and_trigger_description() -> None:
         "sequence alignment",
         "statistical enrichment",
         "non-KEGG ontology analysis",
+        "DeepKOALA",
+        "pathway rendering",
     )
     assert all(trigger in frontmatter for trigger in positive_triggers)
     assert all(boundary in frontmatter for boundary in negative_boundaries)
-    assert "unless the user explicitly asks" in frontmatter
+    assert "already has KO evidence" in frontmatter
 
 
 def test_openai_metadata_declares_real_stdio_dependency() -> None:
     metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
     for key in ("display_name", "short_description", "default_prompt"):
         assert re.search(rf'^  {key}: "[^"\n]+"$', metadata, flags=re.MULTILINE)
-    assert "$kegg-mcp" in metadata
+    assert "$kegg-ko-analysis" in metadata
     assert 'type: "mcp"' in metadata
     assert 'value: "kegg-mcp"' in metadata
     assert 'transport: "stdio"' in metadata

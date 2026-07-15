@@ -15,7 +15,7 @@ from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import ImportLimits, SourceProvenanceInput
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     GetRequest,
@@ -48,16 +48,14 @@ _IMPORT_LIMITS = ImportLimits(
 def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256=marker * 64,
         access_mode=AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.NETWORK,
         cache_lookup_state=CacheLookupState.MISS,
         retrieved_at=_NOW - timedelta(minutes=5),
         served_at=_NOW - timedelta(minutes=5),
         expires_at=_NOW + timedelta(days=1),
-        response_sha256=marker.upper().replace("G", "A").lower() * 64,
         response_bytes=256,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -209,12 +207,11 @@ def test_one_call_service_retains_complete_artifacts_and_returns_bounded_preview
     assert execution["reference_loading_limits"] == request.reference_limits.model_dump(mode="json")
     assert execution["direct_result_limits"] == result.limits.model_dump(mode="json")
     assert structured["report"]["dataset"]["analysis_unit"] == "metagenomic_community"
-    assert structured["report"]["dataset"]["sources"][0]["input_sha256"]
+    assert "input_sha256" not in structured["report"]["dataset"]["sources"][0]
     module_result = structured["report"]["module_evaluations"][0]["strict"]
     assert module_result["is_complete"] is True
     module_retrieval = module_result["provenance"][0]["provenance"]["retrieval"]
     assert module_retrieval["database_release"] == "Release 116.0+/07-14"
-    assert module_retrieval["request_key_sha256"] == "1" * 64
     assert module_retrieval["cache_lookup_state"] == "miss"
     assert module_retrieval["parser_version"] == PARSER_VERSION
     assert module_result["reference_retrieval_provenance"] == [module_retrieval]

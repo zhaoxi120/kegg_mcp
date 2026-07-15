@@ -1,6 +1,5 @@
 """Typed public contracts for bounded KEGG retrieval and local caching."""
 
-import hashlib
 import ipaddress
 import os
 import re
@@ -15,20 +14,14 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel, validate_utf8_text
 
 PUBLIC_KEGG_ENDPOINT = "https://rest.kegg.jp"
-PUBLIC_KEGG_ENDPOINT_FINGERPRINT = hashlib.sha256(PUBLIC_KEGG_ENDPOINT.encode()).hexdigest()
+PUBLIC_KEGG_ENDPOINT_LABEL = "public-academic"
 PARSER_VERSION = "3"
 MAX_GET_ENTRIES_PER_BATCH = 10
 MAX_CONFIGURED_IDENTIFIERS = 1_000
 
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 KeggIdentifier = Annotated[str, Field(min_length=1, max_length=256)]
-
-
-def endpoint_fingerprint(endpoint: str) -> str:
-    """Return a stable namespace fingerprint without exposing the endpoint."""
-    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
 
 
 def default_cache_path() -> str:
@@ -142,15 +135,20 @@ class OfflineCacheAccess(FrozenModel):
 
     mode: Literal[AccessMode.OFFLINE_CACHE] = AccessMode.OFFLINE_CACHE
     retrieval_endpoint_class: RetrievalEndpointClass = RetrievalEndpointClass.PUBLIC_ACADEMIC
-    endpoint_fingerprint: Sha256 = PUBLIC_KEGG_ENDPOINT_FINGERPRINT
+    endpoint_label: str = Field(default=PUBLIC_KEGG_ENDPOINT_LABEL, min_length=1, max_length=100)
+
+    @field_validator("endpoint_label")
+    @classmethod
+    def validate_endpoint_label(cls, value: str) -> str:
+        return LicensedAccess.validate_endpoint_label(value)
 
     @model_validator(mode="after")
     def require_public_namespace_consistency(self) -> Self:
         if (
             self.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
-            and self.endpoint_fingerprint != PUBLIC_KEGG_ENDPOINT_FINGERPRINT
+            and self.endpoint_label != PUBLIC_KEGG_ENDPOINT_LABEL
         ):
-            raise ValueError("public cache access requires the official endpoint fingerprint")
+            raise ValueError("public cache access requires the public-academic endpoint label")
         return self
 
 
@@ -558,16 +556,15 @@ class KeggBatchProvenance(FrozenModel):
     """Serializable provenance for one network/cache batch."""
 
     operation: KeggOperation
-    request_key_sha256: Sha256
+    request_key: str = Field(default="unavailable", min_length=1, max_length=4_096)
     access_mode: AccessMode
     retrieval_endpoint_class: RetrievalEndpointClass
-    endpoint_fingerprint: Sha256
+    endpoint_label: str = Field(min_length=1, max_length=100)
     origin: ResponseOrigin
     cache_lookup_state: CacheLookupState
     retrieved_at: datetime
     served_at: datetime
     expires_at: datetime
-    response_sha256: Sha256
     response_bytes: NonNegativeCount
     parser_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)
     parser_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)*$", max_length=32)

@@ -33,7 +33,7 @@ from kegg_mcp.importers import (
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     GetRequest,
@@ -63,16 +63,14 @@ _IMPORT_LIMITS = ImportLimits(
 def _offline_provenance(operation: KeggOperation) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256="1" * 64 if operation is KeggOperation.LINK else "3" * 64,
         access_mode=AccessMode.OFFLINE_CACHE,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE,
         cache_lookup_state=CacheLookupState.FRESH_HIT,
         retrieved_at=_RETRIEVED_AT,
         served_at=_RETRIEVED_AT + timedelta(hours=1),
         expires_at=_RETRIEVED_AT + timedelta(days=1),
-        response_sha256="2" * 64 if operation is KeggOperation.LINK else "4" * 64,
         response_bytes=256,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -235,7 +233,7 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
         dataset.dataset_id for dataset in datasets
     ]
     assert all(
-        result.reference_ko_sha256 == strict_results[0].reference_ko_sha256
+        result.reference_unique_ko_count == len(reference.reference_kos)
         for result in (*strict_results, *lenient_results)
     )
     assert all(
@@ -252,7 +250,7 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
         "incomplete",
     ]
     assert pathway_target.reference == reference
-    assert pathway_target.reference_ko_sha256 == strict_results[0].reference_ko_sha256
+    assert pathway_target.reference.reference_kos == reference.reference_kos
     assert pathway_target.reference.link_provenance == reference.link_provenance
     assert pathway_target.reference.metadata_provenance == reference.metadata_provenance
     assert [outcome.label for outcome in pathway_target.strict.outcomes] == [

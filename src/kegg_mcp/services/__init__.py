@@ -15,6 +15,7 @@ from kegg_mcp.services.contracts import (
     PlainKoAnalysisResult,
 )
 from kegg_mcp.services.orchestration import analyze_plain_ko
+from kegg_mcp.services.output_bundle import OutputBundle
 from kegg_mcp.services.primitives import (
     DATASET_SECTION,
     DEFAULT_IMPORT_LIMITS,
@@ -26,8 +27,11 @@ from kegg_mcp.services.primitives import (
     CachedKeggEntryServiceResult,
     CompareDatasetSource,
     CompareKoSetsResult,
+    ConnectivityProbeResult,
+    ConnectivityState,
     DatasetSource,
     GenericDecisionPolicy,
+    KeggConnectivityClient,
     KeggEntriesServiceResult,
     KeggEntryPreview,
     KeggPrimitiveClient,
@@ -44,6 +48,7 @@ from kegg_mcp.services.primitives import (
     get_server_status_service,
     map_ko_identifiers,
     normalize_annotations,
+    probe_kegg_connectivity_service,
     read_cached_kegg_entry,
     retrieve_kegg_entries,
 )
@@ -107,10 +112,13 @@ __all__ = [
     "CleanupSummary",
     "CompareDatasetSource",
     "CompareKoSetsResult",
+    "ConnectivityProbeResult",
+    "ConnectivityState",
     "DatasetSource",
     "DeletedResult",
     "GenericDecisionPolicy",
     "ImportSummary",
+    "KeggConnectivityClient",
     "KeggEntriesServiceResult",
     "KeggEntryPreview",
     "KeggPrimitiveClient",
@@ -120,6 +128,7 @@ __all__ = [
     "ModuleAnalysisPreview",
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",
+    "OutputBundle",
     "PathwayAnalysisPreview",
     "PathwaySpec",
     "PlainKoAnalysisRequest",
@@ -146,6 +155,7 @@ __all__ = [
     "load_pathway_references",
     "map_ko_identifiers",
     "normalize_annotations",
+    "probe_kegg_connectivity_service",
     "read_cached_kegg_entry",
     "retrieve_kegg_entries",
 ]

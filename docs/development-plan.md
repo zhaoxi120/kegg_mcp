@@ -1,9 +1,31 @@
 # KEGG MCP: Reviewed Development Plan
 
 Status: approved as a development baseline after the corrections recorded below.
-Implementation status: Milestones 0 through 8 and the first supported release are implemented and
-verified with offline tests. Version 0.1.0 supports Python 3.11.x only.
+Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
+implemented and verified with offline tests. Version 0.2.0 supports Python 3.11.x only.
 Last reviewed: 2026-07-15.
+
+## Version 0.2 workflow-remediation amendment
+
+This amendment supersedes earlier milestone text wherever it describes workflow digests, public
+cache/limit tuning, unrestricted inline-only handoff, explicit duplicate `ko`/`map` namespaces, or
+the former umbrella Skill. Biological evidence and KEGG access safeguards remain unchanged.
+
+- Biological workflow contracts retain readable paths, versions, parameters, timestamps, parser
+  versions, request keys, endpoint class/label, and exact structured evidence; they do not require
+  input, dataset, response, definition, endpoint, or artifact digests.
+- Deployment configuration owns KEGG authorization, cache behavior, service limits, allowed roots,
+  and writable storage. Ordinary tools do not expose `refresh`, `allow_stale`, or internal limits.
+- Controlled absolute annotation files and output bundles are the default cross-process handoff.
+  Private result identifiers remain same-session optimizations.
+- `PathwaySpec` infers and validates namespace, canonicalizes omitted `map` input to `ko`, and
+  de-duplicates paired views by pathway number. GET cache reuse is entry-level.
+- The repository Skill is `kegg-ko-analysis` and only orchestrates the core MCP for existing KO
+  evidence. DeepKOALA annotation and pathway rendering belong to independent MCP repositories and
+  independent Skills; their subprocess, model, parser, and rendering implementations are outside
+  this core repository.
+- The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
+  and can write a concise versioned output bundle beneath configured allowed roots.
 
 ## Table of contents
 
@@ -71,9 +93,9 @@ The MCP server answers:
 
 > What do these supplied KO annotations map to in KEGG, which KEGG module requirements do they satisfy, and what limited functional statements are supported?
 
-The Codex Skill answers:
+The `kegg-ko-analysis` Skill answers:
 
-> What data does the user currently have, which workflow should be used, which external annotation step is needed, and how should the structured result be explained?
+> Which core KO/KEGG workflow should be used, and how should its structured result be explained?
 
 An external annotation program such as DeepKOALA answers:
 
@@ -88,7 +110,8 @@ These responsibilities must remain separate.
 - Source-agnostic: support plain KO lists and generic tables, not only DeepKOALA.
 - Simple by default: provide one high-level analysis tool and expose primitives for advanced use.
 - Biologically conservative: distinguish database relationships, annotation evidence, coverage, completion, activity, and phenotype.
-- Reproducible: record the input digest, policy versions, KEGG retrieval time, parser version, and all analysis parameters.
+- Reproducible: record input paths when supplied, policy versions, KEGG retrieval time, readable
+  request keys, parser version, and all analysis parameters.
 - Bounded: cap inputs and outputs and provide explicit continuation for large results.
 
 ## 4. User experience
@@ -115,14 +138,11 @@ No sequence-annotation guidance should be shown unless requested.
 
 #### Workflow C: protein FASTA only
 
-1. Confirm that the input is protein FASTA rather than nucleotide FASTA.
-2. Determine whether sequences are expected to be complete, fragmented, or potentially multi-domain.
-3. Explain annotation-tool options and trade-offs.
-4. Provide an external local command when the user chooses a tool.
-5. Ask the user to retain a detailed machine-readable result and the tool/model version.
-6. Continue with Workflow B when the result becomes available.
+1. Stop the core `kegg-ko-analysis` Skill because KO evidence is not yet available.
+2. Route annotation to an independent annotation Skill and MCP.
+3. Resume Workflow B from its controlled detailed CSV, source provenance, and original input path.
 
-The MCP server must not execute the external annotator.
+The core MCP server and core Skill must not execute or describe the external annotator workflow.
 
 #### Workflow D: compare KO sets
 
@@ -225,14 +245,12 @@ kegg-mcp/
 ├── docs/
 └── .agents/
     └── skills/
-        └── kegg-mcp/
+        └── kegg-ko-analysis/
             ├── SKILL.md
             ├── agents/
             │   └── openai.yaml
             └── references/
                 ├── workflow-selection.md
-                ├── annotation-tools.md
-                ├── deepkoala.md
                 ├── confidence-policy.md
                 ├── module-interpretation.md
                 └── reporting-policy.md
@@ -269,7 +287,7 @@ SourceProvenance
   model_version            model/database date or version, when available
   annotation_date          ISO 8601 timestamp or null
   input_uri                sanitized logical source, not an unrestricted local path
-  input_sha256             digest of the imported bytes when available
+  input_path               controlled absolute original-input path when available
   importer_name
   importer_version
 ```
@@ -349,7 +367,7 @@ AnalysisProvenance
   parameters
   evidence_mode
   input_dataset_ids
-  input_digests
+  input_paths
   kegg_endpoint_class       public_academic | licensed | offline_cache
   kegg_retrieved_at
   kegg_release_by_database  value or unknown
@@ -412,8 +430,8 @@ Minimum cache metadata:
 operation
 normalized_request_key
 endpoint_class
+endpoint_label
 response_body
-response_sha256
 retrieved_at
 expires_at
 parser_version
@@ -424,7 +442,7 @@ http_metadata_allowlist
 Requirements:
 
 - Cache content is user-local and ignored by Git.
-- Reports may record a checksum and retrieval metadata but must not embed large raw KEGG payloads.
+- Reports record retrieval metadata but must not embed large raw KEGG payloads.
 - Offline mode may use expired data only when explicitly allowed and must mark it stale.
 - `refresh=true` bypasses a fresh cache entry but still obeys rate limits.
 - Cache corruption must not be reported as a biological absence.
@@ -478,7 +496,7 @@ Operator precedence and associativity must be documented in the parser contract.
 ```text
 module_id
 module_name
-definition_sha256
+definition
 evidence_mode
 evaluation_status          complete | incomplete | partially_evaluable | not_evaluable
 is_complete                boolean or null
@@ -672,14 +690,12 @@ MCP Prompts are not part of the MVP because workflow instructions belong in the 
 Use the repository-scoped location:
 
 ```text
-.agents/skills/kegg-mcp/
+.agents/skills/kegg-ko-analysis/
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
 └── references/
     ├── workflow-selection.md
-    ├── annotation-tools.md
-    ├── deepkoala.md
     ├── confidence-policy.md
     ├── module-interpretation.md
     └── reporting-policy.md
@@ -691,21 +707,23 @@ The initial Skill should be instruction-only. Do not add `scripts/normalize_ko_t
 
 The `SKILL.md` description must include both positive triggers and boundaries. It should cover users who provide:
 
-- protein FASTA and need a KO-annotation workflow;
 - K numbers or KO annotation tables;
 - KEGG modules or pathways;
 - metabolic reconstruction questions; or
 - multiple KO sets for descriptive comparison.
 
-It should not trigger for general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis unless the user explicitly asks to connect those tasks to KO/KEGG analysis.
+It should not execute protein annotation, DeepKOALA, pathway rendering, general gene-expression
+analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology
+analysis. Protein annotation and rendering are routed to independent Skills owned by their MCP
+repositories.
 
 ### 13.3 Skill responsibilities
 
 - Identify the user's current data type and analysis unit.
 - Avoid asking questions that can be answered from the input.
-- Recommend an annotation workflow only when KO assignments are absent.
-- Explain tool trade-offs and avoid presenting DeepKOALA as the only valid option.
-- Request detailed, versioned output from external annotators.
+- Route protein input without KO assignments to an independent annotation Skill and MCP.
+- Resume core analysis from a controlled annotation file without describing or executing the
+  external annotation workflow.
 - Call the high-level MCP tool for common workflows and primitives for advanced workflows.
 - Explain strict versus lenient evidence.
 - Distinguish module completion from pathway coverage.
@@ -832,13 +850,13 @@ Do not force nested module alternatives into a lossy single CSV. Use separate no
 
 ### 15.3 Required provenance
 
-- source file logical name and digest;
+- source file logical name and controlled absolute input path when supplied;
 - annotation tool, software version, model name, and model/database version;
 - annotation date when available;
 - importer and decision-policy versions;
 - KEGG endpoint class, retrieval time, per-database release when available, and cache state;
 - server and algorithm versions;
-- module-definition digest;
+- exact module definition and parser version;
 - pathway namespace and denominator retrieval metadata;
 - strict/lenient mode;
 - analysis unit and taxonomic context; and
@@ -1112,7 +1130,7 @@ Acceptance:
 
 ### Milestone 6: MCP server
 
-Status as of 2026-07-14: the local stdio server, all eight approved tools, explicit input/output
+Status as of 2026-07-15: the local stdio server, all nine approved tools, explicit input/output
 schemas, structured success and repairable-error envelopes, tool annotations, fixed status/cache
 resources, and four validated resource templates are implemented and locally verified with
 offline contract tests. Each stdio process generates one opaque result scope. Large sections use
@@ -1139,7 +1157,7 @@ Acceptance:
 
 ### Milestone 7: Codex Skill
 
-Status as of 2026-07-14: the instruction-only repository-scoped Skill, focused workflow and
+Status as of 2026-07-15: the instruction-only `kegg-ko-analysis` repository-scoped Skill, focused workflow and
 interpretation references, real `kegg-mcp` stdio dependency metadata, and the six required routing
 and refusal cases are implemented. Deterministic static contract tests validate the instruction
 artifacts, and a separate recorded forward/manual review passed all six prompts; CI does not
@@ -1152,7 +1170,7 @@ Tasks:
 - initialize the Skill with current official tooling;
 - write concise workflow instructions and focused references;
 - add `agents/openai.yaml` with the real MCP dependency;
-- document DeepKOALA and alternative annotators; and
+- define explicit handoff boundaries for independent annotation and rendering Skills; and
 - evaluate trigger and refusal behavior.
 
 Acceptance:
@@ -1160,15 +1178,16 @@ Acceptance:
 - the six evaluation prompts route correctly;
 - the Skill skips annotation guidance for KO inputs;
 - it never guesses KOs from names;
-- it uses detailed DeepKOALA output guidance; and
+- it routes protein FASTA and pathway rendering to independent Skills without embedding those
+  workflows; and
 - it distinguishes module completion from pathway coverage.
 
 ### Milestone 8: release readiness
 
 Status as of 2026-07-15: installation and MCP configuration guidance, redistributable synthetic KO
 examples, data-rights and security review checklists, an English changelog and release notes, and
-offline wheel/source-distribution audit tests are implemented. Version 0.1.0 is scoped to Python
-3.11.x only. Release preparation and Milestone 8 are complete. The repository is private; before
+offline wheel/source-distribution audit tests are implemented. Versions 0.1.0 and 0.2.0 are scoped
+to Python 3.11.x only. Release preparation and Milestone 8 are complete. The repository is private; before
 any future public supported release, GitHub private vulnerability reporting must be enabled and
 verified.
 
@@ -1213,7 +1232,7 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 25. Implement MCP tool schemas, annotations, and resources.
 26. Add MCP contract and stdout-cleanliness tests.
 27. Initialize and write the repository-scoped Codex Skill.
-28. Write annotation-tool, DeepKOALA, confidence, and interpretation references.
+28. Write focused KO confidence, MODULE/pathway interpretation, and reporting references.
 29. Add synthetic end-to-end examples.
 30. Complete release, security, and data-rights review.
 
@@ -1263,13 +1282,13 @@ The implementation milestones resolved the original open decisions as follows:
    coverage ratio. Coverage is reported only when every required top-level block is evaluable.
 7. **MODULE discovery:** the initial MVP requires explicit MODULE identifiers; automatic discovery
    is deferred rather than introducing an unbounded or speculative strategy.
-8. **CSV delivery:** the complete flat annotation CSV is retained as the `annotations` result
-   section and exposed through validated, bounded resources. The server does not write a caller
-   path or force the full CSV into direct tool content.
-9. **Python compatibility:** version 0.1.x supports and is tested only on Python 3.11.x;
+8. **CSV delivery:** complete retained resources remain available, and a caller may request a
+   concise output bundle beneath a deployment allowed root. The server never writes an
+   unrestricted path or forces full tables into direct tool content.
+9. **Python compatibility:** versions 0.1.x and 0.2.x support and are tested only on Python 3.11.x;
    package metadata excludes Python 3.12 and later.
 10. **Server and Skill identity:** the stdio server name, console command, and Skill MCP dependency
-    value are all `kegg-mcp`.
+    value are `kegg-mcp`; the focused Skill name is `kegg-ko-analysis`.
 
 ## 22. Primary references
 

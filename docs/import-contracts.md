@@ -89,14 +89,15 @@ row is structurally skipped. Every emitted record source must also appear in thi
 
 Nullable provenance fields remain `None` when the source did not provide them. Importers never
 infer a tool version, model name, model/database version, annotation date, organism, or domain
-coordinate. The SHA-256 digest is computed from the actual supplied UTF-8 bytes before BOM removal
-or newline processing.
+coordinate. Workflow digests are not part of source provenance. A caller may provide a controlled
+absolute `input_path`; the MCP boundary validates it against deployment allowed roots before the
+importer sees the content.
 
-`SourceProvenance.input_uri` is a sanitized logical identifier, not an unrestricted filesystem
-path. It accepts a simple basename or the `inline`, `mcp`, `resource`, and `urn` schemes. Absolute
-or relative paths, parent traversal, backslashes, URI credentials, percent encoding, whitespace,
-control characters, query parameters, and fragments are rejected. Hierarchical schemes require an
-authority, and URNs require a namespace-specific identifier.
+`SourceProvenance.input_uri` is a sanitized logical identifier and remains distinct from
+`input_path`. It accepts a simple basename or the `inline`, `mcp`, `resource`, and `urn` schemes.
+URI credentials, percent encoding, whitespace, control characters, query parameters, and fragments
+are rejected. Hierarchical schemes require an authority, and URNs require a namespace-specific
+identifier. `input_path` must be an absolute path without traversal components.
 
 Every record preserves:
 
@@ -172,7 +173,7 @@ view = build_ko_evidence_view(dataset)
 strict_kos = select_ko_ids(view, EvidenceMode.STRICT)
 ```
 
-Blank lines are ignored but remain represented by the whole-input digest. Every non-empty line
+Blank lines are ignored. Every non-empty line
 produces one record, including invalid and duplicate rows. Plain records use `sequence_id=None` and
 default to `sample_id="sample-1"` only for this unnamed single-input workflow.
 
@@ -261,8 +262,8 @@ source records support different statuses for the same KO.
 
 For table inputs, `ImportReport.source_columns` preserves every original header in order, including
 unmapped headers when the input has no data rows. Logical cells from emitted and skipped rows remain
-available through record evidence or `unparsed_rows`; the whole supplied byte stream is bound by its
-SHA-256 digest.
+available through record evidence or `unparsed_rows`. Parsers and schemas, rather than content
+digests, determine whether imported content is usable.
 
 ## Strict and lenient evidence
 

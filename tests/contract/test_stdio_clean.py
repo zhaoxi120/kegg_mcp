@@ -27,4 +27,4 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
         initialized = await session.initialize()
         assert initialized.serverInfo.name == "kegg-mcp"
         tools = await session.list_tools()
-        assert len(tools.tools) == 8
+        assert len(tools.tools) == 9

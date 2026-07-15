@@ -1,6 +1,5 @@
 """Contract tests for KEGG MODULE syntax and evaluation models."""
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -41,7 +40,7 @@ from kegg_mcp.analysis.contracts import (
 from kegg_mcp.domain import DecisionPolicyReference, EvidenceMode
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     KeggBatchProvenance,
@@ -60,16 +59,14 @@ def _retrieval(
     cached = origin is ResponseOrigin.CACHE
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256="1" * 64,
         access_mode=AccessMode.OFFLINE_CACHE if cached else AccessMode.PUBLIC_ACADEMIC,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=origin,
         cache_lookup_state=CacheLookupState.STALE_HIT if cached else CacheLookupState.MISS,
         retrieved_at=retrieved_at,
         served_at=retrieved_at + timedelta(days=2) if cached else retrieved_at,
         expires_at=retrieved_at + timedelta(days=1),
-        response_sha256="2" * 64,
         response_bytes=100,
         parser_name="flat_file",
         parser_version=PARSER_VERSION,
@@ -124,7 +121,6 @@ def _evaluation(
     return ModuleEvaluationResult(
         module_id="M00001",
         module_name=None,
-        definition_sha256=definition.definition_sha256,
         dataset_id="dataset-1",
         decision_policy=DecisionPolicyReference(name="test_policy", version="1"),
         evidence_mode=mode,
@@ -151,7 +147,6 @@ def _evaluation(
         provenance=(
             EvaluatedDefinitionProvenance(
                 module_id="M00001",
-                definition_sha256=definition.definition_sha256,
                 provenance=definition.provenance,
             ),
         ),
@@ -195,7 +190,6 @@ def test_unsupported_leaf_can_remain_in_a_structurally_valid_parse() -> None:
     )
 
     result = ModuleParseResult(
-        definition_sha256=hashlib.sha256(token.lexeme.encode("utf-8")).hexdigest(),
         parser_name=MODULE_PARSER_NAME,
         parser_version=MODULE_PARSER_VERSION,
         tokens=(token,),
@@ -224,17 +218,16 @@ def test_unsupported_leaf_can_remain_in_a_structurally_valid_parse() -> None:
     assert result.ast.required_blocks[0].kind is ModuleExpressionKind.UNSUPPORTED
 
 
-def test_parse_result_rejects_noncontiguous_or_digest_mismatched_tokens() -> None:
-    token = ModuleToken(kind=ModuleTokenKind.KO, lexeme="K00001", span=_span(0, 6))
+def test_parse_result_rejects_noncontiguous_tokens() -> None:
+    token = ModuleToken(kind=ModuleTokenKind.KO, lexeme="K00001", span=_span(1, 7))
     payload = {
-        "definition_sha256": "0" * 64,
         "parser_name": MODULE_PARSER_NAME,
         "parser_version": MODULE_PARSER_VERSION,
         "tokens": (token,),
         "token_count": 1,
         "ast": ModuleDefinitionAst(
             span=token.span,
-            required_blocks=(_ko("K00001"),),
+            required_blocks=(_ko("K00001", 1),),
         ),
         "ast_node_count": 1,
         "diagnostics": (),
@@ -242,7 +235,7 @@ def test_parse_result_rejects_noncontiguous_or_digest_mismatched_tokens() -> Non
         "limits": ModuleParseLimits(),
     }
 
-    with pytest.raises(ValidationError, match="lossless token stream"):
+    with pytest.raises(ValidationError, match="contiguous"):
         ModuleParseResult.model_validate(payload)
 
 
@@ -258,18 +251,20 @@ def test_missing_alternatives_must_be_sorted_and_form_an_antichain() -> None:
         )
 
 
-def test_definition_factory_hashes_exact_text_without_normalizing_whitespace() -> None:
+def test_definition_factory_retains_exact_text_without_accepting_digest_fields() -> None:
     first = ModuleDefinition.from_text(module_id="M00001", definition="K00001 K00002")
     wrapped = ModuleDefinition.from_text(module_id="M00001", definition="K00001\nK00002")
 
-    assert first.definition_sha256 != wrapped.definition_sha256
-    with pytest.raises(ValidationError, match="definition_sha256"):
-        ModuleDefinition(
-            module_id="M00001",
-            module_name=None,
-            definition="K00001",
-            definition_sha256="0" * 64,
-            provenance=ModuleDefinitionProvenance(),
+    assert first.definition != wrapped.definition
+    with pytest.raises(ValidationError, match="extra"):
+        ModuleDefinition.model_validate(
+            {
+                "module_id": "M00001",
+                "module_name": None,
+                "definition": "K00001",
+                "definition_sha256": "0" * 64,
+                "provenance": ModuleDefinitionProvenance().model_dump(mode="python"),
+            }
         )
 
 

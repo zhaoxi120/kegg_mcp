@@ -1,7 +1,6 @@
 """Shared, deterministic importer mechanics."""
 
 import csv
-import hashlib
 import io
 import math
 import uuid
@@ -38,11 +37,10 @@ _CSV_FIELD_SIZE_LOCK = Lock()
 
 @dataclass(frozen=True, slots=True)
 class DecodedInput:
-    """UTF-8 input plus the digest of its actual supplied bytes."""
+    """One bounded UTF-8 input preserving the exact supplied bytes."""
 
     content: bytes
     text: str
-    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +55,7 @@ class ParsedTable:
 
 
 def decode_payload(payload: object, limits: ImportLimits) -> DecodedInput:
-    """Decode one bounded UTF-8 payload without normalizing its digest bytes."""
+    """Decode one bounded UTF-8 payload without changing the supplied bytes."""
     if isinstance(payload, bytes):
         content = payload
     elif isinstance(payload, str):
@@ -103,7 +101,6 @@ def decode_payload(payload: object, limits: ImportLimits) -> DecodedInput:
     return DecodedInput(
         content=content,
         text=text,
-        sha256=hashlib.sha256(content).hexdigest(),
     )
 
 
@@ -154,6 +151,7 @@ def validate_auxiliary_evidence(
                 ("model_version", source_input.model_version),
                 ("annotation_date", source_input.annotation_date),
                 ("input_uri", source_input.input_uri),
+                ("input_path", source_input.input_path),
             )
             if value is not None
         )
@@ -201,7 +199,7 @@ def build_source(
         model_version=supplied.model_version,
         annotation_date=supplied.annotation_date,
         input_uri=supplied.input_uri,
-        input_sha256=decoded.sha256,
+        input_path=supplied.input_path,
         importer_name=importer_name,
         importer_version=IMPORTER_VERSION,
         source_metadata=supplied.source_metadata,

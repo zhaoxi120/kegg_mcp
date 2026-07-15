@@ -35,7 +35,7 @@ The project enforces an explicit configuration choice before any live request:
 - `licensed` requires `authorized_use_confirmed=True`, a caller-supplied authorized HTTPS endpoint,
   and a non-sensitive logical endpoint label.
 - `offline_cache` disables network access and selects an existing cache namespace by endpoint class
-  and endpoint fingerprint.
+  and a non-sensitive endpoint label.
 
 These fields record an operator assertion. The project does not determine whether an organization
 or activity is academic, does not inspect a license, and does not validate that a caller is legally
@@ -54,9 +54,9 @@ assert config.access.mode == "offline_cache"
 ```
 
 The default offline namespace represents payloads originally retrieved from the official public
-academic endpoint. A licensed cache namespace must instead retain the original endpoint class and
-the SHA-256 endpoint fingerprint. This prevents responses from different endpoint configurations
-from sharing one cache key while avoiding endpoint disclosure in result provenance.
+academic endpoint. A licensed cache namespace retains the original endpoint class and a
+deployment-controlled non-sensitive endpoint label. This prevents unrelated endpoint
+configurations from sharing one cache key without exposing the endpoint URL.
 
 Live public access must be selected explicitly:
 
@@ -86,7 +86,7 @@ config = KeggClientConfig(
 )
 ```
 
-Endpoint authorities are canonicalized before fingerprinting and rate-limit scoping: hostnames are
+Endpoint authorities are canonicalized before validation and rate-limit scoping: hostnames are
 lowercased, a DNS terminal dot and the default HTTPS port are removed, IP literals are normalized,
 and invalid ports are rejected. Equivalent spellings therefore cannot create independent rate
 limit scopes. A licensed endpoint is trusted operator-controlled startup configuration, not a
@@ -117,8 +117,9 @@ stricter policy but cannot replace the mandatory process-wide limiter.
 `RetryPolicy` defaults to two retries after the initial attempt, exponential backoff beginning at
 0.5 seconds, an 8-second backoff cap, and up to 0.25 seconds of jitter. Retries remain bounded and
 every attempt passes through the process-wide rate limiter. Deterministic HTTP 400 and 404 responses
-are not retried. Transport timeouts and connection failures may be retried; terminal rate-limit and
-request failures remain structured errors.
+are not retried. Transport timeouts and connection failures may be retried. DNS, permission, TLS,
+and other fixed configuration failures are terminal; terminal rate-limit and request failures
+remain structured errors.
 
 The HTTPS transport is GET-only. It does not read process proxy settings or follow redirects, asks
 for identity content encoding, applies the response-size bound, and retains only `content-type`,
@@ -174,8 +175,10 @@ explicit missing entries follow caller request order.
 - pathway to KO.
 
 Source identifiers must match the selected direction and must be unique. Broad gene expansion is
-not part of this contract. Successful response rows are checked before caching: every source must
-belong to its prepared batch and every target must match the selected relationship namespace.
+not part of this contract. Equivalent identifier sets are sorted before relationship batching so
+their cache keys do not depend on caller order; raw response-row order is preserved. Successful
+response rows are checked before caching: every source must belong to its prepared batch and every
+target must match the selected relationship namespace.
 
 ### CONV
 
@@ -235,13 +238,17 @@ Each cache key includes:
 - operation;
 - normalized request key;
 - retrieval endpoint class; and
-- endpoint fingerprint.
+- endpoint label.
 
-Each stored successful response includes its raw bytes, SHA-256 checksum, retrieval and expiry
-times, parser version, KEGG release when known, and allowlisted HTTP metadata. Reads verify the
-schema, timestamp ordering, parser version, metadata shape, and response checksum before returning
-a payload. A malformed row or checksum mismatch is `CACHE_FAILED`, never a cache miss or biological
-absence.
+Each stored successful response includes its raw bytes, retrieval and expiry times, parser version,
+KEGG release when known, and allowlisted HTTP metadata. Reads verify the schema, timestamp ordering,
+parser version, metadata shape, and parser compatibility before returning a payload. A malformed
+row is `CACHE_FAILED`, never a cache miss or biological absence.
+
+Multi-entry flat-file GET responses are also split into entry-level cache records after successful
+parsing and identifier reconciliation. A later single-entry GET or any fully cached subset is
+reconstructed from those records without a network call. The live request still obeys KEGG's
+maximum of ten GET entries.
 
 The current parser contract version is `3`. It records nested flat-file field indentation
 explicitly and applies the current identifier reconciliation rules before cache use. Cache rows
@@ -267,11 +274,11 @@ rather than converting a failed retrieval into an apparently valid result.
 Every result echoes its typed request and records provenance per HTTP/cache batch. The provenance
 contains:
 
-- operation and a SHA-256 digest of the normalized request key;
-- configured access mode, original retrieval endpoint class, and endpoint fingerprint;
+- operation and the readable normalized request key;
+- configured access mode, original retrieval endpoint class, and endpoint label;
 - response origin (`network` or `cache`) and cache lookup state;
 - retrieval, serving, and expiry timestamps;
-- response SHA-256 and byte count;
+- response byte count;
 - parser name and parser version;
 - KEGG database release when known;
 - allowlisted HTTP metadata;
@@ -296,7 +303,7 @@ safe details, and a suggested action:
 | `KEGG_RATE_LIMITED` | Bounded retries ended with a rate-limit response. |
 | `KEGG_REQUEST_FAILED` | A deterministic request error or exhausted transport retry could not produce a response. |
 | `KEGG_PARSE_FAILED` | Successful response bytes do not conform to the selected strict parser. |
-| `CACHE_FAILED` | Cache I/O, schema, metadata, parser-version, or checksum validation failed. |
+| `CACHE_FAILED` | Cache I/O, schema, metadata, or parser-version validation failed. |
 
 HTTP 400 and 404 responses are not retried. A successful multi-entry GET may return only some
 requested entries; those are represented by `missing_entries` rather than fabricated records. A

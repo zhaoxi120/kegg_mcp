@@ -1,14 +1,14 @@
 # Release readiness
 
-This document is the evidence checklist for the first KEGG MCP release. Completing an item in
+This document is the evidence checklist for a supported KEGG MCP release. Completing an item in
 source code is not sufficient: the release owner must verify every gate against the exact commit
 and distributions proposed for publication.
 
-Current status: **signed off for the private v0.1.0 GitHub release on 2026-07-15**. The applicable
-gates below were verified against the release candidate. Candidate identity and artifact digests
-are recorded in the GitHub release notes.
+Current status: **validated for the private v0.2.0 GitHub release candidate on 2026-07-15**. The
+applicable gates below must be verified against the merged commit before tagging. Candidate
+identity and distribution digests belong in the GitHub release notes, not biological workflows.
 
-Version 0.1.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
+Version 0.2.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
 Python 3.12 and later; a wider Python range requires a separately tested compatibility change.
 
 ## Candidate identity
@@ -82,9 +82,10 @@ following without network access:
 2. tool and resource discovery succeeds;
 3. stdout contains only MCP protocol traffic;
 4. `get_server_status` reports offline mode without a full cache or result-store path;
-5. the synthetic KO example can be normalized;
-6. an absent reference produces `OFFLINE_CACHE_MISS`, not a biological absence claim; and
-7. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
+5. `probe_kegg_connectivity` reports `disabled` without making a request in offline mode;
+6. the synthetic KO example can be normalized;
+7. an absent reference produces `OFFLINE_CACHE_MISS`, not a biological absence claim; and
+8. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
 
 Then, only if the release reviewer is an eligible academic user performing academic work or is
 using an appropriately licensed endpoint, run the separately approved minimal live smoke test.

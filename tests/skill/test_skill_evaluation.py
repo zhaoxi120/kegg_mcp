@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILL_ROOT = ROOT / ".agents" / "skills" / "kegg-mcp"
+SKILL_ROOT = ROOT / ".agents" / "skills" / "kegg-ko-analysis"
 CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROOT.rglob("*.md")))
 
 
@@ -14,11 +14,11 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
     [
         (
             "I have a protein FASTA file and want to analyze metabolic functions.",
-            ("Do not send FASTA to the MCP server", "external annotation choices"),
+            ("independent annotation Skill", "controlled absolute"),
         ),
         (
             "Here is detailed DeepKOALA output; analyze KEGG modules.",
-            ("normalize_ko_annotations", "analyze_modules", "--detail"),
+            ("file_path", "normalize_ko_annotations", "analyze_modules"),
         ),
         (
             "I have one column of K numbers; check carbon-metabolism coverage.",
@@ -46,9 +46,12 @@ def test_evaluation_prompt_has_conservative_routing(
 
 
 def test_skill_never_duplicates_analysis_or_executes_external_annotators() -> None:
-    assert "Let the tools perform validation, normalization, and analysis" in CORPUS
-    assert "does not install, download, or execute these tools" in CORPUS
+    assert "Let the tools perform validation, normalization, and analysis exactly once" in CORPUS
+    assert "Do not execute or describe a DeepKOALA workflow here" in CORPUS
+    assert "Do not implement rendering here" in CORPUS
+    assert "python3 -m deepkoala" not in CORPUS
+    assert "prepare_deepkoala" not in CORPUS
     assert "Never infer a K number" in CORPUS
-    assert "probability >= threshold" in CORPUS
-    assert "not automatically uncertain" in CORPUS
+    assert "Source-rejected" in CORPUS
+    assert "workflow hashes" in CORPUS
     assert "Do not equate coverage with pathway presence" in CORPUS

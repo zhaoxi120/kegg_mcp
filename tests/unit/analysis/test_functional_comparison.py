@@ -114,7 +114,7 @@ def test_module_comparison_recomputes_strict_and_lenient_under_one_graph() -> No
     assert target.lenient.incomplete_in_set_indexes == (2,)
     assert target.lenient.outcomes_differ is True
     assert all(item.required_block_count == 2 for item in target.strict.outcomes)
-    assert target.definition_provenance[0].definition_sha256 == target.definition_sha256
+    assert target.definition_provenance[0].module_id == target.module_id
     assert ModuleComparisonResult.model_validate_json(result.model_dump_json()) == result
 
 

@@ -1,6 +1,5 @@
 """Serializable contracts for conservative KEGG MODULE parsing and evaluation."""
 
-import hashlib
 from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated, Self
@@ -25,21 +24,18 @@ MODULE_CALCULATION_METHOD = "exact_completion_and_top_level_block_coverage"
 MODULE_CALCULATION_VERSION = "1"
 
 ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
-Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 
 
-def _utf8_digest_and_size(parts: Iterable[str]) -> tuple[str, int]:
-    """Hash UTF-8 text incrementally without allocating one unbounded byte string."""
-    digest = hashlib.sha256()
+def _utf8_size(parts: Iterable[str]) -> int:
+    """Count UTF-8 bytes incrementally without allocating one unbounded byte string."""
     byte_count = 0
     for part in parts:
         for offset in range(0, len(part), 4_096):
             encoded = part[offset : offset + 4_096].encode("utf-8")
-            digest.update(encoded)
             byte_count += len(encoded)
-    return digest.hexdigest(), byte_count
+    return byte_count
 
 
 def _ast_node_count(ast: "ModuleDefinitionAst") -> int:
@@ -388,7 +384,6 @@ class ModuleParseResult(FrozenModel):
         },
     )
 
-    definition_sha256: Sha256
     parser_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)
     parser_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)*$", max_length=32)
     tokens: Annotated[tuple[ModuleToken, ...], Field(max_length=100_000)]
@@ -408,11 +403,7 @@ class ModuleParseResult(FrozenModel):
             if token.span.start_offset != next_offset:
                 raise ValueError("tokens must provide contiguous lossless source coverage")
             next_offset = token.span.end_offset
-        reconstructed_digest, definition_bytes = _utf8_digest_and_size(
-            token.lexeme for token in self.tokens
-        )
-        if reconstructed_digest != self.definition_sha256:
-            raise ValueError("definition_sha256 must match the lossless token stream")
+        definition_bytes = _utf8_size(token.lexeme for token in self.tokens)
         if self.ast is not None and (
             self.ast.span.start_offset != 0 or self.ast.span.end_offset != next_offset
         ):
@@ -479,7 +470,6 @@ class ModuleDefinition(FrozenModel):
     module_id: ModuleId
     module_name: str | None = Field(default=None, max_length=1_000)
     definition: str = Field(min_length=1, max_length=1_000_000)
-    definition_sha256: Sha256
     provenance: ModuleDefinitionProvenance = Field(default_factory=ModuleDefinitionProvenance)
 
     @field_validator("module_name", "definition")
@@ -488,13 +478,6 @@ class ModuleDefinition(FrozenModel):
         if value is None:
             return None
         return validate_utf8_text(value, field_name=info.field_name or "module definition")
-
-    @model_validator(mode="after")
-    def validate_digest(self) -> Self:
-        digest, _ = _utf8_digest_and_size((self.definition,))
-        if self.definition_sha256 != digest:
-            raise ValueError("definition_sha256 must match the exact UTF-8 definition")
-        return self
 
     @classmethod
     def from_text(
@@ -505,13 +488,12 @@ class ModuleDefinition(FrozenModel):
         module_name: str | None = None,
         provenance: ModuleDefinitionProvenance | None = None,
     ) -> "ModuleDefinition":
-        """Construct a definition while hashing the exact supplied UTF-8 text."""
+        """Construct a definition while retaining the exact supplied UTF-8 text."""
         validate_utf8_text(definition, field_name="module definition")
         return cls(
             module_id=module_id,
             module_name=module_name,
             definition=definition,
-            definition_sha256=_utf8_digest_and_size((definition,))[0],
             provenance=provenance or ModuleDefinitionProvenance(),
         )
 
@@ -572,9 +554,7 @@ class ResolvedModuleDefinition(FrozenModel):
     parse_result: ModuleParseResult
 
     @model_validator(mode="after")
-    def validate_digest(self) -> Self:
-        if self.definition.definition_sha256 != self.parse_result.definition_sha256:
-            raise ValueError("definition and parse-result digests must match")
+    def validate_definition(self) -> Self:
         if (
             "".join(token.lexeme for token in self.parse_result.tokens)
             != self.definition.definition
@@ -782,10 +762,9 @@ class CalculationMethodReference(FrozenModel):
 
 
 class EvaluatedDefinitionProvenance(FrozenModel):
-    """Digest and sanitized retrieval provenance for a reachable definition."""
+    """Sanitized retrieval provenance for a reachable definition."""
 
     module_id: ModuleId
-    definition_sha256: Sha256
     provenance: ModuleDefinitionProvenance
 
 
@@ -807,7 +786,6 @@ class ModuleEvaluationResult(FrozenModel):
 
     module_id: ModuleId
     module_name: str | None = Field(default=None, max_length=1_000)
-    definition_sha256: Sha256
     dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     decision_policy: DecisionPolicyReference
     evidence_mode: EvidenceMode
@@ -1022,7 +1000,6 @@ class PairedModuleEvaluation(FrozenModel):
         identity_fields = (
             "module_id",
             "module_name",
-            "definition_sha256",
             "dataset_id",
             "decision_policy",
             "required_block_count",

@@ -32,7 +32,7 @@ from kegg_mcp.importers import (
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     KeggBatchProvenance,
@@ -53,16 +53,14 @@ _IMPORT_LIMITS = ImportLimits(
 def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=operation,
-        request_key_sha256="1" * 64 if operation is KeggOperation.LINK else "3" * 64,
         access_mode=AccessMode.OFFLINE_CACHE,
         retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        endpoint_fingerprint=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
         origin=ResponseOrigin.CACHE,
         cache_lookup_state=CacheLookupState.FRESH_HIT,
         retrieved_at=_NOW,
         served_at=_NOW + timedelta(hours=1),
         expires_at=_NOW + timedelta(days=1),
-        response_sha256="2" * 64 if operation is KeggOperation.LINK else "4" * 64,
         response_bytes=100,
         parser_name="pair_table" if operation is KeggOperation.LINK else "flat_file",
         parser_version=PARSER_VERSION,
@@ -152,7 +150,6 @@ def _organism_contexts() -> tuple[PathwayComparisonOrganismContext, ...]:
             label=item.label,
             gene_context=OrganismGeneContext(
                 kegg_organism_code="hsa",
-                qualified_gene_ids_sha256=str(index + 5) * 64,
                 qualified_gene_count=10,
             ),
         )
@@ -182,7 +179,7 @@ def test_pathway_comparison_recomputes_strict_and_lenient_under_one_reference() 
     target = result.targets[0]
 
     assert target.reference == reference
-    assert target.reference_ko_sha256
+    assert target.reference.reference_kos
     assert [item.label for item in target.strict.outcomes] == [
         "complete",
         "uncertain",

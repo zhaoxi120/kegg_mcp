@@ -16,7 +16,7 @@ from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.client import KeggClient
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
-    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
     CachePolicy,
@@ -29,6 +29,7 @@ from kegg_mcp.kegg.contracts import (
     KeggClientLimits,
     KeggConvDatabase,
     KeggEntryRef,
+    KeggFlatFileDocument,
     KeggGetDatabase,
     KeggInfoDatabase,
     KeggLinkRelationship,
@@ -118,7 +119,7 @@ class WriteFailingCache(SQLiteKeggCache):
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_fingerprint: str,
+        endpoint_label: str,
         *,
         body: bytes,
         retrieved_at: datetime,
@@ -130,7 +131,7 @@ class WriteFailingCache(SQLiteKeggCache):
         del (
             normalized_request_key,
             retrieval_endpoint_class,
-            endpoint_fingerprint,
+            endpoint_label,
             body,
             retrieved_at,
             expires_at,
@@ -205,7 +206,7 @@ def _read_public_cache(
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        PUBLIC_KEGG_ENDPOINT_LABEL,
         now=now,
         expected_parser_version=PARSER_VERSION,
     )
@@ -242,9 +243,7 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     assert network_result.batch.access_mode is AccessMode.PUBLIC_ACADEMIC
     assert network_result.batch.cache_lookup_state is CacheLookupState.MISS
     assert network_result.batch.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
-    assert network_result.batch.endpoint_fingerprint == PUBLIC_KEGG_ENDPOINT_FINGERPRINT
-    assert network_result.batch.request_key_sha256 == hashlib.sha256(b"v1:/info/ko").hexdigest()
-    assert network_result.batch.response_sha256 == hashlib.sha256(_INFO_BODY).hexdigest()
+    assert network_result.batch.endpoint_label == PUBLIC_KEGG_ENDPOINT_LABEL
     assert network_result.batch.response_bytes == len(_INFO_BODY)
     assert network_result.batch.parser_version == PARSER_VERSION
     assert network_result.batch.http_metadata == (HttpMetadata(name="etag", value='"info-v1"'),)
@@ -256,13 +255,96 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     assert offline_result.batch.origin is ResponseOrigin.CACHE
     assert offline_result.batch.access_mode is AccessMode.OFFLINE_CACHE
     assert offline_result.batch.cache_lookup_state is CacheLookupState.FRESH_HIT
-    assert offline_result.batch.response_sha256 == network_result.batch.response_sha256
     assert offline_result.batch.http_metadata == network_result.batch.http_metadata
     assert offline_result.batch.attempt_count == 0
     assert offline_result.document == network_result.document
     assert limiter.acquire_count == 1
     assert _NoWaitMandatoryLimiter.instances[-1].acquire_count == 1
     assert len(transport.urls) == 1
+
+
+def test_multi_entry_get_populates_single_entry_and_arbitrary_subset_cache(tmp_path: Path) -> None:
+    cache_path = tmp_path / "entry-level.sqlite3"
+    entries = (
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00002"),
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00003"),
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=b"".join(_flat_entry(entry.identifier) for entry in entries),
+            )
+        ]
+    )
+    live = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    live.get(GetRequest(entries=entries))
+    offline = KeggClient(
+        _offline_config(cache_path),
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    )
+    single = offline.get(GetRequest(entries=(entries[1],)))
+    subset = offline.get(GetRequest(entries=(entries[2], entries[0])))
+
+    assert single.batches[0].origin is ResponseOrigin.CACHE
+    assert all(isinstance(document, KeggFlatFileDocument) for document in subset.documents)
+    flat_documents = tuple(
+        document for document in subset.documents if isinstance(document, KeggFlatFileDocument)
+    )
+    assert [document.entries[0].identifier for document in flat_documents] == [
+        "K00003",
+        "K00001",
+    ]
+    assert all(batch.origin is ResponseOrigin.CACHE for batch in subset.batches)
+    assert len(transport.urls) == 1
+
+
+def test_relationship_cache_key_is_independent_of_identifier_order(tmp_path: Path) -> None:
+    cache_path = tmp_path / "canonical-link.sqlite3"
+    first = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_MODULE,
+        source_identifiers=("K00002", "K00001"),
+    )
+    reversed_request = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_MODULE,
+        source_identifiers=("K00001", "K00002"),
+    )
+    first_prepared = prepare_link(first, KeggClientLimits())[0]
+    reversed_prepared = prepare_link(reversed_request, KeggClientLimits())[0]
+    assert first_prepared.normalized_request_key == reversed_prepared.normalized_request_key
+
+    KeggClient(
+        _public_config(cache_path),
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=b"ko:K00001\tmd:M00001\nko:K00002\tmd:M00002\n",
+                )
+            ]
+        ),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    ).link(first)
+    reused = KeggClient(
+        _offline_config(cache_path),
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).link(reversed_request)
+
+    assert reused.batches[0].origin is ResponseOrigin.CACHE
+    assert [(row.source_id, row.target_id) for row in reused.rows] == [
+        ("ko:K00001", "md:M00001"),
+        ("ko:K00002", "md:M00002"),
+    ]
 
 
 def test_offline_miss_never_calls_injected_transport(tmp_path: Path) -> None:
@@ -591,7 +673,7 @@ def test_unrequested_get_entry_fails_before_the_response_is_cached(tmp_path: Pat
         KeggOperation.GET,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        PUBLIC_KEGG_ENDPOINT_LABEL,
         now=_NOW,
         expected_parser_version=PARSER_VERSION,
     )
@@ -719,7 +801,7 @@ def test_offline_client_rechecks_cached_response_size_under_current_limit(
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        PUBLIC_KEGG_ENDPOINT_LABEL,
         body=_INFO_BODY,
         retrieved_at=_NOW,
         expires_at=_NOW + timedelta(seconds=60),
@@ -849,7 +931,7 @@ def test_cached_parser_failure_is_reported_as_cache_failure(tmp_path: Path) -> N
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        PUBLIC_KEGG_ENDPOINT_LABEL,
         body=b"not an INFO response\n",
         retrieved_at=_NOW,
         expires_at=_NOW + timedelta(seconds=60),

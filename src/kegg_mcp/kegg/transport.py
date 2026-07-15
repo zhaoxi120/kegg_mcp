@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import socket
 import ssl
 from contextlib import closing
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ class TransportErrorKind(StrEnum):
     INVALID_REQUEST = "invalid_request"
     TIMEOUT = "timeout"
     CONNECTION = "connection"
+    DNS = "dns"
+    PERMISSION = "permission"
     TLS = "tls"
     REDIRECT_REJECTED = "redirect_rejected"
     RESPONSE_TOO_LARGE = "response_too_large"
@@ -49,6 +52,8 @@ _SAFE_ERROR_MESSAGES = {
     TransportErrorKind.INVALID_REQUEST: "The HTTPS transport rejected an invalid request.",
     TransportErrorKind.TIMEOUT: "The HTTPS request timed out.",
     TransportErrorKind.CONNECTION: "The HTTPS request could not be completed.",
+    TransportErrorKind.DNS: "The HTTPS endpoint name could not be resolved.",
+    TransportErrorKind.PERMISSION: "The environment denied the HTTPS connection.",
     TransportErrorKind.TLS: "TLS validation failed for the HTTPS request.",
     TransportErrorKind.REDIRECT_REJECTED: "The HTTPS transport rejected a redirect response.",
     TransportErrorKind.RESPONSE_TOO_LARGE: "The HTTPS response exceeded the configured size limit.",
@@ -212,9 +217,15 @@ class HttpsTransport:
             reason = error.reason
             if isinstance(reason, TimeoutError):
                 raise TransportError(TransportErrorKind.TIMEOUT, transient=True) from None
+            if isinstance(reason, socket.gaierror):
+                raise TransportError(TransportErrorKind.DNS, transient=False) from None
+            if isinstance(reason, PermissionError):
+                raise TransportError(TransportErrorKind.PERMISSION, transient=False) from None
             if isinstance(reason, (ssl.SSLError, ssl.CertificateError)):
                 raise TransportError(TransportErrorKind.TLS, transient=False) from None
             raise TransportError(TransportErrorKind.CONNECTION, transient=True) from None
+        except PermissionError:
+            raise TransportError(TransportErrorKind.PERMISSION, transient=False) from None
         except HTTPException:
             raise TransportError(
                 TransportErrorKind.INVALID_RESPONSE,

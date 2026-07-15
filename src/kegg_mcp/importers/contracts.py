@@ -13,6 +13,7 @@ from kegg_mcp.domain.annotations import (
     ScoreType,
     ThresholdRule,
     normalize_identifier_label,
+    validate_absolute_input_path,
     validate_logical_input_uri,
     validate_utf8_text,
 )
@@ -61,13 +62,20 @@ class SourceProvenanceInput(FrozenModel):
     model_version: str | None = Field(default=None, max_length=256)
     annotation_date: datetime | None = None
     input_uri: str | None = Field(default=None, max_length=2_048)
+    input_path: str | None = Field(default=None, max_length=4_096)
     source_metadata: tuple[EvidenceField, ...] = Field(default=(), max_length=128)
 
     @field_validator("annotation_date", mode="before")
     @classmethod
     def bound_annotation_date_text(cls, value: object) -> object:
-        if isinstance(value, str) and len(value) > MAX_ANNOTATION_DATE_CHARACTERS:
-            raise ValueError("annotation_date exceeds the bounded timestamp length")
+        if isinstance(value, str):
+            if len(value) > MAX_ANNOTATION_DATE_CHARACTERS:
+                raise ValueError("annotation_date exceeds the bounded timestamp length")
+            normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+            try:
+                return datetime.fromisoformat(normalized)
+            except ValueError:
+                raise ValueError("annotation_date must use ISO 8601 syntax") from None
         return value
 
     @field_validator("source_name")
@@ -79,6 +87,11 @@ class SourceProvenanceInput(FrozenModel):
     @classmethod
     def validate_input_uri(cls, value: str | None) -> str | None:
         return validate_logical_input_uri(value)
+
+    @field_validator("input_path")
+    @classmethod
+    def validate_input_path(cls, value: str | None) -> str | None:
+        return validate_absolute_input_path(value)
 
     @field_validator("source_version", "model_name", "model_version")
     @classmethod
@@ -99,6 +112,7 @@ class GenericColumnMapping(FrozenModel):
 
     sequence_id: ColumnName
     ko_id: ColumnName
+    protein_name: ColumnName | None = None
     sample_id: ColumnName | None = None
     raw_decision: ColumnName | None = None
     score: ColumnName | None = None
@@ -112,6 +126,7 @@ class GenericColumnMapping(FrozenModel):
     @field_validator(
         "sequence_id",
         "ko_id",
+        "protein_name",
         "sample_id",
         "raw_decision",
         "score",
@@ -133,6 +148,7 @@ class GenericColumnMapping(FrozenModel):
             for value in (
                 self.sequence_id,
                 self.ko_id,
+                self.protein_name,
                 self.sample_id,
                 self.raw_decision,
                 self.score,
@@ -158,6 +174,7 @@ class GenericColumnMapping(FrozenModel):
         pairs = (
             ("sequence_id", self.sequence_id),
             ("ko_id", self.ko_id),
+            ("protein_name", self.protein_name),
             ("sample_id", self.sample_id),
             ("raw_decision", self.raw_decision),
             ("score", self.score),
