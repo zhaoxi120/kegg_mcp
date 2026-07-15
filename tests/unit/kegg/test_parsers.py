@@ -330,6 +330,40 @@ def test_brite_parser_accepts_a_five_level_hierarchy_header() -> None:
     assert document.lines[0] == "+E\tEnzymes"
 
 
+def test_brite_parser_accepts_current_compact_root_with_htext_envelope() -> None:
+    # Current KEGG GET htext shape verified from br08901 on 2026-07-16.
+    document = parse_brite_htext_response(
+        b"+C\tMap number\n!\nAMetabolism\nB  Global and overview maps\n",
+        "br08901",
+    )
+
+    assert document.lines == (
+        "+C\tMap number",
+        "!",
+        "AMetabolism",
+        "B  Global and overview maps",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"AMetabolism\nB  Global and overview maps\n",
+        b"+C\tMap number\nAMetabolism\nB  Global and overview maps\n",
+        b"!\nAMetabolism\nB  Global and overview maps\n",
+        b"AMetabolism\n+C\tMap number\n!\n",
+        b"!\n+C\tMap number\nAMetabolism\n",
+    ],
+)
+def test_brite_parser_rejects_compact_root_without_complete_htext_envelope(
+    body: bytes,
+) -> None:
+    _assert_parse_error(
+        lambda: parse_brite_htext_response(body, "br08901"),
+        reason="invalid_htext_structure",
+    )
+
+
 def test_brite_parser_accepts_blank_response_for_client_reconciliation() -> None:
     assert parse_brite_htext_response(b" \n\t", "br08901").lines == ()
 

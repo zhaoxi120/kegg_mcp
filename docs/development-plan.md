@@ -3,7 +3,7 @@
 Status: approved as a development baseline after the corrections recorded below.
 Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
 implemented and verified with offline tests. Version 0.2.0 supports Python 3.11.x only.
-Last reviewed: 2026-07-15.
+Last reviewed: 2026-07-16.
 
 ## Version 0.2 workflow-remediation amendment
 
@@ -20,12 +20,16 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
   Private result identifiers remain same-session optimizations.
 - `PathwaySpec` infers and validates namespace, canonicalizes omitted `map` input to `ko`, and
   de-duplicates paired views by pathway number. GET cache reuse is entry-level.
-- The repository Skill is `kegg-ko-analysis` and only orchestrates the core MCP for existing KO
-  evidence. DeepKOALA annotation and pathway rendering belong to independent MCP repositories and
-  independent Skills; their subprocess, model, parser, and rendering implementations are outside
-  this core repository.
+- The repository Skill is `kegg-ko-analysis`. It normally orchestrates the core MCP for existing
+  KO evidence and may also orchestrate an explicitly installed optional DeepKOALA companion for
+  FASTA input. The companion is an independent distribution and process, even when maintained in
+  this repository. Its subprocess and model lifecycle never enter the core package or Skill code;
+  pathway rendering remains an independent MCP and Skill.
 - The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
   and can write a concise versioned output bundle beneath configured allowed roots.
+- Default tests and pull-request CI remain offline. A separately enabled, manually dispatched
+  main-only job may run one serialized four-request campaign after explicit eligible-access
+  confirmation and must not upload KEGG payloads.
 
 ## Table of contents
 
@@ -138,11 +142,16 @@ No sequence-annotation guidance should be shown unless requested.
 
 #### Workflow C: protein FASTA only
 
-1. Stop the core `kegg-ko-analysis` Skill because KO evidence is not yet available.
-2. Route annotation to an independent annotation Skill and MCP.
-3. Resume Workflow B from its controlled detailed CSV, source provenance, and original input path.
+1. Do not send FASTA to the core MCP because KO evidence is not yet available.
+2. Discover an explicitly configured local DeepKOALA companion or route annotation to another
+   independent annotation Skill and MCP.
+3. If the companion is available, prepare a bounded CPU job and require explicit confirmation
+   before submission.
+4. Resume Workflow B from its controlled detailed CSV path and returned source provenance.
 
-The core MCP server and core Skill must not execute or describe the external annotator workflow.
+The core MCP server must not execute the annotator. The Skill may orchestrate the companion's
+public lifecycle tools but must not implement inference, subprocess control, weight management, or
+normalization.
 
 #### Workflow D: compare KO sets
 
@@ -179,7 +188,9 @@ The core MCP server and core Skill must not execute or describe the external ann
 
 ### 5.2 Explicitly outside the MVP
 
-- Running DeepKOALA, KofamScan, HMMER, BLAST, or any other annotator.
+- Running DeepKOALA, KofamScan, HMMER, BLAST, or any other annotator from the core package or core
+  server. The optional separately installed DeepKOALA companion is an MCP-side capability, not a
+  core MVP capability.
 - Managing annotation-model weights or KOfam profiles.
 - Nucleotide gene prediction or translation.
 - Enrichment tests, differential abundance, confidence intervals, or replicate-aware statistics.
@@ -240,7 +251,10 @@ kegg-mcp/
 │   ├── unit/
 │   ├── integration/
 │   ├── contract/
+│   ├── live/
 │   └── fixtures/
+├── companions/
+│   └── deepkoala-mcp/       # Independently installed and released
 ├── examples/
 ├── docs/
 └── .agents/
@@ -251,6 +265,7 @@ kegg-mcp/
             │   └── openai.yaml
             └── references/
                 ├── workflow-selection.md
+                ├── deepkoala-companion.md
                 ├── confidence-policy.md
                 ├── module-interpretation.md
                 └── reporting-policy.md
@@ -401,7 +416,7 @@ This is not legal advice and the project must not claim to validate an organizat
 - Stable User-Agent containing project version and a documentation URL, not personal information.
 - Structured parsing of tab-delimited, flat-file, and `info` responses.
 - Offline mode that never attempts a network connection.
-- Response-size limits and checksums.
+- Response-size limits and bounded cache metadata.
 
 ### 8.3 Supported MVP operations
 
@@ -696,12 +711,15 @@ Use the repository-scoped location:
 │   └── openai.yaml
 └── references/
     ├── workflow-selection.md
+    ├── deepkoala-companion.md
     ├── confidence-policy.md
     ├── module-interpretation.md
     └── reporting-policy.md
 ```
 
-The initial Skill should be instruction-only. Do not add `scripts/normalize_ko_table.py`; normalization belongs in the tested core and MCP service.
+The Skill remains instruction-only. Do not add `scripts/normalize_ko_table.py`, annotator launch
+scripts, or model-management code; normalization belongs in the tested core MCP and external
+execution belongs in the companion process.
 
 ### 13.2 Trigger contract
 
@@ -709,21 +727,27 @@ The `SKILL.md` description must include both positive triggers and boundaries. I
 
 - K numbers or KO annotation tables;
 - KEGG modules or pathways;
-- metabolic reconstruction questions; or
-- multiple KO sets for descriptive comparison.
+- metabolic reconstruction questions;
+- multiple KO sets for descriptive comparison; or
+- an explicit request to use an available local DeepKOALA companion before KO analysis.
 
-It should not execute protein annotation, DeepKOALA, pathway rendering, general gene-expression
-analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology
-analysis. Protein annotation and rendering are routed to independent Skills owned by their MCP
-repositories.
+It must not implement protein inference, launch arbitrary annotation subprocesses, manage model
+weights, duplicate normalization, render pathways, or perform general gene-expression analysis,
+nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
+It may call the explicit tools of a separately installed companion; all execution and lifecycle
+controls remain inside that MCP process.
 
 ### 13.3 Skill responsibilities
 
 - Identify the user's current data type and analysis unit.
 - Avoid asking questions that can be answered from the input.
-- Route protein input without KO assignments to an independent annotation Skill and MCP.
-- Resume core analysis from a controlled annotation file without describing or executing the
-  external annotation workflow.
+- For protein input without KO assignments, discover an explicitly configured companion or route
+  to another independent annotation Skill and MCP.
+- When the companion is ready, prepare a bounded CPU job, present the execution notice, require
+  explicit confirmation, submit the opaque job identifier, and poll bounded status.
+- Resume core analysis from the companion's controlled detailed-CSV path and readable provenance.
+  Do not copy private result identifiers, request or verify workflow hashes, or normalize output in
+  the Skill.
 - Call the high-level MCP tool for common workflows and primitives for advanced workflows.
 - Explain strict versus lenient evidence.
 - Distinguish module completion from pathway coverage.
@@ -744,7 +768,18 @@ Generate and validate the Skill using the current official Skill tooling at impl
 
 ## 14. DeepKOALA guidance
 
-DeepKOALA remains an external optional annotator. Its interface is versioned independently, so commands and output fields must be checked against the official repository when the reference is written.
+DeepKOALA remains an external optional annotator. Its interface is versioned independently, so
+commands and output fields must be checked against the official repository when the reference is
+written. The core package remains import-only. The optional `deepkoala-mcp` companion is a
+separately installed stdio server and runner process with its own entry point, environment,
+lifecycle, tests, lock file, and release review.
+
+The companion never becomes a core dependency. It accepts an existing operator-configured
+DeepKOALA checkout and PyTorch interpreter, forces CPU execution with a small thread limit and zero
+data-loader workers, runs one job at a time with fixed arguments and bounded files, and never
+downloads or replaces code, weights, or databases. A prepare step returns a readable execution
+notice; explicit acknowledgement of the server-held opaque job identifier is required before
+submission. Workflow and artifact hashes are not part of this contract.
 
 ### 14.1 Documentation-derived baseline
 
@@ -765,18 +800,27 @@ The documented format was checked separately on 2026-07-14 against official Deep
 weights, explicit CPU execution, two compute threads, and zero data-loader workers. Both models
 produced detailed output that the importer accepted without schema repair. The check did not add
 DeepKOALA code, weights, dependencies, or generated output to this repository and is not part of
-the default test suite. DeepKOALA remains an external, independently versioned contract; the MCP
-server never executes it.
+the default test suite. DeepKOALA remains an external, independently versioned contract; the core
+MCP server never executes it. The optional companion is the only repository component permitted to
+launch the configured external CLI.
+
+On 2026-07-16, the lean companion lifecycle was also checked end to end with that fixed commit and
+its locally bundled `202502` full resource, using CPU only. The detailed evidence is recorded in
+[release readiness](release-readiness.md); no test artifact was added to the repository.
 
 ### 14.2 Importer interface contract
 
-The first DeepKOALA integration is an import-only interface. The MCP server accepts previously generated output and must never launch DeepKOALA, load its models, inspect GPU availability, or depend on its Python runtime.
+The core DeepKOALA integration is an import-only interface. The core MCP server accepts previously
+generated output and must never launch DeepKOALA, load its models, inspect GPU availability, or
+depend on its Python runtime. The companion hands off a controlled output path and source
+provenance through this same importer boundary; it must not implement a second KO decision policy.
 
 Importer input:
 
 - detailed CSV content supplied inline, through a client-provided resource, or through an explicitly allowed local path;
 - a declared source type of `deepkoala_detailed` unless signature detection is unambiguous;
-- optional caller-supplied provenance such as DeepKOALA version, model type, model artifact identifier, command, and execution time; and
+- optional caller-supplied provenance such as DeepKOALA version, model type, installed resource
+  date, execution parameters, and execution time; and
 - the repository's versioned decision-policy identifier.
 
 Importer output:
@@ -789,7 +833,9 @@ Importer output:
 
 The importer must not infer a model version, database release, threshold policy, or domain boundary that is absent from the supplied evidence. If the table lacks the documented detailed fields, it must not be represented as detailed DeepKOALA evidence. The generic table importer may still accept it through explicit column mapping.
 
-Initial importer tests should use small, static, documentation-derived fixtures. End-to-end execution against DeepKOALA is a separate, manually scheduled compatibility check and is not required to define or implement this interface.
+Importer tests use small, static, documentation-derived fixtures. Companion tests use fake local
+checkouts and subprocesses by default. End-to-end execution against an installed DeepKOALA remains
+a separately authorized CPU-only compatibility check and is never required by the core suite.
 
 ### 14.3 Detailed-output mapping
 
@@ -963,8 +1009,12 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Use synthetic or independently authored small fixtures.
 - Do not commit bulk KEGG responses, pathway images, KGML collections, KOfam profiles, model weights, or large FASTA files.
-- Do not run live KEGG requests in normal CI.
-- Keep any opt-in live smoke test local, rate-limited, eligibility-gated, and tolerant of current database content.
+- Do not run live KEGG requests in the default suite or pull-request CI.
+- The dedicated compatibility job may run only through an explicit manual dispatch on `main`,
+  under maintainer enablement and eligible-access confirmation, as one serialized fixed
+  four-request campaign at one request per second with zero retries and no uploaded payloads.
+- Keep any additional opt-in live smoke test local, rate-limited, eligibility-gated, and tolerant
+  of current database content.
 - Do not use strict snapshots of full live KEGG entries because database content changes.
 
 ### 17.5 Skill evaluation
@@ -995,7 +1045,7 @@ Tasks:
 - create the Python project and package metadata;
 - configure uv, ruff, pyright, pytest, and CI;
 - add contribution, security, and issue templates; and
-- keep CI free of live KEGG calls.
+- keep default and pull-request CI free of live KEGG calls.
 
 Acceptance:
 

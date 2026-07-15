@@ -1,7 +1,9 @@
 # MCP server
 
-The MVP runs as a local stdio server. It never launches DeepKOALA or another annotation tool,
-and it does not expose remote HTTP transport.
+The core MVP runs as a local stdio server. It never launches DeepKOALA or another annotation tool,
+and it does not expose remote HTTP transport. The optional `deepkoala-mcp` companion is a separate
+process and distribution documented in its
+[README](../companions/deepkoala-mcp/README.md).
 
 ## Start the server
 
@@ -15,8 +17,8 @@ The default access mode is `offline_cache`. Server logs and configuration failur
 stderr; stdout is reserved for MCP protocol messages.
 
 The user-acceptance deployment profile may explicitly select `public_academic` after the operator
-confirms eligible academic use. Internal development, pytest, and CI remain explicitly
-`offline_cache`; the server does not infer a profile from its host or caller.
+confirms eligible academic use. Internal development, default pytest, and pull-request CI remain
+explicitly `offline_cache`; the server does not infer a profile from its host or caller.
 
 Use the side-effect-free operator diagnostic before client startup:
 
@@ -157,6 +159,8 @@ codes rather than `CACHE_FAILED`. Invalid or unauthorized resource URIs use MCP 
 Endpoint URLs, environment values, credentials, raw tables, and cache payloads are not included in
 status or error output.
 
-The default test suite is offline and must not contact KEGG. Live checks are separate manual tests
-for an eligible academic user or an authorized licensed endpoint and should use only a few explicit
-requests.
+The default test suite and pull-request CI are offline and must not contact KEGG. The dedicated
+live compatibility job runs only through a manual dispatch on `main`, under explicit maintainer
+enablement and eligible academic or licensed access confirmation. It is serialized, fixed at four
+requests with zero retries, and uploads no KEGG payloads. Additional manual checks should use only
+the minimum explicit requests.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -690,7 +689,7 @@ def test_unrequested_get_entry_fails_before_the_response_is_cached(tmp_path: Pat
     ],
 )
 def test_unexpected_link_mapping_fails_before_cache_write(tmp_path: Path, body: bytes) -> None:
-    cache_path = tmp_path / ("link-" + hashlib.sha256(body).hexdigest() + ".sqlite3")
+    cache_path = tmp_path / "link.sqlite3"
     request = LinkRequest(
         relationship=KeggLinkRelationship.KO_TO_MODULE,
         source_identifiers=("K00001",),
@@ -720,7 +719,7 @@ def test_unexpected_link_mapping_fails_before_cache_write(tmp_path: Path, body: 
     ],
 )
 def test_malformed_enzyme_target_fails_before_cache_write(tmp_path: Path, body: bytes) -> None:
-    cache_path = tmp_path / ("enzyme-" + hashlib.sha256(body).hexdigest() + ".sqlite3")
+    cache_path = tmp_path / "enzyme.sqlite3"
     request = LinkRequest(
         relationship=KeggLinkRelationship.KO_TO_ENZYME,
         source_identifiers=("K00001",),

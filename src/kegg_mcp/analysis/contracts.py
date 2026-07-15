@@ -372,12 +372,6 @@ class ModuleParseResult(FrozenModel):
     """Lossless parse result; unsupported tokens remain explicit AST leaves."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:module-parse-result:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -772,12 +766,6 @@ class ModuleEvaluationResult(FrozenModel):
     """Conservative exact completion and project-defined block coverage."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:module-evaluation-result:2",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -973,12 +961,6 @@ class PairedModuleEvaluation(FrozenModel):
     """Separate strict and lenient evaluations over one immutable dataset."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:paired-module-evaluation:2",
             "$schema": JSON_SCHEMA_DIALECT,

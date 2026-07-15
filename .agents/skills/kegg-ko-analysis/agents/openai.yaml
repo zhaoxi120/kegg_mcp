@@ -1,6 +1,6 @@
 interface:
   display_name: "KEGG KO Analysis"
-  short_description: "Route existing KO evidence through cautious KEGG analysis"
+  short_description: "Route KO evidence or an optional local annotation handoff"
   default_prompt: "Use $kegg-ko-analysis to analyze these KO annotations with explicit provenance and conservative interpretation."
 
 dependencies:

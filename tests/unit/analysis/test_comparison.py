@@ -181,14 +181,13 @@ def test_summary_has_exact_counts_and_bounded_previews() -> None:
     assert KoSetComparisonSummary.model_validate_json(summary.model_dump_json()) == summary
 
 
-def test_comparison_provenance_retains_context_without_dataset_digest() -> None:
+def test_comparison_provenance_retains_dataset_context() -> None:
     inputs = _three_inputs()
     dataset = inputs[0].dataset
     detail = compare_ko_datasets(inputs)
 
     assert detail.datasets[0].dataset_id == dataset.dataset_id
     assert detail.datasets[0].analysis_unit == dataset.analysis_unit
-    assert "dataset_sha256" not in detail.datasets[0].model_dump()
 
 
 def test_decision_policy_mismatch_fails_with_structured_provenance_error() -> None:

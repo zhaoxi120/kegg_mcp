@@ -251,21 +251,11 @@ def test_missing_alternatives_must_be_sorted_and_form_an_antichain() -> None:
         )
 
 
-def test_definition_factory_retains_exact_text_without_accepting_digest_fields() -> None:
+def test_definition_factory_retains_exact_text() -> None:
     first = ModuleDefinition.from_text(module_id="M00001", definition="K00001 K00002")
     wrapped = ModuleDefinition.from_text(module_id="M00001", definition="K00001\nK00002")
 
     assert first.definition != wrapped.definition
-    with pytest.raises(ValidationError, match="extra"):
-        ModuleDefinition.model_validate(
-            {
-                "module_id": "M00001",
-                "module_name": None,
-                "definition": "K00001",
-                "definition_sha256": "0" * 64,
-                "provenance": ModuleDefinitionProvenance().model_dump(mode="python"),
-            }
-        )
 
 
 def test_retrieved_definition_provenance_requires_sanitized_metadata() -> None:

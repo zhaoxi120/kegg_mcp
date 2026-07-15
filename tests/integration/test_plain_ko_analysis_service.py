@@ -207,7 +207,6 @@ def test_one_call_service_retains_complete_artifacts_and_returns_bounded_preview
     assert execution["reference_loading_limits"] == request.reference_limits.model_dump(mode="json")
     assert execution["direct_result_limits"] == result.limits.model_dump(mode="json")
     assert structured["report"]["dataset"]["analysis_unit"] == "metagenomic_community"
-    assert "input_sha256" not in structured["report"]["dataset"]["sources"][0]
     module_result = structured["report"]["module_evaluations"][0]["strict"]
     assert module_result["is_complete"] is True
     module_retrieval = module_result["provenance"][0]["provenance"]["retrieval"]

@@ -1,8 +1,10 @@
 # Installation and operation
 
 KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs deterministic local
-analysis, and retrieves KEGG references only under an explicitly configured access mode. It does
-not run DeepKOALA or another sequence annotator.
+analysis, and retrieves KEGG references only under an explicitly configured access mode. The core
+server does not run DeepKOALA or another sequence annotator. An optional independently installed
+CPU-only companion can run an existing local DeepKOALA installation and hand detailed CSV to the
+core importer.
 
 Version 0.2.0 is distributed through the private GitHub repository and its release artifacts; it
 has not been published to a package registry. Install from the exact `v0.2.0` source checkout or
@@ -71,11 +73,17 @@ The supported operating profiles are deliberately separate:
 - academic user acceptance configures `public_academic`, confirms academic use, probes once, and
   checks one requested KEGG entry;
 - licensed user acceptance configures the operator's authorized endpoint;
-- internal iteration, pytest, and CI explicitly configure `offline_cache`; and
+- internal iteration, the default pytest suite, and pull-request CI explicitly configure
+  `offline_cache`; and
 - an unconfigured server still falls back to `offline_cache`.
 
 The project never infers a live-access right from a username, institution, host, or execution
 context.
+
+The dedicated live compatibility workflow is a separate exception to the offline CI default. It
+runs only through an explicit manual dispatch on `main`, only when the maintainer enables it and
+confirms an eligible academic or licensed access profile, and issues one serialized four-request
+campaign without uploading KEGG payloads. Pull requests and ordinary test runs never enable it.
 
 ### Offline cache, the package and internal-development default
 
@@ -173,6 +181,46 @@ absolute and resolve beneath one of these roots. The server rejects traversal an
 This deployment setting permits stable file handoff between local MCP processes without making a
 private `result_id` a cross-process contract.
 
+## Optional DeepKOALA companion
+
+The optional package under `companions/deepkoala-mcp/` is an independent stdio server. Installing
+the core wheel does not install it. The companion also does not install DeepKOALA, PyTorch, model
+weights, HMMER, KOfam profiles, or KEGG data. It requires an operator-reviewed official checkout,
+an existing Python interpreter where that checkout already runs, and a private state root. Add
+that state root to the core server's `KEGG_MCP_ALLOWED_ROOTS` for file handoff. Create the
+owner-only directory before starting either server, as shown in the companion README, because the
+core validates allowed roots during startup.
+
+Install and validate the lightweight companion separately:
+
+```bash
+cd companions/deepkoala-mcp
+uv sync --frozen
+uv run pytest
+```
+
+On a module-based host, resolve the external interpreter before configuring the MCP client:
+
+```bash
+module load pytorch
+command -v python
+```
+
+Set the resulting absolute interpreter path in the companion configuration. Do not use `module
+load`, a shell wrapper, or an activation command as the MCP executable. The companion uses the
+configured interpreter directly, forces CPU execution, fixes data-loader workers at zero, limits
+CPU threads, and allows one running job. It never selects a GPU and never downloads or replaces a
+weight.
+
+Register `deepkoala-mcp` as a second local server using the configuration contract in the
+[companion README](../companions/deepkoala-mcp/README.md). The companion writes successful output
+beneath `DEEPKOALA_MCP_STATE_ROOT`; configure the core server to allow that same root.
+`DEEPKOALA_MCP_ALLOWED_ROOTS` is separate and controls only caller-supplied FASTA intake. The
+repository Skill can then prepare a job, present the execution notice for explicit confirmation,
+submit the opaque job identifier, and pass the successful `output_path` to the core importer as
+`input_format="deepkoala_detailed"`. No digest or cross-server private result identifier is part
+of this handoff.
+
 ## Configure an MCP client
 
 Register the server under the exact name `kegg-mcp`.
@@ -229,13 +277,15 @@ or set the command to the absolute `uv` executable with arguments equivalent to
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
-Codex discovers the repository-scoped Skill at `.agents/skills/kegg-ko-analysis/` while working in an exact
-repository checkout or tag source archive. Its MCP dependency value is also `kegg-mcp`. The Skill
-can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is enabled for existing
-KO/KEGG evidence. The Skill chooses workflows and explains results, while deterministic
-normalization and analysis remain in the server. Protein annotation and pathway rendering belong
-to independent Skills and MCPs. A wheel installation supplies the server command but does not
-install this repository-scoped Skill.
+Codex discovers the repository-scoped Skill at `.agents/skills/kegg-ko-analysis/` while working in
+an exact repository checkout or tag source archive. Its core MCP dependency value is `kegg-mcp`.
+The Skill can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is enabled for
+KO/KEGG evidence and an explicitly requested companion route. The Skill chooses workflows and
+explains results, while deterministic normalization and analysis remain in the core server.
+Protein annotation remains outside that server; the Skill may orchestrate the explicitly
+available local companion described above. Pathway rendering belongs to an independent Skill and
+MCP. A wheel installation supplies the core server command but does not install this
+repository-scoped Skill or the companion.
 
 ## Verify discovery and status
 
@@ -403,14 +453,15 @@ another active scope's result.
 - Normalize and validate requests before enabling live access.
 - Request only the MODULE and pathway identifiers needed for the analysis.
 - Reuse fresh authorized local cache entries instead of forcing refresh.
-- Do not run live requests in CI or the default test suite.
+- Do not run live requests in the default test suite or pull-request CI. Use only the explicitly
+  enabled, main-only compatibility job described in `tests/live/README.md`.
 - Do not publish KEGG response bodies or cache databases when reporting a problem.
 - Record the endpoint class, retrieval time, readable request key, parser version, cache
   state, and database release when available.
 
-An optional live compatibility check requires separate operator authorization. It should use the
-smallest target set, count requests, obey the process-wide limiter, and tolerate current database
-content rather than snapshotting full responses.
+Any additional manual live compatibility check requires separate operator authorization. It
+should use the smallest target set, count requests, obey the process-wide limiter, and tolerate
+current database content rather than snapshotting full responses.
 
 ## Troubleshooting
 

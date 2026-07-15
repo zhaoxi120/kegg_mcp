@@ -255,11 +255,6 @@ class SourceProvenance(FrozenModel):
     """Immutable provenance for one imported annotation source."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:source-provenance:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -316,11 +311,6 @@ class AnnotationRecord(FrozenModel):
     """One preserved source assignment and its normalized decision."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:annotation-record:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -452,11 +442,6 @@ class ImportReport(FrozenModel):
     """Deterministic summary of preserved, skipped, and classified rows."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:import-report:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -535,11 +520,6 @@ class AnnotationDataset(FrozenModel):
     """One immutable imported annotation dataset."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:annotation-dataset:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -604,11 +584,6 @@ class KOEvidenceView(FrozenModel):
     """Deterministic KO-set views derived from immutable source records."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:ko-evidence-view:1",
             "$schema": JSON_SCHEMA_DIALECT,

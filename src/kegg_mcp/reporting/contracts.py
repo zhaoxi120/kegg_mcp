@@ -87,12 +87,6 @@ class ReportInput(FrozenModel):
     """One dataset and optional bounded M4 analyses supplied in caller order."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:report-input:2",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -132,12 +126,6 @@ class StructuredReport(FrozenModel):
     """Canonical complete storage payload before JSON encoding."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:structured-report:2",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -156,12 +144,6 @@ class ReportArtifact(FrozenModel):
     """One bounded UTF-8 report artifact held entirely in memory."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:report-artifact:1",
             "$schema": JSON_SCHEMA_DIALECT,
@@ -200,12 +182,6 @@ class RenderedReport(FrozenModel):
     """Complete deterministic artifact bundle returned by the pure renderer."""
 
     model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=True,
-        validate_default=True,
-        allow_inf_nan=False,
-        hide_input_in_errors=True,
         json_schema_extra={
             "$id": "urn:kegg-mcp:schema:rendered-report:1",
             "$schema": JSON_SCHEMA_DIALECT,

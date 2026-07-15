@@ -4,9 +4,10 @@ Choose the route from KO evidence already supplied. Do not ask the user to resta
 
 ## Protein FASTA without K numbers
 
-This Skill does not annotate proteins. Route the request to an independent annotation Skill and
-MCP, then resume here from its versioned annotation CSV. The handoff must use a controlled absolute
-file path and source provenance, not a private result identifier or a workflow hash.
+The core `kegg-mcp` server does not annotate proteins. If the optional local `deepkoala-mcp`
+companion is discovered, follow [deepkoala-companion.md](deepkoala-companion.md). Otherwise route
+the request to an independent annotation Skill and MCP. Resume core analysis only from a controlled
+absolute annotation path and source provenance, not a private result identifier or workflow hash.
 
 ## Plain K numbers
 
@@ -14,7 +15,7 @@ file path and source provenance, not a private result identifier or a workflow h
 - Prefer `analyze_ko_annotations`. Supply explicit targets when the question names them; otherwise
   allow the high-level tool to discover canonical KO-reference pathways from accepted K numbers.
 - Resolve a named target from supported KEGG evidence rather than guessing an identifier.
-- Do not recommend or execute annotation software from this Skill.
+- Do not recommend or invoke annotation software when usable KO evidence is already present.
 
 ## Annotation table
 

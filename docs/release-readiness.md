@@ -8,6 +8,11 @@ Current status: **validated for the private v0.2.0 GitHub release candidate on 2
 applicable gates below must be verified against the merged commit before tagging. Candidate
 identity and distribution digests belong in the GitHub release notes, not biological workflows.
 
+The current integration amendment was validated on 2026-07-16 with the full offline core and
+companion suites, one four-request authorized KEGG campaign, and one CPU-only companion handoff
+against fixed DeepKOALA commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9` using its bundled
+`202502` full resource. Final packaging is still rechecked against the exact merged commit.
+
 Version 0.2.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
 Python 3.12 and later; a wider Python range requires a separately tested compatibility change.
 
@@ -46,8 +51,25 @@ The release-contract subset is available for focused auditing:
 uv run --frozen pytest tests/release
 ```
 
-The default test suite must not contact KEGG. A passing test run does not authorize a live smoke
-test and does not establish KEGG eligibility.
+The default test suite and pull-request CI must not contact KEGG. A passing test run does not
+authorize a live smoke test and does not establish KEGG eligibility.
+
+When the optional companion is part of the candidate, validate its independent distribution with
+no installed DeepKOALA checkout or model data required:
+
+```bash
+cd companions/deepkoala-mcp
+uv sync --frozen
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+uv build --no-sources --out-dir /tmp/deepkoala-mcp-dist
+```
+
+Its offline tests must use synthetic FASTA and fake subprocess fixtures. They must cover path
+escape, queue bounds, explicit acknowledgement, timeout, cancellation, process-group cleanup,
+output bounds, stdio cleanliness, and controlled core-import handoff.
 
 ## Build and clean-install verification
 
@@ -70,10 +92,11 @@ in addition to the package code and metadata. Neither archive may contain a SQLi
 response, generated analysis result, secret, model weight, KOfam profile, large biological input,
 private fixture, bytecode, or local absolute path.
 
-The Python wheel and Python source distribution deliver the MCP Python server. They do not install
-the repository-scoped Skill or ship the complete repository documentation and examples. Verify the
-Skill separately from the exact GitHub repository checkout or tag source archive proposed for the
-release; do not treat a clean wheel installation as a Skill installation test.
+The core Python wheel and Python source distribution deliver the core MCP Python server. They do
+not install the optional companion, the repository-scoped Skill, or the complete repository
+documentation and examples. Verify the companion as its own distribution and verify the Skill
+separately from the exact GitHub repository checkout or tag source archive proposed for the
+release; do not treat a clean core-wheel installation as either verification.
 
 Install the wheel into a newly created Python 3.11.x environment, confirm that package metadata
 rejects Python 3.12 or later, connect an MCP client in `offline_cache` mode, and verify all of the
@@ -89,11 +112,13 @@ following without network access:
 8. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
 
 Then, only if the release reviewer is an eligible academic user performing academic work or is
-using an appropriately licensed endpoint, run the separately approved minimal live smoke test.
-Record the endpoint class and number of requests, but do not publish response bodies. A live smoke
-test must remain outside CI and the default test suite. The public-academic check should call the
-connectivity probe once, retrieve only one named KO entry, and stop without pathway discovery or
-bulk mapping.
+using an appropriately licensed endpoint, run the separately approved minimal live compatibility
+campaign. Record the endpoint class and number of requests, but do not publish response bodies.
+The reviewed CI campaign runs only through an explicit manual dispatch on `main`, under maintainer
+enablement and eligible-access confirmation, and makes exactly four serialized requests at one
+request per second with zero retries. It covers INFO, one BRITE GET, one LINK, and one CONV
+operation. Pull requests, the default suite, and unconfirmed deployments must collect or stop
+before any live request.
 
 ## Data-rights gates
 
@@ -107,6 +132,8 @@ bulk mapping.
       tracked or packaged.
 - [x] No DeepKOALA weight, KOfam profile, annotation database, or third-party model code is tracked
       or packaged.
+- [x] The optional companion is independently packaged, imports neither the core package nor
+      PyTorch, and never installs or downloads external code, weights, profiles, or data.
 - [x] Local cached payloads are excluded from version control, examples, CI artifacts, and
       releases.
 - [x] External-system statements cite the KEGG API and legal pages with a retrieval date.
@@ -131,6 +158,8 @@ This checklist is operational guidance, not legal advice.
 - [x] Status and errors redact secrets, environment values, usernames, licensed endpoint values,
       and full local paths.
 - [x] No command uses `shell=True` and no input content is executed.
+- [x] Companion execution is CPU-only, uses fixed arguments, limits threads and output bytes,
+      owns the complete child process group, and requires explicit acknowledgement after prepare.
 - [x] Cache corruption, network failure, unsupported MODULE syntax, and missing entries remain
       distinguishable from biological absence.
 - [x] Private annotation tables and protein sequences are not logged by default.
@@ -185,7 +214,9 @@ The exact GitHub repository checkout or tag source archive also provides a repos
 Skill that selects workflows and explains evidence limits; the Python wheel and source
 distribution do not install that Skill.
 
-The release does not annotate sequences, redistribute KEGG or KOfam data, run enrichment, infer
-pathway activity, or provide a remote service. Public KEGG REST access is available only after an
-eligible academic operator explicitly confirms academic use; other users need an appropriately
-licensed endpoint or authorized offline cache content.
+The core distribution does not annotate sequences, redistribute KEGG or KOfam data, run
+enrichment, infer pathway activity, or provide a remote service. The optional companion is a
+separately reviewed local runner for an existing DeepKOALA installation and returns evidence to
+the same core importer. Public KEGG REST access is available only after an eligible academic
+operator explicitly confirms academic use; other users need an appropriately licensed endpoint
+or authorized offline cache content.

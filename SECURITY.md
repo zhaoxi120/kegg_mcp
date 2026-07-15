@@ -4,6 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
+| 0.2.x | Yes |
 | 0.1.x | Yes |
 | Earlier versions | No |
 
@@ -31,5 +32,11 @@ details, and biological data.
 - The MVP is a local stdio MCP server, not a multi-user or remote HTTP service.
 - Filesystem inputs must be limited to explicitly allowed roots and must reject traversal and symlink escapes.
 - KEGG credentials, licensed endpoints, cached responses, and user inputs must remain local and out of logs, fixtures, packages, and releases.
-- External annotation tools, model code, model weights, and databases are outside this project's runtime boundary.
-- Default tests and CI must not access live KEGG services.
+- External annotation tools, model code, model weights, and databases are outside the core
+  package runtime boundary. The optional companion is a separate local process that accepts only
+  an explicitly configured checkout, interpreter, private state root, and allowed input/handoff
+  roots. It uses fixed arguments, CPU-only execution, bounded files, process-group cancellation,
+  and never downloads or updates dependencies or weights.
+- Default tests and pull-request CI must not access live KEGG services. The separately enabled,
+  manually dispatched main-only live job is serialized, request-bounded, and must never upload
+  KEGG payloads.

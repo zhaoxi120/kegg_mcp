@@ -15,7 +15,7 @@ from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel, valida
 
 PUBLIC_KEGG_ENDPOINT = "https://rest.kegg.jp"
 PUBLIC_KEGG_ENDPOINT_LABEL = "public-academic"
-PARSER_VERSION = "3"
+PARSER_VERSION = "4"
 MAX_GET_ENTRIES_PER_BATCH = 10
 MAX_CONFIGURED_IDENTIFIERS = 1_000
 

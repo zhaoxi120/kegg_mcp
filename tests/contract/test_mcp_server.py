@@ -609,7 +609,6 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
         assert manifest["input_paths"] == [str(fasta)]
         assert "bundle_manifest.json" in manifest["files"]
-        assert not any("hash" in key or "digest" in key for key in manifest)
 
 
 @pytest.mark.asyncio

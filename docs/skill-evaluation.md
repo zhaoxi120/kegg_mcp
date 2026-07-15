@@ -22,11 +22,29 @@ that every model or client will behave identically.
 
 Prompt: `I have a protein FASTA file and want to analyze metabolic functions.`
 
-Expected route: recognize that KO assignments are absent; stop the KO-analysis Skill; route to an
-independent annotation Skill and MCP; do not send FASTA to the core server or guess K numbers.
+Expected route: recognize that KO assignments are absent; never send FASTA to the core server or
+guess K numbers; discover an explicitly configured local DeepKOALA companion or route to another
+independent annotation Skill and MCP.
 
-Observed route: passed. The Skill states its boundary, routes annotation outside the core MCP, and
+Observed route: passed. The Skill states its boundary, keeps annotation outside the core MCP, and
 resumes only from a controlled versioned annotation file after KO evidence exists.
+
+### Optional companion lifecycle
+
+The companion route was reviewed in five states:
+
+- **Absent:** the Skill routes to another independent annotation MCP and never sends FASTA to the
+  core server.
+- **Not ready:** the Skill reports the bounded structural status and stops without installing,
+  downloading, or repairing dependencies.
+- **Prepared:** the Skill presents the returned CPU execution notice without starting inference.
+- **Confirmed:** only explicit user confirmation permits submission of the opaque job identifier;
+  no workflow or artifact digest is requested.
+- **Successful:** the Skill passes the controlled absolute detailed-CSV path and readable source
+  provenance to the core importer, which remains the sole normalization authority.
+
+Companion route check: passed. The instructions do not contain an annotator command, subprocess
+implementation, model management, output parser, or duplicate decision policy.
 
 ### Detailed DeepKOALA output for MODULE analysis
 
@@ -88,8 +106,9 @@ an MCP result.
 
 ## Limitations and release use
 
-This forward review covers the exact v0.2.0 release candidate. It used no live KEGG request and did
-not benchmark model-to-model variability, malicious prompt injection, long-context degradation,
-client-specific tool selection, or external annotator compatibility. Future releases must repeat
-the review against their exact candidate; any routing or interpretation regression blocks release
-even if the deterministic static tests still pass.
+This forward review covers the exact v0.2.0 core release candidate plus the current optional
+companion routing amendment. It used no live KEGG request and did not run DeepKOALA or benchmark
+model-to-model variability, malicious prompt injection, long-context degradation, client-specific
+tool selection, or external annotator compatibility. Future releases must repeat the review
+against their exact candidate; any routing or interpretation regression blocks release even if
+the deterministic static tests still pass.

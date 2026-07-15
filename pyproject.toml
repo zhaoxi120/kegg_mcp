@@ -60,4 +60,7 @@ venvPath = "."
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
+markers = [
+    "live_kegg: explicitly authorized, four-request compatibility checks against a live KEGG endpoint",
+]
 testpaths = ["tests"]
