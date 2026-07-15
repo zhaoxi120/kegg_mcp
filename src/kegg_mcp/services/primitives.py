@@ -563,6 +563,8 @@ class ServerStatusResult(FrozenModel):
     stored_payload_bytes: None = None
     newest_entry_age_seconds: None = None
     result_store_configured: bool = True
+    file_handoff_enabled: bool
+    allowed_root_count: int = Field(strict=True, ge=0)
     supported_input_formats: Annotated[
         tuple[AnnotationInputFormat, ...], Field(max_length=len(AnnotationInputFormat))
     ] = tuple(AnnotationInputFormat)
@@ -1242,6 +1244,7 @@ def get_server_status_service(
     client: KeggPrimitiveClient,
     result_store: SQLiteResultStore,
     supported_tools: tuple[str, ...],
+    allowed_root_count: int,
 ) -> ServerStatusResult:
     """Return redacted configuration facts without probing or revealing paths."""
     access = client.config.access
@@ -1261,6 +1264,8 @@ def get_server_status_service(
         network_enabled=access.mode is not AccessMode.OFFLINE_CACHE,
         academic_use_confirmed=access.mode is AccessMode.PUBLIC_ACADEMIC,
         licensed_use_confirmed=cache_endpoint_class is RetrievalEndpointClass.LICENSED,
+        file_handoff_enabled=allowed_root_count > 0,
+        allowed_root_count=allowed_root_count,
         supported_tools=supported_tools,
         result_retention_seconds=result_store.limits.retention_seconds,
         result_quota_bytes=result_store.limits.quota_bytes,

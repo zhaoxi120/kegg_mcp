@@ -8,6 +8,8 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from kegg_mcp.mcp.server import SERVER_INSTRUCTIONS
+
 
 @pytest.mark.asyncio
 async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path: Path) -> None:
@@ -17,7 +19,7 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
     environment["KEGG_MCP_RESULT_STORE_PATH"] = str(tmp_path / "results.sqlite3")
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-c", "from kegg_mcp.mcp.server import main; main()"],
+        args=["-c", "from kegg_mcp.mcp.cli import main; main()"],
         env=environment,
     )
     async with (
@@ -26,5 +28,6 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
     ):
         initialized = await session.initialize()
         assert initialized.serverInfo.name == "kegg-mcp"
+        assert initialized.instructions == SERVER_INSTRUCTIONS
         tools = await session.list_tools()
         assert len(tools.tools) == 9

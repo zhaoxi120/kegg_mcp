@@ -20,6 +20,38 @@ The primary user experience is one high-level analysis request. Lower-level MCP 
 available for users who need explicit control over normalization, KEGG retrieval, module
 evaluation, or pathway coverage.
 
+## Five-minute Codex quick start
+
+From an exact source checkout, create the locked environment and an allowed demo root:
+
+```bash
+uv sync --frozen
+mkdir -p /tmp/kegg-mcp-demo
+KEGG_MCP_ACCESS_MODE=offline_cache \
+KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
+.venv/bin/kegg-mcp doctor
+```
+
+Register the absolute stdio command with Codex, then restart Codex:
+
+```bash
+codex mcp add kegg-mcp \
+  --env KEGG_MCP_ACCESS_MODE=offline_cache \
+  --env KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
+  -- /absolute/path/to/kegg_mcp/.venv/bin/kegg-mcp
+codex mcp list
+```
+
+Then try this first prompt:
+
+> Use kegg-mcp to normalize `K00844`, `ko:K01810`, duplicate `K00844`, and `NOT_A_KO` as an
+> isolate proteome. Report accepted, duplicate, and invalid records. Do not make a live KEGG
+> request.
+
+This first check is deterministic and offline. JSON or TOML MCP snippets are configuration file
+content, not Bash commands. See [installation](docs/installation.md) for access modes and
+[troubleshooting](docs/troubleshooting.md) if discovery fails.
+
 ## Current implementation
 
 The Python package currently provides:
@@ -61,10 +93,13 @@ The Python package currently provides:
   byte-range reads, explicit deletion, and cleanup;
 - a local stdio MCP server exposing nine bounded tools with explicit schemas, structured
   success/error envelopes, accurate annotations, and clean protocol stdout;
+- a backward-compatible CLI with explicit `serve` and side-effect-free, redacted
+  `doctor [--json]` deployment diagnostics;
 - two fixed status resources and four validated resource templates for scoped results, bounded
   result ranges, and offline-only reads of configured cache entries;
 - side-effect-free status and cache-info reads that redact local paths and report SQLite
-  statistics as `null` with `inspection_status=not_probed` rather than opening a database;
+  statistics as `null` with `inspection_status=not_probed`, plus file-handoff readiness and an
+  allowed-root count, rather than opening a database or exposing configured paths;
 - an instruction-only `kegg-ko-analysis` Skill limited to existing KO evidence, with confidence,
   MODULE/pathway interpretation, and reporting references; and
 - redistributable synthetic examples, installation guidance, release gates, and offline package
@@ -86,7 +121,9 @@ for the one-call workflow, report artifacts, result isolation, retention, and re
 
 ## MCP tools and resources
 
-The installed stdio entry point is `kegg-mcp`. The server exposes:
+The installed entry point is `kegg-mcp`: no arguments starts stdio, `serve` is an explicit
+equivalent, and `doctor [--json]` validates redacted deployment configuration without network or
+database probes. The server exposes:
 
 - `analyze_ko_annotations`;
 - `normalize_ko_annotations`;
@@ -103,6 +140,9 @@ cover a result index, a result section, a bounded result byte range, and an offl
 KEGG entry. Each stdio server process generates an opaque scope, so retained results are not
 readable from another process scope. See the [installation and operation guide](docs/installation.md)
 for exact access-mode configuration, calls, and result retrieval.
+
+The initialization response also supplies bounded workflow instructions covering connectivity
+preflight, allowed roots, result scope, stable bundles, and biological interpretation boundaries.
 
 ## Repository-scoped Codex Skill
 
@@ -153,7 +193,9 @@ See the [KEGG API page](https://www.kegg.jp/kegg/rest/) and [KEGG legal notice](
 ## Development documentation
 
 - [Installation and operation](docs/installation.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [MCP server tools, resources, and configuration](docs/mcp-server.md)
+- [High-star MCP repository benchmark](docs/mcp-benchmark-review.md)
 - [Release-readiness checklist](docs/release-readiness.md)
 - [Codex Skill evaluation record](docs/skill-evaluation.md)
 - [Development plan](docs/development-plan.md)
@@ -180,12 +222,14 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── installation.md
 │   ├── import-contracts.md
 │   ├── kegg-client.md
+│   ├── mcp-benchmark-review.md
 │   ├── mcp-server.md
 │   ├── module-analysis.md
 │   ├── pathway-comparison-analysis.md
 │   ├── release-readiness.md
 │   ├── skill-evaluation.md
-│   └── services-results-reporting.md
+│   ├── services-results-reporting.md
+│   └── troubleshooting.md
 ├── pyproject.toml
 ├── src/kegg_mcp/
 │   ├── execution.py                  # Neutral service limits and execution provenance

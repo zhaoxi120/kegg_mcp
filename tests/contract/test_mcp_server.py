@@ -40,7 +40,12 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.kegg.operations import prepare_get
 from kegg_mcp.kegg.parsers import parse_flat_file_response
-from kegg_mcp.mcp.server import MAX_INLINE_RESOURCE_BYTES, TOOL_NAMES, McpRuntime, create_server
+from kegg_mcp.mcp.server import (
+    MAX_INLINE_RESOURCE_BYTES,
+    TOOL_NAMES,
+    McpRuntime,
+    create_server,
+)
 from kegg_mcp.services import ResultArtifactInput, ResultStoreLimits, SQLiteResultStore
 
 _NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
@@ -291,6 +296,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         status_output = _tool_by_name(tools, "get_server_status").outputSchema
         assert status_output is not None
         status_properties = status_output["$defs"]["ServerStatusResult"]["properties"]
+        assert status_properties["allowed_root_count"]["minimum"] == 0
         assert status_properties["supported_input_formats"]["maxItems"] == 4
         assert status_properties["supported_tools"]["maxItems"] == 16
 
@@ -320,6 +326,8 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         status_data = status.structuredContent["result"]["data"]
         assert status_data["transport"] == "stdio"
         assert status_data["access_mode"] == "offline_cache"
+        assert status_data["file_handoff_enabled"] is False
+        assert status_data["allowed_root_count"] == 0
         assert status_data["connectivity"] == "not_probed"
         assert status_data["inspection_status"] == "not_probed"
         assert status_data["entry_count"] is None
@@ -564,6 +572,12 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
     server = create_server(_runtime(tmp_path, allowed_roots=(str(tmp_path.resolve()),)))
 
     async with create_connected_server_and_client_session(server) as session:
+        status = await session.call_tool("get_server_status", {})
+        assert status.structuredContent is not None
+        status_data = status.structuredContent["result"]["data"]
+        assert status_data["file_handoff_enabled"] is True
+        assert status_data["allowed_root_count"] == 1
+
         result = await session.call_tool(
             "normalize_ko_annotations",
             {

@@ -14,6 +14,17 @@ uv run kegg-mcp
 The default access mode is `offline_cache`. Server logs and configuration failures are written to
 stderr; stdout is reserved for MCP protocol messages.
 
+Use the side-effect-free operator diagnostic before client startup:
+
+```text
+uv run kegg-mcp doctor
+uv run kegg-mcp doctor --json
+```
+
+The diagnostic validates configuration but performs no KEGG request or SQLite inspection and
+redacts allowed-root paths and endpoint values. `kegg-mcp serve` is an explicit equivalent to the
+default stdio command.
+
 ## KEGG access configuration
 
 | Environment variable | Meaning |
@@ -36,9 +47,14 @@ To reuse a licensed cache without enabling network access, keep
 to select the matching cache namespace; no live request is made. Cache payloads and retained
 results are local data and must not be committed, packaged, or attached to CI artifacts.
 
-`get_server_status` and `ko-analysis://cache/info` report redacted configuration state. They do not
-probe connectivity or enumerate cache contents. Use the explicit read-only connectivity tool when
-a live-access preflight is required.
+`get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
+includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
+surfaces do not probe connectivity or enumerate cache contents. Use the explicit read-only
+connectivity tool when a live-access preflight is required.
+
+The MCP initialization response guides clients toward the high-level analysis tool and records
+the connectivity, file-handoff, result-scope, stable-bundle, and biological interpretation
+boundaries. It does not replace the explicit input and output schemas.
 
 ## Tools
 

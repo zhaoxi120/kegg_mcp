@@ -27,7 +27,7 @@ Issues = "https://github.com/zhaoxi120/kegg_mcp/issues"
 Changelog = "https://github.com/zhaoxi120/kegg_mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
-kegg-mcp = "kegg_mcp.mcp.server:main"
+kegg-mcp = "kegg_mcp.mcp.cli:main"
 
 [dependency-groups]
 dev = [

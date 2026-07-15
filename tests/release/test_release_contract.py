@@ -15,9 +15,11 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "CHANGELOG.md",
+    PROJECT_ROOT / "docs" / "mcp-benchmark-review.md",
     PROJECT_ROOT / "docs" / "installation.md",
     PROJECT_ROOT / "docs" / "release-readiness.md",
     PROJECT_ROOT / "docs" / "skill-evaluation.md",
+    PROJECT_ROOT / "docs" / "troubleshooting.md",
     PROJECT_ROOT / "examples" / "README.md",
     PROJECT_ROOT / "examples" / "plain-ko" / "ko-list.txt",
     PROJECT_ROOT / "examples" / "plain-ko" / "clean-ko-list.txt",
@@ -97,7 +99,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     assert project["version"] == "0.2.0"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
-    assert scripts == {"kegg-mcp": "kegg_mcp.mcp.server:main"}
+    assert scripts == {"kegg-mcp": "kegg_mcp.mcp.cli:main"}
     lock_text = (PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8")
     lock_header = lock_text.splitlines()[:5]
     assert 'requires-python = "==3.11.*"' in lock_header
@@ -273,11 +275,12 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
             _assert_safe_archive_name(name)
             assert wheel.getinfo(name).file_size <= 5 * 1024 * 1024
         assert "kegg_mcp/mcp/server.py" in names
+        assert "kegg_mcp/mcp/cli.py" in names
         entry_points_name = next(
             name for name in names if name.endswith(".dist-info/entry_points.txt")
         )
         entry_points = wheel.read(entry_points_name).decode("utf-8")
-        assert "kegg-mcp = kegg_mcp.mcp.server:main" in entry_points
+        assert "kegg-mcp = kegg_mcp.mcp.cli:main" in entry_points
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = wheel.read(metadata_name).decode("utf-8")
         assert "License-Expression: MIT" in metadata.splitlines()

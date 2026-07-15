@@ -76,6 +76,16 @@ from kegg_mcp.services import (
 )
 
 SERVER_NAME = "kegg-mcp"
+SERVER_INSTRUCTIONS = (
+    "Prefer analyze_ko_annotations for an existing KO list or annotation table. Call "
+    "get_server_status first when deployment state is unknown, and call probe_kegg_connectivity "
+    "before the first network-dependent analysis. File paths and output directories require a "
+    "configured allowed root. Result IDs are valid only in the same stdio process; use the stable "
+    "output bundle for cross-process handoff. K-number assignments are annotations, exact MODULE "
+    "completion is separate from block coverage, and pathway KO coverage does not prove pathway "
+    "presence, activity, flux, or phenotype. This server never runs an external annotator or "
+    "renders pathway graphics."
+)
 MAX_INLINE_RESOURCE_BYTES = 64 * 1024
 TOOL_NAMES = (
     "analyze_ko_annotations",
@@ -130,10 +140,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
     server: Server[object] = Server(
         SERVER_NAME,
         version=__version__,
-        instructions=(
-            "Analyze user-supplied KO annotations conservatively. K-number assignments are "
-            "annotations, pathway coverage is descriptive, and external annotators are not run."
-        ),
+        instructions=SERVER_INSTRUCTIONS,
     )
 
     @server.list_tools()
@@ -294,6 +301,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     client=state.client,
                     result_store=state.result_store,
                     supported_tools=TOOL_NAMES,
+                    allowed_root_count=len(state.allowed_roots),
                 )
                 return _success(result, "Returned redacted local server status.")
             if name == "probe_kegg_connectivity":
@@ -400,6 +408,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                 client=state.client,
                 result_store=state.result_store,
                 supported_tools=TOOL_NAMES,
+                allowed_root_count=len(state.allowed_roots),
             )
             return [_json_resource(status)]
         if value == "ko-analysis://cache/info":
@@ -408,6 +417,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                 client=state.client,
                 result_store=state.result_store,
                 supported_tools=TOOL_NAMES,
+                allowed_root_count=len(state.allowed_roots),
             )
             return [
                 _json_resource(
@@ -923,6 +933,7 @@ def main() -> None:
 
 __all__ = [
     "MAX_INLINE_RESOURCE_BYTES",
+    "SERVER_INSTRUCTIONS",
     "SERVER_NAME",
     "TOOL_NAMES",
     "McpRuntime",
