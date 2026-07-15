@@ -250,9 +250,11 @@ parsing and identifier reconciliation. A later single-entry GET or any fully cac
 reconstructed from those records without a network call. The live request still obeys KEGG's
 maximum of ten GET entries.
 
-The current parser contract version is `3`. It records nested flat-file field indentation
-explicitly and applies the current identifier reconciliation rules before cache use. Cache rows
-produced under an incompatible parser version fail closed instead of being silently reinterpreted.
+The current parser contract version is `4`. It records nested flat-file field indentation,
+accepts both legacy BRITE root lines and the current compact BRITE root only within a complete
+htext metadata envelope, and applies the current identifier reconciliation rules before cache
+use. Cache rows produced under an incompatible parser version fail closed instead of being
+silently reinterpreted.
 
 `CachePolicy.ttl_seconds` defaults to 604,800 seconds (seven days). At lookup time:
 
@@ -354,5 +356,8 @@ The default unit and integration test suites must not make live KEGG requests. N
 tested with injected transports or a local mock server, fixed clocks, deterministic sleepers, and
 temporary local caches. Any manual live compatibility check must be opt-in, must use an explicitly
 eligible access mode, and must remain within the same process-wide and endpoint-specific limits.
-CI and internal iteration explicitly set `KEGG_MCP_ACCESS_MODE=offline_cache`; an eligible
+Default CI, pull-request CI, and internal iteration explicitly set
+`KEGG_MCP_ACCESS_MODE=offline_cache`. A separately enabled, manually dispatched job on `main` may
+run the four-request compatibility check under an explicitly confirmed eligible access mode. It
+uses one request per second, zero retries, a temporary cache, and no uploaded KEGG payloads. An eligible
 academic user-acceptance profile explicitly sets `public_academic` plus the required confirmation.

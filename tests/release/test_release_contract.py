@@ -20,6 +20,8 @@ OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "docs" / "release-readiness.md",
     PROJECT_ROOT / "docs" / "skill-evaluation.md",
     PROJECT_ROOT / "docs" / "troubleshooting.md",
+    PROJECT_ROOT / "companions" / "deepkoala-mcp" / "README.md",
+    PROJECT_ROOT / "tests" / "live" / "README.md",
     PROJECT_ROOT / "examples" / "README.md",
     PROJECT_ROOT / "examples" / "plain-ko" / "ko-list.txt",
     PROJECT_ROOT / "examples" / "plain-ko" / "clean-ko-list.txt",
@@ -165,6 +167,10 @@ def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
         assert path.suffix.lower() not in FORBIDDEN_DISTRIBUTION_SUFFIXES, path
         assert path.stat().st_size <= 5 * 1024 * 1024, path
 
+    ignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "*.zh-CN.md" in ignore
+    assert all(not path.name.endswith(".zh-CN.md") for path in candidate_files)
+
 
 def test_rights_and_release_status_are_prominent() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
@@ -302,6 +308,8 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
         assert all(".agents" not in PurePosixPath(name).parts for name in names)
         assert all("docs" not in PurePosixPath(name).parts for name in names)
         assert all("examples" not in PurePosixPath(name).parts for name in names)
+        assert all("companions" not in PurePosixPath(name).parts for name in names)
+        assert all("deepkoala_mcp" not in PurePosixPath(name).parts for name in names)
         assert all(b"/lab/zhaoxi/" not in wheel.read(name) for name in names)
 
     with tarfile.open(sdists[0], mode="r:gz") as sdist:
@@ -318,6 +326,8 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
         assert packaged_license is not None
         assert packaged_license.read() == expected_license
         for member in regular_members:
+            assert "companions" not in PurePosixPath(member.name).parts
+            assert "deepkoala_mcp" not in PurePosixPath(member.name).parts
             extracted = sdist.extractfile(member)
             assert extracted is not None
             assert b"/lab/zhaoxi/" not in extracted.read()

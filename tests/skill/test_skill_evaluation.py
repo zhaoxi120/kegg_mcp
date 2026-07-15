@@ -14,7 +14,7 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
     [
         (
             "I have a protein FASTA file and want to analyze metabolic functions.",
-            ("independent annotation Skill", "controlled absolute"),
+            ("get_deepkoala_runner_status", "controlled absolute"),
         ),
         (
             "Here is detailed DeepKOALA output; analyze KEGG modules.",
@@ -47,10 +47,11 @@ def test_evaluation_prompt_has_conservative_routing(
 
 def test_skill_never_duplicates_analysis_or_executes_external_annotators() -> None:
     assert "Let the tools perform validation, normalization, and analysis exactly once" in CORPUS
-    assert "Do not execute or describe a DeepKOALA workflow here" in CORPUS
+    assert "does not implement inference" in CORPUS
+    assert "Do not install, download, or repair dependencies silently" in CORPUS
     assert "Do not implement rendering here" in CORPUS
     assert "python3 -m deepkoala" not in CORPUS
-    assert "prepare_deepkoala" not in CORPUS
+    assert "prepare_deepkoala_job" in CORPUS
     assert "Never infer a K number" in CORPUS
     assert "Source-rejected" in CORPUS
     assert "workflow hashes" in CORPUS

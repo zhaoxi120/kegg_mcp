@@ -10,6 +10,7 @@ EXPECTED_FILES = {
     "SKILL.md",
     "agents/openai.yaml",
     "references/confidence-policy.md",
+    "references/deepkoala-companion.md",
     "references/module-interpretation.md",
     "references/reporting-policy.md",
     "references/workflow-selection.md",
@@ -77,12 +78,12 @@ def test_frontmatter_has_only_name_and_trigger_description() -> None:
         "sequence alignment",
         "statistical enrichment",
         "non-KEGG ontology analysis",
-        "DeepKOALA",
         "pathway rendering",
     )
     assert all(trigger in frontmatter for trigger in positive_triggers)
     assert all(boundary in frontmatter for boundary in negative_boundaries)
-    assert "already has KO evidence" in frontmatter
+    assert "has KO evidence" in frontmatter
+    assert "optional local DeepKOALA companion" in frontmatter
 
 
 def test_openai_metadata_declares_real_stdio_dependency() -> None:

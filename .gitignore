@@ -47,6 +47,9 @@ results/
 *.fasta
 *.fna
 
+# Local non-normative reference documents
+*.zh-CN.md
+
 # Editor and operating-system files
 .DS_Store
 .idea/

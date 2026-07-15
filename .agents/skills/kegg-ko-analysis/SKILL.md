@@ -1,6 +1,6 @@
 ---
 name: kegg-ko-analysis
-description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, and descriptive comparisons of multiple KO sets through the local kegg-mcp server. Use when a user already has KO evidence and needs cautious KO/KEGG analysis. Do not use this Skill to execute protein annotation, DeepKOALA, pathway rendering, general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
+description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, descriptive comparisons of multiple KO sets, and optional local DeepKOALA companion handoff into cautious KO/KEGG analysis. Use when a user has KO evidence or explicitly wants an available DeepKOALA companion to produce it. Do not use this Skill to implement annotation inference, manage models or weights, launch arbitrary subprocesses, perform pathway rendering, or perform general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
 ---
 
 # KEGG KO analysis
@@ -12,8 +12,10 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
    unknown.
 2. Read [workflow-selection.md](references/workflow-selection.md), select the smallest applicable
    workflow, and ask only for information that changes the route or interpretation.
-3. If the input is protein FASTA without K numbers, stop this Skill and route annotation to an
-   independent annotation Skill and MCP. Do not execute or describe a DeepKOALA workflow here.
+3. If the input is protein FASTA without K numbers, read
+   [deepkoala-companion.md](references/deepkoala-companion.md). Use an explicitly configured local
+   companion when it is available and ready; otherwise stop and route annotation to an independent
+   annotation Skill and MCP. Never send FASTA to the core `kegg-mcp` server.
 4. If the user requests pathway graphics, finish the KO analysis and hand off `render_input.json`
    to an independent rendering Skill and MCP. Do not implement rendering here.
 
@@ -34,6 +36,8 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
   confirmation.
 - Follow discovered tool schemas. Do not fabricate parameters, identifiers, result sections, or
   successful retrievals. Do not request or verify workflow hashes.
+- Treat companion job identifiers as opaque. The companion owns FASTA validation, execution,
+  cancellation, and output bounds; the core importer remains the only normalization authority.
 - Prefer the stable output bundle for cross-process handoff. Retrieve full retained artifacts only
   when a bounded preview is insufficient, and treat result identifiers as opaque and
   session-scoped.

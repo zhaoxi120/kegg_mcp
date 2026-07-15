@@ -8,6 +8,11 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Added
 
+- An independently installed, CPU-only `deepkoala-mcp` stdio companion with bounded local job
+  control and controlled detailed-CSV handoff to the core importer.
+- KEGG BRITE htext parser support for compact roots under a validated metadata envelope.
+- An explicitly enabled, main-only, serialized four-request KEGG compatibility campaign; default
+  tests and pull-request CI remain offline.
 - A backward-compatible command-line facade with `serve` and a side-effect-free, redacted
   `doctor [--json]` deployment diagnostic.
 - Client initialization instructions, a high-star MCP repository benchmark, a Codex CLI quick
@@ -15,9 +20,13 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Changed
 
+- The repository Skill may orchestrate an available DeepKOALA companion for FASTA input while
+  keeping inference, process control, and normalization outside Skill code.
+- Companion confirmation uses a server-held opaque job identifier and explicit acknowledgement;
+  biological workflow and artifact hashes remain outside the contract.
 - Academic user acceptance now documents an explicit `public_academic` Codex profile with one
-  connectivity probe and one cached KO content lookup, while internal iteration and CI explicitly
-  remain `offline_cache`.
+  connectivity probe and one cached KO content lookup, while internal iteration, default tests,
+  and pull-request CI explicitly remain `offline_cache`.
 - Redacted server status now reports whether file handoff is enabled and the number of configured
   allowed roots without exposing their paths.
 - The installation guide now identifies JSON and TOML snippets as configuration file content and

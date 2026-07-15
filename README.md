@@ -14,6 +14,7 @@ The project is designed for bioinformatics users who have one of the following:
 
 - a plain list of K numbers;
 - a CSV or TSV annotation table from DeepKOALA, KofamScan, BlastKOALA, GhostKOALA, or another tool;
+- a protein FASTA and an explicitly configured optional local DeepKOALA companion; or
 - two or more KO sets that need a deterministic, non-statistical comparison.
 
 The primary user experience is one high-level analysis request. Lower-level MCP tools remain
@@ -60,8 +61,8 @@ not Bash commands. See [installation](docs/installation.md) for access modes and
 
 ## Internal development profile
 
-Internal iteration, automated tests, and CI stay explicitly offline so repeated development does
-not contact KEGG:
+Internal iteration, the default test suite, and pull-request CI stay explicitly offline so
+repeated development does not contact KEGG:
 
 ```bash
 export KEGG_MCP_ACCESS_MODE=offline_cache
@@ -72,7 +73,10 @@ uv run --frozen pytest
 ```
 
 The package-level fallback also remains `offline_cache` when no access environment is supplied.
-Only the explicitly configured academic user-test profile defaults to live access.
+Only the explicitly configured academic user-test profile defaults to live access. A separately
+enabled, manually dispatched main-only job performs one serialized four-request campaign; it is
+never part of pull-request validation. See `tests/live/README.md` for its authorization and
+request budget.
 
 ## Current implementation
 
@@ -122,8 +126,8 @@ The Python package currently provides:
 - side-effect-free status and cache-info reads that redact local paths and report SQLite
   statistics as `null` with `inspection_status=not_probed`, plus file-handoff readiness and an
   allowed-root count, rather than opening a database or exposing configured paths;
-- an instruction-only `kegg-ko-analysis` Skill limited to existing KO evidence, with confidence,
-  MODULE/pathway interpretation, and reporting references; and
+- an instruction-only `kegg-ko-analysis` Skill for existing KO evidence and optional companion
+  handoff, with confidence, MODULE/pathway interpretation, and reporting references; and
 - redistributable synthetic examples, installation guidance, release gates, and offline package
   audit tests.
 
@@ -140,6 +144,20 @@ grammar, reference resolution, exact evaluation, and interpretation boundaries. 
 denominators, coverage, deterministic set comparison, and shared-reference outcome comparison. See
 the [Milestone 5 services, result storage, and reporting contract](docs/services-results-reporting.md)
 for the one-call workflow, report artifacts, result isolation, retention, and retrieval behavior.
+
+## Optional local DeepKOALA companion
+
+`companions/deepkoala-mcp/` is a separate, CPU-only stdio distribution for an explicitly
+configured official DeepKOALA checkout and an existing PyTorch interpreter. It is not imported by
+the core package, does not install or download DeepKOALA, weights, PyTorch, HMMER, KOfam profiles,
+or KEGG data, and is not included in core wheel or source-distribution artifacts.
+
+The companion uses a prepare/confirm/submit lifecycle, one concurrent CPU job, a small thread
+limit, fixed subprocess arguments, bounded FASTA and output files, and controlled absolute-path
+handoff. It returns detailed CSV and readable source provenance to the existing source-agnostic
+core importer. It deliberately has no workflow or artifact hash protocol and does not duplicate KO
+normalization. See the [companion README](companions/deepkoala-mcp/README.md) for its independent
+installation and configuration contract.
 
 ## MCP tools and resources
 
@@ -171,7 +189,10 @@ preflight, allowed roots, result scope, stable bundles, and biological interpret
 The instruction-only Skill is located at `.agents/skills/kegg-ko-analysis/` and declares the actual
 `kegg-mcp` stdio dependency. It routes existing K numbers, annotation tables, MODULE/pathway
 questions, and deterministic KO-set comparisons without duplicating normalization or analysis
-code. Protein annotation and pathway rendering belong to independent Skills and MCPs.
+code. For FASTA without KO evidence, it may orchestrate an explicitly available local
+`deepkoala-mcp` companion and then hand the controlled detailed CSV path to the core importer.
+Inference, process control, weights, and normalization remain outside the Skill. Pathway rendering
+belongs to an independent Skill and MCP.
 
 Deterministic static tests cover the Skill's instruction contract; they do not execute a language
 model. The six required prompts also have a recorded independent forward/manual review in the
@@ -181,9 +202,10 @@ v0.2.0 candidate for publication sign-off. Synthetic inputs and access-mode temp
 
 ## Distribution boundary
 
-The Python wheel and Python source distribution contain the MCP Python server, package metadata,
-and required license notices. They do not install the repository-scoped Skill or ship the complete
-repository documentation and examples.
+The core Python wheel and Python source distribution contain the MCP Python server, package
+metadata, and required license notices. They do not install the repository-scoped Skill, the
+optional companion, or the complete repository documentation and examples. The companion has its
+own package metadata, lock file, entry point, validation, and release review.
 
 Use `.agents/skills/kegg-ko-analysis/` from an exact GitHub repository checkout or tag source archive when
 the Codex Skill is required. That Skill can depend on a separately installed `kegg-mcp` Python
@@ -202,7 +224,10 @@ The implemented MVP can:
 - compare KO sets descriptively; and
 - return structured MCP results plus concise Markdown reports.
 
-The MVP does not run sequence annotation software, perform enrichment or differential-abundance statistics, redistribute KEGG datasets, generate pathway images, host a public annotation service, or infer pathway activity from KO presence alone.
+The core MVP does not run sequence annotation software, perform enrichment or
+differential-abundance statistics, redistribute KEGG datasets, generate pathway images, host a
+public annotation service, or infer pathway activity from KO presence alone. The optional local
+companion is a separately installed MCP-side runner and does not broaden the core package boundary.
 
 ## Important KEGG usage constraint
 
@@ -252,6 +277,7 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── skill-evaluation.md
 │   ├── services-results-reporting.md
 │   └── troubleshooting.md
+├── companions/deepkoala-mcp/         # Independent optional CPU-only runner distribution
 ├── pyproject.toml
 ├── src/kegg_mcp/
 │   ├── execution.py                  # Neutral service limits and execution provenance
@@ -263,7 +289,7 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── services/                     # Reference loading, orchestration, and result storage
 │   └── mcp/                          # Stdio tools, resources, schemas, and configuration
 ├── .agents/skills/kegg-ko-analysis/  # KO-analysis-only Codex Skill and references
-└── tests/                            # Unit, integration, MCP, Skill, and release tests
+└── tests/                            # Unit, integration, MCP, Skill, release, and opt-in live tests
 ```
 
 ## Language policy
