@@ -32,6 +32,7 @@ the release record.
 Run the locked validation suite with network access disabled or externally blocked:
 
 ```bash
+export KEGG_MCP_ACCESS_MODE=offline_cache
 uv sync --frozen
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
@@ -90,7 +91,9 @@ following without network access:
 Then, only if the release reviewer is an eligible academic user performing academic work or is
 using an appropriately licensed endpoint, run the separately approved minimal live smoke test.
 Record the endpoint class and number of requests, but do not publish response bodies. A live smoke
-test must remain outside CI and the default test suite.
+test must remain outside CI and the default test suite. The public-academic check should call the
+connectivity probe once, retrieve only one named KO entry, and stop without pathway discovery or
+bulk mapping.
 
 ## Data-rights gates
 

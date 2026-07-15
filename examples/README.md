@@ -10,7 +10,9 @@ protein sequence, secret, or private biological data.
   row without asserting biological meaning.
 - `plain-ko/clean-ko-list.txt` is a minimal syntactically valid input for an analysis request.
 - `config/` contains access-mode environment templates. Copy only the template matching the
-  rights and network mode you are authorized to use.
+  rights and network mode you are authorized to use. The `public-academic` template is the
+  user-acceptance profile for an eligible academic user; the `offline` template is the internal
+  iteration and CI profile.
 
 The K numbers are syntax examples. They are annotations supplied for analysis, not experimental
 validation, and the files do not claim that the identifiers belong to one real organism or

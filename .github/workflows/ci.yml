@@ -17,6 +17,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      KEGG_MCP_ACCESS_MODE: offline_cache
 
     steps:
       - name: Check out repository

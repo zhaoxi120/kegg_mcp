@@ -54,6 +54,29 @@ def test_doctor_reports_disabled_file_handoff_without_roots() -> None:
     assert "Set KEGG_MCP_ALLOWED_ROOTS" in text
 
 
+def test_doctor_accepts_explicit_academic_user_test_profile() -> None:
+    output = StringIO()
+
+    exit_code = cli.main(
+        ["doctor", "--json"],
+        environment={
+            "KEGG_MCP_ACCESS_MODE": "public_academic",
+            "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true",
+        },
+        stdout=output,
+    )
+
+    document = json.loads(output.getvalue())
+    assert exit_code == 0
+    assert document["access_mode"] == "public_academic"
+    assert document["network_enabled"] is True
+    assert document["network_probe"] == "not_run"
+    assert document["next_actions"] == [
+        "Call probe_kegg_connectivity from an MCP client before the first live analysis.",
+        "Set KEGG_MCP_ALLOWED_ROOTS to enable file handoff and output bundles.",
+    ]
+
+
 def test_doctor_rejects_invalid_configuration_without_echoing_values() -> None:
     private_endpoint = "https://private.example.test/operator-secret"
     output = StringIO()

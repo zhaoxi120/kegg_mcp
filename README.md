@@ -20,14 +20,17 @@ The primary user experience is one high-level analysis request. Lower-level MCP 
 available for users who need explicit control over normalization, KEGG retrieval, module
 evaluation, or pathway coverage.
 
-## Five-minute Codex quick start
+## Five-minute Codex academic user test
 
-From an exact source checkout, create the locked environment and an allowed demo root:
+This user-facing acceptance profile uses live public KEGG access. Use it only after confirming that
+you are an academic user performing academic work. From an exact source checkout, create the
+locked environment and an allowed demo root:
 
 ```bash
 uv sync --frozen
 mkdir -p /tmp/kegg-mcp-demo
-KEGG_MCP_ACCESS_MODE=offline_cache \
+KEGG_MCP_ACCESS_MODE=public_academic \
+KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
 KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
 .venv/bin/kegg-mcp doctor
 ```
@@ -36,7 +39,8 @@ Register the absolute stdio command with Codex, then restart Codex:
 
 ```bash
 codex mcp add kegg-mcp \
-  --env KEGG_MCP_ACCESS_MODE=offline_cache \
+  --env KEGG_MCP_ACCESS_MODE=public_academic \
+  --env KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
   --env KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
   -- /absolute/path/to/kegg_mcp/.venv/bin/kegg-mcp
 codex mcp list
@@ -44,13 +48,31 @@ codex mcp list
 
 Then try this first prompt:
 
-> Use kegg-mcp to normalize `K00844`, `ko:K01810`, duplicate `K00844`, and `NOT_A_KO` as an
-> isolate proteome. Report accepted, duplicate, and invalid records. Do not make a live KEGG
-> request.
+> Use kegg-mcp in a bounded acceptance check. First confirm that server status is
+> `public_academic`, then probe connectivity once. Retrieve only KO entry `K00844` and report its
+> identifier, name, database release when available, and whether it came from network or cache.
+> Stop after this single entry and do not run pathway discovery.
 
-This first check is deterministic and offline. JSON or TOML MCP snippets are configuration file
-content, not Bash commands. See [installation](docs/installation.md) for access modes and
+The connectivity probe makes one low-cost live request. The single content lookup is cached and
+may be served locally on later checks. JSON or TOML MCP snippets are configuration file content,
+not Bash commands. See [installation](docs/installation.md) for access modes and
 [troubleshooting](docs/troubleshooting.md) if discovery fails.
+
+## Internal development profile
+
+Internal iteration, automated tests, and CI stay explicitly offline so repeated development does
+not contact KEGG:
+
+```bash
+export KEGG_MCP_ACCESS_MODE=offline_cache
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen pyright
+uv run --frozen pytest
+```
+
+The package-level fallback also remains `offline_cache` when no access environment is supplied.
+Only the explicitly configured academic user-test profile defaults to live access.
 
 ## Current implementation
 

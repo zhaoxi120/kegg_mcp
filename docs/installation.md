@@ -24,6 +24,7 @@ DeepKOALA, model weights, and KOfam profiles are not server dependencies.
 From the repository root, create the locked environment and run the offline tests:
 
 ```bash
+export KEGG_MCP_ACCESS_MODE=offline_cache
 uv sync --frozen
 uv run --frozen pytest
 ```
@@ -65,7 +66,18 @@ The server reads configuration from its process environment. The files under `ex
 are reviewable templates; the server does not automatically load `.env` files. Put only the
 selected variables in the MCP client's environment configuration.
 
-### Offline cache, the default
+The supported operating profiles are deliberately separate:
+
+- academic user acceptance configures `public_academic`, confirms academic use, probes once, and
+  checks one requested KEGG entry;
+- licensed user acceptance configures the operator's authorized endpoint;
+- internal iteration, pytest, and CI explicitly configure `offline_cache`; and
+- an unconfigured server still falls back to `offline_cache`.
+
+The project never infers a live-access right from a username, institution, host, or execution
+context.
+
+### Offline cache, the package and internal-development default
 
 With no access variables, the server uses `offline_cache` and never attempts a network
 connection. The explicit equivalent is:
@@ -165,19 +177,21 @@ private `result_id` a cross-process contract.
 
 Register the server under the exact name `kegg-mcp`.
 
-### Codex CLI quick start
+### Codex CLI academic user-test profile
 
-Create the allowed root, validate the same configuration outside the protocol, and register the
-absolute executable:
+For an academic user performing academic work, create the allowed root, validate the same live
+configuration outside the protocol, and register the absolute executable:
 
 ```bash
 mkdir -p /tmp/kegg-mcp-demo
-KEGG_MCP_ACCESS_MODE=offline_cache \
+KEGG_MCP_ACCESS_MODE=public_academic \
+KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
 KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
 /absolute/path/to/.venv/bin/kegg-mcp doctor
 
 codex mcp add kegg-mcp \
-  --env KEGG_MCP_ACCESS_MODE=offline_cache \
+  --env KEGG_MCP_ACCESS_MODE=public_academic \
+  --env KEGG_MCP_ACADEMIC_USE_CONFIRMED=true \
   --env KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
   -- /absolute/path/to/.venv/bin/kegg-mcp
 codex mcp list
@@ -189,8 +203,8 @@ diagnostic.
 
 ### Generic client configuration
 
-The following JSON is configuration file content. Do not paste it at a Bash prompt. A generic
-client configuration for a wheel installation looks like this:
+The following JSON is configuration file content for an eligible academic user. Do not paste it
+at a Bash prompt. A generic client configuration for a wheel installation looks like this:
 
 ```json
 {
@@ -198,7 +212,8 @@ client configuration for a wheel installation looks like this:
     "kegg-mcp": {
       "command": "/absolute/path/to/.venv/bin/kegg-mcp",
       "env": {
-        "KEGG_MCP_ACCESS_MODE": "offline_cache"
+        "KEGG_MCP_ACCESS_MODE": "public_academic",
+        "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true"
       }
     }
   }
@@ -206,8 +221,9 @@ client configuration for a wheel installation looks like this:
 ```
 
 MCP client configuration formats differ; translate the `command` and `env` fields without adding
-a shell wrapper. For a source checkout, either use the absolute `.venv/bin/kegg-mcp` path or set
-the command to the absolute `uv` executable with arguments equivalent to
+a shell wrapper. Operators who are not eligible academic users must select `licensed` or
+`offline_cache` instead. For a source checkout, either use the absolute `.venv/bin/kegg-mcp` path
+or set the command to the absolute `uv` executable with arguments equivalent to
 `run --frozen --directory /absolute/path/to/kegg_mcp kegg-mcp`.
 
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
@@ -253,14 +269,16 @@ configuration state, not proof of KEGG eligibility or current network availabili
 `probe_kegg_connectivity` explicitly before a network-dependent analysis when the current
 connection is unknown.
 
-For a first offline prompt, ask the client:
+For a first live user-acceptance prompt, ask the client:
 
-> Use kegg-mcp to normalize `K00844`, `ko:K01810`, duplicate `K00844`, and `NOT_A_KO` as an
-> isolate proteome. Report accepted, duplicate, and invalid records. Do not make a live KEGG
-> request.
+> Use kegg-mcp in a bounded acceptance check. First confirm that server status is
+> `public_academic`, then probe connectivity once. Retrieve only KO entry `K00844` and report its
+> identifier, name, database release when available, and whether it came from network or cache.
+> Stop after this single entry and do not run pathway discovery.
 
-This checks MCP discovery and deterministic local normalization without requiring cached KEGG
-references.
+This verifies discovery, one explicit connectivity request, and one bounded content lookup. The
+entry lookup uses the normal local cache and may not require a second network request on later
+runs. It is not a bulk KEGG compatibility test.
 
 ## Normalize the synthetic KO list
 

@@ -15,6 +15,9 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Changed
 
+- Academic user acceptance now documents an explicit `public_academic` Codex profile with one
+  connectivity probe and one cached KO content lookup, while internal iteration and CI explicitly
+  remain `offline_cache`.
 - Redacted server status now reports whether file handoff is enabled and the number of configured
   allowed roots without exposing their paths.
 - The installation guide now identifies JSON and TOML snippets as configuration file content and
