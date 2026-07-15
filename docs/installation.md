@@ -32,11 +32,12 @@ The stdio executable is then available at `.venv/bin/kegg-mcp`. For an interacti
 check, run it through uv:
 
 ```bash
-uv run --frozen kegg-mcp
+uv run --frozen kegg-mcp doctor
 ```
 
-The process waits for MCP JSON-RPC messages on stdin. It is not a terminal user interface. Stop a
-manual check with the client's normal shutdown sequence or an interrupt.
+The diagnostic validates deployment configuration without contacting KEGG or opening local
+databases. Bare `uv run --frozen kegg-mcp` starts the stdio server and waits for MCP JSON-RPC
+messages on stdin; it is not a terminal user interface.
 
 ## Install a reviewed wheel
 
@@ -162,8 +163,34 @@ private `result_id` a cross-process contract.
 
 ## Configure an MCP client
 
-Register the server under the exact name `kegg-mcp`. A generic client configuration for a wheel
-installation looks like this:
+Register the server under the exact name `kegg-mcp`.
+
+### Codex CLI quick start
+
+Create the allowed root, validate the same configuration outside the protocol, and register the
+absolute executable:
+
+```bash
+mkdir -p /tmp/kegg-mcp-demo
+KEGG_MCP_ACCESS_MODE=offline_cache \
+KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
+/absolute/path/to/.venv/bin/kegg-mcp doctor
+
+codex mcp add kegg-mcp \
+  --env KEGG_MCP_ACCESS_MODE=offline_cache \
+  --env KEGG_MCP_ALLOWED_ROOTS=/tmp/kegg-mcp-demo \
+  -- /absolute/path/to/.venv/bin/kegg-mcp
+codex mcp list
+```
+
+Restart Codex after changing MCP configuration. Bare `kegg-mcp` remains the stdio command;
+`kegg-mcp serve` is an explicit equivalent, and `kegg-mcp doctor [--json]` is the out-of-band
+diagnostic.
+
+### Generic client configuration
+
+The following JSON is configuration file content. Do not paste it at a Bash prompt. A generic
+client configuration for a wheel installation looks like this:
 
 ```json
 {
@@ -226,6 +253,15 @@ configuration state, not proof of KEGG eligibility or current network availabili
 `probe_kegg_connectivity` explicitly before a network-dependent analysis when the current
 connection is unknown.
 
+For a first offline prompt, ask the client:
+
+> Use kegg-mcp to normalize `K00844`, `ko:K01810`, duplicate `K00844`, and `NOT_A_KO` as an
+> isolate proteome. Report accepted, duplicate, and invalid records. Do not make a live KEGG
+> request.
+
+This checks MCP discovery and deterministic local normalization without requiring cached KEGG
+references.
+
 ## Normalize the synthetic KO list
 
 Read `examples/plain-ko/ko-list.txt` as UTF-8 and call `normalize_ko_annotations`. A minimal inline
@@ -281,13 +317,13 @@ original FASTA under `KEGG_MCP_ALLOWED_ROOTS` and use one high-level call:
   "annotations": {
     "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
     "input_format": "deepkoala_detailed",
+    "analysis_unit": "isolate_proteome",
     "source": {
       "source_name": "deepkoala",
       "input_path": "/absolute/private/input/proteins.faa",
       "annotation_date": "2026-07-15T09:30:00Z"
     }
   },
-  "analysis_unit": "isolate_proteome",
   "output_directory": "/absolute/private/results/example"
 }
 ```
@@ -359,6 +395,10 @@ smallest target set, count requests, obey the process-wide limiter, and tolerate
 content rather than snapshotting full responses.
 
 ## Troubleshooting
+
+See the dedicated [troubleshooting guide](troubleshooting.md) first for client discovery, the
+common mistake of pasting configuration JSON into Bash, redacted diagnostics, allowed roots,
+process-scoped result IDs, protocol stdout, and safe support reports.
 
 `KEGG_USAGE_NOT_CONFIGURED`
 : A network-dependent operation is disabled by deployment configuration. Select an eligible live
