@@ -29,7 +29,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, AnalysisUnit, EvidenceMode, ScoreType
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode, ScoreType
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -89,7 +89,7 @@ def _dataset(
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
         analysis_unit=analysis_unit,
         source=SourceProvenanceInput(
@@ -390,7 +390,7 @@ def test_annotation_csv_preserves_order_nested_evidence_and_formula_safety() -> 
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
         source=SourceProvenanceInput(source_name="formula_safety"),
     )
@@ -479,7 +479,7 @@ def test_score_type_enum_remains_flat_and_no_unavailable_csv_value_is_invented()
             score="score",
             score_type=ScoreType.SOURCE_SPECIFIC,
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
     artifact = _artifact(

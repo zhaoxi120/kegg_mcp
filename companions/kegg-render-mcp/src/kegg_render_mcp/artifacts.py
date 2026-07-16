@@ -1,4 +1,4 @@
-"""Render orchestration plus process-scoped, bounded, atomic artifact retention."""
+"""Process-scoped, bounded, atomic render artifact retention."""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
-from kegg_mcp.kegg import KeggBatchProvenance
-
 from kegg_render_mcp import __version__
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
@@ -24,19 +22,10 @@ from kegg_render_mcp.contracts import (
     DeleteRenderResult,
     ErrorCode,
     ErrorDetail,
-    RenderFormat,
     RenderMcpError,
     RenderResult,
 )
-from kegg_render_mcp.module_scene import construct_module_scene
-from kegg_render_mcp.pathway_scene import PathwayAssetProvider, construct_pathway_scene
-from kegg_render_mcp.raster import render_module_png, render_pathway_png, validate_png
-from kegg_render_mcp.render_input import (
-    load_render_input,
-    open_allowed_directory,
-    resolve_output_directory,
-)
-from kegg_render_mcp.svg import render_module_svg, render_pathway_svg
+from kegg_render_mcp.export_writer import export_bundle
 
 _ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RESULT_ID = re.compile(r"render_[A-Za-z0-9_-]{32}\Z")
@@ -202,16 +191,17 @@ class RenderArtifactStore:
             dir_fd=self._scope_fd,
         )
         _validate_owner_only_directory(result_fd)
-        output_fd: int | None = None
         try:
             for item in all_artifacts:
                 _validate_blob(item)
                 _atomic_write_fd(result_fd, item.name, item.content)
             if output_directory is not None:
-                output_fd = open_allowed_directory(output_directory, self._config.allowed_roots)
-                _remove_commit_manifest(output_fd, manifest_name)
-                for item in all_artifacts:
-                    _atomic_write_fd(output_fd, item.name, item.content)
+                export_bundle(
+                    output_directory,
+                    self._config.allowed_roots,
+                    all_artifacts,
+                    manifest_name=manifest_name,
+                )
             metadata = tuple(
                 ArtifactMetadata(
                     name=item.name,
@@ -241,8 +231,6 @@ class RenderArtifactStore:
             self._remove_result_directory(render_id, ignore_errors=True)
             raise
         finally:
-            if output_fd is not None:
-                os.close(output_fd)
             os.close(result_fd)
 
     def get(self, render_id: str) -> RenderResult:
@@ -384,202 +372,6 @@ class RenderArtifactStore:
             os.rmdir(scope_name, dir_fd=self._state_fd)
 
 
-class RendererService:
-    """Pure-layer coordinator; it does not normalize or evaluate biological evidence."""
-
-    def __init__(
-        self,
-        config: RendererRuntimeConfig,
-        provider: PathwayAssetProvider,
-        store: RenderArtifactStore | None = None,
-    ) -> None:
-        self.config = config
-        self.provider = provider
-        self.store = store or RenderArtifactStore(config)
-
-    def open(self) -> None:
-        self.store.open()
-
-    def close(self) -> None:
-        self.store.close()
-
-    async def render(
-        self,
-        *,
-        render_input_path: str,
-        target_ids: tuple[str, ...] | None,
-        formats: tuple[RenderFormat, ...],
-        output_directory: str | None,
-    ) -> RenderResult:
-        source = load_render_input(render_input_path, self.config)
-        selected = source.target_ids if target_ids is None else target_ids
-        if not selected or len(selected) > 32 or len(selected) != len(set(selected)):
-            raise RenderMcpError(
-                ErrorDetail(
-                    code=ErrorCode.INVALID_REQUEST,
-                    message="The selected render target set is empty, duplicated, or too large.",
-                    suggested_action="Select one through 32 retained target identifiers.",
-                )
-            )
-        output = resolve_output_directory(output_directory, self.config.allowed_roots)
-        artifacts: list[ArtifactBlob] = []
-        warnings: list[str] = []
-        target_provenance: list[dict[str, object]] = []
-        pathway_ids = {str(item.pathway_id) for item in source.document.pathways}
-        module_ids = {str(item.module_id) for item in source.document.modules}
-        for target_id in selected:
-            if target_id in pathway_ids:
-                if not target_id.startswith("ko"):
-                    raise RenderMcpError(
-                        ErrorDetail(
-                            code=ErrorCode.TARGET_NOT_RENDERABLE,
-                            message=(
-                                "Only regular KO reference pathways are renderable in this release."
-                            ),
-                            suggested_action="Select a retained koNNNNN regular pathway target.",
-                        )
-                    )
-                target = source.pathway(target_id)
-                scene = await construct_pathway_scene(
-                    source,
-                    target,
-                    self.provider,
-                    max_asset_bytes=self.config.limits.max_asset_bytes,
-                    max_pixels=self.config.limits.max_pixels,
-                    limits=self.config.limits,
-                )
-                decoded = validate_png(
-                    scene.source_png,
-                    max_bytes=self.config.limits.max_asset_bytes,
-                    max_pixels=self.config.limits.max_pixels,
-                )
-                if decoded != (scene.width, scene.height):
-                    raise RenderMcpError(
-                        ErrorDetail(
-                            code=ErrorCode.ASSET_INVALID,
-                            message="Pathway PNG dimensions do not match asset metadata.",
-                            suggested_action="Refresh the matching pathway assets.",
-                        )
-                    )
-                if RenderFormat.SVG in formats:
-                    svg = render_pathway_svg(
-                        scene,
-                        max_bytes=self.config.limits.max_svg_bytes,
-                        max_nodes=self.config.limits.max_svg_nodes,
-                    )
-                    artifacts.append(
-                        ArtifactBlob(
-                            f"{target_id}.svg", "image/svg+xml", svg.content, svg.width, svg.height
-                        )
-                    )
-                if RenderFormat.PNG in formats:
-                    png = render_pathway_png(
-                        scene,
-                        max_asset_bytes=self.config.limits.max_asset_bytes,
-                        max_pixels=self.config.limits.max_pixels,
-                        max_output_bytes=self.config.limits.max_result_bytes,
-                    )
-                    artifacts.append(
-                        ArtifactBlob(
-                            f"{target_id}.png", "image/png", png.content, png.width, png.height
-                        )
-                    )
-                warnings.extend(scene.warnings)
-                target_provenance.append(
-                    {
-                        "target_id": target_id,
-                        "kind": "pathway",
-                        "reference_namespace": scene.reference_namespace,
-                        "reference_scope": target.reference_scope.value,
-                        "evidence_mode": scene.evidence_mode,
-                        "coverage_numerator": scene.coverage_numerator,
-                        "coverage_denominator": scene.coverage_denominator,
-                        "coverage_ratio": scene.coverage_ratio,
-                        "calculation_method": target.calculation_method,
-                        "calculation_version": target.calculation_version,
-                        "reference_link_provenance": [
-                            _safe_batch(item) for item in target.reference_link_provenance
-                        ],
-                        "reference_metadata_provenance": [
-                            _safe_batch(item) for item in target.reference_metadata_provenance
-                        ],
-                        "assets": scene.asset_provenance,
-                    }
-                )
-            elif target_id in module_ids:
-                target = source.module(target_id)
-                scene = construct_module_scene(
-                    target,
-                    analysis_unit=source.document.dataset.analysis_unit,
-                    max_nodes=self.config.limits.max_svg_nodes,
-                )
-                if RenderFormat.SVG in formats:
-                    svg = render_module_svg(
-                        scene,
-                        max_bytes=self.config.limits.max_svg_bytes,
-                        max_nodes=self.config.limits.max_svg_nodes,
-                    )
-                    artifacts.append(
-                        ArtifactBlob(
-                            f"{target_id}.svg", "image/svg+xml", svg.content, svg.width, svg.height
-                        )
-                    )
-                if RenderFormat.PNG in formats:
-                    png = render_module_png(
-                        scene,
-                        max_pixels=self.config.limits.max_pixels,
-                        max_output_bytes=self.config.limits.max_result_bytes,
-                    )
-                    artifacts.append(
-                        ArtifactBlob(
-                            f"{target_id}.png", "image/png", png.content, png.width, png.height
-                        )
-                    )
-                warnings.extend(scene.warnings)
-                target_provenance.append(
-                    {
-                        "target_id": target_id,
-                        "kind": "module",
-                        "strict_exact_completion": scene.strict_exact_completion,
-                        "strict_block_coverage": scene.strict_block_coverage,
-                        "lenient_exact_completion": scene.lenient_exact_completion,
-                        "lenient_block_coverage": scene.lenient_block_coverage,
-                        "parser_name": target.parser_name,
-                        "parser_version": target.parser_version,
-                        "resolver_version": target.resolver_version,
-                        "strict_calculation_method": (
-                            target.strict.calculation_method.model_dump(mode="json")
-                        ),
-                        "lenient_calculation_method": (
-                            target.lenient.calculation_method.model_dump(mode="json")
-                        ),
-                        "reference_retrieval_provenance": [
-                            _safe_batch(item) for item in target.reference_retrieval_provenance
-                        ],
-                    }
-                )
-            else:
-                # Preserve one safe not-found behavior without guessing a target type.
-                source.pathway(target_id)
-        safe_warnings = tuple(dict.fromkeys(item[:1000] for item in warnings))[:32]
-        return self.store.retain(
-            target_ids=selected,
-            artifacts=tuple(artifacts),
-            warnings=safe_warnings,
-            manifest_context={
-                "render_input_schema_version": "2",
-                "producer": source.document.producer.model_dump(mode="json"),
-                "dataset_id": source.document.dataset.dataset_id,
-                "analysis_unit": source.document.dataset.analysis_unit.value,
-                "taxon_id": source.document.dataset.taxon_id,
-                "kegg_organism_code": source.document.dataset.kegg_organism_code,
-                "decision_policy": source.document.decision_policy.model_dump(mode="json"),
-                "targets": target_provenance,
-            },
-            output_directory=output,
-        )
-
-
 def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> None:
     if _ARTIFACT_NAME.fullmatch(name) is None or Path(name).name != name:
         raise ValueError("invalid derived artifact name")
@@ -623,24 +415,6 @@ def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> No
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary_name, dir_fd=directory_descriptor)
         raise
-
-
-def _remove_commit_manifest(directory_descriptor: int, name: str) -> None:
-    """Invalidate an older export before installing a replacement bundle."""
-    try:
-        existing = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
-    except FileNotFoundError:
-        return
-    if not stat.S_ISREG(existing.st_mode):
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.INPUT_PATH_REJECTED,
-                message="The output manifest path is not a direct regular file.",
-                suggested_action="Use an empty controlled output directory.",
-            )
-        )
-    os.unlink(name, dir_fd=directory_descriptor)
-    os.fsync(directory_descriptor)
 
 
 def _open_or_create_private_directory(path: Path) -> int:
@@ -692,25 +466,6 @@ def _validate_owner_only_directory(descriptor: int) -> None:
         or metadata.st_mode & 0o077
     ):
         raise ValueError("renderer state directories must be owner-only direct directories")
-
-
-def _safe_batch(value: KeggBatchProvenance) -> dict[str, object]:
-    result: dict[str, object] = {
-        "operation": value.operation.value,
-        "request_key": value.request_key,
-        "access_mode": value.access_mode.value,
-        "retrieval_endpoint_class": value.retrieval_endpoint_class.value,
-        "origin": value.origin.value,
-        "cache_lookup_state": value.cache_lookup_state.value,
-        "retrieved_at": value.retrieved_at.isoformat(),
-        "served_at": value.served_at.isoformat(),
-        "is_stale": value.is_stale,
-        "parser_name": value.parser_name,
-        "parser_version": value.parser_version,
-    }
-    if value.database_release is not None:
-        result["database_release"] = value.database_release
-    return result
 
 
 def _validate_blob(item: ArtifactBlob) -> None:

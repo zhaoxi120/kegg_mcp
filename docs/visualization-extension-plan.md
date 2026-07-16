@@ -29,7 +29,7 @@ flowchart LR
     FASTA["Protein FASTA"] --> DK["deepkoala-mcp"]
     DK --> EVIDENCE["Detailed KO table and provenance"]
     EVIDENCE --> CORE["kegg-mcp"]
-    CORE --> HANDOFF["render_input.json v2"]
+    CORE --> HANDOFF["render_input.json version 2"]
     HANDOFF --> RENDER["kegg-render-mcp"]
     RENDER --> ARTIFACTS["SVG, PNG, and render manifest"]
 ```
@@ -138,7 +138,7 @@ It should define immutable Pydantic models with explicit JSON Schema identifiers
 top-level contract is:
 
 ```text
-RenderInputV2
+RenderInput
   schema_version                "2"
   producer                      server name and version
   dataset                       dataset ID, analysis unit, taxonomic context, sources
@@ -208,7 +208,7 @@ artifact. Do not silently drop blocks or ask the renderer to repeat evaluation l
 
 Update `write_analysis_bundle` to accept the already-loaded MODULE graphs and pathway references in
 addition to the dataset and analysis results. Replace the hand-written JSON dictionary with a
-validated `RenderInputV2` model and canonical serialization.
+validated `RenderInput` model and canonical serialization.
 
 Introduce a renderer-specific schema version rather than treating the complete output-bundle
 version as the renderer schema. Record the renderer schema version and MIME type in
@@ -345,7 +345,8 @@ code, arbitrary fonts, or unbounded canvas dimensions.
 Tool annotations must reflect actual behavior:
 
 - status is read-only, idempotent, and closed-world;
-- connectivity probing is read-only, idempotent, and open-world;
+- connectivity probing is non-destructive but is not annotated read-only or idempotent because it
+  performs an external request and advances local cache and rate-limit state; it is open-world;
 - MODULE rendering writes artifacts but is closed-world when all data are in the handoff;
 - pathway rendering writes artifacts and is open-world when it may retrieve KEGG assets; and
 - result deletion is destructive and scoped.
@@ -543,7 +544,7 @@ exists.
 
 Add unit and integration tests for:
 
-- `RenderInputV2` JSON Schema and strict round-trip validation;
+- `RenderInput` JSON Schema and strict round-trip validation;
 - deterministic ordering and byte limits;
 - separation of accepted, uncertain, rejected, unclassified, and invalid records;
 - strict and lenient MODULE and pathway target identity;
@@ -610,7 +611,7 @@ Keep each assigned issue focused on one layer or contract. Recommended order:
    - approve supported pathway types, derivative-output policy, attribution, and release boundary;
    - approve this document or a reviewed replacement.
 2. **Core renderer handoff contract**
-   - implement `RenderInputV2`, full bounded render states, bundle integration, and tests.
+   - implement `RenderInput`, full bounded render states, bundle integration, and tests.
 3. **Typed pathway asset client**
    - implement PNG/KGML retrieval, bounded PNG validation, non-parsing KGML preflight, cache and
      provenance integration, and synthetic tests.

@@ -412,7 +412,7 @@ Rules:
 - `score` values from different `score_type` or source policies are not directly comparable.
 - Invalid identifiers remain in the import report but do not enter analysis.
 - Duplicate handling is deterministic and reported; conflicting duplicates are never silently collapsed.
-- Plain KO-list values may be normalized as accepted for analysis under a policy named `user_supplied_ko_v1`; this describes input handling, not biological validation.
+- Plain KO-list values may be normalized as accepted for analysis under a policy named `user_supplied_ko`; this describes input handling, not biological validation.
 
 ### 7.3 Dataset context
 

@@ -14,8 +14,8 @@ from kegg_mcp.analysis.comparison import (
     summarize_ko_comparison,
 )
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
-    USER_SUPPLIED_KO_V1,
+    CANONICAL_SOURCE_STATUS,
+    USER_SUPPLIED_KO,
     AnalysisUnit,
 )
 from kegg_mcp.domain.decisions import DecisionPolicy
@@ -43,7 +43,7 @@ def _dataset(
     taxon_id: int | None = 9606,
     organism_code: str | None = "hsa",
     source_name: str = "synthetic",
-    policy: DecisionPolicy = CANONICAL_SOURCE_STATUS_V1,
+    policy: DecisionPolicy = CANONICAL_SOURCE_STATUS,
 ):
     payload = "sequence,ko,status\n" + "".join(
         f"{sequence},{ko_id},{status}\n" for sequence, ko_id, status in rows
@@ -194,7 +194,7 @@ def test_decision_policy_mismatch_fails_with_structured_provenance_error() -> No
     canonical = _dataset((("one", "K00001", "accepted"),))
     supplied = _dataset(
         (("two", "K00002", "ignored"),),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
     )
 
     with pytest.raises(KeggMcpError) as caught:
@@ -215,7 +215,7 @@ def test_large_policy_mismatch_returns_bounded_structured_error() -> None:
             label=f"input-{index}",
             dataset=_dataset(
                 ((f"sequence-{index}", "K00001", "accepted"),),
-                policy=(USER_SUPPLIED_KO_V1 if index == 99 else CANONICAL_SOURCE_STATUS_V1),
+                policy=(USER_SUPPLIED_KO if index == 99 else CANONICAL_SOURCE_STATUS),
             ),
         )
         for index in range(100)
@@ -312,7 +312,7 @@ def test_multi_sample_labels_preserve_first_seen_order_and_emit_warning() -> Non
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_LIMITS,
         analysis_unit=AnalysisUnit.MIXED,
     )

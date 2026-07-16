@@ -99,7 +99,7 @@ def test_link_greedily_packs_seventy_three_kos_into_one_default_request() -> Non
 
     assert len(batches) == 1
     assert len(batches[0].requested_identifiers) == 73
-    assert batches[0].normalized_request_key.startswith("v2:/link/pathway/")
+    assert batches[0].normalized_request_key.startswith("/link/pathway/")
 
 
 def test_link_greedy_batches_are_canonical_and_respect_the_url_limit() -> None:

@@ -5,12 +5,10 @@ from __future__ import annotations
 import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Protocol, TypeAlias
+from datetime import UTC, datetime
 
-from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
-from kegg_mcp.kegg.cache import CachedResponse, CacheReadState, SQLiteKeggCache
+from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.kegg.cache import CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
     PUBLIC_KEGG_ENDPOINT_LABEL,
@@ -19,7 +17,6 @@ from kegg_mcp.kegg.contracts import (
     ConvResult,
     GetRequest,
     GetResult,
-    HttpMetadata,
     InfoRequest,
     InfoResult,
     KeggBatchProvenance,
@@ -35,54 +32,24 @@ from kegg_mcp.kegg.contracts import (
     LinkRequest,
     LinkResult,
     PublicAcademicAccess,
-    ResponseOrigin,
     RetrievalEndpointClass,
 )
+from kegg_mcp.kegg.executor import ExecutedBatch, KeggRequestExecutor, RateLimiter
 from kegg_mcp.kegg.operations import (
     PreparedRequest,
-    ResponseParser,
-    pair_target_matches,
     prepare_conv,
     prepare_get,
     prepare_info,
     prepare_link,
 )
-from kegg_mcp.kegg.parsers import (
-    parse_brite_htext_response,
-    parse_flat_file_response,
-    parse_info_response,
-    parse_pair_response,
-)
+from kegg_mcp.kegg.pathway_asset_client import PathwayAssetClient
 from kegg_mcp.kegg.pathway_assets import (
-    PATHWAY_ASSET_PARSER_VERSION,
     PathwayAssetRequest,
     PathwayAssetResult,
     prepare_pathway_asset,
-    validate_pathway_asset_content,
 )
 from kegg_mcp.kegg.rate_limit import ProcessWideRateLimiter
-from kegg_mcp.kegg.transport import HttpsTransport, Transport, TransportError, TransportResponse
-
-_TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 500, 502, 503, 504})
-
-_ParsedDocument: TypeAlias = (
-    KeggInfoDocument | KeggFlatFileDocument | KeggBriteHtextDocument | KeggPairDocument
-)
-
-
-class RateLimiter(Protocol):
-    """Small injectable rate-limiter surface used by the service client."""
-
-    def acquire(self) -> None:
-        """Wait until one request attempt is permitted."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class _ExecutedBatch:
-    document: _ParsedDocument
-    provenance: KeggBatchProvenance
-    body: bytes
+from kegg_mcp.kegg.transport import HttpsTransport, Transport
 
 
 class KeggClient:
@@ -101,10 +68,6 @@ class KeggClient:
     ) -> None:
         self._config = config
         self._cache = cache or SQLiteKeggCache(config.cache.path)
-        self._clock = clock
-        self._sleeper = sleeper
-        self._random_uniform = random_uniform
-
         access = config.access
         if isinstance(access, PublicAcademicAccess):
             self._endpoint = access.endpoint
@@ -114,12 +77,24 @@ class KeggClient:
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.LICENSED
             self._endpoint_label = access.endpoint_label
-        self._transport = transport or HttpsTransport()
-        self._mandatory_rate_limiter = ProcessWideRateLimiter(
+        mandatory_rate_limiter = ProcessWideRateLimiter(
             self._endpoint_label,
             config.limits.requests_per_second,
         )
-        self._additional_rate_limiter = rate_limiter
+        self._executor = KeggRequestExecutor(
+            config,
+            endpoint=self._endpoint,
+            retrieval_endpoint_class=self._retrieval_endpoint_class,
+            endpoint_label=self._endpoint_label,
+            transport=transport or HttpsTransport(),
+            cache=self._cache,
+            mandatory_rate_limiter=mandatory_rate_limiter,
+            additional_rate_limiter=rate_limiter,
+            clock=clock,
+            sleeper=sleeper,
+            random_uniform=random_uniform,
+        )
+        self._pathway_assets = PathwayAssetClient(config, self._cache, self._executor)
 
     @property
     def config(self) -> KeggClientConfig:
@@ -134,7 +109,11 @@ class KeggClient:
     ) -> InfoResult:
         """Retrieve one allowlisted KEGG INFO document."""
         prepared = prepare_info(request, self._config.limits)[0]
-        executed = self._execute(prepared, options or KeggRequestOptions(), info_request=request)
+        executed = self._executor.execute(
+            prepared,
+            options or KeggRequestOptions(),
+            info_request=request,
+        )
         if not isinstance(executed.document, KeggInfoDocument):
             raise AssertionError("INFO preparation selected an incompatible parser")
         return InfoResult(request=request, document=executed.document, batch=executed.provenance)
@@ -151,7 +130,7 @@ class KeggClient:
         if entry_cache_hits is None:
             prepared_batches = prepare_get(request, self._config.limits)
             executed_batches = tuple(
-                self._execute(prepared, effective_options) for prepared in prepared_batches
+                self._executor.execute(prepared, effective_options) for prepared in prepared_batches
             )
             for prepared, executed in zip(prepared_batches, executed_batches, strict=True):
                 self._store_entry_cache_rows(prepared, executed)
@@ -217,184 +196,25 @@ class KeggClient:
     ) -> PathwayAssetResult:
         """Retrieve one validated PNG or preflight-checked KGML pathway asset."""
         prepared = prepare_pathway_asset(request, self._config.limits)
-        return self._execute_pathway_asset(
+        return self._pathway_assets.execute(
             request,
             prepared,
             options or KeggRequestOptions(),
         )
 
-    def _execute_pathway_asset(
-        self,
-        request: PathwayAssetRequest,
-        prepared: PreparedRequest,
-        options: KeggRequestOptions,
-    ) -> PathwayAssetResult:
-        now = self._read_clock()
-        if options.refresh:
-            cache_state = CacheLookupState.REFRESH_BYPASS
-        else:
-            lookup = self._cache.read(
-                prepared.operation,
-                prepared.normalized_request_key,
-                self._retrieval_endpoint_class,
-                self._endpoint_label,
-                now=now,
-                expected_parser_version=PATHWAY_ASSET_PARSER_VERSION,
-            )
-            if lookup.state is CacheReadState.FRESH:
-                if lookup.response is None:
-                    raise AssertionError("a fresh pathway-asset cache hit omitted its response")
-                return self._pathway_asset_from_cache(
-                    request,
-                    prepared,
-                    lookup.response,
-                    CacheLookupState.FRESH_HIT,
-                    now,
-                    is_stale=False,
-                )
-            if lookup.state is CacheReadState.STALE and options.allow_stale:
-                if lookup.response is None:
-                    raise AssertionError("a stale pathway-asset cache hit omitted its response")
-                return self._pathway_asset_from_cache(
-                    request,
-                    prepared,
-                    lookup.response,
-                    CacheLookupState.STALE_HIT,
-                    now,
-                    is_stale=True,
-                )
-            cache_state = (
-                CacheLookupState.STALE_DISALLOWED
-                if lookup.state is CacheReadState.STALE
-                else CacheLookupState.MISS
-            )
-
-        if options.cache_only:
-            fail(
-                ErrorCode.CACHE_ENTRY_NOT_FOUND,
-                "The requested pathway asset is unavailable in the selected cache namespace.",
-                suggested_action="Fetch the asset through an ordinary network-enabled request.",
-                safe_details=(SafeDetail(name="cache_state", value=cache_state.value),),
-            )
-
-        response, attempt_count = self._request_with_retries(prepared)
-        retrieved_at = self._read_clock()
-        self._validate_response_body(prepared, response.body, origin=ResponseOrigin.NETWORK)
-        mime_type, width, height = self._validate_pathway_asset_payload(
-            request,
-            response.body,
-            response.http_metadata,
-            origin=ResponseOrigin.NETWORK,
-        )
-        expires_at = retrieved_at + timedelta(seconds=self._config.cache.ttl_seconds)
-        cached = self._cache.write(
-            prepared.operation,
-            prepared.normalized_request_key,
-            self._retrieval_endpoint_class,
-            self._endpoint_label,
-            body=response.body,
-            retrieved_at=retrieved_at,
-            expires_at=expires_at,
-            parser_version=PATHWAY_ASSET_PARSER_VERSION,
-            database_release=None,
-            http_metadata=response.http_metadata,
-        )
-        return PathwayAssetResult(
-            request=request,
-            content=cached.body,
-            mime_type=mime_type,
-            width=width,
-            height=height,
-            provenance=self._provenance(
-                prepared,
-                cached,
-                origin=ResponseOrigin.NETWORK,
-                cache_state=cache_state,
-                served_at=retrieved_at,
-                attempt_count=attempt_count,
-                is_stale=False,
-            ),
-        )
-
-    def _pathway_asset_from_cache(
-        self,
-        request: PathwayAssetRequest,
-        prepared: PreparedRequest,
-        cached: CachedResponse,
-        cache_state: CacheLookupState,
-        served_at: datetime,
-        *,
-        is_stale: bool,
-    ) -> PathwayAssetResult:
-        self._validate_response_body(prepared, cached.body, origin=ResponseOrigin.CACHE)
-        mime_type, width, height = self._validate_pathway_asset_payload(
-            request,
-            cached.body,
-            cached.http_metadata,
-            origin=ResponseOrigin.CACHE,
-        )
-        return PathwayAssetResult(
-            request=request,
-            content=cached.body,
-            mime_type=mime_type,
-            width=width,
-            height=height,
-            provenance=self._provenance(
-                prepared,
-                cached,
-                origin=ResponseOrigin.CACHE,
-                cache_state=cache_state,
-                served_at=served_at,
-                attempt_count=0,
-                is_stale=is_stale,
-            ),
-        )
-
-    @staticmethod
-    def _validate_pathway_asset_payload(
-        request: PathwayAssetRequest,
-        body: bytes,
-        http_metadata: tuple[HttpMetadata, ...],
-        *,
-        origin: ResponseOrigin,
-    ) -> tuple[str, int | None, int | None]:
-        content_types = tuple(item.value for item in http_metadata if item.name == "content-type")
-        try:
-            if len(content_types) > 1:
-                raise ValueError("multiple content types are not supported")
-            return validate_pathway_asset_content(
-                request,
-                body,
-                content_type=content_types[0] if content_types else None,
-            )
-        except ValueError:
-            if origin is ResponseOrigin.CACHE:
-                fail(
-                    ErrorCode.CACHE_FAILED,
-                    "A cached pathway asset failed content validation.",
-                    suggested_action="Refresh or remove the affected local cache entry.",
-                    safe_details=(SafeDetail(name="stage", value="pathway_asset_validation"),),
-                )
-            fail(
-                ErrorCode.KEGG_PARSE_FAILED,
-                "The pathway asset response failed bounded content validation.",
-                suggested_action="Refresh the asset or verify endpoint compatibility.",
-                safe_details=(SafeDetail(name="asset_kind", value=request.kind.value),),
-            )
-
     def _read_complete_entry_cache(
         self,
         request: GetRequest,
         options: KeggRequestOptions,
-    ) -> tuple[tuple[PreparedRequest, ...], tuple[_ExecutedBatch, ...]] | None:
+    ) -> tuple[tuple[PreparedRequest, ...], tuple[ExecutedBatch, ...]] | None:
         if options.refresh or len(request.entries) < 2:
             return None
         prepared_entries = tuple(
             prepare_get(GetRequest(entries=(entry,)), self._config.limits)[0]
             for entry in request.entries
         )
-        now = self._read_clock()
-        executed: list[_ExecutedBatch] = []
+        now = self._executor.read_clock()
+        executed: list[ExecutedBatch] = []
         for prepared in prepared_entries:
             lookup = self._cache.read(
                 prepared.operation,
@@ -406,7 +226,7 @@ class KeggClient:
             )
             if lookup.state is CacheReadState.FRESH and lookup.response is not None:
                 executed.append(
-                    self._from_cache(
+                    self._executor.from_cache(
                         prepared,
                         lookup.response,
                         CacheLookupState.FRESH_HIT,
@@ -421,7 +241,7 @@ class KeggClient:
                 and lookup.response is not None
             ):
                 executed.append(
-                    self._from_cache(
+                    self._executor.from_cache(
                         prepared,
                         lookup.response,
                         CacheLookupState.STALE_HIT,
@@ -437,7 +257,7 @@ class KeggClient:
     def _store_entry_cache_rows(
         self,
         prepared: PreparedRequest,
-        executed: _ExecutedBatch,
+        executed: ExecutedBatch,
     ) -> None:
         document = executed.document
         if not isinstance(document, KeggFlatFileDocument) or len(prepared.requested_entries) < 2:
@@ -505,7 +325,7 @@ class KeggClient:
         rows: list[KeggPairRow] = []
         provenance: list[KeggBatchProvenance] = []
         for batch_index, prepared in enumerate(prepared_batches):
-            executed = self._execute(prepared, options)
+            executed = self._executor.execute(prepared, options)
             if not isinstance(executed.document, KeggPairDocument):
                 raise AssertionError("relationship preparation selected an incompatible parser")
             rows.extend(
@@ -519,337 +339,3 @@ class KeggClient:
             )
             provenance.append(executed.provenance)
         return tuple(rows), tuple(provenance)
-
-    def _execute(
-        self,
-        prepared: PreparedRequest,
-        options: KeggRequestOptions,
-        *,
-        info_request: InfoRequest | None = None,
-    ) -> _ExecutedBatch:
-        now = self._read_clock()
-        if options.refresh:
-            cache_state = CacheLookupState.REFRESH_BYPASS
-        else:
-            lookup = self._cache.read(
-                prepared.operation,
-                prepared.normalized_request_key,
-                self._retrieval_endpoint_class,
-                self._endpoint_label,
-                now=now,
-                expected_parser_version=PARSER_VERSION,
-            )
-            if lookup.state is CacheReadState.FRESH:
-                if lookup.response is None:
-                    raise AssertionError("a fresh cache hit omitted its response")
-                return self._from_cache(
-                    prepared,
-                    lookup.response,
-                    CacheLookupState.FRESH_HIT,
-                    now,
-                    info_request=info_request,
-                    is_stale=False,
-                )
-            if lookup.state is CacheReadState.STALE and options.allow_stale:
-                if lookup.response is None:
-                    raise AssertionError("a stale cache hit omitted its response")
-                return self._from_cache(
-                    prepared,
-                    lookup.response,
-                    CacheLookupState.STALE_HIT,
-                    now,
-                    info_request=info_request,
-                    is_stale=True,
-                )
-            cache_state = (
-                CacheLookupState.STALE_DISALLOWED
-                if lookup.state is CacheReadState.STALE
-                else CacheLookupState.MISS
-            )
-
-        if options.cache_only:
-            fail(
-                ErrorCode.CACHE_ENTRY_NOT_FOUND,
-                "The requested KEGG response is unavailable in the selected cache namespace.",
-                suggested_action="Fetch the entry through an ordinary network-enabled request.",
-                safe_details=(SafeDetail(name="cache_state", value=cache_state.value),),
-            )
-
-        response, attempt_count = self._request_with_retries(prepared)
-        retrieved_at = self._read_clock()
-        self._validate_response_body(prepared, response.body, origin=ResponseOrigin.NETWORK)
-        document = self._parse_response(prepared, response.body, info_request=info_request)
-        database_release = document.release if isinstance(document, KeggInfoDocument) else None
-        expires_at = retrieved_at + timedelta(seconds=self._config.cache.ttl_seconds)
-        cached = self._cache.write(
-            prepared.operation,
-            prepared.normalized_request_key,
-            self._retrieval_endpoint_class,
-            self._endpoint_label,
-            body=response.body,
-            retrieved_at=retrieved_at,
-            expires_at=expires_at,
-            parser_version=PARSER_VERSION,
-            database_release=database_release,
-            http_metadata=response.http_metadata,
-        )
-        provenance = self._provenance(
-            prepared,
-            cached,
-            origin=ResponseOrigin.NETWORK,
-            cache_state=cache_state,
-            served_at=retrieved_at,
-            attempt_count=attempt_count,
-            is_stale=False,
-        )
-        return _ExecutedBatch(document=document, provenance=provenance, body=cached.body)
-
-    def _from_cache(
-        self,
-        prepared: PreparedRequest,
-        cached: CachedResponse,
-        cache_state: CacheLookupState,
-        served_at: datetime,
-        *,
-        info_request: InfoRequest | None,
-        is_stale: bool,
-    ) -> _ExecutedBatch:
-        self._validate_response_body(prepared, cached.body, origin=ResponseOrigin.CACHE)
-        try:
-            document = self._parse_response(prepared, cached.body, info_request=info_request)
-        except KeggMcpError:
-            fail(
-                ErrorCode.CACHE_FAILED,
-                "A cached KEGG response failed parser validation.",
-                suggested_action="Refresh or remove the affected local cache entry.",
-                safe_details=(
-                    SafeDetail(name="operation", value=prepared.operation.value),
-                    SafeDetail(name="stage", value="cached_parse"),
-                ),
-            )
-        return _ExecutedBatch(
-            document=document,
-            provenance=self._provenance(
-                prepared,
-                cached,
-                origin=ResponseOrigin.CACHE,
-                cache_state=cache_state,
-                served_at=served_at,
-                attempt_count=0,
-                is_stale=is_stale,
-            ),
-            body=cached.body,
-        )
-
-    def _parse_response(
-        self,
-        prepared: PreparedRequest,
-        body: bytes,
-        *,
-        info_request: InfoRequest | None,
-    ) -> _ParsedDocument:
-        if prepared.parser is ResponseParser.INFO:
-            if info_request is None:
-                raise AssertionError("INFO parsing requires its typed request")
-            return parse_info_response(body, info_request.database)
-        if prepared.parser is ResponseParser.FLAT_FILE:
-            document = parse_flat_file_response(body)
-            expected_identifiers = {entry.identifier for entry in prepared.requested_entries}
-            returned_identifiers = [entry.identifier for entry in document.entries]
-            if len(returned_identifiers) != len(set(returned_identifiers)) or any(
-                identifier not in expected_identifiers for identifier in returned_identifiers
-            ):
-                fail(
-                    ErrorCode.KEGG_PARSE_FAILED,
-                    "The KEGG GET response did not match the bounded request.",
-                    suggested_action=(
-                        "Refresh the response or verify the configured endpoint compatibility."
-                    ),
-                    safe_details=(
-                        SafeDetail(name="reason", value="unexpected_or_duplicate_entry"),
-                    ),
-                )
-            return document
-        if prepared.parser is ResponseParser.BRITE_HTEXT:
-            return parse_brite_htext_response(body, prepared.requested_entries[0].identifier)
-        if prepared.parser is ResponseParser.PAIR_TABLE:
-            document = parse_pair_response(body)
-            target_database = prepared.pair_target_database
-            if target_database is None:
-                raise AssertionError("pair-table parsing requires a target contract")
-            if any(
-                row.source_id not in prepared.expected_pair_source_ids
-                or not pair_target_matches(target_database, row.target_id)
-                for row in document.rows
-            ):
-                fail(
-                    ErrorCode.KEGG_PARSE_FAILED,
-                    "The KEGG mapping response did not match the bounded request.",
-                    suggested_action=(
-                        "Refresh the response or verify the configured endpoint compatibility."
-                    ),
-                    safe_details=(
-                        SafeDetail(name="reason", value="unexpected_mapping_identifier"),
-                    ),
-                )
-            return document
-        raise AssertionError("unsupported prepared response parser")
-
-    def _request_with_retries(self, prepared: PreparedRequest) -> tuple[TransportResponse, int]:
-        url = f"{self._endpoint}{prepared.path}"
-        if len(url.encode("ascii")) > self._config.limits.max_url_bytes:
-            fail(
-                ErrorCode.INPUT_LIMIT_EXCEEDED,
-                "The complete KEGG request exceeds the configured URL-size limit.",
-                suggested_action="Use fewer identifiers or configure a smaller relation batch.",
-                safe_details=(SafeDetail(name="operation", value=prepared.operation.value),),
-            )
-
-        maximum_attempts = self._config.retry.max_retries + 1
-        for attempt in range(1, maximum_attempts + 1):
-            self._mandatory_rate_limiter.acquire()
-            if self._additional_rate_limiter is not None:
-                self._additional_rate_limiter.acquire()
-            response: TransportResponse | None = None
-            terminal_transport_failure = False
-            terminal_transport_kind = None
-            try:
-                response = self._transport.request(
-                    url,
-                    timeout_seconds=self._config.limits.timeout_seconds,
-                    max_response_bytes=self._config.limits.max_response_bytes,
-                )
-            except TransportError as error:
-                if error.transient and attempt < maximum_attempts:
-                    self._wait_before_retry(attempt)
-                    continue
-                terminal_transport_failure = True
-                terminal_transport_kind = error.kind
-            if terminal_transport_failure:
-                fail(
-                    ErrorCode.KEGG_REQUEST_FAILED,
-                    "The KEGG request failed before a valid response was received.",
-                    suggested_action=(
-                        "Retry later or verify the configured endpoint and network availability."
-                    ),
-                    safe_details=(
-                        SafeDetail(name="operation", value=prepared.operation.value),
-                        SafeDetail(name="attempt_count", value=str(attempt)),
-                        SafeDetail(
-                            name="transport_kind",
-                            value=(
-                                "unknown"
-                                if terminal_transport_kind is None
-                                else terminal_transport_kind.value
-                            ),
-                        ),
-                    ),
-                )
-            if response is None:
-                raise AssertionError("transport attempt produced no response or failure")
-
-            if response.status_code == 200:
-                return response, attempt
-            if response.status_code == 404:
-                fail(
-                    ErrorCode.KEGG_ENTRY_NOT_FOUND,
-                    "KEGG returned no entry for the bounded request.",
-                    suggested_action="Verify the KEGG identifier and selected database.",
-                    safe_details=(SafeDetail(name="operation", value=prepared.operation.value),),
-                )
-            if response.status_code == 429:
-                if attempt < maximum_attempts:
-                    self._wait_before_retry(attempt)
-                    continue
-                fail(
-                    ErrorCode.KEGG_RATE_LIMITED,
-                    "The configured KEGG endpoint continued to rate-limit the request.",
-                    suggested_action="Retry later or lower the configured request rate.",
-                    safe_details=(SafeDetail(name="attempt_count", value=str(attempt)),),
-                )
-            if response.status_code in _TRANSIENT_HTTP_STATUSES and attempt < maximum_attempts:
-                self._wait_before_retry(attempt)
-                continue
-            fail(
-                ErrorCode.KEGG_REQUEST_FAILED,
-                "The configured KEGG endpoint returned an unsuccessful response.",
-                suggested_action="Verify the request configuration or retry later.",
-                safe_details=(
-                    SafeDetail(name="operation", value=prepared.operation.value),
-                    SafeDetail(name="status_code", value=str(response.status_code)),
-                    SafeDetail(name="attempt_count", value=str(attempt)),
-                ),
-            )
-        raise AssertionError("bounded retry loop terminated unexpectedly")
-
-    def _validate_response_body(
-        self,
-        prepared: PreparedRequest,
-        body: object,
-        *,
-        origin: ResponseOrigin,
-    ) -> None:
-        if isinstance(body, bytes) and len(body) <= self._config.limits.max_response_bytes:
-            return
-        if origin is ResponseOrigin.CACHE:
-            fail(
-                ErrorCode.CACHE_FAILED,
-                "A cached KEGG response exceeds the active safety contract.",
-                suggested_action="Refresh or replace the affected local cache entry.",
-                safe_details=(
-                    SafeDetail(name="operation", value=prepared.operation.value),
-                    SafeDetail(name="stage", value="response_size_check"),
-                ),
-            )
-        fail(
-            ErrorCode.KEGG_REQUEST_FAILED,
-            "The KEGG transport returned a response outside the active size contract.",
-            suggested_action="Lower the response scope or verify the configured transport.",
-            safe_details=(SafeDetail(name="operation", value=prepared.operation.value),),
-        )
-
-    def _wait_before_retry(self, failed_attempt: int) -> None:
-        policy = self._config.retry
-        exponential = policy.initial_backoff_seconds * (2 ** (failed_attempt - 1))
-        base_delay = min(exponential, policy.max_backoff_seconds)
-        jitter = self._random_uniform(0.0, policy.jitter_seconds)
-        if not 0.0 <= jitter <= policy.jitter_seconds:
-            raise RuntimeError("random jitter provider returned a value outside its bounds")
-        self._sleeper(base_delay + jitter)
-
-    def _provenance(
-        self,
-        prepared: PreparedRequest,
-        cached: CachedResponse,
-        *,
-        origin: ResponseOrigin,
-        cache_state: CacheLookupState,
-        served_at: datetime,
-        attempt_count: int,
-        is_stale: bool,
-    ) -> KeggBatchProvenance:
-        return KeggBatchProvenance(
-            operation=prepared.operation,
-            request_key=prepared.normalized_request_key,
-            access_mode=self._config.access.mode,
-            retrieval_endpoint_class=self._retrieval_endpoint_class,
-            endpoint_label=self._endpoint_label,
-            origin=origin,
-            cache_lookup_state=cache_state,
-            retrieved_at=cached.retrieved_at,
-            served_at=served_at,
-            expires_at=cached.expires_at,
-            response_bytes=len(cached.body),
-            parser_name=prepared.parser.value,
-            parser_version=cached.parser_version,
-            database_release=cached.database_release,
-            http_metadata=cached.http_metadata,
-            attempt_count=attempt_count,
-            is_stale=is_stale,
-        )
-
-    def _read_clock(self) -> datetime:
-        value = self._clock()
-        if value.utcoffset() is None:
-            raise RuntimeError("KEGG client clock must return timezone-aware datetimes")
-        return value.astimezone(UTC)

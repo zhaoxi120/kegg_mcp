@@ -25,9 +25,9 @@ from kegg_mcp.domain.annotations import (
     select_ko_ids,
 )
 from kegg_mcp.domain.decisions import (
-    CANONICAL_SOURCE_STATUS_V1,
-    DEEPKOALA_DETAILED_V1,
-    USER_SUPPLIED_KO_V1,
+    CANONICAL_SOURCE_STATUS,
+    DEEPKOALA_DETAILED,
+    USER_SUPPLIED_KO,
     DecisionEvidence,
     DecisionOutcome,
     DecisionPolicy,
@@ -36,9 +36,9 @@ from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError
 from kegg_mcp.domain.identifiers import normalize_ko_id, try_normalize_ko_id
 
 __all__ = [
-    "CANONICAL_SOURCE_STATUS_V1",
-    "DEEPKOALA_DETAILED_V1",
-    "USER_SUPPLIED_KO_V1",
+    "CANONICAL_SOURCE_STATUS",
+    "DEEPKOALA_DETAILED",
+    "USER_SUPPLIED_KO",
     "AnalysisUnit",
     "AnnotationDataset",
     "AnnotationRecord",

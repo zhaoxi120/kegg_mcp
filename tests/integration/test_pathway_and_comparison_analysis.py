@@ -20,7 +20,7 @@ from kegg_mcp.analysis import (
     resolve_module_definitions,
 )
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
+    CANONICAL_SOURCE_STATUS,
     AnalysisUnit,
     AnnotationDataset,
     EvidenceMode,
@@ -92,7 +92,7 @@ def _dataset(rows: tuple[tuple[str, str, str], ...]) -> AnnotationDataset:
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
         analysis_unit=AnalysisUnit.ISOLATE_PROTEOME,
     )

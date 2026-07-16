@@ -133,7 +133,7 @@ def test_preparation_uses_one_fixed_get_path(
     )
 
     assert prepared.path == f"/get/ko00010/{suffix}"
-    assert prepared.normalized_request_key == f"asset-v2:/get/ko00010/{suffix}"
+    assert prepared.normalized_request_key == f"/get/ko00010/{suffix}"
     assert prepared.parser is parser
     assert prepared.requested_identifiers == ("ko00010",)
 

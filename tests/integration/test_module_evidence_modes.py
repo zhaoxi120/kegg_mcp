@@ -11,7 +11,7 @@ from kegg_mcp.analysis.contracts import (
 )
 from kegg_mcp.analysis.module_evaluation import evaluate_module_pair
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, AnalysisUnit, AnnotationDataset
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, AnnotationDataset
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
@@ -38,7 +38,7 @@ def _annotation_dataset() -> AnnotationDataset:
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=ImportLimits(
             max_bytes=10_000,
             max_rows=100,
@@ -110,7 +110,7 @@ def test_paired_evaluation_preserves_evidence_policy_references_and_unknown_or_b
         warning.code for warning in pair.strict.warnings
     }
     assert [item.module_id for item in pair.strict.provenance] == ["M00001", "M00002"]
-    assert pair.strict.decision_policy == CANONICAL_SOURCE_STATUS_V1.reference
+    assert pair.strict.decision_policy == CANONICAL_SOURCE_STATUS.reference
 
     round_trip = PairedModuleEvaluation.model_validate_json(pair.model_dump_json())
     assert round_trip == pair

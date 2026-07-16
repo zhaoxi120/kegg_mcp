@@ -116,7 +116,7 @@ unique key and never collapse top-k, multi-label, or multi-domain assignments.
 Decision behavior is named and versioned. Changing behavior requires a new policy version and new
 truth-table tests.
 
-### `user_supplied_ko_v1`
+### `user_supplied_ko`
 
 Used by the plain KO importer and available explicitly to the generic importer:
 
@@ -125,7 +125,7 @@ Used by the plain KO importer and available explicitly to the generic importer:
 
 This describes input handling. It does not claim experimental validation.
 
-### `canonical_source_status_v1`
+### `canonical_source_status`
 
 Available to the generic table importer. It recognizes only the explicit source values
 `accepted`, `uncertain`, `rejected`, and `unclassified` after trimming and case normalization.
@@ -134,7 +134,7 @@ threshold.
 
 This is the only built-in policy that can currently create `uncertain` evidence.
 
-### `deepkoala_detailed_v1`
+### `deepkoala_detailed`
 
 Used only by the DeepKOALA detailed importer:
 
@@ -184,7 +184,7 @@ matched exactly. The importer does not use delimiter sniffing, fuzzy header matc
 decision guesses.
 
 ```python
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, ScoreType, ThresholdRule
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, ScoreType, ThresholdRule
 from kegg_mcp.importers import GenericColumnMapping, TableDialect, import_generic_table
 
 mapping = GenericColumnMapping(
@@ -202,7 +202,7 @@ dataset = import_generic_table(
     csv_text,
     dialect=TableDialect.CSV,
     mapping=mapping,
-    policy=CANONICAL_SOURCE_STATUS_V1,
+    policy=CANONICAL_SOURCE_STATUS,
     limits=limits,
 )
 ```

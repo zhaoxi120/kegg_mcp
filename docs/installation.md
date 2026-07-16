@@ -7,18 +7,10 @@ CPU-only companion can run an existing local DeepKOALA installation and hand det
 core importer. A second independent companion can turn the core's complete renderer handoff into
 bounded static pathway overlays and MODULE logic diagrams.
 
-The only published GitHub release is core `v0.1.0`. The current checkout contains three
-unreleased candidates and no package-registry publication:
-
-| Distribution | Source version | Release state | Compatibility |
-| --- | --- | --- | --- |
-| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInputV2`; Python 3.11.x |
-| `deepkoala-mcp` | `0.2.0` | Unreleased candidate | Controlled detailed-CSV handoff; Python 3.11.x |
-| `kegg-render-mcp` | `0.1.0` | Unreleased candidate | Requires `kegg-mcp>=0.3,<0.4`; Python 3.11.x |
-
-Install an unreleased candidate only from an exact reviewed commit or its audited wheel. The
-abandoned core 0.2.0 candidate was not published and does not provide the final version 2 renderer
-handoff.
+Current candidate versions and publication status are listed in the repository
+[README](../README.md); release evidence belongs in the
+[release-readiness checklist](release-readiness.md). Install an unreleased candidate only from an
+exact reviewed commit or its audited wheel.
 
 ## Requirements
 
@@ -46,7 +38,7 @@ share controlled handoff roots, but not private state:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json v2    -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 2 -> kegg-render-mcp
 ```
 
 The core never starts either companion. The renderer never imports annotation evidence, runs an

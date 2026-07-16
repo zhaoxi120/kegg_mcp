@@ -12,7 +12,7 @@ from typing import cast
 from kegg_mcp.services.render_contracts import (
     ModuleRenderTarget,
     PathwayRenderTarget,
-    RenderInputV2,
+    RenderInput,
 )
 from pydantic import ValidationError
 
@@ -22,7 +22,7 @@ from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError, Sa
 
 @dataclass(frozen=True, slots=True)
 class ValidatedRenderInput:
-    document: RenderInputV2
+    document: RenderInput
     path: Path
     source_bytes: int
 
@@ -54,7 +54,7 @@ class ValidatedRenderInput:
 
 
 def load_render_input(path_text: str, config: RendererRuntimeConfig) -> ValidatedRenderInput:
-    """Read one no-follow regular file and strictly validate the core v2 contract."""
+    """Read one no-follow regular file and strictly validate the core renderer contract."""
     path, descriptor = _open_beneath(path_text, config.allowed_roots, final_kind="file")
     try:
         payload = _bounded_read(descriptor, config.limits.max_input_bytes)
@@ -94,12 +94,12 @@ def load_render_input(path_text: str, config: RendererRuntimeConfig) -> Validate
             )
         )
     try:
-        document = RenderInputV2.model_validate_json(payload, strict=True)
+        document = RenderInput.model_validate_json(payload, strict=True)
     except ValidationError as error:
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.INVALID_REQUEST,
-                message="The renderer handoff does not satisfy the complete v2 contract.",
+                message="The renderer handoff does not satisfy the complete schema contract.",
                 suggested_action="Rerun core analysis instead of editing render_input.json.",
                 safe_details=(
                     SafeDetail(name="validation_issue_count", value=str(error.error_count())),
@@ -290,6 +290,6 @@ def _invalid_input(message: str) -> RenderMcpError:
         ErrorDetail(
             code=ErrorCode.INVALID_REQUEST,
             message=message,
-            suggested_action="Provide the unchanged v2 renderer handoff written by kegg-mcp.",
+            suggested_action="Provide the unchanged renderer handoff written by kegg-mcp.",
         )
     )

@@ -143,7 +143,7 @@ def prepare_pathway_asset(
     return PreparedRequest(
         operation=KeggOperation.GET,
         path=path,
-        normalized_request_key=f"asset-v2:{path}",
+        normalized_request_key=path,
         parser=parser,
         requested_identifiers=(request.pathway_id,),
     )

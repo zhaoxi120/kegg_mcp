@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 from conftest import SyntheticProvider
-from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore, RendererService
+from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import ErrorCode, RenderFormat, RenderMcpError
+from kegg_render_mcp.render_service import RendererService
 
 
 @pytest.mark.asyncio
@@ -138,7 +139,39 @@ async def test_export_rejects_symlink_artifact_destination(
 
 
 @pytest.mark.asyncio
-async def test_failed_export_cannot_leave_an_old_commit_manifest(
+@pytest.mark.parametrize(
+    "existing_name",
+    ("existing.txt", "M00001.svg", "M00001.png", "render_manifest.json"),
+)
+async def test_export_rejects_every_nonempty_regular_directory_without_changes(
+    existing_name: str,
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+) -> None:
+    output = allowed_root / "images"
+    output.mkdir(mode=0o700)
+    existing = output / existing_name
+    existing.write_bytes(b"existing")
+    service = RendererService(runtime_config, SyntheticProvider())
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=("M00001",),
+                formats=(RenderFormat.SVG, RenderFormat.PNG),
+                output_directory=str(output),
+            )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
+        assert existing.read_bytes() == b"existing"
+        assert tuple(output.iterdir()) == (existing,)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_export_rolls_back_new_files_and_commit_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
@@ -146,42 +179,42 @@ async def test_failed_export_cannot_leave_an_old_commit_manifest(
 ) -> None:
     output = allowed_root / "images"
     output.mkdir(mode=0o700)
-    (output / "render_manifest.json").write_text("old", encoding="utf-8")
-    real_replace = os.replace
-    manifest_replacements = 0
+    real_link = os.link
+    links = 0
 
-    def fail_export_manifest(
+    def fail_second_link(
         source: str,
         destination: str,
         *,
         src_dir_fd: int | None = None,
         dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
     ) -> None:
-        nonlocal manifest_replacements
-        if destination == "render_manifest.json":
-            manifest_replacements += 1
-            if manifest_replacements == 2:
-                raise OSError("synthetic export failure")
-        real_replace(
+        nonlocal links
+        links += 1
+        if links == 2:
+            raise OSError("synthetic export failure")
+        real_link(
             source,
             destination,
             src_dir_fd=src_dir_fd,
             dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
         )
 
-    monkeypatch.setattr(os, "replace", fail_export_manifest)
+    monkeypatch.setattr(os, "link", fail_second_link)
     service = RendererService(runtime_config, SyntheticProvider())
     service.open()
     try:
-        with pytest.raises(OSError, match="synthetic export failure"):
+        with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
                 target_ids=("M00001",),
-                formats=(RenderFormat.SVG,),
+                formats=(RenderFormat.SVG, RenderFormat.PNG),
                 output_directory=str(output),
             )
-        assert not (output / "render_manifest.json").exists()
-        assert not tuple(output.glob(".tmp-*"))
+        assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+        assert not tuple(output.iterdir())
     finally:
         service.close()
 

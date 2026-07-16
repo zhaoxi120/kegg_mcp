@@ -12,7 +12,7 @@ distribution digests belong in the GitHub release notes, not biological workflow
 
 | Distribution | Source version | Release state | Compatibility |
 | --- | --- | --- | --- |
-| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInputV2`; Python 3.11.x |
+| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInput`; Python 3.11.x |
 | `deepkoala-mcp` | `0.2.0` | Unreleased candidate | Controlled detailed-CSV handoff; Python 3.11.x |
 | `kegg-render-mcp` | `0.1.0` | Unreleased candidate | Requires `kegg-mcp>=0.3,<0.4`; Python 3.11.x |
 

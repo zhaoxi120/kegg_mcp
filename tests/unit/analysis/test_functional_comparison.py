@@ -16,7 +16,7 @@ from kegg_mcp.analysis.functional_comparison import (
     compare_module_graphs,
 )
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, AnalysisUnit
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -45,7 +45,7 @@ def _dataset(rows: tuple[tuple[str, str, str], ...]):
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
         analysis_unit=AnalysisUnit.ISOLATE_PROTEOME,
     )

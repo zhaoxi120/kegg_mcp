@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shutil
@@ -76,6 +77,7 @@ FORBIDDEN_ARCHIVE_PARTS = {
 }
 CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 PYTHON_REQUIRES = ">=3.11,<3.12"
+VERSION_SUFFIXED_IDENTIFIER = re.compile(r"(?:V[0-9]+|_v[0-9]+)\Z")
 
 
 def _project_table() -> dict[str, object]:
@@ -146,10 +148,14 @@ def test_candidate_version_and_release_matrix_is_consistent() -> None:
         f"| `deepkoala-mcp` | `{deepkoala_project['version']}` | Unreleased candidate |",
         f"| `kegg-render-mcp` | `{renderer_project['version']}` | Unreleased candidate |",
     )
-    for document in (readme, installation, readiness):
+    for document in (readme, readiness):
         assert all(row in document for row in matrix_rows)
         normalized = re.sub(r"\s+", " ", document.lower())
         assert "only published github release is core `v0.1.0`" in normalized
+
+    assert "Current candidate versions and publication status" in installation
+    assert "release-readiness checklist" in installation
+    for document in (readme, installation, readiness):
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
@@ -226,6 +232,40 @@ def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
     assert "render_input.json" in ignore
     assert "render_manifest.json" in ignore
     assert all(not path.name.endswith(".zh-CN.md") for path in candidate_files)
+
+
+def test_refactored_orchestration_hotspots_remain_bounded() -> None:
+    limits = {
+        "src/kegg_mcp/mcp/server.py": 250,
+        "src/kegg_mcp/services/primitives.py": 150,
+        "src/kegg_mcp/kegg/client.py": 500,
+        "companions/kegg-render-mcp/src/kegg_render_mcp/artifacts.py": 650,
+        "companions/kegg-render-mcp/src/kegg_render_mcp/render_service.py": 400,
+        "companions/deepkoala-mcp/src/deepkoala_mcp/jobs.py": 700,
+    }
+
+    for relative_path, maximum_lines in limits.items():
+        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        assert len(content.splitlines()) <= maximum_lines, relative_path
+
+
+def test_python_identifiers_do_not_embed_contract_versions() -> None:
+    for path in _candidate_files():
+        if path.suffix != ".py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        identifiers: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                identifiers.add(node.name)
+            elif isinstance(node, ast.Name):
+                identifiers.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                identifiers.add(node.attr)
+            elif isinstance(node, ast.arg):
+                identifiers.add(node.arg)
+        offenders = sorted(name for name in identifiers if VERSION_SUFFIXED_IDENTIFIER.search(name))
+        assert offenders == [], f"{path.relative_to(PROJECT_ROOT)}: {offenders}"
 
 
 def test_visualization_extension_has_an_independent_synthetic_release_boundary() -> None:

@@ -4,9 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
-    DEEPKOALA_DETAILED_V1,
-    USER_SUPPLIED_KO_V1,
+    CANONICAL_SOURCE_STATUS,
+    DEEPKOALA_DETAILED,
+    USER_SUPPLIED_KO,
     DiagnosticCode,
     ErrorCode,
     EvidenceMode,
@@ -61,7 +61,7 @@ def test_generic_csv_preserves_all_columns_and_policy_defined_uncertainty() -> N
         payload,
         dialect=TableDialect.CSV,
         mapping=_full_mapping(),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=LIMITS,
     )
     view = build_ko_evidence_view(dataset)
@@ -100,7 +100,7 @@ def test_generic_tsv_uses_explicit_dialect_and_user_supplied_policy() -> None:
         payload,
         dialect=TableDialect.TSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -118,7 +118,7 @@ def test_generic_table_preserves_same_sequence_top_k_and_reports_explicit_slot_c
         payload,
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -144,7 +144,7 @@ def test_generic_table_keeps_malformed_numeric_text_and_reports_it() -> None:
         payload,
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=LIMITS,
     )
 
@@ -165,7 +165,7 @@ def test_generic_table_retains_ragged_row_as_unparsed_evidence() -> None:
         payload,
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -187,7 +187,7 @@ def test_generic_table_reports_duplicate_skipped_logical_rows(payload: str) -> N
         payload,
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -207,7 +207,7 @@ def test_ragged_extra_field_names_do_not_collide_with_source_headers() -> None:
         payload,
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -223,7 +223,7 @@ def test_ragged_extra_field_collision_suffix_stays_bounded() -> None:
         payload,
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -237,7 +237,7 @@ def test_generic_table_reports_explicit_all_empty_logical_row() -> None:
         "sequence,ko\n,\n",
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -253,7 +253,7 @@ def test_generic_header_only_input_retains_every_source_column() -> None:
         "sequence,ko,unmapped_note\n",
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -269,7 +269,7 @@ def test_generic_table_missing_mapped_column_is_repairable() -> None:
             "sequence,other\np1,K00001\n",
             dialect=TableDialect.CSV,
             mapping=mapping,
-            policy=USER_SUPPLIED_KO_V1,
+            policy=USER_SUPPLIED_KO,
             limits=LIMITS,
         )
 
@@ -285,7 +285,7 @@ def test_generic_table_rejects_duplicate_headers() -> None:
             "sequence,ko,ko\np1,K00001,K00002\n",
             dialect=TableDialect.CSV,
             mapping=mapping,
-            policy=USER_SUPPLIED_KO_V1,
+            policy=USER_SUPPLIED_KO,
             limits=LIMITS,
         )
 
@@ -301,7 +301,7 @@ def test_generic_table_rejects_oversized_header_with_structured_error() -> None:
             f"sequence,ko,{oversized_header}\np1,K00001,value\n",
             dialect=TableDialect.CSV,
             mapping=mapping,
-            policy=USER_SUPPLIED_KO_V1,
+            policy=USER_SUPPLIED_KO,
             limits=LIMITS,
         )
 
@@ -321,7 +321,7 @@ def test_generic_table_supports_explicit_field_limit_above_csv_default() -> None
         f"sequence,ko,note\np1,K00001,{long_value}\n",
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=limits,
     )
 
@@ -341,7 +341,7 @@ def test_generic_table_reports_huge_integer_without_python_conversion_error() ->
         f"sequence,ko,rank\np1,K00001,{huge_rank}\n",
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko", rank="rank"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=limits,
     )
 
@@ -360,7 +360,7 @@ def test_generic_table_skips_oversized_mapped_sample_identifier() -> None:
         f"sample,sequence,ko\n{sample_id},p1,K00001\n",
         dialect=TableDialect.CSV,
         mapping=mapping,
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 
@@ -375,7 +375,7 @@ def test_generic_table_rejects_format_specific_policy() -> None:
             "sequence,ko\np1,K00001\n",
             dialect=TableDialect.CSV,
             mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-            policy=DEEPKOALA_DETAILED_V1,
+            policy=DEEPKOALA_DETAILED,
             limits=LIMITS,
         )
 
@@ -405,7 +405,7 @@ def test_missing_column_preview_is_bounded_for_full_mapping() -> None:
             "present\nvalue\n",
             dialect=TableDialect.CSV,
             mapping=mapping,
-            policy=CANONICAL_SOURCE_STATUS_V1,
+            policy=CANONICAL_SOURCE_STATUS,
             limits=LIMITS,
         )
 
@@ -418,7 +418,7 @@ def test_generic_table_retains_invalid_ko_and_exact_duplicate_rows() -> None:
         "sequence,ko\np1,BAD\np2,K00001\np2,K00001\n",
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko"),
-        policy=USER_SUPPLIED_KO_V1,
+        policy=USER_SUPPLIED_KO,
         limits=LIMITS,
     )
 

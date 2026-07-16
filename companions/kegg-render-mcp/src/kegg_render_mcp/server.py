@@ -19,7 +19,6 @@ from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl, BaseModel, ValidationError
 
 from kegg_render_mcp import SERVER_NAME, __version__
-from kegg_render_mcp.artifacts import RendererService
 from kegg_render_mcp.config import RendererRuntimeConfig, load_runtime_config
 from kegg_render_mcp.contracts import (
     ConnectivityResult,
@@ -37,11 +36,13 @@ from kegg_render_mcp.contracts import (
     RenderResult,
     ToolEnvelope,
 )
+from kegg_render_mcp.input_validation import validate_tool_input
 from kegg_render_mcp.pathway_scene import (
     CorePathwayAssetProvider,
     PathwayAssetProvider,
     UnconfiguredAssetProvider,
 )
+from kegg_render_mcp.render_service import RendererService
 
 TOOL_NAMES = (
     "get_renderer_status",
@@ -281,7 +282,7 @@ def _tool_definitions() -> list[types.Tool]:
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
     )
     probe_annotations = types.ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
     )
     pathway_annotations = types.ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
@@ -314,7 +315,7 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "render_analysis_bundle",
             "Render selected analysis targets",
-            "Validate one v2 handoff and render one through 32 selected targets.",
+            "Validate one compatible handoff and render one through 32 selected targets.",
             RenderAnalysisBundleInput,
             RenderResult,
             pathway_annotations,
@@ -380,9 +381,7 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
 
 def _parse(model: type[_M], arguments: dict[str, Any]) -> _M:
     try:
-        return model.model_validate_json(
-            json.dumps(arguments, ensure_ascii=True, separators=(",", ":")), strict=True
-        )
+        return validate_tool_input(model, arguments)
     except ValidationError as error:
         raise _RequestValidationError(error.error_count()) from None
 

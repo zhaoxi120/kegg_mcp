@@ -470,7 +470,7 @@ class RenderExecutionProvenance(FrozenModel):
     handoff_builder_version: Literal["1"] = RENDER_INPUT_BUILDER_VERSION
 
 
-class RenderInputV2(FrozenModel):
+class RenderInput(FrozenModel):
     """Complete, typed renderer input produced by the core analysis service."""
 
     model_config = ConfigDict(
@@ -555,7 +555,7 @@ def build_render_input(
     execution: AnalysisExecutionProvenance,
     *,
     limits: RenderInputLimits | None = None,
-) -> RenderInputV2:
+) -> RenderInput:
     """Build and identity-check one complete renderer handoff from core analysis values."""
     bounds = limits or RenderInputLimits()
     pairs = module_results
@@ -605,7 +605,7 @@ def build_render_input(
     )
 
     sources = tuple(sorted(dataset.sources, key=lambda item: item.model_dump_json()))
-    document = RenderInputV2(
+    document = RenderInput(
         producer=RenderProducer(version=__version__),
         dataset=RenderDataset(
             dataset_id=dataset.dataset_id,
@@ -625,7 +625,7 @@ def build_render_input(
     return document
 
 
-def serialize_render_input(value: RenderInputV2) -> str:
+def serialize_render_input(value: RenderInput) -> str:
     """Return canonical UTF-8 JSON and enforce the document's serialized-byte bound."""
     content = (
         json.dumps(
@@ -648,12 +648,12 @@ def serialize_render_input(value: RenderInputV2) -> str:
     return content
 
 
-def parse_render_input_json(payload: str | bytes) -> RenderInputV2:
+def parse_render_input_json(payload: str | bytes) -> RenderInput:
     """Strictly validate a version 2 handoff with pre- and post-parse byte bounds."""
     raw = payload.encode("utf-8") if isinstance(payload, str) else payload
     if len(raw) > 100_000_000:
         _fail_output_limit("render_input_bytes", len(raw), "hard_max_serialized_bytes", 100_000_000)
-    value = RenderInputV2.model_validate_json(raw, strict=True)
+    value = RenderInput.model_validate_json(raw, strict=True)
     if len(raw) > value.limits.max_serialized_bytes:
         _fail_output_limit(
             "render_input_bytes",
@@ -1202,8 +1202,8 @@ __all__ = [
     "PathwayRenderTarget",
     "RenderDataset",
     "RenderExecutionProvenance",
+    "RenderInput",
     "RenderInputLimits",
-    "RenderInputV2",
     "RenderProducer",
     "RenderabilityStatus",
     "VisualizationEvidence",

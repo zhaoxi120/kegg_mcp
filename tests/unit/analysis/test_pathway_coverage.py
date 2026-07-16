@@ -23,7 +23,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     build_pathway_reference,
     evaluate_pathway_coverage,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, AnalysisUnit, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -106,7 +106,7 @@ def _dataset(
             ko_id="ko",
             raw_decision="decision",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
         analysis_unit=analysis_unit,
         taxon_id=taxon_id,
@@ -246,7 +246,7 @@ def test_strict_ko_reference_uses_dataset_evidence_and_preserves_provenance() ->
     assert result.detected_kos_preview == ("K00001",)
     assert result.missing_kos_preview == ("K00002", "K00003")
     assert result.dataset_id == dataset.dataset_id
-    assert result.decision_policy == CANONICAL_SOURCE_STATUS_V1.reference
+    assert result.decision_policy == CANONICAL_SOURCE_STATUS.reference
     assert result.analysis_unit is AnalysisUnit.ISOLATE_GENOME
     assert result.taxon_id == 9606
     assert result.kegg_organism_code == "hsa"

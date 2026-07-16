@@ -108,6 +108,11 @@ kegg-render://results/{render_id}
 kegg-render://results/{render_id}/{artifact}
 ```
 
+An optional `output_directory` must be new or empty. Any existing entry causes
+`OUTPUT_ALREADY_EXISTS`; the renderer exposes no overwrite mode. It prepares the complete bundle,
+publishes image files without replacement, publishes `render_manifest.json` last, and removes only
+files installed by the failed operation if publication cannot complete.
+
 SVG resources use `image/svg+xml`; PNG resources return binary `image/png`. Unknown, expired,
 deleted, and cross-process identifiers share the same safe not-found response. Explicit deletion
 removes all artifacts in the result.
