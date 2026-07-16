@@ -13,6 +13,7 @@ EXPECTED_FILES = {
     "references/deepkoala-companion.md",
     "references/module-interpretation.md",
     "references/reporting-policy.md",
+    "references/visualization-handoff.md",
     "references/workflow-selection.md",
 }
 
@@ -79,6 +80,7 @@ def test_frontmatter_has_only_name_and_trigger_description() -> None:
         "statistical enrichment",
         "non-KEGG ontology analysis",
         "pathway rendering",
+        "MODULE rendering",
     )
     assert all(trigger in frontmatter for trigger in positive_triggers)
     assert all(boundary in frontmatter for boundary in negative_boundaries)

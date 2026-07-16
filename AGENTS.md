@@ -5,10 +5,11 @@
 This repository provides a local stdio MCP server and a repository-scoped Codex skill for
 KEGG-aware analysis of KO annotations.
 
-Milestones 0 through 8 and the first supported release are implemented and verified. Further work
-must begin only through an assigned issue or explicit maintainer request. Do not add empty source
-trees, placeholder tests, speculative post-MVP code, or a partially functional Skill. The reviewed
-specification is `docs/development-plan.md`.
+Milestones 0 through 8 and the first supported release are implemented and verified. The
+visualization extension is an explicitly assigned post-MVP change governed by
+`docs/visualization-extension-plan.md`. Further work must begin only through an assigned issue or
+explicit maintainer request. Do not add empty source trees, placeholder tests, speculative code, or
+a partially functional Skill. The core specification remains `docs/development-plan.md`.
 
 ## Communication and repository language
 
@@ -29,7 +30,8 @@ Use this precedence order when requirements conflict:
 
 1. the current user request or assigned GitHub issue;
 2. this `AGENTS.md`;
-3. `docs/development-plan.md`;
+3. `docs/development-plan.md` for the core and `docs/visualization-extension-plan.md` for the
+   visualization extension;
 4. public interfaces and tests once they exist;
 5. other documentation.
 
@@ -56,7 +58,10 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
   implement inference, launch annotation subprocesses itself, manage weights, or silently install
   or download dependencies.
 - Do not download or redistribute KOfam profiles or KEGG datasets.
-- Do not add enrichment, differential-abundance statistics, pathway image generation, a web UI, multi-user hosting, or remote HTTP transport to the MVP.
+- Do not add enrichment, differential-abundance statistics, a web UI, multi-user hosting, or
+  remote HTTP transport. The core server must not generate pathway images; approved image
+  generation belongs only to the separately installed `kegg-render-mcp` companion and must follow
+  `docs/visualization-extension-plan.md`.
 - Keep generic KO input support; never make the core schema DeepKOALA-specific.
 
 ## Architecture invariants
@@ -68,6 +73,9 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
   job-control code.
 - A companion runner must return detailed annotation output and provenance through the existing
   source-agnostic importer boundary rather than introducing a second KO normalization policy.
+- The core server produces the authoritative typed renderer handoff but does not parse KGML or
+  render images. The renderer must not normalize evidence or recompute MODULE completion or
+  pathway coverage.
 - Keep raw source evidence immutable. Derive normalized decisions using a named and versioned policy.
 - Allow multiple KO records for one sequence, including top-k and multi-domain results.
 - Treat a KO set as a derived view of annotation records, not as the primary evidence model.
@@ -95,10 +103,11 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Enforce a process-wide rate no greater than three KEGG API requests per second; use a safer default with no burst.
 - Respect endpoint-specific limits, including the maximum of ten entries for `get` requests.
 - Keep cached KEGG payloads local and out of version control, packages, examples, CI artifacts, and releases.
-- Keep live KEGG tests opt-in locally. Pull-request CI runs one serialized 20-request compatibility
-  campaign: five requests each for `INFO`, `GET`, `LINK`, and `CONV`, at one request per second
-  with zero retries and no uploaded KEGG payloads. A manual authorized run may raise the count to
-  at most 30 requests per operation.
+- Retrieve pathway PNG and KGML assets only through the typed single-pathway asset interface. Keep
+  source assets local and never add real KEGG-derived image or XML fixtures to the repository.
+- Keep live KEGG tests explicit locally. The enabled default campaign and pull-request CI run one
+  serialized 120-request campaign: 30 requests each for `INFO`, `GET`, `LINK`, and `CONV`, at one
+  request per second with zero retries and no uploaded KEGG payloads.
 - Store retrieval time, endpoint, request key, parser version, and release information when
   available.
 
@@ -113,6 +122,8 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Validate input size, record count, identifier count, URI parameters, and output size.
 - Redact secrets, environment values, usernames, and full local cache paths from status output.
 - Never use `shell=True`.
+- Renderer inputs, SVG, PNG, retained results, and output paths must remain bounded, static,
+  scope-isolated, symlink-safe, and free of external resources or active content.
 
 ## Development workflow
 

@@ -48,7 +48,14 @@ from kegg_mcp.mcp.server import (
     McpRuntime,
     create_server,
 )
-from kegg_mcp.services import ResultArtifactInput, ResultStoreLimits, SQLiteResultStore
+from kegg_mcp.services import (
+    RENDER_INPUT_MIME_TYPE,
+    RENDER_INPUT_SCHEMA_VERSION,
+    RenderInputV2,
+    ResultArtifactInput,
+    ResultStoreLimits,
+    SQLiteResultStore,
+)
 
 _NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 
@@ -633,6 +640,39 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
 
 
 @pytest.mark.asyncio
+async def test_explicit_inline_source_keeps_null_original_input_path(tmp_path: Path) -> None:
+    annotations = tmp_path / "deepkoala_annotations.csv"
+    output = tmp_path / "normalized-inline"
+    annotations.write_text(
+        "sequence_id,ko_id\nprotein-1,K00001\n",
+        encoding="utf-8",
+    )
+    server = create_server(_runtime(tmp_path, allowed_roots=(str(tmp_path.resolve()),)))
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "file_path": str(annotations),
+                "output_directory": str(output),
+                "input_format": "generic_csv",
+                "source": {
+                    "source_name": "deepkoala",
+                    "input_uri": "mcp://deepkoala-mcp/jobs/job_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/output",
+                    "input_path": None,
+                },
+            },
+        )
+
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["provenance"]["source_preview"][0]["input_path"] is None
+        manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
+        assert manifest["input_paths"] == []
+
+
+@pytest.mark.asyncio
 async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
     tmp_path: Path,
 ) -> None:
@@ -669,7 +709,20 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert data["pathway_previews"][0]["pathway_id"] == "ko00001"
         report_path = Path(data["output_bundle"]["analysis_report"])
         assert str(fasta) in report_path.read_text(encoding="utf-8")
-        assert Path(data["output_bundle"]["render_input"]).is_file()
+        render_input_path = Path(data["output_bundle"]["render_input"])
+        assert render_input_path.is_file()
+        render_input = RenderInputV2.model_validate_json(
+            render_input_path.read_text(encoding="utf-8"),
+            strict=True,
+        )
+        assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION
+        assert render_input.pathways[0].detected_ko_ids == ("K00001",)
+        manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
+        assert manifest["schema_version"] == "1"
+        assert manifest["render_input"] == {
+            "schema_version": RENDER_INPUT_SCHEMA_VERSION,
+            "mime_type": RENDER_INPUT_MIME_TYPE,
+        }
 
 
 @pytest.mark.asyncio

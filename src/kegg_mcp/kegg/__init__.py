@@ -31,9 +31,16 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
     RetryPolicy,
 )
+from kegg_mcp.kegg.pathway_assets import (
+    PATHWAY_ASSET_PARSER_VERSION,
+    PathwayAssetKind,
+    PathwayAssetRequest,
+    PathwayAssetResult,
+)
 
 __all__ = [
     "MAX_HTTP_METADATA_ITEMS",
+    "PATHWAY_ASSET_PARSER_VERSION",
     "PUBLIC_KEGG_ENDPOINT",
     "AccessMode",
     "CacheLookupState",
@@ -58,6 +65,9 @@ __all__ = [
     "LicensedAccess",
     "LinkRequest",
     "LinkResult",
+    "PathwayAssetKind",
+    "PathwayAssetRequest",
+    "PathwayAssetResult",
     "PublicAcademicAccess",
     "ResponseOrigin",
     "RetrievalEndpointClass",

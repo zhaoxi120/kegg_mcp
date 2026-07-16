@@ -1,5 +1,6 @@
 """Public deterministic reporting contracts and renderers."""
 
+from kegg_mcp.report_limits import ReportLimits
 from kegg_mcp.reporting.contracts import (
     REPORT_FORMAT_NAME,
     REPORT_FORMAT_VERSION,
@@ -9,7 +10,6 @@ from kegg_mcp.reporting.contracts import (
     RenderedReport,
     ReportArtifact,
     ReportInput,
-    ReportLimits,
     ReportSection,
     StructuredReport,
 )

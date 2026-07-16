@@ -20,7 +20,7 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.transport import HttpsTransport, TransportError, TransportResponse
 from kegg_mcp.mcp.config import load_runtime_config
 
-_DEFAULT_REQUESTS_PER_OPERATION = 5
+_DEFAULT_REQUESTS_PER_OPERATION = 30
 _MAX_REQUESTS_PER_OPERATION = 30
 _OPERATION_COUNT = 4
 _MIN_START_GAP_SECONDS = 0.95

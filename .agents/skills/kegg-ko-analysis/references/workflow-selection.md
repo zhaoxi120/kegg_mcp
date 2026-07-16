@@ -9,6 +9,10 @@ companion is discovered, follow [deepkoala-companion.md](deepkoala-companion.md)
 the request to an independent annotation Skill and MCP. Resume core analysis only from a controlled
 absolute annotation path and source provenance, not a private result identifier or workflow hash.
 
+Keep the successful companion job until `analyze_ko_annotations` has imported its controlled
+detailed CSV and written the complete output bundle. Do not delete the retained job after only a
+preview or partial analysis succeeds.
+
 ## Plain K numbers
 
 - Preserve the user's analysis unit and context.
@@ -37,11 +41,20 @@ absolute annotation path and source provenance, not a private result identifier 
 - Describe shared and set-specific KOs as deterministic set differences, not differential
   abundance, enrichment, or biological specificity.
 
-## Pathway rendering
+## Existing renderer handoff
 
-Complete analysis first. If graphics are requested, pass the canonical `render_input.json` from
-the output bundle to an independent rendering Skill and MCP. Do not parse KGML or generate images
-inside this Skill.
+If the user supplies a `render_input.json`, route its controlled absolute path to the independent
+visualization Skill and renderer first. A compatible version 2 handoff skips annotation and core
+analysis. Let the renderer validate the schema; never infer compatibility from a filename or
+manually upgrade a version 1 preview.
+
+## Pathway or MODULE rendering
+
+When graphics are requested without a compatible handoff, request an allowed `output_directory`
+and complete the smallest necessary analysis. Pass the canonical absolute `render_input.json`
+version 2 path from the output bundle to the independent visualization Skill and
+`kegg-render-mcp`. Read [visualization-handoff.md](visualization-handoff.md) before transfer. Do not
+parse KGML, manipulate pixels, or generate images inside this Skill.
 
 ## Requests that need explanation rather than analysis
 

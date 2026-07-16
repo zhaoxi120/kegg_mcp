@@ -1,0 +1,295 @@
+"""Bounded Pillow raster validation and PNG rendering."""
+
+from __future__ import annotations
+
+import io
+import threading
+import warnings
+from dataclasses import dataclass
+
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+
+from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
+from kegg_render_mcp.module_scene import ModuleScene
+from kegg_render_mcp.pathway_scene import PathwayScene
+from kegg_render_mcp.svg import ACCEPTED_COLOR, UNCERTAIN_COLOR, UNSUPPORTED_COLOR
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PIL_PIXEL_LIMIT_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, slots=True)
+class PngArtifact:
+    content: bytes
+    width: int
+    height: int
+
+
+def validate_png(payload: bytes, *, max_bytes: int, max_pixels: int) -> tuple[int, int]:
+    if not payload.startswith(PNG_SIGNATURE) or not payload or len(payload) > max_bytes:
+        raise _asset_error("The pathway image is not a bounded PNG.")
+    with _PIL_PIXEL_LIMIT_LOCK:
+        previous = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = max_pixels
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(payload)) as image:
+                    if image.format != "PNG" or getattr(image, "n_frames", 1) != 1:
+                        raise _asset_error("The pathway image must be one static PNG frame.")
+                    width, height = image.size
+                    if width <= 0 or height <= 0 or width * height > max_pixels:
+                        raise _asset_error("The pathway image exceeds the configured pixel limit.")
+                    image.verify()
+                with Image.open(io.BytesIO(payload)) as image:
+                    image.load()
+        except RenderMcpError:
+            raise
+        except (
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            UnidentifiedImageError,
+            OSError,
+            ValueError,
+        ) as error:
+            raise _asset_error("The pathway PNG could not be decoded safely.") from error
+        finally:
+            Image.MAX_IMAGE_PIXELS = previous
+    return width, height
+
+
+def render_pathway_png(
+    scene: PathwayScene, *, max_asset_bytes: int, max_pixels: int, max_output_bytes: int
+) -> PngArtifact:
+    width, height = validate_png(scene.source_png, max_bytes=max_asset_bytes, max_pixels=max_pixels)
+    if (width, height) != (scene.width, scene.height):
+        raise _asset_error("Decoded PNG dimensions disagree with validated asset metadata.")
+    footer = 220 if scene.warnings else 180
+    output_width = max(width, 760)
+    output_height = height + footer
+    if output_width * output_height > max_pixels:
+        raise _output_error("The pathway PNG derivative exceeds the configured pixel limit.")
+    with Image.open(io.BytesIO(scene.source_png)) as source:
+        canvas = Image.new("RGBA", (output_width, output_height), "white")
+        canvas.alpha_composite(source.convert("RGBA"), (0, 0))
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    for overlay in scene.overlays:
+        left = round(overlay.x - overlay.width / 2)
+        top = round(overlay.y - overlay.height / 2)
+        right = round(overlay.x + overlay.width / 2)
+        bottom = round(overlay.y + overlay.height / 2)
+        color = ACCEPTED_COLOR if overlay.state == "accepted" else UNCERTAIN_COLOR
+        fill = _rgba(color, 72)
+        outline = _rgba(color, 255)
+        draw.rectangle((left, top, right, bottom), fill=fill, outline=outline, width=4)
+        if overlay.state == "uncertain":
+            _dashed_rectangle(draw, (left, top, right, bottom), outline)
+    font = ImageFont.load_default()
+    y = height + 20
+    draw.text((20, y), f"{scene.target_id}: {scene.title}", fill="#1F2937", font=font)
+    draw.rectangle(
+        (20, y + 24, 42, y + 38), fill=_rgba(ACCEPTED_COLOR, 72), outline=ACCEPTED_COLOR, width=2
+    )
+    draw.text((50, y + 24), "Accepted annotation", fill="#1F2937", font=font)
+    draw.rectangle(
+        (210, y + 24, 232, y + 38),
+        fill=_rgba(UNCERTAIN_COLOR, 72),
+        outline=UNCERTAIN_COLOR,
+        width=2,
+    )
+    draw.text((240, y + 24), "Policy-defined uncertain annotation", fill="#1F2937", font=font)
+    content_y = y + 54
+    if scene.warnings:
+        _draw_wrapped(
+            draw,
+            "Warnings: " + " | ".join(scene.warnings)[:1000],
+            (20, content_y),
+            width=110,
+            font=font,
+        )
+        content_y += 34
+    draw.text(
+        (20, content_y),
+        "Unmatched graphics are not evidence of biological absence.",
+        fill="#1F2937",
+        font=font,
+    )
+    _draw_wrapped(draw, scene.caption, (20, content_y + 24), width=110, font=font)
+    return _serialize_png(canvas.convert("RGB"), max_output_bytes)
+
+
+def render_module_png(scene: ModuleScene, *, max_pixels: int, max_output_bytes: int) -> PngArtifact:
+    if scene.width * scene.height > max_pixels:
+        raise _output_error("The MODULE PNG derivative exceeds the configured pixel limit.")
+    canvas = Image.new("RGB", (scene.width, scene.height), "white")
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    draw.text((30, 28), f"{scene.target_id}: {scene.title}", fill="#1F2937", font=font)
+    draw.text(
+        (30, 52),
+        (
+            f"Strict exact={_exact(scene.strict_exact_completion)}; "
+            f"block={_ratio(scene.strict_block_coverage)}; {scene.strict_status}"
+        ),
+        fill="#1F2937",
+        font=font,
+    )
+    draw.text(
+        (30, 72),
+        (
+            f"Lenient exact={_exact(scene.lenient_exact_completion)}; "
+            f"block={_ratio(scene.lenient_block_coverage)}; {scene.lenient_status}"
+        ),
+        fill="#1F2937",
+        font=font,
+    )
+    positions = {
+        node.node_id: (40 + node.depth * 205, 130 + index * 48)
+        for index, node in enumerate(scene.nodes)
+    }
+    for node in scene.nodes:
+        if node.parent_id is not None:
+            parent_x, parent_y = positions[node.parent_id]
+            x, y = positions[node.node_id]
+            draw.line((parent_x + 160, parent_y + 15, x, y + 15), fill="#94A3B8", width=2)
+    for node in scene.nodes:
+        x, y = positions[node.node_id]
+        color = UNSUPPORTED_COLOR if node.unsupported else "#6B7280" if node.optional else "#4B5563"
+        draw.rounded_rectangle(
+            (x, y, x + 160, y + 30), radius=5, fill="white", outline=color, width=3
+        )
+        draw.text((x + 7, y + 9), node.label[:24], fill="#1F2937", font=font)
+    panel_x = max((x for x, _ in positions.values()), default=40) + 190
+    draw.text((panel_x, 112), "Required blocks", fill="#1F2937", font=font)
+    for index, block in enumerate(scene.blocks):
+        y = 132 + index * 28
+        color = (
+            ACCEPTED_COLOR
+            if block.strict_state == "complete"
+            else UNCERTAIN_COLOR
+            if block.lenient_state == "complete"
+            else UNSUPPORTED_COLOR
+            if "not_evaluable" in {block.strict_state, block.lenient_state}
+            else "#FFFFFF"
+        )
+        draw.rectangle((panel_x, y, panel_x + 15, y + 15), fill=color, outline="#374151")
+        draw.text(
+            (panel_x + 22, y + 3),
+            f"{block.block_index}: {block.strict_state}/{block.lenient_state}",
+            fill="#1F2937",
+            font=font,
+        )
+    panel_y = 132 + len(scene.blocks) * 28
+    if scene.optional_components:
+        panel_y += 14
+        draw.text((panel_x, panel_y), "Optional component states", fill="#1F2937", font=font)
+        panel_y += 20
+        for item in scene.optional_components:
+            draw.text(
+                (panel_x, panel_y),
+                f"Optional {item.component_index} ({item.source_module_id}): "
+                f"{item.strict_state}/{item.lenient_state}",
+                fill="#1F2937",
+                font=font,
+            )
+            panel_y += 22
+    if scene.reference_edges:
+        panel_y += 10
+        draw.text((panel_x, panel_y), "Resolved MODULE references", fill="#1F2937", font=font)
+        panel_y += 20
+        for edge in scene.reference_edges:
+            draw.text(
+                (panel_x, panel_y),
+                f"{edge.source_module_id} -> {edge.target_module_id}",
+                fill="#1F2937",
+                font=font,
+            )
+            panel_y += 22
+    if scene.warnings:
+        _draw_wrapped(
+            draw,
+            "Warnings: " + " | ".join(scene.warnings)[:1000],
+            (30, scene.height - 104),
+            width=130,
+            font=font,
+        )
+    _draw_wrapped(draw, scene.caption, (30, scene.height - 64), width=130, font=font)
+    return _serialize_png(canvas, max_output_bytes)
+
+
+def _serialize_png(image: Image.Image, max_bytes: int) -> PngArtifact:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=False, compress_level=9)
+    content = buffer.getvalue()
+    if len(content) > max_bytes:
+        raise _output_error("The PNG derivative exceeds the configured byte limit.")
+    return PngArtifact(content=content, width=image.width, height=image.height)
+
+
+def _dashed_rectangle(
+    draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], color: tuple[int, int, int, int]
+) -> None:
+    left, top, right, bottom = box
+    for start in range(left, right, 10):
+        draw.line((start, top, min(start + 5, right), top), fill=color, width=3)
+        draw.line((start, bottom, min(start + 5, right), bottom), fill=color, width=3)
+    for start in range(top, bottom, 10):
+        draw.line((left, start, left, min(start + 5, bottom)), fill=color, width=3)
+        draw.line((right, start, right, min(start + 5, bottom)), fill=color, width=3)
+
+
+def _rgba(hex_color: str, alpha: int) -> tuple[int, int, int, int]:
+    value = hex_color.lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16), alpha
+
+
+def _draw_wrapped(
+    draw: ImageDraw.ImageDraw,
+    value: str,
+    origin: tuple[int, int],
+    *,
+    width: int,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
+) -> None:
+    words = value.split()
+    rows: list[str] = []
+    current: list[str] = []
+    for word in words:
+        candidate = " ".join((*current, word))
+        if len(candidate) > width and current:
+            rows.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        rows.append(" ".join(current))
+    for index, row in enumerate(rows[:4]):
+        draw.text((origin[0], origin[1] + index * 16), row, fill="#1F2937", font=font)
+
+
+def _ratio(value: float | None) -> str:
+    return "not evaluable" if value is None else f"{value:.1%}"
+
+
+def _exact(value: bool | None) -> str:
+    return "complete" if value is True else "incomplete" if value is False else "not evaluable"
+
+
+def _asset_error(message: str) -> RenderMcpError:
+    return RenderMcpError(
+        ErrorDetail(
+            code=ErrorCode.ASSET_INVALID,
+            message=message,
+            suggested_action="Refresh the matching pathway PNG or select another target.",
+        )
+    )
+
+
+def _output_error(message: str) -> RenderMcpError:
+    return RenderMcpError(
+        ErrorDetail(
+            code=ErrorCode.OUTPUT_LIMIT_EXCEEDED,
+            message=message,
+            suggested_action="Use SVG only or select a smaller render target.",
+        )
+    )

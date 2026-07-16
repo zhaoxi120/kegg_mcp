@@ -4,11 +4,15 @@ KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs de
 analysis, and retrieves KEGG references through public-academic access by default. The core
 server does not run DeepKOALA or another sequence annotator. An optional independently installed
 CPU-only companion can run an existing local DeepKOALA installation and hand detailed CSV to the
-core importer.
+core importer. A second independent companion can turn the core's complete renderer handoff into
+bounded static pathway overlays and MODULE logic diagrams.
 
 Version 0.2.0 is distributed through the private GitHub repository and its release artifacts; it
 has not been published to a package registry. Install from the exact `v0.2.0` source checkout or
 from a release wheel after verifying its published SHA-256 digest.
+The visualization extension is currently an unreleased repository feature and must be installed
+from an exact reviewed commit. Its renderer requires the corresponding unreleased `kegg-mcp` 0.3
+series; the published 0.2.0 package does not provide `RenderInputV2` and is incompatible.
 
 ## Requirements
 
@@ -20,6 +24,17 @@ from a release wheel after verifying its published SHA-256 digest.
 
 The source development workflow uses [uv](https://docs.astral.sh/uv/). GPU access, PyTorch,
 DeepKOALA, model weights, and KOfam profiles are not server dependencies.
+
+The complete FASTA-to-image workflow uses three separately installed stdio processes. They may
+share controlled handoff roots, but not private state:
+
+```text
+deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
+kegg-mcp      -> render_input.json v2    -> kegg-render-mcp
+```
+
+The core never starts either companion. The renderer never imports annotation evidence, runs an
+annotator, or recomputes MODULE completion or pathway coverage.
 
 ## Install from a source checkout
 
@@ -78,8 +93,8 @@ The supported operating profiles are:
 The project never infers a live-access right from a username, institution, host, or execution
 context.
 
-Pull-request CI issues one serialized 20-request campaign without uploading KEGG payloads. It
-makes five requests for each supported operation at one request per second with zero retries.
+Pull-request CI issues one serialized 120-request campaign without uploading KEGG payloads. It
+makes 30 requests for each supported operation at one request per second with zero retries.
 Merging the pull request does not trigger the same workflow again.
 
 ### Public academic access
@@ -153,7 +168,9 @@ The optional package under `companions/deepkoala-mcp/` is an independent stdio s
 the core wheel does not install it. The companion also does not install DeepKOALA, PyTorch, model
 weights, HMMER, KOfam profiles, or KEGG data. It requires an operator-reviewed official checkout,
 an existing Python interpreter where that checkout already runs, and a private state root. Add
-that state root to the core server's `KEGG_MCP_ALLOWED_ROOTS` for file handoff. Create the
+that state root to the core server's `KEGG_MCP_ALLOWED_ROOTS` for file handoff. When using
+caller-supplied `fasta_path`, also allow the original FASTA root so the distinct provenance
+`input_path` passes the core boundary. Inline FASTA provenance uses `input_path=null`. Create the
 owner-only directory before starting either server, as shown in the companion README, because the
 core validates allowed roots during startup.
 
@@ -181,11 +198,63 @@ weight.
 Register `deepkoala-mcp` as a second local server using the configuration contract in the
 [companion README](../companions/deepkoala-mcp/README.md). The companion writes successful output
 beneath `DEEPKOALA_MCP_STATE_ROOT`; configure the core server to allow that same root.
-`DEEPKOALA_MCP_ALLOWED_ROOTS` is separate and controls only caller-supplied FASTA intake. The
-repository Skill can then prepare a job, present the execution notice for explicit confirmation,
-submit the opaque job identifier, and pass the successful `output_path` to the core importer as
+`DEEPKOALA_MCP_ALLOWED_ROOTS` is separate and controls only caller-supplied FASTA intake. A
+successful path-input handoff identifies that original FASTA as `source.input_path`, while inline
+input leaves it null; neither form exposes the private staged FASTA. The repository Skill can then
+prepare a job, present the execution notice for explicit confirmation, submit the opaque job
+identifier, and pass the successful `output_path` to the core importer as
 `input_format="deepkoala_detailed"`. No digest or cross-server private result identifier is part
 of this handoff.
+
+This corrected handoff belongs to `deepkoala-mcp` 0.2.0. Companion 0.1.0 conflated the generated
+CSV with the original biological input and is not compatible with this provenance contract.
+
+## Optional renderer companion
+
+`companions/kegg-render-mcp/` is an independent Python 3.11 stdio distribution. It depends on a
+compatible `kegg-mcp` package for the public renderer contract and typed pathway-asset client, but
+it does not add tools to the core server or import the DeepKOALA companion. Install it separately
+from the same reviewed checkout:
+
+```bash
+cd companions/kegg-render-mcp
+uv sync --frozen --all-groups
+uv run --frozen pytest
+```
+
+Create private, non-overlapping renderer state and shared analysis roots before starting it:
+
+```bash
+mkdir -p /absolute/private/renderer-state /absolute/private/analysis-results
+chmod 700 /absolute/private/renderer-state /absolute/private/analysis-results
+```
+
+Configure the core to write bundles under the shared analysis root and configure the renderer to
+read them. The renderer state root must not overlap any allowed root:
+
+```text
+KEGG_MCP_ALLOWED_ROOTS=/absolute/private/analysis-results
+KEGG_RENDER_MCP_STATE_ROOT=/absolute/private/renderer-state
+KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/private/analysis-results
+KEGG_RENDER_MCP_ACCESS_MODE=public_academic
+KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true
+```
+
+Public-academic access is the renderer default and is only for eligible academic users performing
+academic work. Licensed deployments instead set `KEGG_RENDER_MCP_ACCESS_MODE=licensed`, an
+authorized HTTPS `KEGG_RENDER_MCP_LICENSED_ENDPOINT`, and
+`KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true`. Set the renderer mode to `unconfigured` only for
+MODULE-only rendering; pathway rendering then returns an actionable access error.
+
+The renderer accepts only a validated `render_input.json` version 2 path below an allowed root.
+Version 1 was a bounded preview and cannot be upgraded losslessly; rerun core analysis to create a
+new handoff. Source pathway PNG and KGML are fetched one asset at a time through the typed core
+client, remain local, and are not distributable under the project's MIT license. See the
+[renderer README](../companions/kegg-render-mcp/README.md) for its six tools, resource templates,
+retention settings, and exact bounds.
+
+Do not resolve the renderer against the published core 0.2.0 wheel. Its package dependency must
+remain `kegg-mcp>=0.3,<0.4`, and both distributions must come from compatible reviewed candidates.
 
 ## Configure an MCP client
 
@@ -234,6 +303,32 @@ at a Bash prompt. A generic client configuration for a wheel installation looks 
 }
 ```
 
+For visualization, register the independently installed renderer alongside the core. This JSON is
+also configuration file content; replace both executable paths and local roots:
+
+```json
+{
+  "mcpServers": {
+    "kegg-mcp": {
+      "command": "/absolute/path/to/core/.venv/bin/kegg-mcp",
+      "env": {
+        "KEGG_MCP_ALLOWED_ROOTS": "/absolute/private/analysis-results"
+      }
+    },
+    "kegg-render-mcp": {
+      "command": "/absolute/path/to/renderer/.venv/bin/kegg-render-mcp",
+      "env": {
+        "KEGG_RENDER_MCP_STATE_ROOT": "/absolute/private/renderer-state",
+        "KEGG_RENDER_MCP_ALLOWED_ROOTS": "/absolute/private/analysis-results"
+      }
+    }
+  }
+}
+```
+
+Add `deepkoala-mcp` as a third independent server only when protein FASTA must first be annotated.
+Do not replace these direct stdio commands with shell activation wrappers.
+
 MCP client configuration formats differ; translate the `command` and `env` fields without adding
 a shell wrapper. Operators who are not eligible academic users must select `licensed`. For a source
 checkout, either use the absolute `.venv/bin/kegg-mcp` path
@@ -249,9 +344,10 @@ The Skill can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation 
 KO/KEGG evidence and an explicitly requested companion route. The Skill chooses workflows and
 explains results, while deterministic normalization and analysis remain in the core server.
 Protein annotation remains outside that server; the Skill may orchestrate the explicitly
-available local companion described above. Pathway rendering belongs to an independent Skill and
-MCP. A wheel installation supplies the core server command but does not install this
-repository-scoped Skill or the companion.
+available local companion described above. Codex discovers the separate
+`.agents/skills/kegg-visualization/` Skill for pathway and MODULE graphics; it requires the core and
+renderer stdio dependencies and contains no rendering code. A wheel installation supplies the
+core server command but does not install either repository-scoped Skill or either companion.
 
 ## Verify discovery and status
 
@@ -386,7 +482,37 @@ bundle_manifest.json
 ```
 
 Use these files between MCP stages. The report records the original absolute input path when it is
-provided as source provenance and does not display workflow digests.
+provided as source provenance and does not display workflow digests. `render_input.json` uses the
+renderer-specific version 2 schema, and `bundle_manifest.json` records that schema and MIME type.
+Its `AnalysisExecutionProvenance` version 2 records the MODULE analysis limits, pathway parameters,
+pathway coverage limits, and report limits used to produce the authoritative targets.
+
+## Render a compatible analysis bundle
+
+First call `get_renderer_status` and verify that schema version 2 is supported. For pathway
+targets, call `probe_renderer_kegg_connectivity` only when an explicit live preflight is needed;
+the probe makes exactly one INFO request. Then pass the controlled absolute handoff path to
+`render_analysis_bundle`:
+
+```json
+{
+  "render_input_path": "/absolute/private/analysis-results/example/render_input.json",
+  "output_directory": "/absolute/private/analysis-results/example/images",
+  "formats": ["svg", "png"],
+  "target_ids": ["ko00010", "M00001"]
+}
+```
+
+The renderer returns an opaque process-scoped `render_id`, artifact metadata, warnings,
+provenance, and validated `kegg-render://results/...` resource URIs. Use those URIs rather than
+constructing them. SVG is canonical; PNG is an optional bounded derivative. Global and overview
+pathways are rejected in this release. MODULE diagrams use only the authoritative AST and states
+in the handoff and display exact completion separately from project block coverage.
+
+Graphics visualize annotation evidence. Accepted and policy-defined uncertain annotations have
+distinct states; rejected predictions are not colored and unchanged graphics are not labelled as
+biological absence. A pathway overlay does not establish pathway presence, completeness,
+expression, activity, flux, phenotype, or statistical significance.
 
 ## Retrieve the full result
 
@@ -422,6 +548,8 @@ another active scope's result.
 - Keep pull-request CI and any explicitly enabled local campaign within the budget documented in
   `tests/live/README.md`.
 - Do not publish KEGG response bodies or cache databases when reporting a problem.
+- Do not publish source pathway PNG, KGML, renderer cache/state, or rendered derivatives without a
+  specific rights review.
 - Record the endpoint class, retrieval time, readable request key, parser version, cache
   state, and database release when available.
 
@@ -463,9 +591,10 @@ process-scoped result IDs, protocol stdout, and safe support reports.
 ## Rights and interpretation notice
 
 Project source code is MIT licensed. That license does not grant rights to KEGG content,
-DeepKOALA models, KOfam profiles, annotation databases, or other third-party materials. Review the
+DeepKOALA models, KOfam profiles, annotation databases, source pathway assets, or other third-party
+materials. Redistribution of rendered derivatives requires a specific rights review. Review the
 current primary sources before enabling live access. These pages were last reviewed for this
-installation contract on 2026-07-14:
+installation contract on 2026-07-16:
 
 - [KEGG API overview and usage restriction](https://www.kegg.jp/kegg/rest/)
 - [KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html)

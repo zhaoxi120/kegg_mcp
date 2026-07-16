@@ -105,6 +105,29 @@ to an allowed-root `output_directory`: normalized annotations, protein-to-KO map
 pathway tables, Markdown report, canonical renderer input, and a versioned manifest. Safe atomic
 file writes reject symlinks and report a dedicated output error.
 
+`render_input.json` now uses the public, transport-independent `RenderInputV2` contract. Renderer
+schema version `2` is independent of output-bundle schema version `1`; the bundle manifest records
+the renderer schema version and
+`application/vnd.kegg-mcp.render-input+json;version=2` MIME type explicitly. The handoff contains
+separate accepted and policy-defined uncertain KO sets, complete pathway detected-KO evidence when
+it fits the renderer limit, resolved MODULE definitions and ASTs, exact strict and lenient
+completion summaries, and complete required-block and optional-component states when renderable.
+Rejected, unclassified, and invalid records remain in summary counts but never enter visualization
+evidence.
+
+The bundle writer receives the same loaded MODULE graphs, pathway references, analysis results,
+and execution provenance used by the core calculation. It validates their identities before any
+file is written. MODULEs or pathways that exceed per-target renderer limits are retained only as
+explicit `not_renderable` summaries; no preview is relabeled as complete evidence. Target counts,
+evidence identifiers, and canonical serialized bytes are bounded. A total renderer-input byte
+failure raises `OUTPUT_LIMIT_EXCEEDED` before the output directory is created, so it cannot leave a
+partial renderer handoff.
+
+Analysis execution provenance uses schema and service version `2`. In addition to import, KEGG
+request, reference-loading, and direct-result limits, it records the effective MODULE analysis
+limits, pathway evidence mode and global/overview opt-in, pathway coverage limits, and report
+limits. The renderer carries this provenance forward but does not reinterpret or recompute it.
+
 ## Scoped SQLite result store
 
 `SQLiteResultStore` stores immutable artifact groups in an operator-selected local SQLite file.
@@ -165,7 +188,7 @@ stores. They cover typed reference traversal, missing and malformed responses, r
 preview limits, conservative report language, cross-scope isolation, expiry, capacity failure,
 pagination, byte-range reconstruction, explicit deletion, and the complete plain-KO one-call flow.
 The default local validation suite skips live KEGG calls. Pull-request CI explicitly enables the
-bounded 20-request compatibility campaign.
+bounded 120-request compatibility campaign.
 
 Live behavior is controlled by the injected Milestone 2 client. Public `rest.kegg.jp` access
 remains restricted to academic use by academic users, must use

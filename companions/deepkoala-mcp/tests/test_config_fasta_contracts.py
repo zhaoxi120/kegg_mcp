@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,9 @@ from deepkoala_mcp.config import (
 )
 from deepkoala_mcp.contracts import (
     MAX_FASTA_BYTES,
+    ImportHandoff,
     PrepareDeepKoalaInput,
+    SourceProvenance,
     SubmitDeepKoalaInput,
 )
 from deepkoala_mcp.fasta import (
@@ -133,6 +136,32 @@ def test_submit_requires_literal_acknowledgement() -> None:
         )
 
 
+def test_handoff_validates_annotation_output_and_original_input_independently() -> None:
+    job_id = "job_" + "a" * 32
+    source = SourceProvenance(
+        source_version="0.1-test",
+        model_name="full",
+        model_version="202502",
+        annotation_date=datetime(2026, 7, 16, tzinfo=UTC),
+        input_uri=f"mcp://deepkoala-mcp/jobs/{job_id}/output",
+        input_path="/allowed/original.faa",
+    )
+    handoff = ImportHandoff(output_path="/private/annotations.csv", source=source)
+    assert handoff.output_path != handoff.source.input_path
+
+    with pytest.raises(ValidationError, match="output_path"):
+        ImportHandoff(output_path="annotations.csv", source=source)
+    with pytest.raises(ValidationError, match="input_path"):
+        SourceProvenance(
+            source_version="0.1-test",
+            model_name="full",
+            model_version="202502",
+            annotation_date=datetime(2026, 7, 16, tzinfo=UTC),
+            input_uri=f"mcp://deepkoala-mcp/jobs/{job_id}/output",
+            input_path="original.faa",
+        )
+
+
 def test_validate_fasta_normalizes_newlines_case_and_reports_only_aggregates() -> None:
     summary, canonical = validate_fasta_bytes(b">p1 note\r\nmpep\r\n>p2\rW\r")
     assert canonical == b">p1 note\nMPEP\n>p2\nW\n"
@@ -173,7 +202,7 @@ def test_stage_path_requires_allowlist_and_writes_owner_only_copy(tmp_path: Path
     source = allowed / "proteins.faa"
     source.write_text(">p\nMPEPTIDE\n", encoding="ascii")
 
-    summary = stage_fasta(
+    staged_result = stage_fasta(
         fasta_text=None,
         fasta_path=str(source),
         allowed_roots=(allowed.resolve(),),
@@ -181,7 +210,8 @@ def test_stage_path_requires_allowlist_and_writes_owner_only_copy(tmp_path: Path
     )
 
     staged = job / "input.fasta"
-    assert summary.sequence_count == 1
+    assert staged_result.summary.sequence_count == 1
+    assert staged_result.original_input_path == str(source.resolve())
     assert staged.read_text(encoding="ascii") == ">p\nMPEPTIDE\n"
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
@@ -245,11 +275,12 @@ def test_stage_path_rejects_intermediate_symlink_swap(
 def test_stage_inline_never_requires_an_allowed_root(tmp_path: Path) -> None:
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
-    summary = stage_fasta(
+    staged = stage_fasta(
         fasta_text=">inline\nM\n",
         fasta_path=None,
         allowed_roots=(),
         job_directory=job,
     )
-    assert summary.sequence_count == 1
+    assert staged.summary.sequence_count == 1
+    assert staged.original_input_path is None
     assert os.access(job / "input.fasta", os.R_OK)

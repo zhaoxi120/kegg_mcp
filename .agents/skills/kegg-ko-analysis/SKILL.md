@@ -1,23 +1,28 @@
 ---
 name: kegg-ko-analysis
-description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, descriptive comparisons of multiple KO sets, and optional local DeepKOALA companion handoff into cautious KO/KEGG analysis. Use when a user has KO evidence or explicitly wants an available DeepKOALA companion to produce it. Do not use this Skill to implement annotation inference, manage models or weights, launch arbitrary subprocesses, perform pathway rendering, or perform general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
+description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, descriptive comparisons of multiple KO sets, and optional local DeepKOALA companion handoff into cautious KO/KEGG analysis. Use when a user has KO evidence or explicitly wants an available DeepKOALA companion to produce it. Do not use this Skill to implement annotation inference, manage models or weights, launch arbitrary subprocesses, perform pathway rendering or MODULE rendering, or perform general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
 ---
 
 # KEGG KO analysis
 
 ## Route the request
 
-1. Inspect the supplied KO evidence before asking questions. Identify whether the analysis unit is
-   a single genome, MAG, isolate proteome, pangenome, metagenomic community, mixed collection, or
-   unknown.
-2. Read [workflow-selection.md](references/workflow-selection.md), select the smallest applicable
+1. Inspect the supplied input before asking questions. If it is an existing compatible
+   `render_input.json` version 2, skip annotation and analysis and hand its controlled absolute
+   path to the independent visualization Skill and renderer MCP.
+2. Otherwise, identify whether the analysis unit is a single genome, MAG, isolate proteome,
+   pangenome, metagenomic community, mixed collection, or unknown.
+3. Read [workflow-selection.md](references/workflow-selection.md), select the smallest applicable
    workflow, and ask only for information that changes the route or interpretation.
-3. If the input is protein FASTA without K numbers, read
+4. If the input is protein FASTA without K numbers, read
    [deepkoala-companion.md](references/deepkoala-companion.md). Use an explicitly configured local
    companion when it is available and ready; otherwise stop and route annotation to an independent
    annotation Skill and MCP. Never send FASTA to the core `kegg-mcp` server.
-4. If the user requests pathway graphics, finish the KO analysis and hand off `render_input.json`
-   to an independent rendering Skill and MCP. Do not implement rendering here.
+5. If the user requests pathway or MODULE graphics, read
+   [visualization-handoff.md](references/visualization-handoff.md). Obtain an allowed
+   `output_directory` before analysis, require `render_input.json` version 2, and hand its
+   controlled absolute path to the independent visualization Skill and `kegg-render-mcp`.
+   Do not implement rendering here.
 
 ## Use the MCP server
 
@@ -41,6 +46,9 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
 - Prefer the stable output bundle for cross-process handoff. Retrieve full retained artifacts only
   when a bounded preview is insufficient, and treat result identifiers as opaque and
   session-scoped.
+- Keep a successful DeepKOALA job and its controlled output until the core import and complete
+  output-bundle write have succeeded. Delete it only after the renderer handoff no longer depends
+  on that private output.
 
 ## Interpret the result
 

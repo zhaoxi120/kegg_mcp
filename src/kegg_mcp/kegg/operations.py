@@ -31,6 +31,8 @@ class ResponseParser(StrEnum):
     FLAT_FILE = "flat_file"
     BRITE_HTEXT = "brite_htext"
     PAIR_TABLE = "pair_table"
+    PATHWAY_PNG = "pathway_png"
+    PATHWAY_KGML_PREFLIGHT = "pathway_kgml_preflight"
 
 
 class PairTargetDatabase(StrEnum):

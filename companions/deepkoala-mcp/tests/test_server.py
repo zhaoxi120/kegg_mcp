@@ -119,6 +119,10 @@ async def test_memory_transport_workflow_returns_schema_valid_file_handoff(
         handoff = cast(dict[str, object], data["handoff"])
         assert handoff["input_format"] == "deepkoala_detailed"
         assert Path(cast(str, handoff["output_path"])).is_file()
+        source = cast(dict[str, object], handoff["source"])
+        assert source["input_path"] is None
+        assert source["input_uri"] == f"mcp://deepkoala-mcp/jobs/{job_id}/output"
+        assert "input.fasta" not in json.dumps(handoff)
 
         deleted = await session.call_tool("delete_deepkoala_job", {"job_id": job_id})
         assert deleted.isError is False

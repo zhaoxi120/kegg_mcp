@@ -32,8 +32,8 @@ def test_pull_request_ci_enables_public_academic_access_once() -> None:
 def test_github_ci_runs_the_opt_in_live_campaign_without_artifacts() -> None:
     validate_job = _validate_job_text()
 
-    assert "Test, including 20 live KEGG requests" in validate_job
-    assert 'KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "5"' in validate_job
+    assert "Test, including 120 live KEGG requests" in validate_job
+    assert 'KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "30"' in validate_job
     assert "uv run --frozen pytest" in validate_job
     assert "-m live_kegg" not in validate_job
     assert "upload-artifact" not in validate_job
@@ -47,7 +47,7 @@ def test_live_suite_is_opt_in_configurable_bounded_and_rate_limited() -> None:
     assert "KEGG_MCP_RUN_LIVE_TESTS" in suite
     assert suite.count("range(live_requests_per_operation):") == 4
     assert "_REFRESH = KeggRequestOptions(refresh=True)" in suite
-    assert "_DEFAULT_REQUESTS_PER_OPERATION = 5" in controls
+    assert "_DEFAULT_REQUESTS_PER_OPERATION = 30" in controls
     assert "_MAX_REQUESTS_PER_OPERATION = 30" in controls
     assert "requests_per_second=1.0" in controls
     assert "max_retries=0" in controls

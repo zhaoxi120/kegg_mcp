@@ -1,0 +1,221 @@
+"""Strict public contracts for renderer tools, results, and safe errors."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Generic, Literal, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+MAX_TARGETS = 32
+MAX_FORMATS = 2
+MAX_WARNINGS = 32
+MAX_ARTIFACTS = 97
+MAX_SAFE_DETAILS = 8
+
+
+class _Model(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        allow_inf_nan=False,
+        hide_input_in_errors=True,
+    )
+
+
+class RenderFormat(StrEnum):
+    SVG = "svg"
+    PNG = "png"
+
+
+class ArtifactKind(StrEnum):
+    IMAGE = "image"
+    MANIFEST = "manifest"
+
+
+class ErrorCode(StrEnum):
+    INVALID_REQUEST = "INVALID_REQUEST"
+    INPUT_PATH_REJECTED = "INPUT_PATH_REJECTED"
+    INPUT_LIMIT_EXCEEDED = "INPUT_LIMIT_EXCEEDED"
+    INCOMPATIBLE_SCHEMA = "INCOMPATIBLE_SCHEMA"
+    TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
+    TARGET_NOT_RENDERABLE = "TARGET_NOT_RENDERABLE"
+    ASSET_UNAVAILABLE = "ASSET_UNAVAILABLE"
+    ASSET_INVALID = "ASSET_INVALID"
+    OUTPUT_LIMIT_EXCEEDED = "OUTPUT_LIMIT_EXCEEDED"
+    RESULT_NOT_FOUND = "RESULT_NOT_FOUND"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class SafeDetail(_Model):
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    value: str = Field(min_length=1, max_length=160)
+
+
+class ErrorDetail(_Model):
+    code: ErrorCode
+    message: str = Field(min_length=1, max_length=320)
+    recoverable: bool = True
+    suggested_action: str = Field(min_length=1, max_length=320)
+    safe_details: tuple[SafeDetail, ...] = Field(default=(), max_length=MAX_SAFE_DETAILS)
+
+
+class RenderMcpError(Exception):
+    """Expected error carrying only bounded, redacted public details."""
+
+    def __init__(self, detail: ErrorDetail) -> None:
+        super().__init__(detail.message)
+        self.detail = detail
+
+
+class EmptyInput(_Model):
+    pass
+
+
+class RenderAnalysisBundleInput(_Model):
+    render_input_path: str = Field(min_length=1, max_length=4096)
+    output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
+    formats: tuple[RenderFormat, ...] = Field(
+        default=(RenderFormat.SVG,), min_length=1, max_length=MAX_FORMATS
+    )
+    target_ids: tuple[str, ...] | None = Field(default=None, max_length=MAX_TARGETS)
+
+    @field_validator("formats")
+    @classmethod
+    def unique_formats(cls, value: tuple[RenderFormat, ...]) -> tuple[RenderFormat, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("formats must be unique")
+        return value
+
+    @field_validator("target_ids")
+    @classmethod
+    def validate_targets(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if len(value) != len(set(value)):
+            raise ValueError("target_ids must be unique")
+        for identifier in value:
+            if not _is_target_id(identifier):
+                raise ValueError("target_ids must contain canonical ko pathway or MODULE IDs")
+        return value
+
+
+class RenderOneInput(_Model):
+    render_input_path: str = Field(min_length=1, max_length=4096)
+    target_id: str = Field(min_length=6, max_length=7)
+    output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
+    formats: tuple[RenderFormat, ...] = Field(
+        default=(RenderFormat.SVG,), min_length=1, max_length=MAX_FORMATS
+    )
+
+    @field_validator("formats")
+    @classmethod
+    def unique_formats(cls, value: tuple[RenderFormat, ...]) -> tuple[RenderFormat, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("formats must be unique")
+        return value
+
+
+class RenderPathwayInput(RenderOneInput):
+    target_id: str = Field(pattern=r"^ko[0-9]{5}$")
+
+
+class RenderModuleInput(RenderOneInput):
+    target_id: str = Field(pattern=r"^M[0-9]{5}$")
+
+
+class DeleteRenderResultInput(_Model):
+    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+
+
+class RendererBounds(_Model):
+    max_input_bytes: int = Field(ge=1)
+    max_targets: int = Field(ge=1)
+    max_asset_bytes: int = Field(ge=1)
+    max_pixels: int = Field(ge=1)
+    max_svg_bytes: int = Field(ge=1)
+    max_result_bytes: int = Field(ge=1)
+
+
+class RendererStatus(_Model):
+    server_name: Literal["kegg-render-mcp"] = "kegg-render-mcp"
+    server_version: str = Field(min_length=1, max_length=32)
+    ready: bool
+    compatible_schema_versions: tuple[Literal["2"], ...] = ("2",)
+    output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
+    pathway_access_configured: bool
+    access_mode: Literal["public_academic", "licensed", "unconfigured"]
+    allowed_root_count: int = Field(ge=0, le=64)
+    retention_seconds: int = Field(ge=1)
+    retained_result_count: int = Field(ge=0)
+    bounds: RendererBounds
+
+
+class ConnectivityResult(_Model):
+    reachable: bool
+    operation: Literal["info"] = "info"
+    request_count: Literal[1] = 1
+    message: str = Field(min_length=1, max_length=240)
+
+
+class ArtifactMetadata(_Model):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    kind: ArtifactKind
+    mime_type: Literal["image/svg+xml", "image/png", "application/json"]
+    byte_size: int = Field(ge=1)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    resource_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}/")
+
+    @model_validator(mode="after")
+    def dimensions_match_kind(self) -> ArtifactMetadata:
+        if (self.width is None) != (self.height is None):
+            raise ValueError("artifact dimensions must be both present or both absent")
+        if self.kind is ArtifactKind.IMAGE and self.width is None:
+            raise ValueError("image artifacts require dimensions")
+        if self.kind is ArtifactKind.MANIFEST and self.width is not None:
+            raise ValueError("manifest artifacts must not have dimensions")
+        return self
+
+
+class RenderResult(_Model):
+    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+    created_at: datetime
+    expires_at: datetime
+    target_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_TARGETS)
+    artifacts: tuple[ArtifactMetadata, ...] = Field(min_length=1, max_length=MAX_ARTIFACTS)
+    warnings: tuple[str, ...] = Field(default=(), max_length=MAX_WARNINGS)
+    result_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}$")
+
+
+class DeleteRenderResult(_Model):
+    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+    deleted: Literal[True] = True
+
+
+T = TypeVar("T", bound=BaseModel)
+
+
+class SuccessPayload(_Model, Generic[T]):
+    data: T
+
+
+class ToolEnvelope(_Model, Generic[T]):
+    ok: bool
+    result: SuccessPayload[T] | None
+    error: ErrorDetail | None
+
+    @model_validator(mode="after")
+    def exactly_one_branch(self) -> ToolEnvelope[T]:
+        if self.ok != (self.result is not None and self.error is None):
+            raise ValueError("envelope must contain exactly one matching branch")
+        return self
+
+
+def _is_target_id(value: str) -> bool:
+    return (len(value) == 7 and value.startswith("ko") and value[2:].isdigit()) or (
+        len(value) == 6 and value.startswith("M") and value[1:].isdigit()
+    )

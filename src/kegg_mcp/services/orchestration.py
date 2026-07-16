@@ -11,7 +11,11 @@ from kegg_mcp.analysis.pathway_coverage import (
     evaluate_pathway_coverage,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.execution import AnalysisExecutionProvenance, ReferenceLoadingLimits
+from kegg_mcp.execution import (
+    AnalysisExecutionProvenance,
+    PathwayExecutionParameters,
+    ReferenceLoadingLimits,
+)
 from kegg_mcp.importers.plain_ko import import_plain_ko
 from kegg_mcp.kegg.contracts import (
     GetRequest,
@@ -128,6 +132,13 @@ def analyze_plain_ko(
                 import_limits=request.import_limits,
                 kegg_request_options=request.kegg_options,
                 reference_loading_limits=request.reference_limits,
+                module_analysis_limits=request.module_limits,
+                pathway_parameters=PathwayExecutionParameters(
+                    evidence_mode=request.pathway_evidence_mode,
+                    allow_global_or_overview=request.allow_global_or_overview,
+                ),
+                pathway_coverage_limits=request.pathway_limits,
+                report_limits=request.report_limits,
                 direct_result_limits=output_limits,
             ),
             module_evaluations=module_evaluations,

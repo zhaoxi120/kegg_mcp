@@ -2,7 +2,9 @@
 
 Status: approved as a development baseline after the corrections recorded below.
 Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
-implemented and verified. Version 0.2.0 supports Python 3.11.x only.
+implemented and verified. The assigned post-MVP visualization extension is implemented as an
+independent renderer companion and typed core handoff for the unreleased 0.3 series. Published
+version 0.2.0 does not provide the renderer handoff. Both series support Python 3.11.x only.
 Last reviewed: 2026-07-16.
 
 ## Version 0.2 workflow-remediation amendment
@@ -27,8 +29,30 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
   pathway rendering remains an independent MCP and Skill.
 - The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
   and can write a concise versioned output bundle beneath configured allowed roots.
-- Local tests skip live KEGG access by default. Pull-request CI runs one serialized 20-request live
+- Local tests skip live KEGG access by default. Pull-request CI runs one serialized 120-request live
   campaign and must not upload KEGG payloads; merging to `main` does not repeat that workflow.
+
+## Visualization extension amendment
+
+The post-MVP visualization implementation is governed by
+[`visualization-extension-plan.md`](visualization-extension-plan.md). It does not change the core
+MCP process boundary:
+
+- `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently installed local stdio
+  processes;
+- the renderer requires `kegg-mcp>=0.3,<0.4`; published 0.2.0 must not be treated as compatible;
+- the core produces the immutable, complete-within-limit `render_input.json` version 2 handoff and
+  never parses KGML or renders an image;
+- `AnalysisExecutionProvenance` version 2 serializes the MODULE analysis limits, pathway
+  parameters, pathway coverage limits, and report limits used by that handoff;
+- the renderer consumes authoritative evidence, MODULE states, and pathway coverage without
+  normalizing annotations or recomputing analysis;
+- the renderer uses the core package's typed single-pathway PNG/KGML asset interface rather than
+  copying KEGG access code or accepting arbitrary URLs;
+- `kegg-visualization` remains instruction-only and orchestrates the typed core and renderer tools;
+  and
+- renderer CI, fixtures, and distribution audits are synthetic and offline. Real KEGG source
+  assets remain local, and distributing rendered derivatives requires a separate rights review.
 
 ## Table of contents
 
@@ -103,6 +127,11 @@ The `kegg-ko-analysis` Skill answers:
 An external annotation program such as DeepKOALA answers:
 
 > Which KO assignments does this protein sequence support under that program's model and decision policy?
+
+The independent `kegg-render-mcp` companion answers:
+
+> How can the core's authoritative annotation-evidence and analysis results be represented as a
+> bounded static regular-pathway overlay or MODULE logic diagram?
 
 These responsibilities must remain separate.
 
@@ -195,7 +224,9 @@ normalization.
 - Enrichment tests, differential abundance, confidence intervals, or replicate-aware statistics.
 - Abundance-weighted pathway analysis.
 - Unrestricted KO-to-all-genes expansion.
-- Automated pathway images, KGML visualization, flux inference, or metabolic modeling.
+- Pathway-image or KGML rendering inside the core server, flux inference, or metabolic modeling.
+  The approved post-MVP renderer implements only the bounded external workflow in
+  `visualization-extension-plan.md`.
 - Remote HTTP transport, web UI, user accounts, or multi-user result storage.
 - Public hosting or annotation-as-a-service.
 - KEGG dataset mirroring or redistribution.
@@ -207,7 +238,8 @@ Candidates require separate design decisions and must not leak into MVP interfac
 - organism-scoped gene mapping;
 - abundance-aware summaries;
 - enrichment with an explicit background universe;
-- KGML-based topology summaries;
+- additional KGML-based topology summaries, global/overview overlays, or organism-specific
+  visual claims beyond the approved renderer contract;
 - plugin packaging for distribution;
 - Streamable HTTP transport with authentication and access control; and
 - non-KEGG pathway backends.
@@ -253,21 +285,22 @@ kegg-mcp/
 │   ├── live/
 │   └── fixtures/
 ├── companions/
-│   └── deepkoala-mcp/       # Independently installed and released
+│   ├── deepkoala-mcp/       # Independently installed and released
+│   └── kegg-render-mcp/     # Independently installed and released
 ├── examples/
 ├── docs/
 └── .agents/
     └── skills/
-        └── kegg-ko-analysis/
+        ├── kegg-ko-analysis/
+        │   ├── SKILL.md
+        │   ├── agents/
+        │   │   └── openai.yaml
+        │   └── references/
+        └── kegg-visualization/
             ├── SKILL.md
             ├── agents/
             │   └── openai.yaml
             └── references/
-                ├── workflow-selection.md
-                ├── deepkoala-companion.md
-                ├── confidence-policy.md
-                ├── module-interpretation.md
-                └── reporting-policy.md
 ```
 
 Do not commit empty directories. `uv.lock` must be generated from a real `pyproject.toml`, not written as a placeholder. Choose the code license before adding `LICENSE`.
@@ -283,9 +316,12 @@ Services -> use-case orchestration and result persistence
 Reporting -> bounded JSON-compatible and Markdown views
 MCP -> schemas, transport, resources, and protocol errors
 Skill -> workflow selection and user-facing interpretation
+Renderer companion -> KGML/image validation, deterministic scenes, static artifacts, and resources
 ```
 
-The domain and analysis layers must not import MCP packages. The Skill must not contain a second normalization implementation.
+The domain and analysis layers must not import MCP packages. Skills must not contain a second
+normalization, evaluation, KGML parsing, or rendering implementation. The core server must not
+import the renderer companion.
 
 ## 7. Canonical data contracts
 
@@ -1006,7 +1042,7 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Use synthetic or independently authored small fixtures.
 - Do not commit bulk KEGG responses, pathway images, KGML collections, KOfam profiles, model weights, or large FASTA files.
-- Keep the local live suite opt-in. Pull-request CI runs one serialized campaign with five requests
+- Keep the local live suite opt-in. Pull-request CI runs one serialized campaign with 30 requests
   for each of `INFO`, `GET`, `LINK`, and `CONV` at one request per second with zero retries and no
   uploaded payloads.
 - Allow explicitly authorized manual runs to configure 1 through 30 requests per operation while
@@ -1251,6 +1287,34 @@ Acceptance:
 
 A new eligible user can install, configure, normalize a KO list, run module and pathway analyses, retrieve a full result, and understand the limitations without maintainer assistance.
 
+### Post-MVP visualization extension
+
+Status as of 2026-07-16: the assigned visualization extension implements the core version 2
+renderer handoff, typed single-pathway PNG/KGML retrieval, corrected DeepKOALA source provenance,
+the independently locked `kegg-render-mcp` stdio distribution, and instruction-only visualization
+orchestration. The detailed contract and acceptance criteria remain in
+`visualization-extension-plan.md`; this section does not replace them.
+
+The corrected original-FASTA/generated-CSV provenance is the breaking `deepkoala-mcp` 0.2.0
+contract; its earlier 0.1.0 handoff must not be treated as equivalent.
+
+The supported release path is one bounded local workflow across three independent processes. The
+core remains the sole authority for evidence normalization, MODULE evaluation, and pathway
+coverage. The renderer accepts only version 2, supports regular reference pathways and
+project-owned MODULE diagrams, returns static scoped SVG/PNG resources, and rejects global or
+overview pathways. Its tests and package audits use only generated synthetic assets.
+
+Acceptance additionally requires:
+
+- no core rendering tool or companion subprocess launch;
+- accepted and policy-defined uncertain evidence remain distinct and rejected evidence is excluded;
+- exact MODULE completion remains separate from project block coverage;
+- all XML, images, SVG, paths, retained artifacts, and resource identifiers remain bounded and safe;
+- no real KEGG PNG, KGML, cache payload, or rendered derivative is tracked, uploaded, or packaged;
+  and
+- the independently locked renderer job passes in pull-request CI without adding another live KEGG
+  campaign or a second run after merge to `main`.
+
 ## 19. Initial issue backlog
 
 1. Choose the source-code license and document KEGG data-rights boundaries.
@@ -1283,6 +1347,14 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 28. Write focused KO confidence, MODULE/pathway interpretation, and reporting references.
 29. Add synthetic end-to-end examples.
 30. Complete release, security, and data-rights review.
+31. Approve the visualization specification and derivative-output rights boundary.
+32. Implement the immutable renderer handoff and output-bundle integration.
+33. Implement typed, bounded single-pathway PNG and KGML retrieval.
+34. Correct DeepKOALA original-input and generated-artifact provenance.
+35. Implement the renderer domain, scene, SVG/PNG, and artifact-retention layers.
+36. Implement the renderer MCP tools, resources, schemas, scope, and stdio contracts.
+37. Add the visualization Skill and cross-Skill handoff evaluation.
+38. Complete synthetic end-to-end, distribution, documentation, and release-readiness checks.
 
 Each issue should normally touch one layer or one contract. Cross-layer changes require an explicit integration issue.
 
@@ -1301,8 +1373,16 @@ The first release is blocked until all of the following are true:
 - Large MCP results are bounded and retrievable safely.
 - Tool outputs conform to declared schemas and stdio stdout is clean.
 - Reports do not claim pathway activity, flux, phenotype, or statistical significance from KO presence alone.
-- Pull-request CI runs the 20-request live KEGG campaign once; local default pytest and the merge
+- The core version 2 renderer handoff is authoritative, bounded, typed, and complete within its
+  declared limits; the renderer does not normalize or recompute analysis.
+- Renderer artifacts and resources are bounded, static, scope-isolated, traversal- and symlink-safe,
+  and contain no active or external content.
+- Renderer tests, CI, fixtures, and distributions contain no real KEGG PNG, KGML, cache payload, or
+  unreviewed rendered derivative.
+- Pull-request CI runs the 120-request live KEGG campaign once; local default pytest and the merge
   push do not repeat it.
+- A separate frozen renderer CI job runs synthetic offline tests and an independent distribution
+  build audit without issuing another KEGG request.
 - All tracked repository content is in English.
 - Version 0.1.x package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.
@@ -1337,6 +1417,10 @@ The implementation milestones resolved the original open decisions as follows:
    package metadata excludes Python 3.12 and later.
 10. **Server and Skill identity:** the stdio server name, console command, and Skill MCP dependency
     value are `kegg-mcp`; the focused Skill name is `kegg-ko-analysis`.
+11. **Visualization boundary:** the renderer command and MCP dependency value are
+    `kegg-render-mcp`; `kegg-visualization` orchestrates it from a compatible version 2 core
+    handoff. The three servers remain independent stdio processes and independently reviewed
+    distributions.
 
 ## 22. Primary references
 

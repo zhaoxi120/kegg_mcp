@@ -777,11 +777,14 @@ def _materialize_annotation_file(
                 suggested_action="Convert the file to UTF-8 and retry.",
             )
         ) from None
-    source = request.source or SourceProvenanceInput(source_name="file_handoff")
+    source = request.source or SourceProvenanceInput(
+        source_name="file_handoff",
+        input_path=str(path),
+    )
     source_path = (
         str(_resolve_existing_file(source.input_path, allowed_roots))
         if source.input_path is not None
-        else str(path)
+        else None
     )
     return request.model_copy(
         update={
