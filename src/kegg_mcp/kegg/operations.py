@@ -50,6 +50,9 @@ class PairTargetDatabase(StrEnum):
     UNIPROT = "uniprot"
 
 
+LINK_REQUEST_PREPARATION_VERSION = "2"
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedRequest:
     """One validated HTTP batch with no caller-controlled URL components."""
@@ -148,21 +151,35 @@ def prepare_get(request: GetRequest, limits: KeggClientLimits) -> tuple[Prepared
     return tuple(prepared)
 
 
-def prepare_link(request: LinkRequest, limits: KeggClientLimits) -> tuple[PreparedRequest, ...]:
-    """Prepare selected-entry LINK batches for one approved relationship."""
+def prepare_link(
+    request: LinkRequest,
+    limits: KeggClientLimits,
+    *,
+    url_prefix_bytes: int = 0,
+) -> tuple[PreparedRequest, ...]:
+    """Greedily prepare canonical LINK batches within identifier and URL bounds."""
     _require_identifier_limit(len(request.source_identifiers), limits)
     target = _LINK_TARGETS[request.relationship]
+    path_prefix = f"/link/{target}/"
     prepared: list[PreparedRequest] = []
-    for batch in _batches(tuple(sorted(request.source_identifiers)), limits.relation_batch_size):
+    for batch in _greedy_relation_batches(
+        tuple(sorted(request.source_identifiers)),
+        path_prefix=path_prefix,
+        maximum_items=limits.link_batch_size,
+        maximum_url_bytes=limits.max_url_bytes,
+        url_prefix_bytes=url_prefix_bytes,
+    ):
         source_prefix = (
             "path" if request.relationship is KeggLinkRelationship.PATHWAY_TO_KO else "ko"
         )
         prepared.append(
             _prepared(
                 KeggOperation.LINK,
-                f"/link/{target}/{'+'.join(batch)}",
+                f"{path_prefix}{'+'.join(batch)}",
                 ResponseParser.PAIR_TABLE,
                 limits,
+                url_prefix_bytes=url_prefix_bytes,
+                request_key_version=f"v{LINK_REQUEST_PREPARATION_VERSION}",
                 requested_identifiers=batch,
                 expected_pair_source_ids=frozenset(
                     f"{source_prefix}:{identifier}" for identifier in batch
@@ -231,8 +248,12 @@ def _prepared(
     requested_identifiers: tuple[str, ...] = (),
     expected_pair_source_ids: frozenset[str] = frozenset(),
     pair_target_database: PairTargetDatabase | None = None,
+    url_prefix_bytes: int = 0,
+    request_key_version: str = "v1",
 ) -> PreparedRequest:
-    if len(path.encode("ascii")) > limits.max_url_bytes:
+    if url_prefix_bytes < 0:
+        raise ValueError("url_prefix_bytes must be non-negative")
+    if url_prefix_bytes + len(path.encode("ascii")) > limits.max_url_bytes:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
             "The prepared KEGG request exceeds the configured URL-size limit.",
@@ -242,7 +263,7 @@ def _prepared(
     return PreparedRequest(
         operation=operation,
         path=path,
-        normalized_request_key=f"v1:{path}",
+        normalized_request_key=f"{request_key_version}:{path}",
         parser=parser,
         requested_entries=requested_entries,
         requested_identifiers=requested_identifiers,
@@ -267,3 +288,39 @@ def _require_identifier_limit(count: int, limits: KeggClientLimits) -> None:
 def _batches(values: Sequence[str], size: int) -> Iterator[tuple[str, ...]]:
     for start in range(0, len(values), size):
         yield tuple(values[start : start + size])
+
+
+def _greedy_relation_batches(
+    values: Sequence[str],
+    *,
+    path_prefix: str,
+    maximum_items: int,
+    maximum_url_bytes: int,
+    url_prefix_bytes: int,
+) -> Iterator[tuple[str, ...]]:
+    """Pack sorted identifiers into the fewest bounded request paths."""
+    current: list[str] = []
+    for value in values:
+        candidate = (*current, value)
+        candidate_path = f"{path_prefix}{'+'.join(candidate)}"
+        exceeds_items = len(candidate) > maximum_items
+        exceeds_url = url_prefix_bytes + len(candidate_path.encode("ascii")) > maximum_url_bytes
+        if current and (exceeds_items or exceeds_url):
+            yield tuple(current)
+            current = []
+            candidate = (value,)
+            candidate_path = f"{path_prefix}{value}"
+            exceeds_items = False
+            exceeds_url = url_prefix_bytes + len(candidate_path.encode("ascii")) > maximum_url_bytes
+        if exceeds_items or exceeds_url:
+            fail(
+                ErrorCode.INPUT_LIMIT_EXCEEDED,
+                "One KEGG relationship identifier cannot fit the configured URL-size limit.",
+                suggested_action=(
+                    "Raise the bounded URL limit or use a shorter supported identifier."
+                ),
+                safe_details=(SafeDetail(name="operation", value=KeggOperation.LINK.value),),
+            )
+        current.append(value)
+    if current:
+        yield tuple(current)

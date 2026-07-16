@@ -12,10 +12,14 @@ functional local `kegg-render-mcp` server.
   `output_directory`, call `analyze_ko_annotations`, and pass the resulting absolute renderer-input
   path.
 - For protein FASTA without KO evidence, use the explicitly available DeepKOALA companion, retain
-  its job through the core import and bundle write, and then pass the version 2 handoff.
+  its job through the core import and bundle write, call
+  `analyze_ko_annotations(pathway_selection=top_detected, top_n=N)`, and then pass the version 2
+  handoff.
 
 Never pass a private or session-scoped `result_id` between MCP processes. Never copy the handoff to
 an unapproved directory merely to satisfy an allowed-root check.
+Never parse the DeepKOALA CSV, KO-to-pathway detail, ranking artifact, or renderer input in the
+Skill. Do not repeat a successfully completed stage.
 
 ## Check compatibility and readiness
 

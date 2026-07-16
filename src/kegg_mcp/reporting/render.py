@@ -152,6 +152,12 @@ def _preflight(report: ReportInput, limits: ReportLimits) -> None:
         pathway_targets += len(report.pathway_comparison.targets)
     if pathway_targets > limits.max_pathway_targets:
         _limit_exceeded("pathway targets", pathway_targets, limits.max_pathway_targets)
+    if len(report.pathway_ranking) > limits.max_pathway_ranking_rows:
+        _limit_exceeded(
+            "pathway ranking rows",
+            len(report.pathway_ranking),
+            limits.max_pathway_ranking_rows,
+        )
     total_targets = module_targets + pathway_targets
     if total_targets > limits.max_total_targets:
         _limit_exceeded("total analysis targets", total_targets, limits.max_total_targets)
@@ -483,6 +489,56 @@ def _append_primary_pathways(
     return truncated
 
 
+def _append_pathway_ranking(
+    lines: list[str],
+    report: ReportInput,
+    limits: ReportLimits,
+) -> bool:
+    """Append a bounded candidate ranking without placing full KO lists in Markdown."""
+    if report.pathway_selection is None:
+        return False
+    lines.extend(("", "## Pathway target selection", ""))
+    selection = report.pathway_selection
+    lines.append(
+        "Selection mode: "
+        f"`{selection.mode.value}`. Metric: `{selection.metric.value}`. Requested target count: "
+        f"{selection.top_n}. Candidate pathway count: {len(report.pathway_ranking)}."
+    )
+    if not report.pathway_ranking:
+        lines.extend(("", "No ranked pathway candidate was retained.", ""))
+        return False
+    lines.extend(
+        (
+            "",
+            "| Rank | Canonical pathway | Detected unique selected KOs "
+            "| Relationship rows | Selected |",
+            "| ---: | --- | ---: | ---: | --- |",
+        )
+    )
+    selected = report.pathway_ranking[: limits.max_markdown_pathway_ranking_rows]
+    for row in selected:
+        lines.append(
+            f"| {row.rank} | `{row.pathway_id}` | {row.detected_unique_ko_count} | "
+            f"{row.relationship_row_count} | "
+            f"{'yes' if row.rank <= selection.top_n else 'no'} |"
+        )
+    truncated = len(selected) < len(report.pathway_ranking)
+    if truncated:
+        lines.append(
+            f"\nPathway ranking preview shows {len(selected)} of "
+            f"{len(report.pathway_ranking)} candidates."
+        )
+    lines.extend(
+        (
+            "",
+            "The complete detected-KO sets and relationship rows are retained across the "
+            "structured report and dedicated ranking artifacts.",
+            "",
+        )
+    )
+    return truncated
+
+
 def _module_comparison_outcomes(target: ModuleTargetComparison, strict: bool) -> str:
     mode = target.strict if strict else target.lenient
     return "; ".join(
@@ -731,6 +787,7 @@ def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bo
         "",
     ]
     preview_truncated = _append_primary_modules(lines, report, limits)
+    preview_truncated |= _append_pathway_ranking(lines, report, limits)
     preview_truncated |= _append_primary_pathways(lines, report, limits)
     preview_truncated |= _append_comparisons(lines, report, limits)
     preview_truncated |= _append_warnings_and_provenance(lines, report, limits)

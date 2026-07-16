@@ -78,6 +78,32 @@ The injected client preserves the Milestone 2 access gate, process-wide request 
 cache-only behavior, and retrieval provenance. Milestone 5 tests use synthetic in-process clients;
 the opt-in live suite is enabled by pull-request CI for the bounded compatibility campaign.
 
+## Server-side pathway ranking and Top-N selection
+
+The high-level annotation service accepts an optional `PathwaySelection`. In `top_detected` mode it
+derives the strict or lenient selected KO set once, maps those canonical unique K numbers to
+pathways, and applies the versioned `selected_unique_ko_count` ranking policy. A K number contributes
+at most one detected node to one canonical pathway number, regardless of duplicate annotation
+records, duplicate LINK rows, or paired `ko`/`map` relationships. Candidates sort by descending
+detected unique-KO count and then ascending canonical `koNNNNN` identifier.
+
+Ranking occurs before `load_pathway_references`. `top_n` is bounded from 1 through 25 and must not
+exceed the deployment-owned `max_pathway_specs`; a large candidate set therefore does not trigger
+the pathway-reference target limit when only Top-N references are requested. Explicit pathways
+retain their previous behavior when no selection is supplied.
+
+The complete ranking and normalized KO-to-pathway relationships are retained in scoped JSON
+artifacts and, when an output directory is supplied, in `pathway_ranking.tsv` and
+`ko_pathway_relationships.tsv`. The report and manifest record the evidence mode, decision policy,
+ranking method/version, candidate count, selected identifiers, and compact request/cache summary.
+The direct response returns only bounded selected-pathway rows without complete detected-KO lists.
+
+High-level results also contain six fixed `StageMetric` rows: `annotation_import`,
+`ko_pathway_mapping`, `pathway_ranking`, `reference_loading`, `analysis`, and `bundle_write`. Each
+row uses integer elapsed milliseconds and sanitized logical request, actual network-attempt, cache
+hit, and response-byte counts. Endpoint URLs, credentials, environment values, usernames, and
+private cache paths are absent.
+
 ## Report artifacts
 
 `render_report` is a deterministic in-memory renderer. Every successful render produces exactly
@@ -102,8 +128,10 @@ currently supplies its primary dataset, MODULE evaluations, and pathway coverage
 
 Reports are rendered in memory. The MCP high-level workflow may additionally write a concise bundle
 to an allowed-root `output_directory`: normalized annotations, protein-to-KO mapping, MODULE and
-pathway tables, Markdown report, canonical renderer input, and a versioned manifest. Safe atomic
-file writes reject symlinks and report a dedicated output error.
+pathway tables, optional full pathway-ranking and relationship tables, Markdown report, canonical
+renderer input, and a versioned manifest. Every returned bundle file carries MIME type, exact byte
+size, and controlled absolute path. Safe atomic file writes reject symlinks and report a dedicated
+output error.
 
 `render_input.json` now uses the public, transport-independent `RenderInputV2` contract. Renderer
 schema version `2` is independent of output-bundle schema version `1`; the bundle manifest records

@@ -174,6 +174,26 @@ caller-supplied `fasta_path`, also allow the original FASTA root so the distinct
 owner-only directory before starting either server, as shown in the companion README, because the
 core validates allowed roots during startup.
 
+The local-only routing policy was reviewed on 2026-07-16 against the official
+[GenomeNet DeepKOALA page](https://www.genome.jp/tools/deepkoala/), the linked official
+[DeepKOALA repository](https://github.com/zhaoxi120/deepkoala), and the
+[KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html). The official page exposes a web form
+and links to downloadable local software and weights; the repository documents local CLI and
+Python interfaces. The KEGG API manual documents no DeepKOALA job endpoint. This project therefore
+treats the absence of a documented remote API as a deployment boundary: MCP automation never
+opens, submits to, or simulates the web form and uses only the configured local runtime through
+`deepkoala-mcp`.
+
+For protein FASTA without KO evidence, the Skill first discovers `deepkoala-mcp` and makes
+`get_deepkoala_runner_status` its first annotation-tool call. If the runtime, model resources,
+companion installation, state root, or MCP registration is missing, it reports that local state and
+asks permission before making any change. The confirmation states which local checkout,
+environment, resources, state, and registration would change; whether dependencies or models must
+be downloaded; expected disk and compute requirements; and that FASTA remains local with no remote
+upload branch. Declining preserves the FASTA and stops annotation. No package install, environment
+change, checkout or model download, directory creation, or MCP configuration write occurs before
+permission.
+
 Install and validate the lightweight companion separately:
 
 ```bash
@@ -462,8 +482,32 @@ When targets are omitted, accepted K numbers are used to discover bounded canoni
 pathways. The independent annotation service owns FASTA execution and its run report; this core
 server only validates and analyzes the resulting annotation evidence.
 
+For a most-detected or Top-N pathway request, prefer server-side selection:
+
+```json
+{
+  "annotations": {
+    "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
+    "input_format": "deepkoala_detailed",
+    "analysis_unit": "isolate_proteome"
+  },
+  "pathway_selection": {
+    "mode": "top_detected",
+    "top_n": 1,
+    "metric": "unique_selected_ko_count"
+  },
+  "output_directory": "/absolute/private/results/top-pathway"
+}
+```
+
+This route maps the evidence once, ranks all candidates in the service, and loads denominator and
+metadata references only for the selected Top-N. The Skill does not read or aggregate the full
+DeepKOALA table or KO-to-pathway relationship rows.
+
 The bounded direct response includes normalization counts, MODULE and pathway previews, caveats,
-retrieval provenance, an opaque `result_id`, and a server-provided `resource_uri`. Reading that
+compact request/cache and six-stage execution summaries, an opaque `result_id`, and a
+server-provided `resource_uri`. Top-N results include the candidate count and selected pathway
+summaries but omit full relationship rows and detected-KO lists. Reading that
 resource index provides validated section links. Exact MODULE completion and project block
 coverage are separate values. Pathway coverage is detected unique KOs divided by the recorded
 unique linked-KO denominator; it does not establish pathway presence, completeness, expression,
@@ -474,12 +518,18 @@ The requested output directory receives stable handoff files:
 ```text
 normalized_annotations.tsv
 protein_ko_mapping.tsv
+pathway_ranking.tsv              # Top-N workflows
+ko_pathway_relationships.tsv     # Top-N workflows
 pathway_coverage.tsv
 module_completion.tsv
 analysis_report.md
 render_input.json
 bundle_manifest.json
 ```
+
+The direct `output_bundle.artifacts` entries report each file's MIME type, exact byte size, and
+controlled absolute path. Complete ranking and relationship tables remain local artifacts rather
+than default model-context content.
 
 Use these files between MCP stages. The report records the original absolute input path when it is
 provided as source provenance and does not display workflow digests. `render_input.json` uses the

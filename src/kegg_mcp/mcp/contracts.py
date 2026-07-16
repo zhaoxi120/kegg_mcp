@@ -34,6 +34,8 @@ from kegg_mcp.services import (
     KoMappingServiceResult,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
+    PathwaySelection,
+    PathwaySelectionMode,
     PathwaySpec,
     PrimitiveAnalysisResult,
     ReferenceLoadingLimits,
@@ -115,6 +117,7 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
     annotations: NormalizeKoAnnotationsInput | None = None
     module_ids: Annotated[tuple[ModuleId, ...], Field(max_length=25)] = ()
     pathways: Annotated[tuple[PathwaySpec, ...], Field(max_length=25)] = ()
+    pathway_selection: PathwaySelection | None = None
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
     pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT
@@ -140,6 +143,19 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
         ):
             raise ValueError("conflicting output_directory values were supplied")
         _reject_organism_pathways(self.pathways)
+        if self.pathway_selection is not None:
+            if self.pathway_selection.mode is PathwaySelectionMode.TOP_DETECTED:
+                if self.pathways:
+                    raise ValueError(
+                        "top_detected pathway selection cannot include explicit pathways"
+                    )
+            elif self.pathway_selection.mode is PathwaySelectionMode.EXPLICIT:
+                if not self.pathways:
+                    raise ValueError("explicit pathway selection requires pathways")
+                if self.pathway_selection.top_n != len(self.pathways):
+                    raise ValueError(
+                        "explicit pathway selection top_n must match the pathway count"
+                    )
         return self
 
 

@@ -17,9 +17,10 @@ description: Render, draw, color, visualize, or export KEGG pathway overlays and
 4. When usable K numbers or an annotation table exist, skip annotation. Route the missing analysis
    through `$kegg-ko-analysis` and the local `kegg-mcp` server, with an allowed
    `output_directory`, then use the absolute renderer-input path from the completed bundle.
-5. Use an explicitly configured `deepkoala-mcp` only for protein FASTA without KO evidence. Route
-   it through `$kegg-ko-analysis`, retain its output until the core import and bundle write
-   succeed, then hand the version 2 path to the renderer.
+5. For protein FASTA without KO evidence, route local companion discovery, readiness, installation
+   permission, and execution through `$kegg-ko-analysis`. Never use the DeepKOALA web form. Retain
+   local output until the core import and bundle write succeed, request server-side Top-N pathway
+   selection when applicable, then hand the version 2 path to the renderer.
 
 Never implement inference, normalization, KGML parsing, MODULE evaluation, coverage calculation,
 color assignment, SVG construction, or pixel manipulation in this Skill.

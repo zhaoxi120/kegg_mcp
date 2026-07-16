@@ -56,8 +56,10 @@ two requests per second with no burst, enforces a hard process-wide maximum no g
 requests per second, and batches `get` requests at no more than ten entries.
 
 Cache payloads and retained results are local data and must not be committed, packaged, or attached
-to CI artifacts. Ordinary KEGG operations refresh from the network by default; the cached-entry
-resource remains a cache-only read and never falls back to the network.
+to CI artifacts. The low-level client keeps explicit refresh semantics, while high-level MCP
+analysis uses fresh-cache-first requests so an equivalent Top-N run can report cache hits without
+repeating network requests. The cached-entry resource remains a cache-only read and never falls
+back to the network.
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
@@ -74,7 +76,9 @@ The server exposes nine tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no target is supplied, accepted K numbers are
-  mapped to canonical reference pathways within deployment bounds.
+  mapped to canonical reference pathways within deployment bounds. To select only the most
+  detected pathways, supply `pathway_selection.mode="top_detected"`, `top_n` from 1 through 25,
+  and `metric="unique_selected_ko_count"`; ranking occurs before reference loading.
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries. It is not an arbitrary URL proxy.
@@ -105,6 +109,28 @@ Minimal one-call MODULE input:
 }
 ```
 
+Minimal server-ranked Top-1 pathway input:
+
+```json
+{
+  "annotations": {
+    "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
+    "input_format": "deepkoala_detailed"
+  },
+  "pathway_selection": {
+    "mode": "top_detected",
+    "top_n": 1,
+    "metric": "unique_selected_ko_count"
+  },
+  "output_directory": "/absolute/private/results/top-pathway"
+}
+```
+
+The server selects K numbers from the requested evidence mode, performs one logical KO-to-pathway
+mapping stage, de-duplicates each pathway's K numbers, sorts by descending unique selected-KO count
+and then canonical pathway ID, and loads pathway LINK/GET references only for the selected Top-N.
+Duplicate annotation records and duplicate LINK rows cannot increase the detected node count.
+
 Generic tables with unambiguous common headers are mapped automatically and the decision is
 reported; ambiguous or non-standard tables require an explicit mapping. When `annotations` is used
 in the high-level tool, biological context belongs inside that nested object. KO-only MCP inputs do
@@ -116,6 +142,7 @@ must be absolute and resolve beneath an allowed root. Traversal, missing files, 
 unsafe output ancestors are rejected. A successful normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds
 `pathway_coverage.tsv`, `module_completion.tsv`, `analysis_report.md`, and `render_input.json`.
+A Top-N analysis also adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
 The report records the original absolute input path when source provenance supplies it.
 `render_input.json` is an immutable renderer-specific version 2 contract: it distinguishes
 accepted from policy-defined uncertain KOs, carries complete-within-limit pathway evidence and
@@ -124,8 +151,13 @@ cannot be upgraded losslessly. The bundle manifest records the renderer schema a
 `AnalysisExecutionProvenance` version 2 also records the applicable MODULE analysis limits,
 pathway parameters, pathway coverage limits, and report limits.
 
-Direct tool responses are bounded previews. Complete immutable evidence and analysis detail stay
-in the retained resource. A K number is an annotation, MODULE exact completion is distinct from
+Direct tool responses are bounded previews. A Top-N response contains record/status counts,
+selected unique-KO count, candidate count, bounded selected-pathway summaries, logical/network/cache
+request counts, six fixed execution-stage metrics, warnings, and bundle metadata. It does not
+contain complete relationship rows or detected-KO lists. Bundle artifact metadata includes MIME
+type, exact byte size, and controlled path. Complete immutable evidence, ranking, relationships,
+and per-batch provenance stay in retained resources and output files. A K number is an annotation,
+MODULE exact completion is distinct from
 the project block-coverage metric, and pathway coverage does not establish pathway presence,
 activity, flux, phenotype, or statistical significance.
 
@@ -145,8 +177,9 @@ Resource templates:
 
 Result identifiers are opaque and scoped to one stdio server process. They expire under the local
 retention policy and cannot be read from another scope. The result index lists validated section
-URIs. High-level analysis normally retains `structured`, `summary`, and `annotations`; normalization
-retains `dataset`; primitive tools retain `detail`.
+URIs. High-level analysis normally retains `structured`, `summary`, and `annotations`; a Top-N
+workflow also retains `pathway_ranking` and `ko_pathway_relationships`. Normalization retains
+`dataset`, and primitive tools retain `detail`.
 
 An artifact larger than the inline resource limit returns an
 `artifact_requires_pagination` notice. Range resources return base64 content, exact byte counts,
