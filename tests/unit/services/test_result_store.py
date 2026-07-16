@@ -308,6 +308,59 @@ def test_expired_results_are_hidden_identically_and_cleanup_reclaims_them(tmp_pa
     assert summary.remaining_bytes == 0
 
 
+def test_expired_only_cleanup_preserves_active_results_and_never_quota_evicts(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteResultStore(
+        tmp_path / "store.sqlite3",
+        limits=ResultStoreLimits(retention_seconds=10),
+    )
+    expired = store.create("scope-a", (_artifact("old.json", b"old"),), now=_NOW)
+    active = store.create(
+        "scope-b",
+        (_artifact("active.json", b"active"),),
+        now=_NOW + timedelta(seconds=5),
+    )
+
+    summary = store.cleanup_expired(now=_NOW + timedelta(seconds=10))
+
+    assert summary.expired_results == 1
+    assert summary.expired_bytes == 3
+    assert summary.evicted_results == 0
+    assert summary.evicted_bytes == 0
+    assert summary.remaining_results == 1
+    assert store.get_result("scope-b", active.result_id, now=_NOW + timedelta(seconds=10)) == active
+    with pytest.raises(KeggMcpError) as error:
+        store.get_result("scope-a", expired.result_id, now=_NOW + timedelta(seconds=10))
+    _assert_not_found(error, expired.result_id)
+
+
+def test_scope_deletion_removes_only_one_session_and_is_noop_without_database(
+    tmp_path: Path,
+) -> None:
+    missing_store = SQLiteResultStore(tmp_path / "missing" / "store.sqlite3")
+    assert missing_store.delete_scope("scope-a").deleted_results == 0
+    assert not (tmp_path / "missing").exists()
+
+    store = SQLiteResultStore(tmp_path / "store.sqlite3")
+    first = store.create(
+        "scope-a",
+        (_artifact("one.json", b"one"), _artifact("two.json", b"two")),
+        now=_NOW,
+    )
+    retained = store.create("scope-b", (_artifact("three.json", b"three"),), now=_NOW)
+
+    summary = store.delete_scope("scope-a")
+
+    assert summary.deleted_results == 1
+    assert summary.deleted_artifacts == 2
+    assert summary.deleted_bytes == 6
+    assert store.get_result("scope-b", retained.result_id, now=_NOW) == retained
+    with pytest.raises(KeggMcpError) as error:
+        store.get_result("scope-a", first.result_id, now=_NOW)
+    _assert_not_found(error, first.result_id)
+
+
 def test_create_rejects_quota_overflow_without_evicting_active_results(tmp_path: Path) -> None:
     limits = ResultStoreLimits(
         quota_bytes=6,

@@ -63,8 +63,8 @@ back to the network.
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
-surfaces do not probe connectivity or enumerate cache contents. Use the explicit read-only
-connectivity tool when a live-access preflight is required.
+surfaces do not probe connectivity or enumerate cache contents. Use the explicit connectivity
+tool when a live-access preflight is required.
 
 The MCP initialization response guides clients toward the high-level analysis tool and records
 the connectivity, file-handoff, result-scope, stable-bundle, and biological interpretation
@@ -72,7 +72,7 @@ boundaries. It does not replace the explicit input and output schemas.
 
 ## Tools
 
-The server exposes nine tools:
+The server exposes ten tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no target is supplied, accepted K numbers are
@@ -91,7 +91,24 @@ The server exposes nine tools:
   shared-reference MODULE or pathway comparisons.
 - `probe_kegg_connectivity`: make one explicit low-cost INFO request and classify DNS,
   connection, or authorization/configuration outcomes.
+- `delete_analysis_result`: immediately delete one retained result in the current stdio scope.
 - `get_server_status`: return redacted access, capability, and result-retention information.
+
+The advertised MCP behavior hints describe local effects as well as remote effects:
+
+| Tool class | Read-only | Destructive | Idempotent | Open world |
+| --- | --- | --- | --- | --- |
+| `get_server_status` | Yes | No | Yes | No |
+| `normalize_ko_annotations` | No | No | No | No |
+| KEGG retrieval and analysis tools | No | No | No | Yes |
+| `probe_kegg_connectivity` | No | No | No | Yes |
+| `delete_analysis_result` | No | Yes | Yes | No |
+
+Normalization and analysis create retained results and can create an output bundle. KEGG-facing
+tools can also update the local response cache, so even a connectivity probe is not advertised as
+read-only. Deletion is idempotent in environmental effect although a repeated call returns the
+same safe not-found class. These hints inform clients; they do not replace server-side validation
+or authorization.
 
 Minimal plain-KO normalization input:
 
@@ -139,7 +156,9 @@ refresh flags, and internal limit models are deployment-owned rather than ordina
 
 File input and `output_directory` are disabled until `KEGG_MCP_ALLOWED_ROOTS` is configured. Paths
 must be absolute and resolve beneath an allowed root. Traversal, missing files, symlink escapes, and
-unsafe output ancestors are rejected. A successful normalization bundle contains
+unsafe output ancestors are rejected. An output directory must be new or empty; any existing entry
+causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation. A successful
+normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds
 `pathway_coverage.tsv`, `module_completion.tsv`, `analysis_report.md`, and `render_input.json`.
 A Top-N analysis also adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
@@ -147,7 +166,10 @@ The report records the original absolute input path when source provenance suppl
 `render_input.json` is an immutable renderer-specific version 2 contract: it distinguishes
 accepted from policy-defined uncertain KOs, carries complete-within-limit pathway evidence and
 authoritative MODULE states, and records producer and calculation provenance. Version 1 previews
-cannot be upgraded losslessly. The bundle manifest records the renderer schema and MIME type.
+cannot be upgraded losslessly. Bundle schema version 2 installs its manifest last as a commit
+marker and represents source paths with redacted labels by default. The explicit
+`manifest_path_mode="absolute"` option includes absolute paths in the manifest when required. The
+bundle manifest records the renderer schema and MIME type.
 `AnalysisExecutionProvenance` version 2 also records the applicable MODULE analysis limits,
 pathway parameters, pathway coverage limits, and report limits.
 
@@ -175,11 +197,21 @@ Resource templates:
 - `ko-analysis://results/{result_id}/{section}/{offset}/{limit}`
 - `kegg-cache://entries/{database}/{identifier}`
 
-Result identifiers are opaque and scoped to one stdio server process. They expire under the local
-retention policy and cannot be read from another scope. The result index lists validated section
-URIs. High-level analysis normally retains `structured`, `summary`, and `annotations`; a Top-N
-workflow also retains `pathway_ranking` and `ko_pathway_relationships`. Normalization retains
-`dataset`, and primitive tools retain `detail`.
+Result identifiers are opaque and scoped to one stdio server process. They cannot be read from
+another scope, and normal stdio shutdown deletes the current scope. The default 24-hour value is
+both the active-result hard TTL and the eligibility threshold for cleaning orphan rows left by an
+abnormal exit; it is not a cross-process persistence promise. `get_server_status` reports
+`result_scope="stdio_session"`, both TTL meanings, normal-exit cleanup, and
+`durable_output="output_bundle"` explicitly. The result index lists validated section URIs.
+High-level analysis normally retains `structured`, `summary`, and `annotations`; a Top-N workflow
+also retains `pathway_ranking` and `ko_pathway_relationships`. Normalization retains `dataset`, and
+primitive tools retain `detail`.
+
+`delete_analysis_result` removes one active result only when it belongs to the current scope.
+Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.
+Operators can remove TTL-expired rows without starting the stdio server by running
+`kegg-mcp cleanup --expired [--json]`. This command does not remove unexpired results or KEGG cache
+entries. Durable delivery uses a non-overwriting output bundle controlled by the operator.
 
 An artifact larger than the inline resource limit returns an
 `artifact_requires_pagination` notice. Range resources return base64 content, exact byte counts,
@@ -203,7 +235,8 @@ SVG and optional bounded PNG. It never imports annotation tables, normalizes evi
 MODULEs, recomputes pathway coverage, or starts either other process.
 
 This handoff first appears in the unreleased core 0.3 series. The renderer declares
-`kegg-mcp>=0.3,<0.4`; published core 0.2.0 is intentionally incompatible.
+`kegg-mcp>=0.3,<0.4`; the published core 0.1 release and abandoned 0.2 candidate are intentionally
+incompatible.
 
 Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and
 `KEGG_RENDER_MCP_ALLOWED_ROOTS`. The state root must be private and must not overlap a renderer

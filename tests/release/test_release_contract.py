@@ -16,11 +16,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "README.md",
     PROJECT_ROOT / "CHANGELOG.md",
+    PROJECT_ROOT / "SECURITY.md",
     PROJECT_ROOT / "docs" / "development-plan.md",
     PROJECT_ROOT / "docs" / "mcp-benchmark-review.md",
     PROJECT_ROOT / "docs" / "installation.md",
     PROJECT_ROOT / "docs" / "mcp-server.md",
     PROJECT_ROOT / "docs" / "release-readiness.md",
+    PROJECT_ROOT / "docs" / "repository-review-decisions.md",
+    PROJECT_ROOT / "docs" / "services-results-reporting.md",
     PROJECT_ROOT / "docs" / "skill-evaluation.md",
     PROJECT_ROOT / "docs" / "troubleshooting.md",
     PROJECT_ROOT / "docs" / "visualization-extension-plan.md",
@@ -122,6 +125,40 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
         package for package in locked_packages if package.get("name") == project["name"]
     )
     assert locked_project["version"] == project["version"]
+
+
+def test_candidate_version_and_release_matrix_is_consistent() -> None:
+    core_version = str(_project_table()["version"])
+    deepkoala_project = tomllib.loads(
+        (PROJECT_ROOT / "companions/deepkoala-mcp/pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+    renderer_project = tomllib.loads(
+        (PROJECT_ROOT / "companions/kegg-render-mcp/pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
+    readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
+    security = (PROJECT_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    matrix_rows = (
+        f"| `kegg-mcp` | `{core_version}` | Unreleased candidate |",
+        f"| `deepkoala-mcp` | `{deepkoala_project['version']}` | Unreleased candidate |",
+        f"| `kegg-render-mcp` | `{renderer_project['version']}` | Unreleased candidate |",
+    )
+    for document in (readme, installation, readiness):
+        assert all(row in document for row in matrix_rows)
+        normalized = re.sub(r"\s+", " ", document.lower())
+        assert "only published github release is core `v0.1.0`" in normalized
+        assert "Linux" in document
+        assert "Python 3.11.x" in document
+
+    assert "kegg-mcp>=0.3,<0.4" in renderer_project["dependencies"]
+    assert "| 0.3.x | Current unreleased candidate" in security
+    assert "| 0.2.x | Never published" in security
+    assert "| 0.1.x | Supported GitHub release |" in security
+    assert "## [0.2.0] - Unpublished candidate (2026-07-15)" in changelog
+    assert "## [0.2.0] - 2026-07-15" not in changelog
 
 
 def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> None:
@@ -273,7 +310,7 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "Current status:" in readiness
     assert "exact commit" in readiness
     normalized_changelog = re.sub(r"\s+", " ", changelog.lower())
-    assert "## [0.2.0] - 2026-07-15" in changelog
+    assert "## [0.2.0] - Unpublished candidate (2026-07-15)" in changelog
     assert "## [unreleased]" in normalized_changelog
 
 

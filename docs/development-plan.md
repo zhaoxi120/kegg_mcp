@@ -3,8 +3,9 @@
 Status: approved as a development baseline after the corrections recorded below.
 Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
 implemented and verified. The assigned post-MVP visualization extension is implemented as an
-independent renderer companion and typed core handoff for the unreleased 0.3 series. Published
-version 0.2.0 does not provide the renderer handoff. Both series support Python 3.11.x only.
+independent renderer companion and typed core handoff for the unreleased 0.3 series. Core 0.2.0
+was an unpublished intermediate candidate; the only published GitHub release is core v0.1.0. The
+current candidates support Linux with Python 3.11.x only.
 Last reviewed: 2026-07-16.
 
 ## Version 0.2 workflow-remediation amendment
@@ -27,8 +28,8 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
   FASTA input. The companion is an independent distribution and process, even when maintained in
   this repository. Its subprocess and model lifecycle never enter the core package or Skill code;
   pathway rendering remains an independent MCP and Skill.
-- The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
-  and can write a concise versioned output bundle beneath configured allowed roots.
+- The server includes `probe_kegg_connectivity`, returns field-level validation details, and can
+  write a concise versioned output bundle beneath configured allowed roots.
 - Local tests skip live KEGG access by default. Pull-request CI runs one serialized 120-request live
   campaign and must not upload KEGG payloads; merging to `main` does not repeat that workflow.
 
@@ -40,7 +41,8 @@ MCP process boundary:
 
 - `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently installed local stdio
   processes;
-- the renderer requires `kegg-mcp>=0.3,<0.4`; published 0.2.0 must not be treated as compatible;
+- the renderer requires `kegg-mcp>=0.3,<0.4`; core 0.1 and the unpublished 0.2 candidate must not
+  be treated as compatible;
 - the core produces the immutable, complete-within-limit `render_input.json` version 2 handoff and
   never parses KGML or renders an image;
 - `AnalysisExecutionProvenance` version 2 serializes the MODULE analysis limits, pathway
@@ -53,6 +55,26 @@ MCP process boundary:
   and
 - renderer CI, fixtures, and distribution audits are synthetic and offline. Real KEGG source
   assets remain local, and distributing rendered derivatives requires a separate rights review.
+
+## Repository-review hardening amendment
+
+The 2026-07-16 repository review is accepted with the scoped decisions recorded in
+[`repository-review-decisions.md`](repository-review-decisions.md). This amendment changes public
+contracts as follows without broadening the biological or three-process boundaries:
+
+- every tool annotation describes local cache, retained-result, output-bundle, deletion, and
+  open-world effects under the MCP annotation semantics reviewed on 2026-07-16;
+- output-bundle schema version 2 accepts only a new or empty destination, never replaces existing
+  entries, commits the manifest last, and redacts absolute source paths in that manifest by
+  default;
+- `delete_analysis_result` deletes only one current-scope result and preserves the safe not-found
+  equivalence for unknown, expired, deleted, and cross-scope identifiers;
+- normal stdio shutdown deletes the current result scope; the configured TTL remains a hard limit
+  for active results and the cleanup threshold for orphan rows after abnormal termination;
+- `kegg-mcp cleanup --expired` removes only TTL-expired result rows and does not clean the KEGG
+  response cache or evict unexpired results; and
+- release metadata tests enforce the current candidate matrix, renderer dependency, published
+  release statement, platform range, and tracked-document status.
 
 ## Local annotation and Top-N pathway optimization amendment
 
@@ -1287,10 +1309,10 @@ Acceptance:
 
 Status as of 2026-07-15: installation and MCP configuration guidance, redistributable synthetic KO
 examples, data-rights and security review checklists, an English changelog and release notes, and
-local wheel/source-distribution audit tests are implemented. Versions 0.1.0 and 0.2.0 are scoped
-to Python 3.11.x only. Release preparation and Milestone 8 are complete. The repository is private; before
-any future public supported release, GitHub private vulnerability reporting must be enabled and
-verified.
+local wheel/source-distribution audit tests are implemented. The published 0.1.0 release and
+unpublished 0.2.0 candidate were scoped to Python 3.11.x only. Release preparation and Milestone 8
+are complete. The repository is private; before any future public supported release, GitHub
+private vulnerability reporting must be enabled and verified.
 
 Tasks:
 
@@ -1420,9 +1442,11 @@ The implementation milestones resolved the original open decisions as follows:
 4. **Bounds:** schemas enforce five million inline bytes, 100,000 imported rows, 100 K numbers per
    mapping call, 25 MODULE targets, 25 pathway targets, bounded previews, bounded response bytes,
    and lower operation-specific limits where applicable.
-5. **Result lifecycle:** defaults are 24-hour retention, a 512 MiB logical payload quota, a 640 MiB
-   main-database cap, and 10,000 active results. The scoped store provides explicit deletion,
-   cleanup, metadata pagination, and bounded artifact reads.
+5. **Result lifecycle:** defaults are a 24-hour active hard TTL that also bounds abnormal-exit
+   orphan cleanup, a 512 MiB logical payload quota, a 640 MiB main-database cap, and 10,000 active
+   results. Normal stdio shutdown deletes the current scope. The store provides current-scope
+   deletion, expired-only cleanup, metadata pagination, and bounded artifact reads; durable
+   delivery uses output bundles.
 6. **Partial MODULE evaluation:** `partially_evaluable` and `not_evaluable` results expose no block
    coverage ratio. Coverage is reported only when every required top-level block is evaluable.
 7. **MODULE discovery:** the initial MVP requires explicit MODULE identifiers; automatic discovery
@@ -1430,8 +1454,9 @@ The implementation milestones resolved the original open decisions as follows:
 8. **CSV delivery:** complete retained resources remain available, and a caller may request a
    concise output bundle beneath a deployment allowed root. The server never writes an
    unrestricted path or forces full tables into direct tool content.
-9. **Python compatibility:** versions 0.1.x and 0.2.x support and are tested only on Python 3.11.x;
-   package metadata excludes Python 3.12 and later.
+9. **Python compatibility:** the current distributions support and are tested only on Linux with
+   Python 3.11.x; package metadata excludes Python 3.12 and later, and macOS and Windows are not
+   release-supported.
 10. **Server and Skill identity:** the stdio server name, console command, and Skill MCP dependency
     value are `kegg-mcp`; the focused Skill name is `kegg-ko-analysis`.
 11. **Visualization boundary:** the renderer command and MCP dependency value are

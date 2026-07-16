@@ -33,7 +33,8 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
   annotation evidence.
 - Prefer `analyze_ko_annotations` for the common KO-to-module/pathway workflow. When the user
   supplies a shared annotation file, pass its absolute `file_path`, source provenance, and an
-  allowed `output_directory`; do not copy a private result identifier across MCP processes.
+  allowed new or empty `output_directory`; do not copy a private result identifier across MCP
+  processes.
 - When the user asks for the most detected pathway or a Top-N pathway result, pass
   `pathway_selection={"mode":"top_detected","top_n":N,"metric":"unique_selected_ko_count"}`
   to `analyze_ko_annotations`. Let the server aggregate, rank, select, and retain the full
@@ -53,6 +54,9 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
 - Prefer the stable output bundle for cross-process handoff. Retrieve full retained artifacts only
   when a bounded preview is insufficient, and treat result identifiers as opaque and
   session-scoped.
+- When the user requests immediate privacy cleanup, call `delete_analysis_result` only after every
+  required retained section has been read and any requested output bundle has committed. Never
+  treat an old or cross-session result identifier as recoverable.
 - Keep a successful DeepKOALA job and its controlled output until the core import and complete
   output-bundle write have succeeded. Delete it only after the renderer handoff no longer depends
   on that private output.

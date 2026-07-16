@@ -259,7 +259,6 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert tool.inputSchema.get("additionalProperties") is False
             assert tool.outputSchema is not None
             assert tool.annotations is not None
-            assert tool.annotations.destructiveHint is False
         status = _tool_by_name(tools, "get_server_status")
         assert status.annotations is not None
         assert status.annotations.readOnlyHint is True
@@ -276,13 +275,29 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         ):
             annotations = _tool_by_name(tools, name).annotations
             assert annotations is not None
-            assert annotations.readOnlyHint is True
-            assert annotations.idempotentHint is True
+            assert annotations.readOnlyHint is False
+            assert annotations.destructiveHint is False
+            assert annotations.idempotentHint is False
             assert annotations.openWorldHint is True
+
+        normalize_annotations = _tool_by_name(tools, "normalize_ko_annotations").annotations
+        assert normalize_annotations is not None
+        assert normalize_annotations.readOnlyHint is False
+        assert normalize_annotations.destructiveHint is False
+        assert normalize_annotations.idempotentHint is False
+        assert normalize_annotations.openWorldHint is False
+        delete_annotations = _tool_by_name(tools, "delete_analysis_result").annotations
+        assert delete_annotations is not None
+        assert delete_annotations.readOnlyHint is False
+        assert delete_annotations.destructiveHint is True
+        assert delete_annotations.idempotentHint is True
+        assert delete_annotations.openWorldHint is False
 
         normalize_schema = _tool_by_name(tools, "normalize_ko_annotations").inputSchema
         normalize_properties = normalize_schema["properties"]
-        assert {"text", "file_path", "output_directory"} <= set(normalize_properties)
+        assert {"text", "file_path", "output_directory", "manifest_path_mode"} <= set(
+            normalize_properties
+        )
         for internal_field in ("limits", "refresh", "allow_stale"):
             assert internal_field not in normalize_properties
         mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
@@ -292,6 +307,8 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         selection_schema = analysis_schema["$defs"]["PathwaySelection"]["properties"]
         assert selection_schema["top_n"]["minimum"] == 1
         assert selection_schema["top_n"]["maximum"] == 25
+        delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
+        assert set(delete_schema["properties"]) == {"result_id"}
         entries_output_schema = _tool_by_name(tools, "get_kegg_entries").outputSchema
         assert entries_output_schema is not None
         assert (
@@ -400,6 +417,11 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert status_data["entry_count"] is None
         assert status_data["stored_payload_bytes"] is None
         assert status_data["newest_entry_age_seconds"] is None
+        assert status_data["result_scope"] == "stdio_session"
+        assert status_data["result_active_ttl_seconds"] == 24 * 60 * 60
+        assert status_data["orphan_cleanup_after_seconds"] == 24 * 60 * 60
+        assert status_data["normal_exit_scope_cleanup"] is True
+        assert status_data["durable_output"] == "output_bundle"
         serialized_status = json.dumps(status.structuredContent)
         assert "/" not in status_data.get("cache_location", "")
         assert "rest.kegg.jp" not in serialized_status
@@ -436,6 +458,27 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert (
             json.loads(dataset_content.text)["dataset_id"] == data["import_summary"]["dataset_id"]
         )
+
+        deleted = await session.call_tool(
+            "delete_analysis_result",
+            {"result_id": data["result"]["result_id"]},
+        )
+        _validate_result(_tool_by_name(tools, "delete_analysis_result"), deleted)
+        assert deleted.isError is False
+        assert deleted.structuredContent is not None
+        deleted_data = deleted.structuredContent["result"]["data"]
+        assert deleted_data["result_id"] == data["result"]["result_id"]
+        assert deleted_data["deleted_artifacts"] == 1
+        with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
+            await session.read_resource(AnyUrl(uri))
+
+        repeated = await session.call_tool(
+            "delete_analysis_result",
+            {"result_id": data["result"]["result_id"]},
+        )
+        assert repeated.isError is True
+        assert repeated.structuredContent is not None
+        assert repeated.structuredContent["error"]["code"] == "RESULT_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -687,9 +730,56 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         normalized = Path(bundle["normalized_annotations"]).read_text(encoding="utf-8")
         assert "protein_name" in normalized
         assert "alpha enzyme" in normalized
-        manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["input_paths"] == [str(fasta)]
+        manifest_path = Path(bundle["manifest"])
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+        assert manifest["schema_version"] == "2"
+        assert manifest["input_path_provenance"] == {
+            "mode": "redacted",
+            "source_count": 1,
+            "values": ["input-1"],
+        }
+        assert str(fasta) not in manifest_text
         assert "bundle_manifest.json" in manifest["files"]
+
+        repeated = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "file_path": str(annotations),
+                "output_directory": str(output),
+                "input_format": "generic_csv",
+            },
+        )
+        assert repeated.isError is True
+        assert repeated.structuredContent is not None
+        assert repeated.structuredContent["error"]["code"] == "OUTPUT_ALREADY_EXISTS"
+        assert manifest_path.read_text(encoding="utf-8") == manifest_text
+
+        private_output = tmp_path / "normalized-private-manifest"
+        private_manifest_result = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "file_path": str(annotations),
+                "output_directory": str(private_output),
+                "input_format": "generic_csv",
+                "manifest_path_mode": "absolute",
+                "source": {
+                    "source_name": "deepkoala",
+                    "input_path": str(fasta),
+                },
+            },
+        )
+        assert private_manifest_result.isError is False
+        assert private_manifest_result.structuredContent is not None
+        private_bundle = private_manifest_result.structuredContent["result"]["data"][
+            "output_bundle"
+        ]
+        private_manifest = json.loads(Path(private_bundle["manifest"]).read_text(encoding="utf-8"))
+        assert private_manifest["input_path_provenance"] == {
+            "mode": "absolute",
+            "source_count": 1,
+            "values": [str(fasta)],
+        }
 
 
 @pytest.mark.asyncio
@@ -722,7 +812,11 @@ async def test_explicit_inline_source_keeps_null_original_input_path(tmp_path: P
         data = result.structuredContent["result"]["data"]
         assert data["provenance"]["source_preview"][0]["input_path"] is None
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["input_paths"] == []
+        assert manifest["input_path_provenance"] == {
+            "mode": "redacted",
+            "source_count": 0,
+            "values": [],
+        }
 
 
 @pytest.mark.asyncio
@@ -771,7 +865,7 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION
         assert render_input.pathways[0].detected_ko_ids == ("K00001",)
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == "1"
+        assert manifest["schema_version"] == "2"
         assert manifest["render_input"] == {
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
@@ -1195,6 +1289,13 @@ async def test_resource_validation_scoping_and_protocol_errors(tmp_path: Path) -
     )
     server = create_server(runtime)
     async with create_connected_server_and_client_session(server) as session:
+        cross_scope_delete = await session.call_tool(
+            "delete_analysis_result",
+            {"result_id": metadata.result_id},
+        )
+        assert cross_scope_delete.isError is True
+        assert cross_scope_delete.structuredContent is not None
+        assert cross_scope_delete.structuredContent["error"]["code"] == "RESULT_NOT_FOUND"
         with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
             await session.read_resource(AnyUrl(f"ko-analysis://results/{metadata.result_id}"))
         invalid_uris = (

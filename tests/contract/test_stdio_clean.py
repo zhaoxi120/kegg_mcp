@@ -1,6 +1,7 @@
 """The executable stdio channel contains protocol traffic only."""
 
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -31,4 +32,9 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
         assert initialized.serverInfo.name == "kegg-mcp"
         assert initialized.instructions == SERVER_INSTRUCTIONS
         tools = await session.list_tools()
-        assert len(tools.tools) == 9
+        assert len(tools.tools) == 10
+        normalized = await session.call_tool("normalize_ko_annotations", {"text": "K00844"})
+        assert normalized.isError is False
+
+    with sqlite3.connect(tmp_path / "results.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM stored_results").fetchone() == (0,)

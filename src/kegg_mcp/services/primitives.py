@@ -106,6 +106,7 @@ from kegg_mcp.services.contracts import (
     PathwayAnalysisPreview,
 )
 from kegg_mcp.services.output_bundle import (
+    ManifestPathMode,
     OutputBundle,
     write_analysis_bundle,
     write_normalization_bundle,
@@ -117,6 +118,7 @@ from kegg_mcp.services.reference_loading import (
     load_pathway_references,
 )
 from kegg_mcp.services.result_store import (
+    DeletedResult,
     ResultArtifactInput,
     ResultArtifactMetadata,
     ResultMetadata,
@@ -269,6 +271,7 @@ class NormalizeAnnotationsRequest(FrozenModel):
     text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
     file_path: str | None = Field(default=None, min_length=1, max_length=4_096)
     output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
+    manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED
     input_format: AnnotationInputFormat = AnnotationInputFormat.PLAIN_KO
     import_limits: ImportLimits = DEFAULT_IMPORT_LIMITS
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
@@ -641,7 +644,11 @@ class ServerStatusResult(FrozenModel):
     supported_tools: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=100)], ...], Field(max_length=16)
     ]
-    result_retention_seconds: int = Field(strict=True, gt=0)
+    result_scope: Literal["stdio_session"] = "stdio_session"
+    result_active_ttl_seconds: int = Field(strict=True, gt=0)
+    orphan_cleanup_after_seconds: int = Field(strict=True, gt=0)
+    normal_exit_scope_cleanup: bool = True
+    durable_output: Literal["output_bundle"] = "output_bundle"
     result_quota_bytes: int = Field(strict=True, gt=0)
 
 
@@ -676,7 +683,11 @@ def normalize_annotations(
     dataset = _import_dataset(request)
     content = dataset.model_dump_json().encode("utf-8")
     output_bundle = (
-        write_normalization_bundle(dataset, output_directory)
+        write_normalization_bundle(
+            dataset,
+            output_directory,
+            manifest_path_mode=request.manifest_path_mode,
+        )
         if output_directory is not None
         else None
     )
@@ -884,6 +895,7 @@ def analyze_annotation_targets(
             analysis_report=summary_artifact.content,
             output_directory=output_directory,
             pathway_ranking=ranking,
+            manifest_path_mode=request.manifest_path_mode,
         )
     stage_elapsed[ExecutionStage.BUNDLE_WRITE] = _elapsed_ms(started)
 
@@ -1503,9 +1515,20 @@ def get_server_status_service(
         file_handoff_enabled=allowed_root_count > 0,
         allowed_root_count=allowed_root_count,
         supported_tools=supported_tools,
-        result_retention_seconds=result_store.limits.retention_seconds,
+        result_active_ttl_seconds=result_store.limits.retention_seconds,
+        orphan_cleanup_after_seconds=result_store.limits.retention_seconds,
         result_quota_bytes=result_store.limits.quota_bytes,
     )
+
+
+def delete_analysis_result(
+    result_id: str,
+    *,
+    result_store: SQLiteResultStore,
+    scope_id: str,
+) -> DeletedResult:
+    """Delete one current-session retained result without exposing other scopes."""
+    return result_store.delete(scope_id, result_id)
 
 
 def probe_kegg_connectivity_service(
@@ -2114,6 +2137,7 @@ __all__ = [
     "analyze_module_targets",
     "analyze_pathway_targets",
     "compare_annotation_sets",
+    "delete_analysis_result",
     "get_server_status_service",
     "map_ko_identifiers",
     "normalize_annotations",

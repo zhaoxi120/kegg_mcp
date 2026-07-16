@@ -2,11 +2,15 @@
 
 ## Supported versions
 
-| Version | Supported |
+| Version | Status |
 | --- | --- |
-| 0.2.x | Yes |
-| 0.1.x | Yes |
-| Earlier versions | No |
+| 0.3.x | Current unreleased candidate; security fixes are made on the active branch |
+| 0.2.x | Never published from this repository |
+| 0.1.x | Supported GitHub release |
+| Earlier versions | Unsupported |
+
+The only published GitHub release is `v0.1.0`. Candidate source versions are not presented as
+supported releases until their exact distributions and release gates are published.
 
 ## Reporting a vulnerability
 
@@ -31,12 +35,18 @@ details, and biological data.
 
 - The MVP is a local stdio MCP server, not a multi-user or remote HTTP service.
 - Filesystem inputs must be limited to explicitly allowed roots and must reject traversal and symlink escapes.
+- Output bundles must be created only in new or empty allowed-root directories, must never replace
+  existing entries, and must redact absolute source paths in the manifest unless explicitly
+  requested.
+- Retained analysis results are stdio-session scoped, are deleted on normal shutdown, can be
+  deleted explicitly within the current scope, and use the configured TTL as both an active hard
+  limit and an abnormal-exit orphan cleanup threshold.
 - KEGG credentials, licensed endpoints, cached responses, and user inputs must remain local and out of logs, fixtures, packages, and releases.
 - External annotation tools, model code, model weights, and databases are outside the core
   package runtime boundary. The optional companion is a separate local process that accepts only
   an explicitly configured checkout, interpreter, private state root, and allowed input/handoff
   roots. It uses fixed arguments, CPU-only execution, bounded files, process-group cancellation,
   and never downloads or updates dependencies or weights.
-- Default tests and pull-request CI must not access live KEGG services. The separately enabled,
-  manually dispatched main-only live job is serialized, request-bounded, and must never upload
-  KEGG payloads.
+- Default local tests must not access live KEGG services. Pull-request CI runs one serialized,
+  request-bounded 120-request live campaign and must never upload KEGG payloads; merging to `main`
+  does not repeat that workflow.

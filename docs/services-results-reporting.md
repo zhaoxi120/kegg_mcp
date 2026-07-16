@@ -130,11 +130,14 @@ Reports are rendered in memory. The MCP high-level workflow may additionally wri
 to an allowed-root `output_directory`: normalized annotations, protein-to-KO mapping, MODULE and
 pathway tables, optional full pathway-ranking and relationship tables, Markdown report, canonical
 renderer input, and a versioned manifest. Every returned bundle file carries MIME type, exact byte
-size, and controlled absolute path. Safe atomic file writes reject symlinks and report a dedicated
-output error.
+size, and controlled absolute path. Bundle schema version `2` requires a new or empty directory,
+never replaces an existing entry, and installs the manifest last as the commit marker. Safe atomic
+file writes reject symlinks and report dedicated already-exists or output-write errors. The
+manifest uses redacted source labels by default; absolute source paths require an explicit
+`manifest_path_mode="absolute"` request.
 
 `render_input.json` now uses the public, transport-independent `RenderInputV2` contract. Renderer
-schema version `2` is independent of output-bundle schema version `1`; the bundle manifest records
+schema version `2` is independent of output-bundle schema version `2`; the bundle manifest records
 the renderer schema version and
 `application/vnd.kegg-mcp.render-input+json;version=2` MIME type explicitly. The handoff contains
 separate accepted and policy-defined uncertain KO sets, complete pathway detected-KO evidence when
@@ -161,7 +164,7 @@ limits. The renderer carries this provenance forward but does not reinterpret or
 `SQLiteResultStore` stores immutable artifact groups in an operator-selected local SQLite file.
 Its defaults are:
 
-- 24-hour result retention;
+- a 24-hour hard TTL for every active result and for abnormal-exit orphan cleanup eligibility;
 - a 512 MiB logical artifact-payload quota;
 - a 640 MiB persistent SQLite main-database page limit;
 - at most 10,000 retained results, including results with empty artifacts;
@@ -193,13 +196,20 @@ artifact path. Existing parent or final symlinks, lexical `..` traversal, unsafe
 directories, non-regular targets, and open-time inode replacement are rejected. Newly created
 directories and the database use restrictive permissions where POSIX permissions are available.
 
+The store exposes current-scope bulk deletion for transport lifecycle integration. The stdio
+server calls it during normal shutdown, so a result identifier is a session optimization rather
+than a durable handle. `cleanup_expired` removes only TTL-expired rows left by active or abnormal
+sessions and never performs quota eviction; output bundles remain independently operator-owned.
+
 The store provides bounded operations for:
 
 - listing active results within one scope by `offset` and `limit`;
 - listing artifact metadata for one authorized result by `offset` and `limit`;
 - reading one artifact by section as byte ranges with `offset`, `limit`, and `next_offset`;
 - explicitly deleting one authorized active result; and
-- cleaning up expired results and deterministic over-quota evictions.
+- deleting every result in one authorized scope;
+- cleaning up expired results without evicting active rows; and
+- deterministic over-quota cleanup through the separate maintenance operation.
 
 Pagination and byte-range offsets are validated before SQLite binding. They must be non-negative
 and must leave room for the configured page or range limit within SQLite's signed 64-bit integer

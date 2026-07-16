@@ -9,6 +9,7 @@ import os
 import secrets
 from collections.abc import Iterable
 from contextlib import suppress
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -34,7 +35,14 @@ from kegg_mcp.services.render_contracts import (
     serialize_render_input,
 )
 
-OUTPUT_BUNDLE_SCHEMA_VERSION = "1"
+OUTPUT_BUNDLE_SCHEMA_VERSION = "2"
+
+
+class ManifestPathMode(StrEnum):
+    """How private source paths are represented in a portable bundle manifest."""
+
+    REDACTED = "redacted"
+    ABSOLUTE = "absolute"
 
 
 class OutputBundle(FrozenModel):
@@ -65,7 +73,12 @@ class OutputBundleArtifact(FrozenModel):
     path: str = Field(min_length=1, max_length=4_096)
 
 
-def write_normalization_bundle(dataset: AnnotationDataset, output_directory: Path) -> OutputBundle:
+def write_normalization_bundle(
+    dataset: AnnotationDataset,
+    output_directory: Path,
+    *,
+    manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED,
+) -> OutputBundle:
     """Write the reusable normalization stage without cache or result-store files."""
     normalized = _normalized_annotations_tsv(dataset)
     mapping = _protein_ko_mapping_tsv(dataset)
@@ -77,6 +90,7 @@ def write_normalization_bundle(dataset: AnnotationDataset, output_directory: Pat
         dataset,
         (*files, "bundle_manifest.json"),
         stage="normalization",
+        manifest_path_mode=manifest_path_mode,
     )
     files["bundle_manifest.json"] = manifest
     _write_files(output_directory, files)
@@ -95,6 +109,7 @@ def write_analysis_bundle(
     output_directory: Path,
     render_limits: RenderInputLimits | None = None,
     pathway_ranking: PathwayRankingResult | None = None,
+    manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED,
 ) -> OutputBundle:
     """Write canonical handoff tables, report, and renderer input as one stable bundle."""
     render_input = build_render_input(
@@ -123,6 +138,7 @@ def write_analysis_bundle(
         dataset,
         (*files, "bundle_manifest.json"),
         stage="analysis",
+        manifest_path_mode=manifest_path_mode,
         render_input_schema=(RENDER_INPUT_SCHEMA_VERSION, RENDER_INPUT_MIME_TYPE),
         pathway_ranking_execution=execution.pathway_parameters.ranking,
     )
@@ -313,15 +329,26 @@ def _manifest(
     files: tuple[str, ...],
     *,
     stage: str,
+    manifest_path_mode: ManifestPathMode,
     render_input_schema: tuple[str, str] | None = None,
     pathway_ranking_execution: PathwayRankingExecution | None = None,
 ) -> str:
+    input_paths = tuple(
+        sorted({source.input_path for source in dataset.sources if source.input_path is not None})
+    )
+    manifest_paths = (
+        input_paths
+        if manifest_path_mode is ManifestPathMode.ABSOLUTE
+        else tuple(f"input-{index}" for index in range(1, len(input_paths) + 1))
+    )
     value: dict[str, object] = {
         "schema_version": OUTPUT_BUNDLE_SCHEMA_VERSION,
         "stage": stage,
-        "input_paths": sorted(
-            {source.input_path for source in dataset.sources if source.input_path is not None}
-        ),
+        "input_path_provenance": {
+            "mode": manifest_path_mode.value,
+            "source_count": len(input_paths),
+            "values": manifest_paths,
+        },
         "analysis_unit": dataset.analysis_unit.value,
         "files": list(files),
     }
@@ -349,9 +376,17 @@ def _write_files(output_directory: Path, files: dict[str, str]) -> None:
     if manifest_name not in files:
         raise AssertionError("output bundles require a commit manifest")
     temporary_names: list[str] = []
+    installed_names: list[tuple[str, str]] = []
     directory_fd: int | None = None
+    committed = False
     try:
         directory_fd = _open_directory_fd(output_directory)
+        if os.listdir(directory_fd):
+            fail(
+                ErrorCode.OUTPUT_ALREADY_EXISTS,
+                "The requested output bundle directory is not empty.",
+                suggested_action="Choose a new or empty output_directory.",
+            )
         for name, content in files.items():
             temporary = f".{name}.{secrets.token_hex(8)}.tmp"
             temporary_names.append(temporary)
@@ -369,27 +404,39 @@ def _write_files(output_directory: Path, files: dict[str, str]) -> None:
                 raise
         os.fsync(directory_fd)
 
-        # The manifest is the bundle commit marker. Remove any previous marker,
-        # install every payload, and publish the new manifest only after success.
-        with suppress(FileNotFoundError):
-            os.unlink(manifest_name, dir_fd=directory_fd)
+        # Hard-link every temporary into place without replacement, then publish
+        # the manifest last as the bundle commit marker.
         for name in files:
             if name == manifest_name:
                 continue
             temporary = next(item for item in temporary_names if item.startswith(f".{name}."))
-            os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-            temporary_names.remove(temporary)
+            os.link(
+                temporary,
+                name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            installed_names.append((name, temporary))
         manifest_temporary = next(
             item for item in temporary_names if item.startswith(f".{manifest_name}.")
         )
-        os.replace(
+        os.link(
             manifest_temporary,
             manifest_name,
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
+            follow_symlinks=False,
         )
-        temporary_names.remove(manifest_temporary)
+        installed_names.append((manifest_name, manifest_temporary))
         os.fsync(directory_fd)
+        committed = True
+    except FileExistsError:
+        fail(
+            ErrorCode.OUTPUT_ALREADY_EXISTS,
+            "The requested output bundle would replace an existing file.",
+            suggested_action="Choose a new or empty output_directory.",
+        )
     except OSError:
         fail(
             ErrorCode.OUTPUT_WRITE_FAILED,
@@ -398,9 +445,29 @@ def _write_files(output_directory: Path, files: dict[str, str]) -> None:
         )
     finally:
         if directory_fd is not None:
+            if not committed:
+                for name, temporary in installed_names:
+                    with suppress(OSError):
+                        temporary_stat = os.stat(
+                            temporary,
+                            dir_fd=directory_fd,
+                            follow_symlinks=False,
+                        )
+                        installed_stat = os.stat(
+                            name,
+                            dir_fd=directory_fd,
+                            follow_symlinks=False,
+                        )
+                        if (temporary_stat.st_dev, temporary_stat.st_ino) == (
+                            installed_stat.st_dev,
+                            installed_stat.st_ino,
+                        ):
+                            os.unlink(name, dir_fd=directory_fd)
             for temporary in temporary_names:
                 with suppress(OSError):
                     os.unlink(temporary, dir_fd=directory_fd)
+            with suppress(OSError):
+                os.fsync(directory_fd)
             os.close(directory_fd)
 
 
@@ -479,6 +546,7 @@ def _bundle_mime_type(name: str) -> str:
 
 
 __all__ = (
+    "ManifestPathMode",
     "OutputBundle",
     "OutputBundleArtifact",
     "write_analysis_bundle",

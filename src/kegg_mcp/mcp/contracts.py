@@ -29,9 +29,11 @@ from kegg_mcp.services import (
     CompareKoSetsResult,
     ConnectivityProbeResult,
     DatasetSource,
+    DeletedResult,
     GenericDecisionPolicy,
     KeggEntriesServiceResult,
     KoMappingServiceResult,
+    ManifestPathMode,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
     PathwaySelection,
@@ -79,6 +81,7 @@ class NormalizeKoAnnotationsInput(FrozenModel):
     text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
     file_path: str | None = Field(default=None, min_length=1, max_length=4_096)
     output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
+    manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED
     input_format: AnnotationInputFormat = AnnotationInputFormat.PLAIN_KO
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
@@ -99,6 +102,7 @@ class NormalizeKoAnnotationsInput(FrozenModel):
             text=self.text,
             file_path=self.file_path,
             output_directory=self.output_directory,
+            manifest_path_mode=self.manifest_path_mode,
             input_format=self.input_format,
             analysis_unit=self.analysis_unit,
             sample_id=self.sample_id,
@@ -240,6 +244,12 @@ class ProbeKeggConnectivityInput(FrozenModel):
     """Explicit no-argument request that authorizes one low-cost network probe."""
 
 
+class DeleteAnalysisResultInput(FrozenModel):
+    """One opaque current-session retained result selected for immediate deletion."""
+
+    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+
+
 class ResultResourceIndex(FrozenModel):
     """Scoped retained-result metadata and validated section links."""
 
@@ -295,6 +305,7 @@ PrimitiveAnalysisToolEnvelope = ToolEnvelope[PrimitiveAnalysisResult]
 CompareToolEnvelope = ToolEnvelope[CompareKoSetsResult]
 StatusToolEnvelope = ToolEnvelope[ServerStatusResult]
 ConnectivityToolEnvelope = ToolEnvelope[ConnectivityProbeResult]
+DeleteToolEnvelope = ToolEnvelope[DeletedResult]
 
 
 def constrain_mcp_input_schema(schema: dict[str, object]) -> None:
@@ -418,6 +429,8 @@ __all__ = [
     "CompareKoSetsInput",
     "CompareToolEnvelope",
     "ConnectivityToolEnvelope",
+    "DeleteAnalysisResultInput",
+    "DeleteToolEnvelope",
     "EntriesToolEnvelope",
     "GetKeggEntriesInput",
     "GetServerStatusInput",

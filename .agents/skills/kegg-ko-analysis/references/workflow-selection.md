@@ -28,8 +28,9 @@ preview or partial analysis succeeds.
 
 ## Annotation table
 
-1. Prefer the high-level tool with `file_path` and `output_directory` when the user wants analysis.
-   Use `normalize_ko_annotations` alone when the user wants only a reusable normalized table.
+1. Prefer the high-level tool with `file_path` and a new or empty `output_directory` when the user
+   wants analysis. Use `normalize_ko_annotations` alone when the user wants only a reusable
+   normalized table.
 2. Let the server auto-detect unambiguous common columns and report its decision. Supply an
    explicit mapping only when columns are ambiguous or non-standard.
 3. Preserve raw source decisions, scores, thresholds, ranks, domain coordinates, protein names,
