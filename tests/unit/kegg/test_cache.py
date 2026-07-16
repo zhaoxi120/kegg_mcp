@@ -26,7 +26,7 @@ from kegg_mcp.kegg.contracts import (
 
 _RETRIEVED_AT = datetime(2026, 7, 14, 1, 2, 3, tzinfo=UTC)
 _EXPIRES_AT = _RETRIEVED_AT + timedelta(days=7)
-_REQUEST_KEY = "v1:get:/get/K00001"
+_REQUEST_KEY = "/get/K00001"
 _PARSER_VERSION = "1"
 
 
@@ -103,6 +103,43 @@ def test_round_trip_returns_fresh_response_and_complete_metadata(tmp_path: Path)
     )
 
 
+def test_legacy_table_name_is_migrated_without_losing_cached_payloads(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    cache = SQLiteKeggCache(cache_path)
+    expected = _write_response(cache)
+    schema_version = 2
+    legacy_table = f"kegg_responses_v{schema_version}"
+    legacy_key = f"v{schema_version}:{_REQUEST_KEY}"
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            "UPDATE kegg_responses SET normalized_request_key = ?",
+            (legacy_key,),
+        )
+        connection.execute(f'ALTER TABLE kegg_responses RENAME TO "{legacy_table}"')
+
+    lookup = _read_response(SQLiteKeggCache(cache_path))
+
+    assert lookup.response == expected
+    with sqlite3.connect(cache_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            ).fetchall()
+        }
+    assert "kegg_responses" in tables
+    assert legacy_table not in tables
+    with sqlite3.connect(cache_path) as connection:
+        stored_keys = {
+            row[0]
+            for row in connection.execute(
+                "SELECT normalized_request_key FROM kegg_responses"
+            ).fetchall()
+        }
+    assert _REQUEST_KEY in stored_keys
+    assert legacy_key not in stored_keys
+
+
 def test_expired_response_is_returned_as_stale_without_policy_decision(tmp_path: Path) -> None:
     cache = SQLiteKeggCache(tmp_path / "kegg.sqlite3")
     _write_response(cache)
@@ -127,7 +164,7 @@ def test_expired_response_is_returned_as_stale_without_policy_decision(tmp_path:
         ),
         (
             KeggOperation.GET,
-            "v1:get:/get/K00002",
+            "/get/K00002",
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
             PUBLIC_KEGG_ENDPOINT_LABEL,
         ),
@@ -194,7 +231,7 @@ def test_tampered_row_is_an_explicit_cache_failure(
     cache = SQLiteKeggCache(cache_path)
     _write_response(cache)
     with sqlite3.connect(cache_path) as connection:
-        connection.execute(f"UPDATE kegg_responses_v2 SET {column} = ?", (replacement,))
+        connection.execute(f"UPDATE kegg_responses SET {column} = ?", (replacement,))
 
     with pytest.raises(KeggMcpError) as error:
         _read_response(cache)
@@ -274,7 +311,7 @@ def test_excess_http_metadata_in_cache_row_is_an_integrity_failure(tmp_path: Pat
     )
     with sqlite3.connect(cache_path) as connection:
         connection.execute(
-            "UPDATE kegg_responses_v2 SET http_metadata_json = ?",
+            "UPDATE kegg_responses SET http_metadata_json = ?",
             (metadata_json,),
         )
 

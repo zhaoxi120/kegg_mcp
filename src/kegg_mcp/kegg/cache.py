@@ -25,13 +25,14 @@ from kegg_mcp.kegg.contracts import (
 )
 
 _SCHEMA_VERSION: Final = 2
+_RESPONSE_TABLE: Final = "kegg_responses"
 _MAX_REQUEST_KEY_CHARACTERS: Final = 65_536
 _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
 _ENDPOINT_LABEL_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
 
 _CREATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS kegg_responses_v2 (
+CREATE TABLE IF NOT EXISTS kegg_responses (
     operation TEXT NOT NULL,
     normalized_request_key TEXT NOT NULL,
     endpoint_class TEXT NOT NULL,
@@ -59,7 +60,7 @@ SELECT
     parser_version,
     database_release,
     http_metadata_json
-FROM kegg_responses_v2
+FROM kegg_responses
 WHERE operation = ?
   AND normalized_request_key = ?
   AND endpoint_class = ?
@@ -67,7 +68,7 @@ WHERE operation = ?
 """
 
 _UPSERT_RESPONSE = """
-INSERT INTO kegg_responses_v2 (
+INSERT INTO kegg_responses (
     operation,
     normalized_request_key,
     endpoint_class,
@@ -268,7 +269,10 @@ class SQLiteKeggCache:
             if schema_version not in {0, _SCHEMA_VERSION}:
                 raise _CacheIntegrityError("unsupported SQLite schema version")
             with connection:
+                migrated = _migrate_response_table(connection)
                 connection.execute(_CREATE_SCHEMA)
+                if migrated:
+                    _migrate_request_keys(connection)
                 if schema_version == 0:
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         except BaseException:
@@ -344,6 +348,38 @@ class SQLiteKeggCache:
             normalized_request_key,
             retrieval_endpoint_class.value,
             endpoint_label,
+        )
+
+
+def _migrate_response_table(connection: sqlite3.Connection) -> bool:
+    """Rename the prior version-suffixed table without copying cached payloads."""
+    legacy_table = f"{_RESPONSE_TABLE}_v{_SCHEMA_VERSION}"
+    rows = connection.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?)",
+        (_RESPONSE_TABLE, legacy_table),
+    ).fetchall()
+    names = {row[0] for row in rows if len(row) == 1 and isinstance(row[0], str)}
+    if _RESPONSE_TABLE in names and legacy_table in names:
+        raise _CacheIntegrityError("conflicting cache response tables")
+    if legacy_table in names:
+        connection.execute(f'ALTER TABLE "{legacy_table}" RENAME TO "{_RESPONSE_TABLE}"')
+        return True
+    return False
+
+
+def _migrate_request_keys(connection: sqlite3.Connection) -> None:
+    """Remove legacy key prefixes while preserving any conflicting newer row."""
+    prefixes = tuple(f"v{version}:" for version in range(1, _SCHEMA_VERSION + 1))
+    prefixes += (f"asset-v{_SCHEMA_VERSION}:",)
+    for prefix in prefixes:
+        connection.execute(
+            """
+            UPDATE OR IGNORE kegg_responses
+            SET normalized_request_key = substr(normalized_request_key, ?)
+            WHERE substr(normalized_request_key, 1, ?) = ?
+              AND substr(normalized_request_key, ?, 1) = '/'
+            """,
+            (len(prefix) + 1, len(prefix), prefix, len(prefix) + 1),
         )
 
 

@@ -20,9 +20,9 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 
 from conftest import SyntheticProvider
-from kegg_render_mcp.artifacts import RendererService
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.pathway_scene import CorePathwayAssetProvider
+from kegg_render_mcp.render_service import RendererService
 from kegg_render_mcp.server import TOOL_NAMES, RendererRuntime, build_runtime, create_server
 
 
@@ -75,7 +75,12 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert tuple(item.name for item in tools) == TOOL_NAMES
         assert all(item.inputSchema.get("additionalProperties") is False for item in tools)
         assert _tool(tools, "get_renderer_status").annotations.openWorldHint is False  # type: ignore[union-attr]
-        assert _tool(tools, "probe_renderer_kegg_connectivity").annotations.openWorldHint is True  # type: ignore[union-attr]
+        probe_annotations = _tool(tools, "probe_renderer_kegg_connectivity").annotations
+        assert probe_annotations is not None
+        assert probe_annotations.readOnlyHint is False
+        assert probe_annotations.destructiveHint is False
+        assert probe_annotations.idempotentHint is False
+        assert probe_annotations.openWorldHint is True
         assert _tool(tools, "render_pathway").annotations.openWorldHint is True  # type: ignore[union-attr]
         assert _tool(tools, "render_module").annotations.openWorldHint is False  # type: ignore[union-attr]
         assert _tool(tools, "delete_render_result").annotations.destructiveHint is True  # type: ignore[union-attr]

@@ -1,7 +1,7 @@
 """Tests for deterministic server-side pathway ranking."""
 
 from kegg_mcp.analysis import PathwaySelection, PathwaySelectionMode, rank_pathways
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
@@ -69,7 +69,7 @@ def test_strict_and_lenient_ranking_use_only_their_selected_evidence() -> None:
             ko_id="ko",
             raw_decision="decision",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_LIMITS,
     )
     rows = (

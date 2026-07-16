@@ -5,7 +5,7 @@ from typing import cast
 import pytest
 
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
+    CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
     ErrorCode,
     EvidenceMode,
@@ -44,7 +44,7 @@ def test_generic_import_to_strict_and_lenient_view_is_stable_and_lossless() -> N
             ko_id="ko",
             raw_decision="decision",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=limits,
     )
     before = dataset.model_dump_json()

@@ -5,21 +5,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import re
 import secrets
-import shutil
-import stat
-import tomllib
-from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn, Protocol, cast
+from typing import Protocol, cast
 
 from deepkoala_mcp import __version__
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.contracts import (
-    MAX_OUTPUT_BYTES,
     CompanionStatus,
     DeleteDeepKoalaJobResult,
     ErrorCode,
@@ -27,7 +21,6 @@ from deepkoala_mcp.contracts import (
     ExecutionPlan,
     GetDeepKoalaJobResult,
     ImportHandoff,
-    InstalledResource,
     JobState,
     JobSummary,
     PrepareDeepKoalaInput,
@@ -43,6 +36,18 @@ from deepkoala_mcp.fasta import (
     InputPathError,
     stage_fasta,
 )
+from deepkoala_mcp.installation import (
+    InstallationError,
+    fail_installation,
+    inspect_installation,
+    select_installation,
+)
+from deepkoala_mcp.job_storage import (
+    prepare_state_root,
+    remove_job_directory,
+    remove_session_directory,
+    validate_output,
+)
 from deepkoala_mcp.runner import (
     OUTPUT_FILENAME,
     DeepKoalaProcessRunner,
@@ -50,25 +55,15 @@ from deepkoala_mcp.runner import (
     RunnerPlan,
     RunnerTimedOutError,
 )
+from deepkoala_mcp.scheduler import JobScheduler
 
-_DATE = re.compile(r"^[0-9]{4}(?:0[1-9]|1[0-2])$")
-_JOB = re.compile(r"^job_[a-f0-9]{32}$")
-_SESSION = re.compile(r"^session_[a-f0-9]{32}$")
 _TERMINAL = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED, JobState.TIMED_OUT})
-_MAX_RESOURCE_DIRECTORIES = 128
-_MAX_PYPROJECT_BYTES = 256 * 1024
 
 
 class Runner(Protocol):
     """Small injectable boundary used by offline job-manager tests."""
 
     async def run(self, plan: RunnerPlan) -> ProcessOutcome: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _Installation:
-    source_version: str
-    resource: InstalledResource
 
 
 @dataclass(slots=True)
@@ -91,12 +86,6 @@ class _JobRecord:
     cancel_requested: bool = False
 
 
-class _InstallationError(RuntimeError):
-    def __init__(self, code: ErrorCode) -> None:
-        super().__init__(code.value)
-        self.code = code
-
-
 class DeepKoalaJobManager:
     """Own one bounded CPU runner, one queue, and one opaque job namespace."""
 
@@ -112,8 +101,7 @@ class DeepKoalaJobManager:
         self._lock = asyncio.Lock()
         self._prepare_lock = asyncio.Lock()
         self._jobs: dict[str, _JobRecord] = {}
-        self._queue: deque[str] = deque()
-        self._running_job_id: str | None = None
+        self._scheduler = JobScheduler(config.max_queue_size)
         self._session_directory: Path | None = None
         self._sweeper: asyncio.Task[None] | None = None
         self._opened = False
@@ -124,7 +112,7 @@ class DeepKoalaJobManager:
         async with self._lifecycle_lock:
             if self._opened:
                 return
-            root = _prepare_state_root(self.config.state_root)
+            root = prepare_state_root(self.config.state_root)
             session = root / f"session_{secrets.token_hex(16)}"
             session.mkdir(mode=0o700)
             os.chmod(session, 0o700)
@@ -164,14 +152,13 @@ class DeepKoalaJobManager:
             session = self._session_directory
             if session is not None:
                 try:
-                    _remove_session_directory(session)
+                    remove_session_directory(session)
                 except (OSError, ValueError) as error:
                     self._sweeper = None
                     raise RuntimeError("private session cleanup failed") from error
         async with self._lock:
             self._jobs.clear()
-            self._queue.clear()
-            self._running_job_id = None
+            self._scheduler.clear()
             self._session_directory = None
             self._sweeper = None
             self._opened = False
@@ -185,7 +172,7 @@ class DeepKoalaJobManager:
             self._require_open()
             async with self._lock:
                 self._require_capacity_locked()
-                queued_ahead = len(self._queue)
+                queued_ahead = self._scheduler.queued_count
             session = self._session_directory
             if session is None:
                 raise RuntimeError("job manager has no session")
@@ -200,27 +187,27 @@ class DeepKoalaJobManager:
                     allowed_roots=self.config.allowed_roots,
                     job_directory=directory,
                 )
-                installation = _select_installation(
+                installation = select_installation(
                     self.config.checkout,
                     request.model,
                     request.model_date,
                 )
             except FastaLimitError:
-                _remove_job_directory(directory, session)
+                remove_job_directory(directory, session)
                 fail(
                     ErrorCode.INPUT_LIMIT_EXCEEDED,
                     "The protein FASTA exceeds a hard companion limit.",
                     suggested_action="Reduce the FASTA to the documented input bounds.",
                 )
             except FastaValidationError:
-                _remove_job_directory(directory, session)
+                remove_job_directory(directory, session)
                 fail(
                     ErrorCode.INVALID_FASTA,
                     "The supplied input is not an accepted protein FASTA.",
                     suggested_action="Correct the FASTA syntax and protein residues.",
                 )
             except InputPathError:
-                _remove_job_directory(directory, session)
+                remove_job_directory(directory, session)
                 fail(
                     ErrorCode.PATH_NOT_ALLOWED,
                     "The FASTA path is outside the configured local input boundary.",
@@ -228,11 +215,11 @@ class DeepKoalaJobManager:
                         "Use inline FASTA or a direct regular file under an allowed root."
                     ),
                 )
-            except _InstallationError as error:
-                _remove_job_directory(directory, session)
-                _fail_installation(error)
+            except InstallationError as error:
+                remove_job_directory(directory, session)
+                fail_installation(error)
             except OSError:
-                _remove_job_directory(directory, session)
+                remove_job_directory(directory, session)
                 fail(
                     ErrorCode.INTERNAL_ERROR,
                     "The companion could not create private job state.",
@@ -266,7 +253,7 @@ class DeepKoalaJobManager:
             )
             async with self._lock:
                 if self._closing:
-                    _remove_job_directory(directory, session)
+                    remove_job_directory(directory, session)
                     raise RuntimeError("job manager is closing")
                 self._require_capacity_locked()
                 self._jobs[job_id] = record
@@ -283,7 +270,7 @@ class DeepKoalaJobManager:
             assert record is not None
             if record.state is not JobState.PREPARED:
                 return self._summary(record)
-            if len(self._queue) >= self.config.max_queue_size:
+            if self._scheduler.is_full:
                 fail(
                     ErrorCode.QUEUE_FULL,
                     "The local DeepKOALA queue is full.",
@@ -292,7 +279,7 @@ class DeepKoalaJobManager:
             else:
                 record.state = JobState.QUEUED
                 record.submitted_at = _now()
-                self._queue.append(job_id)
+                self._scheduler.enqueue(job_id)
                 self._schedule_locked()
                 return self._summary(record)
 
@@ -328,13 +315,13 @@ class DeepKoalaJobManager:
             if record.state is JobState.PREPARED:
                 record.state = JobState.CANCELLED
                 record.completed_at = _now()
-                _remove_job_directory(record.directory, self._require_session())
+                remove_job_directory(record.directory, self._require_session())
                 return self._summary(record)
             elif record.state is JobState.QUEUED:
-                self._queue.remove(job_id)
+                self._scheduler.remove(job_id)
                 record.state = JobState.CANCELLED
                 record.completed_at = _now()
-                _remove_job_directory(record.directory, self._require_session())
+                remove_job_directory(record.directory, self._require_session())
                 self._schedule_locked()
                 return self._summary(record)
             elif record.state is JobState.RUNNING:
@@ -373,7 +360,7 @@ class DeepKoalaJobManager:
                 )
             self._jobs.pop(job_id)
         try:
-            _remove_job_directory(record.directory, self._require_session())
+            remove_job_directory(record.directory, self._require_session())
         except (OSError, ValueError):
             async with self._lock:
                 self._jobs.setdefault(job_id, record)
@@ -388,13 +375,13 @@ class DeepKoalaJobManager:
         """Return structural readiness without loading a model or exposing paths."""
         self._require_open()
         try:
-            version, resources = _inspect_installation(self.config.checkout)
-        except _InstallationError:
+            version, resources = inspect_installation(self.config.checkout)
+        except InstallationError:
             version, resources = None, ()
         async with self._lock:
             prepared = sum(record.state is JobState.PREPARED for record in self._jobs.values())
-            queued = len(self._queue)
-            running = int(self._running_job_id is not None)
+            queued = self._scheduler.queued_count
+            running = int(self._scheduler.running_job_id is not None)
         return CompanionStatus(
             server_version=__version__,
             ready=bool(resources),
@@ -408,16 +395,18 @@ class DeepKoalaJobManager:
         )
 
     def _schedule_locked(self) -> None:
-        if self._closing or self._running_job_id is not None:
+        if self._closing:
             return
-        while self._queue:
-            job_id = self._queue.popleft()
+        while True:
+            job_id = self._scheduler.start_next()
+            if job_id is None:
+                return
             record = self._jobs.get(job_id)
             if record is None or record.state is not JobState.QUEUED:
+                self._scheduler.finish(job_id)
                 continue
             record.state = JobState.RUNNING
             record.started_at = _now()
-            self._running_job_id = job_id
             record.task = asyncio.create_task(self._execute(record))
             return
 
@@ -426,7 +415,7 @@ class DeepKoalaJobManager:
         reason: str | None = "The local DeepKOALA process or output failed safely."
         output_bytes: int | None = None
         try:
-            installation = _select_installation(
+            installation = select_installation(
                 self.config.checkout,
                 record.notice.plan.model,
                 record.notice.plan.resolved_model_date,
@@ -438,7 +427,7 @@ class DeepKoalaJobManager:
                 reason = "DeepKOALA exited without a successful result."
             else:
                 output_path = record.directory / OUTPUT_FILENAME
-                output_bytes = _validate_output(output_path)
+                output_bytes = validate_output(output_path)
                 os.chmod(output_path, 0o600, follow_symlinks=False)
                 (record.directory / INPUT_FILENAME).unlink()
                 state = JobState.SUCCEEDED
@@ -449,22 +438,22 @@ class DeepKoalaJobManager:
         except asyncio.CancelledError:
             state = JobState.CANCELLED
             reason = None
-        except _InstallationError:
+        except InstallationError:
             reason = "The configured DeepKOALA installation became unavailable."
         except Exception:
             pass
         finally:
             if state is not JobState.SUCCEEDED:
                 with contextlib.suppress(OSError, ValueError):
-                    _remove_job_directory(record.directory, self._require_session())
+                    remove_job_directory(record.directory, self._require_session())
             async with self._lock:
                 record.state = state
                 record.failure_reason = reason
                 record.output_bytes = output_bytes
                 record.completed_at = _now()
                 record.task = None
-                if self._running_job_id == record.job_id:
-                    self._running_job_id = None
+                if self._scheduler.running_job_id == record.job_id:
+                    self._scheduler.finish(record.job_id)
                 self._schedule_locked()
 
     async def _cleanup_expired(self) -> None:
@@ -479,7 +468,7 @@ class DeepKoalaJobManager:
         if session is not None:
             for directory in expired:
                 with contextlib.suppress(OSError, ValueError):
-                    _remove_job_directory(directory, session)
+                    remove_job_directory(directory, session)
 
     async def _sweep_expired(self) -> None:
         interval = max(1, min(60, self.config.plan_ttl_seconds, self.config.retention_seconds))
@@ -537,7 +526,7 @@ class DeepKoalaJobManager:
             raise AssertionError("handoff requires a successful job")
         plan = record.notice.plan
         output_path = record.directory / OUTPUT_FILENAME
-        if _validate_output(output_path) != record.output_bytes:
+        if validate_output(output_path) != record.output_bytes:
             raise RuntimeError("retained DeepKOALA output changed after completion")
         resolved_directory = record.directory.resolve(strict=True)
         resolved_output = output_path.resolve(strict=True)
@@ -573,184 +562,6 @@ class DeepKoalaJobManager:
         if session is None:
             raise RuntimeError("job manager has no session")
         return session
-
-
-def _select_installation(checkout: Path, model: str, requested_date: str) -> _Installation:
-    version, resources = _inspect_installation(checkout)
-    matches = [
-        resource
-        for resource in resources
-        if resource.model == model
-        and (requested_date == "latest" or resource.model_date == requested_date)
-    ]
-    if not matches:
-        raise _InstallationError(ErrorCode.WEIGHTS_NOT_FOUND)
-    selected = max(matches, key=lambda item: item.model_date)
-    return _Installation(source_version=version, resource=selected)
-
-
-def _inspect_installation(checkout: Path) -> tuple[str, tuple[InstalledResource, ...]]:
-    package = checkout / "deepkoala"
-    for path in (package, checkout / "resources"):
-        if not _direct_directory(path):
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-    if not _direct_regular(package / "__init__.py", nonempty=False):
-        raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-    for path in (package / "cli.py", package / "utils.py"):
-        if not _direct_regular(path, nonempty=True):
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-    version = _read_source_version(checkout / "pyproject.toml")
-    resources: list[InstalledResource] = []
-    try:
-        candidates: list[Path] = []
-        with os.scandir(checkout / "resources") as entries:
-            for entry in entries:
-                candidates.append(Path(entry.path))
-                if len(candidates) > _MAX_RESOURCE_DIRECTORIES:
-                    raise _InstallationError(ErrorCode.WEIGHTS_NOT_FOUND)
-        for candidate in sorted(candidates, key=lambda item: item.name):
-            if _DATE.fullmatch(candidate.name) is None or not _direct_directory(candidate):
-                continue
-            for model in ("full", "frag"):
-                if _direct_regular(
-                    candidate / f"weights_{model}.pt", nonempty=True
-                ) and _direct_regular(
-                    candidate / f"ko_config_{model}.json",
-                    nonempty=True,
-                ):
-                    resources.append(
-                        InstalledResource(
-                            model=model,
-                            model_date=candidate.name,
-                        )
-                    )
-    except OSError as error:
-        raise _InstallationError(ErrorCode.WEIGHTS_NOT_FOUND) from error
-    return version, tuple(resources)
-
-
-def _read_source_version(path: Path) -> str:
-    if not _direct_regular(path, nonempty=True):
-        raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-    try:
-        metadata = path.stat()
-        if metadata.st_size > _MAX_PYPROJECT_BYTES:
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-        document = cast(dict[str, object], tomllib.loads(path.read_text(encoding="utf-8")))
-        project_value = document.get("project")
-        if not isinstance(project_value, dict):
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-        project = cast(dict[str, object], project_value)
-        if project.get("name") != "deepkoala":
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-        version = project.get("version")
-        if not isinstance(version, str) or not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", version
-        ):
-            raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
-        return version
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
-        raise _InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE) from error
-
-
-def _validate_output(path: Path) -> int:
-    try:
-        named = path.lstat()
-    except OSError as error:
-        raise RuntimeError("DeepKOALA output is unavailable") from error
-    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
-        raise RuntimeError("DeepKOALA output is not a direct regular file")
-    if named.st_size < 1:
-        raise RuntimeError("DeepKOALA output is empty")
-    if named.st_size > MAX_OUTPUT_BYTES:
-        raise RuntimeError("DeepKOALA output exceeds the handoff limit")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        opened = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
-            or opened.st_size != named.st_size
-        ):
-            raise RuntimeError("DeepKOALA output changed during validation")
-    finally:
-        os.close(descriptor)
-    return named.st_size
-
-
-def _prepare_state_root(path: Path) -> Path:
-    existed = path.exists()
-    if existed:
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError("state root must be a direct directory")
-    else:
-        path.mkdir(parents=True, mode=0o700)
-    resolved = path.resolve(strict=True)
-    metadata = resolved.lstat()
-    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-        if not existed:
-            os.chmod(resolved, 0o700)
-        else:
-            raise ValueError("existing state root must be owner-only and owned by this user")
-    return resolved
-
-
-def _remove_job_directory(directory: Path, session: Path) -> None:
-    if directory.parent != session or _JOB.fullmatch(directory.name) is None:
-        raise ValueError("invalid controlled job directory")
-    if not directory.exists() and not directory.is_symlink():
-        return
-    metadata = directory.lstat()
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError("controlled job entry is not a direct directory")
-    shutil.rmtree(directory)
-
-
-def _remove_session_directory(session: Path) -> None:
-    if _SESSION.fullmatch(session.name) is None:
-        raise ValueError("invalid controlled session directory")
-    if not session.exists() and not session.is_symlink():
-        return
-    metadata = session.lstat()
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError("controlled session entry is not a direct directory")
-    shutil.rmtree(session)
-
-
-def _direct_directory(path: Path) -> bool:
-    try:
-        metadata = path.lstat()
-    except OSError:
-        return False
-    return stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
-
-
-def _direct_regular(path: Path, *, nonempty: bool) -> bool:
-    try:
-        metadata = path.lstat()
-    except OSError:
-        return False
-    return (
-        stat.S_ISREG(metadata.st_mode)
-        and not stat.S_ISLNK(metadata.st_mode)
-        and (not nonempty or metadata.st_size > 0)
-    )
-
-
-def _fail_installation(error: _InstallationError) -> NoReturn:
-    if error.code is ErrorCode.WEIGHTS_NOT_FOUND:
-        fail(
-            ErrorCode.WEIGHTS_NOT_FOUND,
-            "The requested local DeepKOALA model resources are unavailable.",
-            suggested_action="Install or select an existing local model/date pair.",
-        )
-    fail(
-        ErrorCode.DEEPKOALA_UNAVAILABLE,
-        "The configured directory is not an available official DeepKOALA checkout.",
-        suggested_action="Check the configured checkout and external Python environment.",
-    )
 
 
 def _fail_job_not_found() -> None:

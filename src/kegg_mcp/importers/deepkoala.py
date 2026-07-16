@@ -12,7 +12,7 @@ from kegg_mcp.domain.annotations import (
     ScoreType,
     ThresholdRule,
 )
-from kegg_mcp.domain.decisions import DEEPKOALA_DETAILED_V1, DecisionEvidence
+from kegg_mcp.domain.decisions import DEEPKOALA_DETAILED, DecisionEvidence
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 from kegg_mcp.importers._common import (
@@ -131,7 +131,7 @@ def import_deepkoala_detailed(
             row_number=evidence.row_number,
             diagnostics=diagnostics,
         )
-        outcome = DEEPKOALA_DETAILED_V1.classify(
+        outcome = DEEPKOALA_DETAILED.classify(
             DecisionEvidence(
                 raw_ko=raw_ko,
                 ko_id=ko_id,
@@ -186,7 +186,7 @@ def import_deepkoala_detailed(
                 raw_decision=raw_decision,
                 normalized_status=outcome.status,
                 status_reason=outcome.reason,
-                decision_policy=DEEPKOALA_DETAILED_V1.reference,
+                decision_policy=DEEPKOALA_DETAILED.reference,
                 score=score,
                 score_type=ScoreType.PROBABILITY,
                 threshold=threshold,
@@ -209,7 +209,7 @@ def import_deepkoala_detailed(
         source_columns=table.header,
         delimiter=",",
         column_mapping=bindings,
-        policy=DEEPKOALA_DETAILED_V1.reference,
+        policy=DEEPKOALA_DETAILED.reference,
         diagnostics=diagnostics,
         unparsed_rows=unparsed_rows,
         duplicate_key=exact_record_key,

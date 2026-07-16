@@ -205,6 +205,6 @@ class DeepKoalaDetailedPolicy:
         )
 
 
-USER_SUPPLIED_KO_V1 = UserSuppliedKOPolicy()
-CANONICAL_SOURCE_STATUS_V1 = CanonicalSourceStatusPolicy()
-DEEPKOALA_DETAILED_V1 = DeepKoalaDetailedPolicy()
+USER_SUPPLIED_KO = UserSuppliedKOPolicy()
+CANONICAL_SOURCE_STATUS = CanonicalSourceStatusPolicy()
+DEEPKOALA_DETAILED = DeepKoalaDetailedPolicy()

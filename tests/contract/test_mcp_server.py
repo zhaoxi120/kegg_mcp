@@ -51,7 +51,7 @@ from kegg_mcp.mcp.server import (
 from kegg_mcp.services import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
-    RenderInputV2,
+    RenderInput,
     ResultArtifactInput,
     ResultStoreLimits,
     SQLiteResultStore,
@@ -194,6 +194,17 @@ class _LargeRankingReferenceClient(_FakeReferenceClient):
         )
 
 
+class _InternalFailureClient(_FakeReferenceClient):
+    def get(
+        self,
+        request: GetRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> GetResult:
+        del request, options
+        raise ValueError("private implementation detail")
+
+
 class _UnavailableTransport:
     def request(
         self,
@@ -253,6 +264,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
     async with create_connected_server_and_client_session(server) as session:
         tools = (await session.list_tools()).tools
         assert tuple(tool.name for tool in tools) == TOOL_NAMES
+        assert len(TOOL_NAMES) == len(set(TOOL_NAMES))
         for tool in tools:
             assert tool.title
             assert tool.description
@@ -602,6 +614,36 @@ async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_unexpected_internal_failure_uses_safe_correlation_id(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime = McpRuntime(
+        client=_InternalFailureClient(),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="internal-failure-scope",
+    )
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "get_kegg_entries",
+            {"entries": [{"database": "ko", "identifier": "K00844"}]},
+        )
+    assert result.isError is True
+    assert result.structuredContent is not None
+    error = result.structuredContent["error"]
+    assert error["code"] == "INTERNAL_ERROR"
+    details = {item["name"]: item["value"] for item in error["safe_details"]}
+    assert details["correlation_id"].startswith("err_")
+    assert details["stage"] == "tool:get_kegg_entries"
+    serialized = json.dumps(result.structuredContent)
+    assert "private implementation detail" not in serialized
+    captured = capsys.readouterr()
+    assert details["correlation_id"] in captured.err
+    assert "ValueError" in captured.err
+    assert "private implementation detail" not in captured.err
+
+
+@pytest.mark.asyncio
 async def test_high_level_schema_accepts_table_input_and_rejects_organism_context(
     tmp_path: Path,
 ) -> None:
@@ -615,7 +657,7 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
                     "text": "sequence,ko\nseq-1,K00844",
                     "input_format": "generic_csv",
                     "column_mapping": {"sequence_id": "sequence", "ko_id": "ko"},
-                    "decision_policy": "user_supplied_ko_v1",
+                    "decision_policy": "user_supplied_ko",
                 },
                 "module_ids": ["M00001"],
             },
@@ -858,7 +900,7 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert str(fasta) in report_path.read_text(encoding="utf-8")
         render_input_path = Path(data["output_bundle"]["render_input"])
         assert render_input_path.is_file()
-        render_input = RenderInputV2.model_validate_json(
+        render_input = RenderInput.model_validate_json(
             render_input_path.read_text(encoding="utf-8"),
             strict=True,
         )
@@ -1037,7 +1079,7 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
                     "text": "sequence,ko\nseq-1,K00001\nseq-2,K00002",
                     "input_format": "generic_csv",
                     "column_mapping": {"sequence_id": "sequence", "ko_id": "ko"},
-                    "decision_policy": "user_supplied_ko_v1",
+                    "decision_policy": "user_supplied_ko",
                 },
                 "module_ids": ["M00001"],
                 "pathways": [{"pathway_id": "ko00010", "reference_namespace": "ko"}],

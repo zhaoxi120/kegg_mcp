@@ -29,7 +29,7 @@ def test_services_package_exports_orchestration_and_contracts() -> None:
         "PlainKoAnalysisResult",
         "ReferenceLoadingLimits",
         "RenderInputLimits",
-        "RenderInputV2",
+        "RenderInput",
         "ModuleRenderTarget",
         "PathwayRenderTarget",
         "ResultArtifactInput",
@@ -55,7 +55,7 @@ def test_services_package_exports_orchestration_and_contracts() -> None:
     assert services.analyze_plain_ko is orchestration.analyze_plain_ko
     assert services.PathwaySpec is reference_loading.PathwaySpec
     assert services.SQLiteResultStore is result_store.SQLiteResultStore
-    assert services.RenderInputV2 is render_contracts.RenderInputV2
+    assert services.RenderInput is render_contracts.RenderInput
 
 
 def test_services_package_exports_store_defaults_and_lifecycle_results() -> None:
@@ -95,9 +95,7 @@ def test_service_request_and_result_schemas_have_stable_identifiers() -> None:
     assert services.PlainKoAnalysisResult.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:plain-ko-analysis-result:1"
     )
-    assert services.RenderInputV2.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:render-input:2"
-    )
+    assert services.RenderInput.model_json_schema()["$id"] == ("urn:kegg-mcp:schema:render-input:2")
     assert services.ModuleRenderTarget.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:module-render-target:2"
     )

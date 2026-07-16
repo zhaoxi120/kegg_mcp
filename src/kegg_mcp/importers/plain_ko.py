@@ -10,7 +10,7 @@ from kegg_mcp.domain.annotations import (
     InputFormat,
     RowEvidence,
 )
-from kegg_mcp.domain.decisions import USER_SUPPLIED_KO_V1, DecisionEvidence
+from kegg_mcp.domain.decisions import USER_SUPPLIED_KO, DecisionEvidence
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 from kegg_mcp.importers._common import (
@@ -70,7 +70,7 @@ def import_plain_ko(
                 ),
             )
         ko_id, _ = try_normalize_ko_id(raw_ko)
-        outcome = USER_SUPPLIED_KO_V1.classify(
+        outcome = USER_SUPPLIED_KO.classify(
             DecisionEvidence(
                 raw_ko=raw_ko,
                 ko_id=ko_id,
@@ -94,7 +94,7 @@ def import_plain_ko(
             raw_decision=None,
             normalized_status=outcome.status,
             status_reason=outcome.reason,
-            decision_policy=USER_SUPPLIED_KO_V1.reference,
+            decision_policy=USER_SUPPLIED_KO.reference,
             score=None,
             score_type=None,
             threshold=None,
@@ -139,7 +139,7 @@ def import_plain_ko(
         source_columns=(),
         delimiter=None,
         column_mapping=(),
-        policy=USER_SUPPLIED_KO_V1.reference,
+        policy=USER_SUPPLIED_KO.reference,
         diagnostics=diagnostics,
         unparsed_rows=(),
         duplicate_key=plain_duplicate_key,

@@ -40,8 +40,13 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
   requires explicit permission before installation, resource downloads, environment changes, or
   MCP registration; the GenomeNet web form is never automated as an API substitute.
 - KEGG LINK preparation now uses canonical greedy packing under identifier and complete-URL
-  bounds, with isolated version 2 request keys and fresh-cache-first high-level analysis.
-- The core candidate advances to 0.3.0 for the first `RenderInputV2` public contract;
+  bounds, with canonical unversioned request keys and fresh-cache-first high-level analysis.
+- Code-facing contract names now use stable descriptive names such as `RenderInput` and
+  `CANONICAL_SOURCE_STATUS`; explicit schema, parser, and policy version fields remain unchanged.
+- Core MCP transport, service use cases, renderer orchestration, DeepKOALA scheduling and storage,
+  and KEGG request execution are split into focused modules without changing MCP tool or resource
+  names.
+- The core candidate advances to 0.3.0 for the first `RenderInput` public contract;
   `kegg-render-mcp` requires `kegg-mcp>=0.3,<0.4`, so the published core 0.1 release and abandoned
   0.2 candidate cannot be selected as compatible renderer dependencies.
 - The independently distributed DeepKOALA companion advances to 0.2.0 with a breaking provenance
@@ -70,6 +75,8 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 - Output-bundle schema version 2 rejects non-empty destinations, never replaces existing files,
   commits its manifest last, and redacts absolute source paths in the manifest by default with an
   explicit absolute-path opt-in.
+- Renderer exports also reject non-empty destinations, publish the commit manifest last, and roll
+  back newly installed files after a failed export.
 - Retained results are explicitly stdio-session scoped, deleted on normal shutdown, and governed
   by a 24-hour active hard TTL that also bounds abnormal-exit orphan cleanup; output bundles are
   the durable cross-process artifact.

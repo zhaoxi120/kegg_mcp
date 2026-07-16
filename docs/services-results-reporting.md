@@ -136,7 +136,7 @@ file writes reject symlinks and report dedicated already-exists or output-write 
 manifest uses redacted source labels by default; absolute source paths require an explicit
 `manifest_path_mode="absolute"` request.
 
-`render_input.json` now uses the public, transport-independent `RenderInputV2` contract. Renderer
+`render_input.json` now uses the public, transport-independent `RenderInput` contract. Renderer
 schema version `2` is independent of output-bundle schema version `2`; the bundle manifest records
 the renderer schema version and
 `application/vnd.kegg-mcp.render-input+json;version=2` MIME type explicitly. The handoff contains

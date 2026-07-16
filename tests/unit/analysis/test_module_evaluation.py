@@ -13,7 +13,7 @@ from kegg_mcp.analysis.contracts import (
 from kegg_mcp.analysis.module_evaluation import evaluate_module, evaluate_module_pair
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
+    CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
     EvidenceMode,
 )
@@ -68,7 +68,7 @@ def _dataset(
             domain_start="start",
             domain_end="end",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
 

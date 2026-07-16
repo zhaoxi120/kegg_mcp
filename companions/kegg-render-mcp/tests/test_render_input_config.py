@@ -73,7 +73,7 @@ def test_asset_limit_cannot_exceed_the_core_client_contract() -> None:
         RendererLimits(max_asset_bytes=50_000_001)
 
 
-def test_render_input_strictly_validates_v2(
+def test_render_input_strictly_validates_schema(
     render_input_file: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)

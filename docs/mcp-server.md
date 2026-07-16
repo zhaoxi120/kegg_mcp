@@ -6,7 +6,7 @@ capabilities are separate local stdio processes and independently reviewed distr
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json v2    -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 2 -> kegg-render-mcp
 ```
 
 See the [DeepKOALA companion README](../companions/deepkoala-mcp/README.md) and

@@ -18,7 +18,7 @@ from kegg_mcp.analysis import (
     evaluate_pathway_coverage,
     resolve_module_definitions,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS_V1, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
 from kegg_mcp.execution import (
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
@@ -42,7 +42,7 @@ from kegg_mcp.kegg import (
 )
 from kegg_mcp.kegg.contracts import KeggOperation
 from kegg_mcp.services.render_contracts import (
-    RenderInputV2,
+    RenderInput,
     build_render_input,
     serialize_render_input,
 )
@@ -147,7 +147,7 @@ def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
     )
 
 
-def make_render_input() -> RenderInputV2:
+def make_render_input() -> RenderInput:
     import_limits = ImportLimits(
         max_bytes=100_000,
         max_rows=100,
@@ -158,7 +158,7 @@ def make_render_input() -> RenderInputV2:
         "sequence,ko,decision\na,K00001,accepted\nu,K00002,uncertain\nr,K00003,rejected\n",
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko", raw_decision="decision"),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=import_limits,
         source=SourceProvenanceInput(source_name="synthetic_annotations", source_version="1"),
     )

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 
 _SCHEMA_VERSION: Final = 2
+_ARTIFACT_TABLE: Final = "result_artifacts"
 _MEBIBYTE: Final = 1024 * 1024
 _GIBIBYTE: Final = 1024 * _MEBIBYTE
 _SQLITE_MAX_INTEGER: Final = (1 << 63) - 1
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS stored_results (
 """
 
 _CREATE_ARTIFACTS = """
-CREATE TABLE IF NOT EXISTS result_artifacts_v2 (
+CREATE TABLE IF NOT EXISTS result_artifacts (
     result_id TEXT NOT NULL,
     position INTEGER NOT NULL CHECK (position >= 0),
     section TEXT NOT NULL,
@@ -99,7 +100,7 @@ INSERT INTO stored_results (
 """
 
 _INSERT_ARTIFACT = """
-INSERT INTO result_artifacts_v2 (
+INSERT INTO result_artifacts (
     result_id,
     position,
     section,
@@ -474,7 +475,7 @@ class SQLiteResultStore:
                         COUNT(a.section),
                         COALESCE(SUM(a.byte_size), 0)
                     FROM stored_results AS r
-                    LEFT JOIN result_artifacts_v2 AS a ON a.result_id = r.result_id
+                    LEFT JOIN result_artifacts AS a ON a.result_id = r.result_id
                     WHERE r.scope_id = ?
                       AND r.result_id = ?
                       AND r.expires_at > ?
@@ -579,7 +580,7 @@ class SQLiteResultStore:
                 rows = connection.execute(
                     """
                     SELECT section, mime_type, byte_size
-                    FROM result_artifacts_v2
+                    FROM result_artifacts
                     WHERE result_id = ?
                     ORDER BY position
                     LIMIT ? OFFSET ?
@@ -587,7 +588,7 @@ class SQLiteResultStore:
                     (checked_result, checked_limit, checked_offset),
                 ).fetchall()
                 actual_count_row = connection.execute(
-                    "SELECT COUNT(*) FROM result_artifacts_v2 WHERE result_id = ?",
+                    "SELECT COUNT(*) FROM result_artifacts WHERE result_id = ?",
                     (checked_result,),
                 ).fetchone()
                 connection.commit()
@@ -639,7 +640,7 @@ class SQLiteResultStore:
                         a.byte_size,
                         length(a.content),
                         substr(a.content, ? + 1, ?)
-                    FROM result_artifacts_v2 AS a
+                    FROM result_artifacts AS a
                     JOIN stored_results AS r ON r.result_id = a.result_id
                     WHERE r.scope_id = ?
                       AND r.result_id = ?
@@ -1097,6 +1098,7 @@ class SQLiteResultStore:
                 if _decode_single_nonnegative_integer(auto_vacuum_row) != 1:
                     raise _ResultStoreIntegrityError("full auto-vacuum could not be enabled")
             with connection:
+                _migrate_artifact_table(connection)
                 connection.execute(_CREATE_RESULTS)
                 connection.execute(_CREATE_ARTIFACTS)
                 connection.execute(_CREATE_EXPIRY_INDEX)
@@ -1140,6 +1142,20 @@ class SQLiteResultStore:
         if stat.S_IMODE(parent_stat.st_mode) & 0o022:
             raise OSError("result store parent must not be group- or world-writable")
         return path
+
+
+def _migrate_artifact_table(connection: sqlite3.Connection) -> None:
+    """Rename the prior version-suffixed table without copying result payloads."""
+    legacy_table = f"{_ARTIFACT_TABLE}_v{_SCHEMA_VERSION}"
+    rows = connection.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?)",
+        (_ARTIFACT_TABLE, legacy_table),
+    ).fetchall()
+    names = {row[0] for row in rows if len(row) == 1 and isinstance(row[0], str)}
+    if _ARTIFACT_TABLE in names and legacy_table in names:
+        raise _ResultStoreIntegrityError("conflicting result artifact tables")
+    if legacy_table in names:
+        connection.execute(f'ALTER TABLE "{legacy_table}" RENAME TO "{_ARTIFACT_TABLE}"')
 
 
 def _validate_scope_id(value: object) -> str:

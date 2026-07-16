@@ -27,9 +27,7 @@ from kegg_mcp.services.contracts import (
     PlainKoAnalysisRequest,
     PlainKoAnalysisResult,
 )
-from kegg_mcp.services.orchestration import analyze_plain_ko
-from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle, OutputBundleArtifact
-from kegg_mcp.services.primitives import (
+from kegg_mcp.services.models import (
     DATASET_SECTION,
     DEFAULT_IMPORT_LIMITS,
     DETAIL_SECTION,
@@ -44,10 +42,8 @@ from kegg_mcp.services.primitives import (
     ConnectivityState,
     DatasetSource,
     GenericDecisionPolicy,
-    KeggConnectivityClient,
     KeggEntriesServiceResult,
     KeggEntryPreview,
-    KeggPrimitiveClient,
     KoMappingServiceResult,
     KoSetComparisonPreview,
     NormalizeAnnotationsRequest,
@@ -55,6 +51,10 @@ from kegg_mcp.services.primitives import (
     PrimitiveAnalysisResult,
     SelectedPathwaySummary,
     ServerStatusResult,
+)
+from kegg_mcp.services.orchestration import analyze_plain_ko
+from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle, OutputBundleArtifact
+from kegg_mcp.services.primitives import (
     analyze_annotation_targets,
     analyze_module_targets,
     analyze_pathway_targets,
@@ -67,6 +67,7 @@ from kegg_mcp.services.primitives import (
     read_cached_kegg_entry,
     retrieve_kegg_entries,
 )
+from kegg_mcp.services.reference_budget import KeggConnectivityClient, KeggPrimitiveClient
 from kegg_mcp.services.reference_loading import (
     KeggReferenceClient,
     PathwaySpec,
@@ -88,8 +89,8 @@ from kegg_mcp.services.render_contracts import (
     RenderabilityStatus,
     RenderDataset,
     RenderExecutionProvenance,
+    RenderInput,
     RenderInputLimits,
-    RenderInputV2,
     RenderProducer,
     VisualizationEvidence,
     build_render_input,
@@ -196,8 +197,8 @@ __all__ = [
     "ReferenceLoadingLimits",
     "RenderDataset",
     "RenderExecutionProvenance",
+    "RenderInput",
     "RenderInputLimits",
-    "RenderInputV2",
     "RenderProducer",
     "RenderabilityStatus",
     "ResultArtifactInput",

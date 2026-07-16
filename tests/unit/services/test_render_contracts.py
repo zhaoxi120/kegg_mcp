@@ -26,7 +26,7 @@ from kegg_mcp.analysis import (
     resolve_module_definitions,
 )
 from kegg_mcp.domain import (
-    CANONICAL_SOURCE_STATUS_V1,
+    CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
     EvidenceMode,
     NormalizedStatus,
@@ -59,8 +59,8 @@ from kegg_mcp.services.reference_loading import ReferenceLoadingLimits
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RenderabilityStatus,
+    RenderInput,
     RenderInputLimits,
-    RenderInputV2,
     build_render_input,
     parse_render_input_json,
     serialize_render_input,
@@ -91,7 +91,7 @@ def _dataset() -> AnnotationDataset:
             ko_id="ko",
             raw_decision="status",
         ),
-        policy=CANONICAL_SOURCE_STATUS_V1,
+        policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
 
@@ -171,7 +171,7 @@ def _execution() -> AnalysisExecutionProvenance:
     )
 
 
-def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInputV2:
+def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInput:
     dataset = _dataset()
     graph, pair = _module_values(dataset)
     reference, coverage = _pathway_values(dataset)
@@ -189,7 +189,7 @@ def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInputV2:
 def test_version_2_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
-    schema = RenderInputV2.model_json_schema()
+    schema = RenderInput.model_json_schema()
 
     assert schema["$id"] == "urn:kegg-mcp:schema:render-input:2"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
@@ -202,7 +202,7 @@ def test_version_2_schema_and_canonical_json_round_trip() -> None:
     payload = json.loads(serialized)
     payload["schema_version"] = "1"
     with pytest.raises(ValidationError):
-        RenderInputV2.model_validate(payload)
+        RenderInput.model_validate(payload)
 
 
 def test_evidence_classes_and_complete_renderer_targets_exclude_other_statuses() -> None:
@@ -324,7 +324,7 @@ def test_visualization_evidence_classes_must_be_disjoint() -> None:
     payload["evidence"]["uncertain_count"] += 1
 
     with pytest.raises(ValidationError, match="must be disjoint"):
-        RenderInputV2.model_validate_json(json.dumps(payload), strict=True)
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
 
 def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:

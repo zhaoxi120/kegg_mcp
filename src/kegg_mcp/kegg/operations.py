@@ -50,9 +50,6 @@ class PairTargetDatabase(StrEnum):
     UNIPROT = "uniprot"
 
 
-LINK_REQUEST_PREPARATION_VERSION = "2"
-
-
 @dataclass(frozen=True, slots=True)
 class PreparedRequest:
     """One validated HTTP batch with no caller-controlled URL components."""
@@ -179,7 +176,6 @@ def prepare_link(
                 ResponseParser.PAIR_TABLE,
                 limits,
                 url_prefix_bytes=url_prefix_bytes,
-                request_key_version=f"v{LINK_REQUEST_PREPARATION_VERSION}",
                 requested_identifiers=batch,
                 expected_pair_source_ids=frozenset(
                     f"{source_prefix}:{identifier}" for identifier in batch
@@ -249,7 +245,6 @@ def _prepared(
     expected_pair_source_ids: frozenset[str] = frozenset(),
     pair_target_database: PairTargetDatabase | None = None,
     url_prefix_bytes: int = 0,
-    request_key_version: str = "v1",
 ) -> PreparedRequest:
     if url_prefix_bytes < 0:
         raise ValueError("url_prefix_bytes must be non-negative")
@@ -263,7 +258,7 @@ def _prepared(
     return PreparedRequest(
         operation=operation,
         path=path,
-        normalized_request_key=f"{request_key_version}:{path}",
+        normalized_request_key=path,
         parser=parser,
         requested_entries=requested_entries,
         requested_identifiers=requested_identifiers,

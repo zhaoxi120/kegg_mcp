@@ -119,7 +119,7 @@ completed required top-level blocks / required top-level blocks
 The numerator, evaluable count, and full required-block count are always returned. Coverage is null
 for partial and not-evaluable results, so an unsafe block cannot silently disappear from the
 denominator. This metric is named
-`exact_completion_and_top_level_block_coverage_v1`. It is descriptive project output and must not
+`exact_completion_and_top_level_block_coverage`. It is descriptive project output and must not
 be called an official KEGG completeness percentage.
 
 Optional components do not add required blocks and do not change the denominator. Their presence,

@@ -494,7 +494,7 @@ async def test_close_reports_cleanup_failure_and_retains_state_for_retry(
     def fail_cleanup(_: Path) -> None:
         raise OSError("simulated cleanup failure")
 
-    monkeypatch.setattr("deepkoala_mcp.jobs._remove_session_directory", fail_cleanup)
+    monkeypatch.setattr("deepkoala_mcp.jobs.remove_session_directory", fail_cleanup)
     with pytest.raises(RuntimeError, match="session cleanup"):
         await manager.close()
     assert any(runtime_config.state_root.iterdir())
