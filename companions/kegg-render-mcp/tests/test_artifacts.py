@@ -97,8 +97,9 @@ def test_state_root_is_exclusive_and_cleans_abandoned_scope(
     finally:
         first.close()
     abandoned = runtime_config.state_root / "scope_abandoned"
+    abandoned.mkdir(mode=0o700)
     result = abandoned / ("render_" + "a" * 32)
-    result.mkdir(parents=True, mode=0o700)
+    result.mkdir(mode=0o700)
     (result / "M00001.svg").write_text("<svg/>", encoding="utf-8")
     third = RenderArtifactStore(runtime_config)
     third.open()
