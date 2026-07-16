@@ -31,6 +31,8 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
   `doctor [--json]` deployment diagnostic.
 - Client initialization instructions, a high-star MCP repository benchmark, a Codex CLI quick
   start, a safe first prompt, and a dedicated troubleshooting guide.
+- `delete_analysis_result` for immediate current-scope retained-result deletion and
+  `kegg-mcp cleanup --expired [--json]` for operator-only expired-row cleanup.
 
 ### Changed
 
@@ -40,8 +42,8 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 - KEGG LINK preparation now uses canonical greedy packing under identifier and complete-URL
   bounds, with isolated version 2 request keys and fresh-cache-first high-level analysis.
 - The core candidate advances to 0.3.0 for the first `RenderInputV2` public contract;
-  `kegg-render-mcp` requires `kegg-mcp>=0.3,<0.4`, so published core 0.2.0 cannot be selected as a
-  compatible renderer dependency.
+  `kegg-render-mcp` requires `kegg-mcp>=0.3,<0.4`, so the published core 0.1 release and abandoned
+  0.2 candidate cannot be selected as compatible renderer dependencies.
 - The independently distributed DeepKOALA companion advances to 0.2.0 with a breaking provenance
   correction: the caller's original FASTA path is distinct from the companion-produced detailed
   CSV, and the private staged FASTA is never exposed.
@@ -63,6 +65,17 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
   allowed roots without exposing their paths.
 - The installation guide now identifies JSON and TOML snippets as configuration file content and
   fixes the nested biological-context placement in the annotation-file example.
+- MCP tool annotations now describe local cache, retained-result, output-bundle, deletion, and
+  open-world effects rather than treating analytical computation as side-effect free.
+- Output-bundle schema version 2 rejects non-empty destinations, never replaces existing files,
+  commits its manifest last, and redacts absolute source paths in the manifest by default with an
+  explicit absolute-path opt-in.
+- Retained results are explicitly stdio-session scoped, deleted on normal shutdown, and governed
+  by a 24-hour active hard TTL that also bounds abnormal-exit orphan cleanup; output bundles are
+  the durable cross-process artifact.
+- Release documentation now identifies core 0.3.0 and both companion versions as unreleased
+  candidates, records core v0.1.0 as the only published GitHub release, and states the Linux
+  CPython 3.11 support matrix.
 
 ### Security
 
@@ -71,10 +84,13 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
   content.
 - Renderer CI and package audits use only generated synthetic assets and reject real KEGG PNG,
   KGML, cache payloads, model resources, private paths, and cross-component implementation code.
+- Portable bundle manifests no longer expose absolute source paths unless the caller explicitly
+  selects the absolute-path mode, and current-scope results can be deleted immediately.
 
-## [0.2.0] - 2026-07-15
+## [0.2.0] - Unpublished candidate (2026-07-15)
 
-Workflow-remediation release for stable file handoff and a smaller public MCP contract.
+Workflow-remediation candidate for stable file handoff and a smaller public MCP contract. This
+candidate was superseded by 0.3.0 before publication.
 
 ### Added
 

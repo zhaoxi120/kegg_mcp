@@ -7,12 +7,18 @@ CPU-only companion can run an existing local DeepKOALA installation and hand det
 core importer. A second independent companion can turn the core's complete renderer handoff into
 bounded static pathway overlays and MODULE logic diagrams.
 
-Version 0.2.0 is distributed through the private GitHub repository and its release artifacts; it
-has not been published to a package registry. Install from the exact `v0.2.0` source checkout or
-from a release wheel after verifying its published SHA-256 digest.
-The visualization extension is currently an unreleased repository feature and must be installed
-from an exact reviewed commit. Its renderer requires the corresponding unreleased `kegg-mcp` 0.3
-series; the published 0.2.0 package does not provide `RenderInputV2` and is incompatible.
+The only published GitHub release is core `v0.1.0`. The current checkout contains three
+unreleased candidates and no package-registry publication:
+
+| Distribution | Source version | Release state | Compatibility |
+| --- | --- | --- | --- |
+| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInputV2`; Python 3.11.x |
+| `deepkoala-mcp` | `0.2.0` | Unreleased candidate | Controlled detailed-CSV handoff; Python 3.11.x |
+| `kegg-render-mcp` | `0.1.0` | Unreleased candidate | Requires `kegg-mcp>=0.3,<0.4`; Python 3.11.x |
+
+Install an unreleased candidate only from an exact reviewed commit or its audited wheel. The
+abandoned core 0.2.0 candidate was not published and does not provide the final version 2 renderer
+handoff.
 
 ## Requirements
 
@@ -21,6 +27,16 @@ series; the published 0.2.0 package does not provide `RenderInputV2` and is inco
 - local writable storage for the cache and scoped result database; and
 - for live KEGG access, either eligible public-academic use or an appropriately licensed HTTPS
   endpoint.
+
+| Platform | Core | DeepKOALA companion | Renderer |
+| --- | --- | --- | --- |
+| Linux with CPython 3.11.x | Supported and tested | Supported and tested | Supported and tested |
+| macOS | Not release-supported | Not release-supported | Not release-supported |
+| Windows | Not release-supported | Not release-supported | Not release-supported |
+
+The guarded filesystem and process implementations use POSIX controls and fail closed when those
+controls are unavailable. Python 3.12 and 3.13 are excluded by package metadata until a separate
+compatibility campaign is completed.
 
 The source development workflow uses [uv](https://docs.astral.sh/uv/). GPU access, PyTorch,
 DeepKOALA, model weights, and KOfam profiles are not server dependencies.
@@ -65,7 +81,7 @@ in an isolated environment:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install /path/to/kegg_mcp-0.2.0-py3-none-any.whl
+python -m pip install /path/to/kegg_mcp-0.3.0-py3-none-any.whl
 kegg-mcp
 ```
 
@@ -159,8 +175,9 @@ KEGG_MCP_ALLOWED_ROOTS=/absolute/private/input:/absolute/private/results
 
 An input `file_path`, original source `input_path`, and requested `output_directory` must be
 absolute and resolve beneath one of these roots. The server rejects traversal and symlink escapes.
-This deployment setting permits stable file handoff between local MCP processes without making a
-private `result_id` a cross-process contract.
+An output directory must be new or empty. A non-empty target is rejected and no existing file is
+replaced. This deployment setting permits stable file handoff between local MCP processes without
+making a private `result_id` a cross-process contract.
 
 ## Optional DeepKOALA companion
 
@@ -273,8 +290,9 @@ client, remain local, and are not distributable under the project's MIT license.
 [renderer README](../companions/kegg-render-mcp/README.md) for its six tools, resource templates,
 retention settings, and exact bounds.
 
-Do not resolve the renderer against the published core 0.2.0 wheel. Its package dependency must
-remain `kegg-mcp>=0.3,<0.4`, and both distributions must come from compatible reviewed candidates.
+Do not resolve the renderer against an older core 0.1 release or the abandoned 0.2 candidate. Its
+package dependency must remain `kegg-mcp>=0.3,<0.4`, and both distributions must come from
+compatible reviewed candidates.
 
 ## Configure an MCP client
 
@@ -304,10 +322,11 @@ Restart Codex after changing MCP configuration. Bare `kegg-mcp` remains the stdi
 `kegg-mcp serve` is an explicit equivalent, and `kegg-mcp doctor [--json]` is the out-of-band
 diagnostic.
 
-### Generic client configuration
+### Claude Desktop and generic JSON client configuration
 
 The following JSON is configuration file content for an eligible academic user. Do not paste it
-at a Bash prompt. A generic client configuration for a wheel installation looks like this:
+at a Bash prompt. Claude Desktop and other local clients that use an `mcpServers` object can start
+the installed stdio executable with this configuration:
 
 ```json
 {
@@ -322,6 +341,13 @@ at a Bash prompt. A generic client configuration for a wheel installation looks 
   }
 }
 ```
+
+In Claude Desktop, open **Settings > Developer > Edit Config**, add the server object to the
+existing `mcpServers` map, save, and completely restart the application. Client menu names and
+configuration locations are client-owned and may change; this flow was checked against the
+[official MCP local-server guide](https://modelcontextprotocol.io/docs/develop/connect-local-servers)
+on 2026-07-16. The server remains Linux-supported even though this client example is provided for
+configuration portability; using an unsupported host does not expand the release support matrix.
 
 For visualization, register the independently installed renderer alongside the core. This JSON is
 also configuration file content; replace both executable paths and local roots:
@@ -372,7 +398,7 @@ core server command but does not install either repository-scoped Skill or eithe
 ## Verify discovery and status
 
 Restart the MCP client after changing server configuration. Confirm that discovery shows these
-nine tools:
+ten tools:
 
 ```text
 analyze_ko_annotations
@@ -383,6 +409,7 @@ analyze_modules
 analyze_pathways
 compare_ko_sets
 probe_kegg_connectivity
+delete_analysis_result
 get_server_status
 ```
 
@@ -528,14 +555,19 @@ bundle_manifest.json
 ```
 
 The direct `output_bundle.artifacts` entries report each file's MIME type, exact byte size, and
-controlled absolute path. Complete ranking and relationship tables remain local artifacts rather
-than default model-context content.
+controlled absolute path. Bundle schema version 2 requires the directory to be new or empty and
+installs the manifest last as the commit marker; an existing file causes
+`OUTPUT_ALREADY_EXISTS`, and no overwrite mode is exposed. Complete ranking and relationship
+tables remain local artifacts rather than default model-context content.
 
 Use these files between MCP stages. The report records the original absolute input path when it is
-provided as source provenance and does not display workflow digests. `render_input.json` uses the
-renderer-specific version 2 schema, and `bundle_manifest.json` records that schema and MIME type.
-Its `AnalysisExecutionProvenance` version 2 records the MODULE analysis limits, pathway parameters,
-pathway coverage limits, and report limits used to produce the authoritative targets.
+provided as source provenance and does not display workflow digests. By default,
+`bundle_manifest.json` represents source paths as stable redacted labels. Set
+`manifest_path_mode="absolute"` only when the operator explicitly wants absolute source paths in
+that manifest. `render_input.json` uses the renderer-specific version 2 schema, and the manifest
+records that schema and MIME type. Its `AnalysisExecutionProvenance` version 2 records the MODULE
+analysis limits, pathway parameters, pathway coverage limits, and report limits used to produce
+the authoritative targets.
 
 ## Render a compatible analysis bundle
 
@@ -584,11 +616,24 @@ The canonical sections are:
 Read `structured` for the full nested result. If an artifact is too large for one client read, use
 the returned bounded range URI or the range template with byte `offset` and `limit` values. Treat
 the opaque ID as local and session-scoped. Unknown, expired, deleted, or differently scoped IDs
-all return `RESULT_NOT_FOUND` without revealing whether another scope owns a result.
+all return `RESULT_NOT_FOUND` without revealing whether another scope owns a result. Call
+`delete_analysis_result` to remove one current-scope result immediately; repeated, unknown, and
+cross-scope deletion attempts retain the same safe not-found behavior.
 
-By default, results expire after 24 hours. The store limits logical artifact payloads to 512 MiB,
-the main database to 640 MiB, and active results to 10,000. Capacity failures do not silently evict
-another active scope's result.
+Normal stdio shutdown removes all results in the current server scope. The default 24-hour value
+is both the hard TTL for an active result and the cleanup threshold for orphan rows left by an
+abnormal termination; it is not a promise that a `result_id` survives a client restart. The store
+limits logical artifact payloads to 512 MiB, the main database to 640 MiB, and active results to
+10,000. Capacity failures do not silently evict another active scope's result. For an out-of-band
+operator cleanup that never starts stdio or removes an active unexpired result, run:
+
+```bash
+kegg-mcp cleanup --expired
+kegg-mcp cleanup --expired --json
+```
+
+The KEGG response cache has a separate cross-process freshness policy. Durable analysis delivery
+uses a non-overwriting output bundle, which remains until the operator deletes it.
 
 ## Use live access responsibly
 
@@ -632,6 +677,10 @@ process-scoped result IDs, protocol stdout, and safe support reports.
 `RESULT_NOT_FOUND`
 : The result is unknown, expired, deleted, or outside the current scope. Rerun the bounded analysis
   instead of guessing or reusing another session's identifier.
+
+`OUTPUT_ALREADY_EXISTS`
+: The output directory contains an existing entry. Choose a new or empty directory; this release
+  has no overwrite mode.
 
 `OUTPUT_WRITE_FAILED` or `RESULT_STORE_FAILED`
 : The requested output bundle or retained-result store could not be written safely. Check the

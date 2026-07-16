@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
 import pytest
 
 from kegg_mcp.mcp import cli
+from kegg_mcp.services import ResultArtifactInput, ResultStoreLimits, SQLiteResultStore
 
 
 def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None:
@@ -108,3 +110,34 @@ def test_default_and_serve_commands_preserve_stdio_dispatch(
     assert cli.main([]) == 0
     assert cli.main(["serve"]) == 0
     assert calls == ["stdio", "stdio"]
+
+
+def test_cleanup_expired_is_explicit_bounded_and_path_redacted(tmp_path: Path) -> None:
+    store_path = tmp_path / "private-results.sqlite3"
+    now = datetime.now(UTC)
+    store = SQLiteResultStore(store_path, limits=ResultStoreLimits(retention_seconds=1))
+    store.create(
+        "orphan-scope",
+        (ResultArtifactInput(section="detail", mime_type="text/plain", content=b"private"),),
+        now=now - timedelta(seconds=2),
+    )
+    output = StringIO()
+
+    exit_code = cli.main(
+        ["cleanup", "--expired", "--json"],
+        environment={"KEGG_MCP_RESULT_STORE_PATH": str(store_path)},
+        stdout=output,
+    )
+
+    document = json.loads(output.getvalue())
+    assert exit_code == 0
+    assert document == {
+        "expired_bytes": 7,
+        "expired_results": 1,
+        "issue": None,
+        "operation": "expired_results",
+        "remaining_bytes": 0,
+        "remaining_results": 0,
+        "status": "ok",
+    }
+    assert str(store_path) not in output.getvalue()

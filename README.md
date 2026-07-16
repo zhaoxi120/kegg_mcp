@@ -7,10 +7,19 @@ the project. Its optional FASTA-to-image workflow uses three independent local s
 `deepkoala-mcp` annotates proteins, `kegg-mcp` normalizes and analyzes evidence, and
 `kegg-render-mcp` renders the core's typed handoff.
 
-> Project status: Version 0.2.0 implements the reviewed workflow remediation and is verified with
-> automated tests. The unreleased visualization extension adds an independently installed renderer
-> without changing the core server's process boundary. It is a core 0.3 series candidate; published
-> core 0.2.0 does not provide the version 2 handoff. These distributions support Python 3.11.x.
+> Project status: the only published GitHub release is core `v0.1.0`. This checkout contains the
+> unreleased core `0.3.0`, DeepKOALA companion `0.2.0`, and renderer `0.1.0` candidates. No
+> distribution in this repository is currently published to a Python package registry.
+
+| Distribution | Source version | Release state | Compatibility |
+| --- | --- | --- | --- |
+| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInputV2`; Python 3.11.x |
+| `deepkoala-mcp` | `0.2.0` | Unreleased candidate | Controlled detailed-CSV handoff; Python 3.11.x |
+| `kegg-render-mcp` | `0.1.0` | Unreleased candidate | Requires `kegg-mcp>=0.3,<0.4`; Python 3.11.x |
+
+The release-supported platform is Linux with CPython 3.11.x. macOS and Windows are not currently
+release-supported; the guarded local file and process controls must fail closed where their POSIX
+requirements are unavailable.
 
 ## Intended users
 
@@ -113,20 +122,22 @@ The repository currently provides:
 - typed, bounded service-layer loading of requested MODULE graphs and pathway references with
   ten-entry GET batching and shared aggregate request and response budgets;
 - one-call KO import, automatic reference-pathway discovery, MODULE/pathway analysis, concise
-  output-directory bundles, and scoped result retention with bounded direct previews;
+  non-overwriting output-directory bundles, and scoped result retention with bounded direct
+  previews;
 - an immutable, versioned `RenderInputV2` handoff with complete-within-limit accepted and uncertain
   evidence, authoritative MODULE states, pathway coverage results, and calculation provenance;
 - a typed single-pathway PNG/KGML asset interface that reuses the core access gate, cache, rate
   limiter, transport validation, and retrieval provenance without exposing arbitrary URLs;
 - deterministic structured JSON, concise Markdown, and flat annotation CSV report artifacts with
   `AnalysisExecutionProvenance` version 2, including MODULE, pathway, coverage, and report limits;
-- a scope-isolated SQLite result store with 24-hour default retention, a 512 MiB logical payload
-  quota, a 640 MiB main-database page cap, a 10,000-result cap, metadata pagination, artifact
-  byte-range reads, explicit deletion, and cleanup;
-- a local stdio MCP server exposing nine bounded tools with explicit schemas, structured
+- a scope-isolated SQLite result store with normal-exit scope cleanup, a 24-hour active hard TTL
+  and abnormal-exit orphan cleanup threshold, a 512 MiB logical payload quota, a 640 MiB
+  main-database page cap, a 10,000-result cap, metadata pagination, artifact byte-range reads,
+  current-scope deletion, and expired-result cleanup;
+- a local stdio MCP server exposing ten bounded tools with explicit schemas, structured
   success/error envelopes, accurate annotations, and clean protocol stdout;
-- a backward-compatible CLI with explicit `serve` and side-effect-free, redacted
-  `doctor [--json]` deployment diagnostics;
+- a backward-compatible CLI with explicit `serve`, side-effect-free redacted
+  `doctor [--json]` deployment diagnostics, and operator-only `cleanup --expired [--json]`;
 - two fixed status resources and four validated resource templates for scoped results, bounded
   result ranges, and cache-only reads of configured entries;
 - side-effect-free status and cache-info reads that redact local paths and report SQLite
@@ -187,8 +198,9 @@ configuration, tools, resources, retention, and output limits.
 ## MCP tools and resources
 
 The installed entry point is `kegg-mcp`: no arguments starts stdio, `serve` is an explicit
-equivalent, and `doctor [--json]` validates redacted deployment configuration without network or
-database probes. The server exposes:
+equivalent, `doctor [--json]` validates redacted deployment configuration without network or
+database probes, and `cleanup --expired [--json]` removes only TTL-expired retained results. The
+server exposes:
 
 - `analyze_ko_annotations`;
 - `normalize_ko_annotations`;
@@ -197,14 +209,18 @@ database probes. The server exposes:
 - `analyze_modules`;
 - `analyze_pathways`;
 - `compare_ko_sets`;
-- `probe_kegg_connectivity`; and
+- `probe_kegg_connectivity`;
+- `delete_analysis_result`; and
 - `get_server_status`.
 
 Fixed resources are `ko-analysis://status` and `ko-analysis://cache/info`. Validated templates
 cover a result index, a result section, a bounded result byte range, and a cache-only cached
 KEGG entry. Each stdio server process generates an opaque scope, so retained results are not
-readable from another process scope. See the [installation and operation guide](docs/installation.md)
-for exact access-mode configuration, calls, and result retrieval.
+readable from another process scope and are removed on normal server shutdown. The 24-hour limit
+is both an active-result hard TTL and the cleanup threshold for rows left by abnormal termination;
+an output bundle is the durable cross-process artifact. See the
+[installation and operation guide](docs/installation.md) for exact access-mode configuration,
+calls, and result retrieval.
 
 The initialization response also supplies bounded workflow instructions covering connectivity
 preflight, allowed roots, result scope, stable bundles, and biological interpretation boundaries.

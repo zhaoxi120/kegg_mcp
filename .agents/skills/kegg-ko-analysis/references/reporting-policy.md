@@ -29,6 +29,11 @@ render_input.json
 bundle_manifest.json
 ```
 
+Treat the bundle as the durable cross-process artifact. The manifest redacts absolute source paths
+by default, while retained result IDs are valid only in the current stdio session and are removed
+on normal server shutdown. Use `delete_analysis_result` after required reads only when the user
+requests immediate cleanup.
+
 Use bounded previews in conversation. Prefer a resource URI returned by a tool over constructing
 one. The server declares these fixed resources and templates:
 

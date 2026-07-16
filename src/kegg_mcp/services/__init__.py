@@ -28,7 +28,7 @@ from kegg_mcp.services.contracts import (
     PlainKoAnalysisResult,
 )
 from kegg_mcp.services.orchestration import analyze_plain_ko
-from kegg_mcp.services.output_bundle import OutputBundle, OutputBundleArtifact
+from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle, OutputBundleArtifact
 from kegg_mcp.services.primitives import (
     DATASET_SECTION,
     DEFAULT_IMPORT_LIMITS,
@@ -59,6 +59,7 @@ from kegg_mcp.services.primitives import (
     analyze_module_targets,
     analyze_pathway_targets,
     compare_annotation_sets,
+    delete_analysis_result,
     get_server_status_service,
     map_ko_identifiers,
     normalize_annotations,
@@ -117,6 +118,7 @@ from kegg_mcp.services.result_store import (
     ResultMetadataPage,
     ResultStoreError,
     ResultStoreLimits,
+    ScopeDeletionSummary,
     SQLiteResultStore,
 )
 
@@ -167,6 +169,7 @@ __all__ = [
     "KoMappingServiceResult",
     "KoPathwayRelationship",
     "KoSetComparisonPreview",
+    "ManifestPathMode",
     "ModuleAnalysisPreview",
     "ModuleCompletionRenderResult",
     "ModuleOptionalComponentRenderState",
@@ -206,6 +209,7 @@ __all__ = [
     "ResultStoreError",
     "ResultStoreLimits",
     "SQLiteResultStore",
+    "ScopeDeletionSummary",
     "SelectedPathwaySummary",
     "ServerStatusResult",
     "StageMetric",
@@ -216,6 +220,7 @@ __all__ = [
     "analyze_plain_ko",
     "build_render_input",
     "compare_annotation_sets",
+    "delete_analysis_result",
     "get_server_status_service",
     "load_module_graphs",
     "load_pathway_references",

@@ -350,6 +350,14 @@ class CleanupSummary(_StoreModel):
     remaining_bytes: int = Field(strict=True, ge=0)
 
 
+class ScopeDeletionSummary(_StoreModel):
+    """Counts removed when one process-local result scope is discarded."""
+
+    deleted_results: int = Field(strict=True, ge=0)
+    deleted_artifacts: int = Field(strict=True, ge=0)
+    deleted_bytes: int = Field(strict=True, ge=0)
+
+
 class ResultStoreError(RuntimeError):
     """Sanitized internal persistence failure without paths or payload data."""
 
@@ -730,6 +738,96 @@ class SQLiteResultStore:
             deleted_bytes=deleted_bytes,
         )
 
+    def delete_scope(self, scope_id: str) -> ScopeDeletionSummary:
+        """Delete every retained result owned by one validated process-local scope."""
+        checked_scope = _validate_scope_id(scope_id)
+        try:
+            if not self._configured_store_exists():
+                return ScopeDeletionSummary(
+                    deleted_results=0,
+                    deleted_artifacts=0,
+                    deleted_bytes=0,
+                )
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    row = connection.execute(
+                        """
+                        SELECT
+                            COUNT(*),
+                            COALESCE(SUM(artifact_count), 0),
+                            COALESCE(SUM(total_bytes), 0)
+                        FROM stored_results
+                        WHERE scope_id = ?
+                        """,
+                        (checked_scope,),
+                    ).fetchone()
+                    connection.execute(
+                        "DELETE FROM stored_results WHERE scope_id = ?",
+                        (checked_scope,),
+                    )
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+        except (OSError, sqlite3.Error, _ResultStoreIntegrityError):
+            raise ResultStoreError("delete_scope") from None
+        try:
+            if row is None or len(row) != 3:
+                raise _ResultStoreIntegrityError("unexpected scope summary row shape")
+            deleted_results = _decode_nonnegative_integer(row[0])
+            deleted_artifacts = _decode_nonnegative_integer(row[1])
+            deleted_bytes = _decode_nonnegative_integer(row[2])
+        except (TypeError, ValueError, _ResultStoreIntegrityError):
+            raise ResultStoreError("integrity_check") from None
+        return ScopeDeletionSummary(
+            deleted_results=deleted_results,
+            deleted_artifacts=deleted_artifacts,
+            deleted_bytes=deleted_bytes,
+        )
+
+    def cleanup_expired(self, *, now: datetime | None = None) -> CleanupSummary:
+        """Delete only TTL-expired results without evicting active results for quota."""
+        checked_now = _normalize_now(now)
+        try:
+            if not self._configured_store_exists():
+                return CleanupSummary(
+                    expired_results=0,
+                    expired_bytes=0,
+                    evicted_results=0,
+                    evicted_bytes=0,
+                    remaining_results=0,
+                    remaining_bytes=0,
+                )
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    expired_results, expired_bytes = self._delete_expired(
+                        connection,
+                        checked_now,
+                    )
+                    remaining_row = connection.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(total_bytes), 0) FROM stored_results"
+                    ).fetchone()
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+        except (OSError, sqlite3.Error, _ResultStoreIntegrityError):
+            raise ResultStoreError("cleanup_expired") from None
+        try:
+            remaining_results, remaining_bytes = _decode_count_and_bytes(remaining_row)
+        except (TypeError, ValueError, _ResultStoreIntegrityError):
+            raise ResultStoreError("integrity_check") from None
+        return CleanupSummary(
+            expired_results=expired_results,
+            expired_bytes=expired_bytes,
+            evicted_results=0,
+            evicted_bytes=0,
+            remaining_results=remaining_results,
+            remaining_bytes=remaining_bytes,
+        )
+
     def cleanup(self, *, now: datetime | None = None) -> CleanupSummary:
         """Delete expired results, then evict oldest active results over quota."""
         checked_now = _normalize_now(now)
@@ -1010,6 +1108,13 @@ class SQLiteResultStore:
             raise
         _tighten_file_permissions(path)
         return connection
+
+    def _configured_store_exists(self) -> bool:
+        configured = Path(self._configured_path).expanduser()
+        if ".." in configured.parts:
+            raise OSError("result store path must not contain traversal components")
+        path = configured if configured.is_absolute() else Path.cwd() / configured
+        return os.path.lexists(path)
 
     def _prepare_location(self) -> Path:
         configured = Path(self._configured_path).expanduser()
@@ -1294,4 +1399,5 @@ __all__ = [
     "ResultStoreError",
     "ResultStoreLimits",
     "SQLiteResultStore",
+    "ScopeDeletionSummary",
 ]

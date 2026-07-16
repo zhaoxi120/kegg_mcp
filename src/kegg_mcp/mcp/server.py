@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import secrets
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar, cast
@@ -40,6 +41,8 @@ from kegg_mcp.mcp.contracts import (
     CompareKoSetsInput,
     CompareToolEnvelope,
     ConnectivityToolEnvelope,
+    DeleteAnalysisResultInput,
+    DeleteToolEnvelope,
     EntriesToolEnvelope,
     GetKeggEntriesInput,
     GetServerStatusInput,
@@ -66,6 +69,7 @@ from kegg_mcp.services import (
     analyze_module_targets,
     analyze_pathway_targets,
     compare_annotation_sets,
+    delete_analysis_result,
     get_server_status_service,
     map_ko_identifiers,
     normalize_annotations,
@@ -95,6 +99,7 @@ TOOL_NAMES = (
     "analyze_pathways",
     "compare_ko_sets",
     "probe_kegg_connectivity",
+    "delete_analysis_result",
     "get_server_status",
 )
 
@@ -304,6 +309,17 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                 return _success(
                     result,
                     f"KEGG connectivity preflight completed: {result.state.value}.",
+                )
+            if name == "delete_analysis_result":
+                supplied = _parse(DeleteAnalysisResultInput, arguments)
+                result = delete_analysis_result(
+                    supplied.result_id,
+                    result_store=state.result_store,
+                    scope_id=state.scope_id,
+                )
+                return _success(
+                    result,
+                    "Deleted the current-session retained result and all of its artifacts.",
                 )
             raise ValueError("Unknown MCP tool name.")
         except ValidationError as error:
@@ -580,14 +596,20 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
 
 
 def _tool_definitions() -> list[types.Tool]:
-    deterministic = types.ToolAnnotations(
-        readOnlyHint=True,
+    additive_closed = types.ToolAnnotations(
+        readOnlyHint=False,
         destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+    additive_open = additive_closed.model_copy(update={"openWorldHint": True})
+    destructive_closed = types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
         idempotentHint=True,
         openWorldHint=False,
     )
-    open_world = deterministic.model_copy(update={"openWorldHint": True})
-    status = types.ToolAnnotations(
+    read_only_closed = types.ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
         idempotentHint=True,
@@ -604,7 +626,7 @@ def _tool_definitions() -> list[types.Tool]:
             ),
             AnalyzeKoAnnotationsInput,
             PrimitiveAnalysisToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "normalize_ko_annotations",
@@ -615,7 +637,7 @@ def _tool_definitions() -> list[types.Tool]:
             ),
             NormalizeKoAnnotationsInput,
             NormalizeToolEnvelope,
-            deterministic,
+            additive_closed,
         ),
         _tool(
             "get_kegg_entries",
@@ -623,7 +645,7 @@ def _tool_definitions() -> list[types.Tool]:
             "Retrieve allowlisted KEGG entries with bounded batching; this is not a URL proxy.",
             GetKeggEntriesInput,
             EntriesToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "map_ko_ids",
@@ -631,7 +653,7 @@ def _tool_definitions() -> list[types.Tool]:
             "Map selected K numbers to pathways, modules, reactions, EC numbers, or BRITE.",
             MapKoIdsInput,
             MappingToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "analyze_modules",
@@ -642,7 +664,7 @@ def _tool_definitions() -> list[types.Tool]:
             ),
             AnalyzeModulesInput,
             PrimitiveAnalysisToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "analyze_pathways",
@@ -650,7 +672,7 @@ def _tool_definitions() -> list[types.Tool]:
             "Compute descriptive unique-KO coverage with an explicit reference namespace.",
             AnalyzePathwaysInput,
             PrimitiveAnalysisToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "compare_ko_sets",
@@ -658,7 +680,7 @@ def _tool_definitions() -> list[types.Tool]:
             "Compute deterministic KO set differences without statistical interpretation.",
             CompareKoSetsInput,
             CompareToolEnvelope,
-            open_world,
+            additive_open,
         ),
         _tool(
             "probe_kegg_connectivity",
@@ -669,7 +691,18 @@ def _tool_definitions() -> list[types.Tool]:
             ),
             ProbeKeggConnectivityInput,
             ConnectivityToolEnvelope,
-            open_world,
+            additive_open,
+        ),
+        _tool(
+            "delete_analysis_result",
+            "Delete retained analysis result",
+            (
+                "Immediately delete one retained result from the current stdio session; "
+                "unknown, expired, deleted, and cross-scope identifiers remain indistinguishable."
+            ),
+            DeleteAnalysisResultInput,
+            DeleteToolEnvelope,
+            destructive_closed,
         ),
         _tool(
             "get_server_status",
@@ -677,7 +710,7 @@ def _tool_definitions() -> list[types.Tool]:
             "Return redacted capabilities, access mode, and local retention limits.",
             GetServerStatusInput,
             StatusToolEnvelope,
-            status,
+            read_only_closed,
         ),
     ]
 
@@ -909,13 +942,23 @@ def _json_resource(model: BaseModel) -> ReadResourceContents:
 
 
 async def _run_stdio() -> None:
-    server = create_server()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    runtime = build_runtime()
+    server = create_server(runtime)
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        try:
+            runtime.result_store.delete_scope(runtime.scope_id)
+        except ResultStoreError:
+            print(
+                "KEGG MCP could not clear session-scoped retained results during shutdown.",
+                file=sys.stderr,
+            )
 
 
 def main() -> None:

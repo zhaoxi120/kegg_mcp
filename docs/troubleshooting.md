@@ -74,11 +74,23 @@ ancestors are rejected.
 Run `kegg-mcp doctor`; it reports only whether handoff is enabled and how many roots were accepted.
 It never prints the roots. Inspect the client configuration locally when the count is unexpected.
 
+### `OUTPUT_ALREADY_EXISTS`
+
+Output bundles are non-overwriting. The requested output directory contains an existing entry, so
+the server made no change. Choose a new or empty directory. There is no overwrite flag in this
+release.
+
 ### `RESULT_NOT_FOUND`
 
 A `result_id` belongs to one stdio server process and may also have expired or been deleted. Do not
 copy opaque result IDs across client sessions. Rerun the analysis, or request an output bundle
-beneath an allowed root for stable cross-process handoff.
+beneath an allowed root for stable cross-process handoff. Normal shutdown deletes the current
+scope; 24 hours is the active hard TTL and the cleanup threshold for rows left by abnormal exit,
+not a cross-process recovery promise.
+
+Use `delete_analysis_result` for immediate deletion in the current session. Operators can remove
+TTL-expired rows without starting stdio by running `kegg-mcp cleanup --expired`; this does not
+delete unexpired results or KEGG cache entries.
 
 ## KEGG access failures
 

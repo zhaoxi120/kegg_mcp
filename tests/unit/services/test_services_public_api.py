@@ -20,6 +20,7 @@ def test_services_package_exports_orchestration_and_contracts() -> None:
         "ImportSummary",
         "KeggReferenceClient",
         "ModuleAnalysisPreview",
+        "ManifestPathMode",
         "PathwayAnalysisPreview",
         "PathwayExecutionParameters",
         "PathwayRankingExecution",
@@ -38,10 +39,12 @@ def test_services_package_exports_orchestration_and_contracts() -> None:
         "ResultMetadata",
         "ResultMetadataPage",
         "ResultStoreLimits",
+        "ScopeDeletionSummary",
         "SQLiteResultStore",
         "SelectedPathwaySummary",
         "StageMetric",
         "analyze_plain_ko",
+        "delete_analysis_result",
         "load_module_graphs",
         "load_pathway_references",
     }
@@ -70,6 +73,7 @@ def test_services_package_exports_store_defaults_and_lifecycle_results() -> None
         "DEFAULT_RETENTION_SECONDS",
         "CleanupSummary",
         "DeletedResult",
+        "ScopeDeletionSummary",
         "ResultStoreError",
     }
 
