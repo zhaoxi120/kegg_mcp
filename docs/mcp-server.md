@@ -16,8 +16,8 @@ uv run kegg-mcp
 The default access mode is confirmed `public_academic`. Server logs and configuration failures are written to
 stderr; stdout is reserved for MCP protocol messages.
 
-Internal development, default pytest, and pull-request CI use the same public-academic default and
-run the bounded 120-request compatibility campaign.
+Local pytest skips live requests by default. Pull-request CI explicitly runs the bounded
+20-request public-academic compatibility campaign once.
 
 Use the side-effect-free operator diagnostic before client startup:
 
@@ -157,6 +157,7 @@ codes rather than `CACHE_FAILED`. Invalid or unauthorized resource URIs use MCP 
 Endpoint URLs, environment values, credentials, raw tables, and cache payloads are not included in
 status or error output.
 
-The default test suite and pull-request CI run one serialized campaign fixed at 120 requests (30
-for each supported operation) with zero retries and no uploaded KEGG payloads. Additional manual
-checks should use only the minimum explicit requests.
+Pull-request CI runs one serialized campaign of 20 requests (five for each supported operation)
+with zero retries and no uploaded KEGG payloads. Local live checks are opt-in and accept a bounded
+per-operation count from 1 through 30. Additional manual checks should use only the minimum
+explicit requests.

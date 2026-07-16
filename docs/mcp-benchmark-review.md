@@ -28,8 +28,8 @@ infer implementation quality from popularity or copy product-specific features i
 High-adoption repositories put a short, client-specific path before generic configuration. They
 also supply a first prompt that proves discovery without requiring the user to understand the MCP
 protocol. KEGG MCP therefore documents a Codex CLI registration command, a discovery check, and a
-bounded live content check for eligible academic acceptance. Internal iteration and CI use the
-same bounded public-academic campaign.
+bounded live content check for eligible academic acceptance. Local pytest keeps that check opt-in,
+while pull-request CI runs the bounded public-academic profile once.
 
 ### Separate operator diagnostics from protocol traffic
 

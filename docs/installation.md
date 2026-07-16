@@ -23,8 +23,8 @@ DeepKOALA, model weights, and KOfam profiles are not server dependencies.
 
 ## Install from a source checkout
 
-From the repository root, create the locked environment and run the default test suite, including
-its 120-request live KEGG campaign:
+From the repository root, create the locked environment. Local validation is optional before a
+commit, and the default test command does not contact KEGG:
 
 ```bash
 uv sync --frozen
@@ -72,15 +72,15 @@ The supported operating profiles are:
 
 - unconfigured operation defaults to `public_academic` with academic use confirmed;
 - licensed operation configures the operator's authorized endpoint; and
-- internal iteration, the default pytest suite, and pull-request CI run the same bounded live
-  campaign.
+- local pytest skips live KEGG tests unless explicitly enabled; and
+- pull-request CI runs the bounded live compatibility campaign once.
 
 The project never infers a live-access right from a username, institution, host, or execution
 context.
 
-Default and pull-request CI issue one serialized 120-request campaign without uploading KEGG
-payloads. It makes 30 requests for each supported operation at one request per second with zero
-retries.
+Pull-request CI issues one serialized 20-request campaign without uploading KEGG payloads. It
+makes five requests for each supported operation at one request per second with zero retries.
+Merging the pull request does not trigger the same workflow again.
 
 ### Public academic access
 
@@ -419,7 +419,7 @@ another active scope's result.
 - Normalize and validate inputs before requesting KEGG references.
 - Request only the MODULE and pathway identifiers needed for the analysis.
 - Use the cache-only entry resource only when an explicit local read is intended.
-- Keep the default and pull-request campaign fixed at the budget documented in
+- Keep pull-request CI and any explicitly enabled local campaign within the budget documented in
   `tests/live/README.md`.
 - Do not publish KEGG response bodies or cache databases when reporting a problem.
 - Record the endpoint class, retrieval time, readable request key, parser version, cache

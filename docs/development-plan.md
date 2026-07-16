@@ -27,8 +27,8 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
   pathway rendering remains an independent MCP and Skill.
 - The nine-tool server includes `probe_kegg_connectivity`, returns field-level validation details,
   and can write a concise versioned output bundle beneath configured allowed roots.
-- Default tests and pull-request CI run one serialized 120-request live KEGG campaign and must not
-  upload KEGG payloads.
+- Local tests skip live KEGG access by default. Pull-request CI runs one serialized 20-request live
+  campaign and must not upload KEGG payloads; merging to `main` does not repeat that workflow.
 
 ## Table of contents
 
@@ -1006,11 +1006,11 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 
 - Use synthetic or independently authored small fixtures.
 - Do not commit bulk KEGG responses, pathway images, KGML collections, KOfam profiles, model weights, or large FASTA files.
-- Run one serialized fixed 120-request campaign in the default suite and pull-request CI. It makes
-  30 requests for each of `INFO`, `GET`, `LINK`, and `CONV` at one request per second with zero
-  retries and no uploaded payloads.
-- Keep any additional opt-in live smoke test local, rate-limited, eligibility-gated, and tolerant
-  of current database content.
+- Keep the local live suite opt-in. Pull-request CI runs one serialized campaign with five requests
+  for each of `INFO`, `GET`, `LINK`, and `CONV` at one request per second with zero retries and no
+  uploaded payloads.
+- Allow explicitly authorized manual runs to configure 1 through 30 requests per operation while
+  retaining the same rate, eligibility, circuit-breaker, and payload-handling controls.
 - Do not use strict snapshots of full live KEGG entries because database content changes.
 
 ### 17.5 Skill evaluation
@@ -1041,7 +1041,8 @@ Tasks:
 - create the Python project and package metadata;
 - configure uv, ruff, pyright, pytest, and CI;
 - add contribution, security, and issue templates; and
-- keep the default and pull-request live campaign fixed at 120 serialized KEGG calls.
+- keep local live calls opt-in and configure the single pull-request campaign within its reviewed
+  request budget.
 
 Acceptance:
 
@@ -1099,7 +1100,8 @@ Acceptance:
 - `get` batches never exceed ten entries;
 - the process cannot exceed the configured maximum rate;
 - cache-only reads never make a live call;
-- standard tests include one bounded live campaign and otherwise use injected transports; and
+- standard local tests skip the bounded live campaign and otherwise use injected transports;
+- pull-request CI explicitly enables one bounded live campaign; and
 - cache failures cannot be mistaken for missing biology.
 
 ### Milestone 3: module parser and evaluator
@@ -1299,7 +1301,8 @@ The first release is blocked until all of the following are true:
 - Large MCP results are bounded and retrievable safely.
 - Tool outputs conform to declared schemas and stdio stdout is clean.
 - Reports do not claim pathway activity, flux, phenotype, or statistical significance from KO presence alone.
-- Default CI runs the fixed 120-request live KEGG campaign.
+- Pull-request CI runs the 20-request live KEGG campaign once; local default pytest and the merge
+  push do not repeat it.
 - All tracked repository content is in English.
 - Version 0.1.x package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.

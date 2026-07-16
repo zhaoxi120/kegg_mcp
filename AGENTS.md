@@ -95,9 +95,10 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Enforce a process-wide rate no greater than three KEGG API requests per second; use a safer default with no burst.
 - Respect endpoint-specific limits, including the maximum of ten entries for `get` requests.
 - Keep cached KEGG payloads local and out of version control, packages, examples, CI artifacts, and releases.
-- Run one serialized 120-request live KEGG campaign in the default test suite and pull-request CI:
-  30 requests each for `INFO`, `GET`, `LINK`, and `CONV`, at one request per second with zero
-  retries and no uploaded KEGG payloads.
+- Keep live KEGG tests opt-in locally. Pull-request CI runs one serialized 20-request compatibility
+  campaign: five requests each for `INFO`, `GET`, `LINK`, and `CONV`, at one request per second
+  with zero retries and no uploaded KEGG payloads. A manual authorized run may raise the count to
+  at most 30 requests per operation.
 - Store retrieval time, endpoint, request key, parser version, and release information when
   available.
 
@@ -130,7 +131,13 @@ uv run pyright
 uv run pytest
 ```
 
-Do not add these commands to CI until the corresponding tools and minimal tests are configured and verified locally.
+These commands are maintainer tools, not a mandatory pre-commit gate. Routine commits may rely on
+the pull-request CI and address failures in a follow-up commit. The default local test command must
+not make live KEGG requests unless the maintainer explicitly opts in.
+
+Keep the GitHub workflow aligned with these commands now that the corresponding tools and tests
+are configured. Local execution remains optional unless a release checklist explicitly requires
+additional evidence.
 
 ## Review checklist
 

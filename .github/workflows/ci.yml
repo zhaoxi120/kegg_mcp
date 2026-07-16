@@ -2,9 +2,6 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -21,6 +18,8 @@ jobs:
     env:
       KEGG_MCP_ACCESS_MODE: public_academic
       KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"
+      KEGG_MCP_RUN_LIVE_TESTS: "true"
+      KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "5"
 
     steps:
       - name: Check out repository
@@ -45,7 +44,7 @@ jobs:
       - name: Type-check
         run: uv run --frozen pyright
 
-      - name: Test, including 120 live KEGG requests
+      - name: Test, including 20 live KEGG requests
         run: uv run --frozen pytest
 
   validate-deepkoala-companion:

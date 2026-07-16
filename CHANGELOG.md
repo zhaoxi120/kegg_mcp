@@ -11,8 +11,8 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 - An independently installed, CPU-only `deepkoala-mcp` stdio companion with bounded local job
   control and controlled detailed-CSV handoff to the core importer.
 - KEGG BRITE htext parser support for compact roots under a validated metadata envelope.
-- A default serialized 120-request KEGG compatibility campaign with 30 real requests for each
-  supported operation in local pytest and pull-request CI.
+- An opt-in KEGG compatibility campaign covering all four supported operations with bounded,
+  configurable repetition and a 20-request pull-request CI profile.
 - A backward-compatible command-line facade with `serve` and a side-effect-free, redacted
   `doctor [--json]` deployment diagnostic.
 - Client initialization instructions, a high-star MCP repository benchmark, a Codex CLI quick
@@ -20,6 +20,8 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Changed
 
+- Pull-request CI is the single automatic validation run; local pre-commit validation is optional,
+  default local pytest skips live KEGG calls, and merges to `main` do not repeat the same workflow.
 - The repository Skill may orchestrate an available DeepKOALA companion for FASTA input while
   keeping inference, process control, and normalization outside Skill code.
 - Companion confirmation uses a server-held opaque job identifier and explicit acknowledgement;

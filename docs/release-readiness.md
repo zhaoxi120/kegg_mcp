@@ -12,10 +12,9 @@ The current integration amendment was validated on 2026-07-16 with the full core
 companion suites, one four-request authorized KEGG campaign, and one CPU-only companion handoff
 against fixed DeepKOALA commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9` using its bundled
 `202502` full resource. Final packaging is still rechecked against the exact merged commit.
-The expanded 120-request KEGG campaign was additionally checked against the official API on
-2026-07-16 as part of the unconfigured default suite: 686 tests passed in 127.04 seconds from the
-implementation working tree. It still requires a run against the exact merged candidate before
-release.
+The earlier expanded 120-request KEGG campaign was additionally checked against the official API
+on 2026-07-16: 686 tests passed in 127.04 seconds from the implementation working tree. Current
+pull-request CI uses the reduced 20-request profile and is the automatic live gate for a candidate.
 
 Version 0.2.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
 Python 3.12 and later; a wider Python range requires a separately tested compatibility change.
@@ -38,7 +37,8 @@ the release record.
 
 ## Required automated validation
 
-Run the locked validation suite with public KEGG network access available:
+GitHub pull-request CI is the authoritative automated gate. Local commands are optional and the
+default local pytest invocation does not contact KEGG:
 
 ```bash
 uv sync --frozen
@@ -54,8 +54,8 @@ The release-contract subset is available for focused auditing:
 uv run --frozen pytest tests/release
 ```
 
-The default test suite and pull-request CI run the serialized 120-request live campaign. A passing
-test run does not independently establish KEGG eligibility for another deployment.
+Pull-request CI explicitly runs the serialized 20-request live campaign. A passing test run does
+not independently establish KEGG eligibility for another deployment.
 
 When the optional companion is part of the candidate, validate its independent distribution with
 no installed DeepKOALA checkout or model data required:
@@ -114,9 +114,10 @@ all of the following:
 7. a failed request remains a technical retrieval error, not a biological absence claim; and
 8. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
 
-The default suite makes exactly 120 serialized requests at one request per second with zero
-retries: 30 each for `INFO`, `GET`, `LINK`, and `CONV`. Record the endpoint class and number of
-requests, but do not publish response bodies. Record a successful campaign against the exact
+Pull-request CI makes 20 serialized requests at one request per second with zero retries: five each
+for `INFO`, `GET`, `LINK`, and `CONV`. Record the endpoint class and number of requests, but do not
+publish response bodies. An authorized manual run may configure 1 through 30 requests per
+operation when stronger repetition is justified. Record a successful campaign against the exact
 candidate commit before release.
 
 ## Data-rights gates

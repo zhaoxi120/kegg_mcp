@@ -58,8 +58,7 @@ JSON or TOML MCP snippets are configuration file content, not Bash commands. See
 
 ## Internal development profile
 
-Internal iteration, the default test suite, and pull-request CI include the bounded live KEGG
-campaign:
+Local validation is available but is not a mandatory pre-commit gate:
 
 ```bash
 uv run --frozen ruff check .
@@ -68,9 +67,10 @@ uv run --frozen pyright
 uv run --frozen pytest
 ```
 
-The package default is confirmed `public_academic` access. Every default pytest run, including pull
-requests, performs one serialized campaign of 30 real requests for each supported operation, 120
-requests total. See `tests/live/README.md` for its controls and budget.
+Local pytest skips live KEGG tests by default. Pull-request CI explicitly enables one serialized
+20-request campaign with five requests for each supported operation. It runs once for the pull
+request; merging to `main` does not repeat it. See `tests/live/README.md` for its controls and
+configurable manual budget. The package default remains confirmed `public_academic` access.
 
 ## Current implementation
 
