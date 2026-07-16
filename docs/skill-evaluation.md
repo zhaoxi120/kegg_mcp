@@ -7,9 +7,11 @@ model, or contacted KEGG.
 ## Method
 
 On 2026-07-15, the independent forward/manual review was repeated against the exact v0.2.0
-candidate and its actual MCP schemas. All six routes passed. The reviewer inspected the selected
-route, necessary clarification, tool choice, refusal boundary, interpretation language, and
-relevant Skill references.
+candidate and its actual MCP schemas. The seven core and annotation-companion routes below passed.
+On 2026-07-16, a separate nine-route forward review covered the v0.3.0 visualization candidate,
+the version 2 handoff, and the independently installed renderer MCP. The reviewer inspected the
+selected route, necessary clarification, tool choice, refusal boundary, interpretation language,
+and relevant Skill references.
 
 The repository tests under `tests/skill/` provide deterministic instruction-contract coverage.
 They verify metadata, trigger terms, boundaries, MCP dependency identity, required guidance, and
@@ -104,11 +106,33 @@ is available.
 Observed route: passed. The Skill follows the explicit no-guessing boundary and does not fabricate
 an MCP result.
 
+## Visualization extension forward review
+
+The visualization review used the exact tracked `kegg-visualization` instructions, its five
+references, the amended `kegg-ko-analysis` instructions, and the actual six-tool renderer surface.
+All nine routes passed:
+
+| Prompt class | Expected route and boundary | Result |
+| --- | --- | --- |
+| Protein FASTA to pathway graphic | Use `deepkoala-mcp -> kegg-mcp -> kegg-render-mcp`; retain the annotation job until the complete version 2 bundle exists. | Passed |
+| Existing K numbers | Skip annotation, request an allowed core output directory, and render the resulting handoff. | Passed |
+| Existing version 2 handoff | Skip annotation and analysis; let the renderer validate and render the unchanged handoff. | Passed |
+| Renderer unavailable | Stop with the deployment result; do not synthesize a fallback image or install another tool. | Passed |
+| Version 1 handoff | Request a new core analysis bundle because preview-only input cannot be upgraded losslessly. | Passed |
+| Accepted and uncertain evidence | Preserve distinct renderer-owned visual states and redundant non-color cues. | Passed |
+| Rejected prediction as a missing gene | Refuse the absence claim and exclude rejected evidence from coloring. | Passed |
+| Global or overview pathway | Preserve explicit rejection or summary-only behavior; do not approximate a regular box overlay. | Passed |
+| MODULE logic diagram | Preserve AND, OR, optional, grouping, and MODULE-reference semantics from the authoritative core AST. | Passed |
+
+The review also confirmed that the Skill does not contain inference, normalization, KGML parsing,
+MODULE evaluation, pathway-coverage calculation, color assignment, SVG construction, pixel
+manipulation, endpoint configuration, or resource-URI construction logic.
+
 ## Limitations and release use
 
-This forward review covers the exact v0.2.0 core release candidate plus the current optional
-companion routing amendment. It used no live KEGG request and did not run DeepKOALA or benchmark
-model-to-model variability, malicious prompt injection, long-context degradation, client-specific
-tool selection, or external annotator compatibility. Future releases must repeat the review
-against their exact candidate; any routing or interpretation regression blocks release even if
-the deterministic static tests still pass.
+This record covers the exact v0.2.0 review and the v0.3.0 visualization candidate. It used no live
+KEGG request, did not execute DeepKOALA, and used no real KEGG PNG or KGML payload. It did not
+benchmark model-to-model variability, malicious prompt injection, long-context degradation,
+client-specific tool selection, or external annotator compatibility. Future releases must repeat
+the review against their exact candidate; any routing or interpretation regression blocks release
+even if the deterministic static tests still pass.

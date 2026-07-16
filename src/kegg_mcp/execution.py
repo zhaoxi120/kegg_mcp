@@ -4,13 +4,16 @@ from typing import Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
-from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel
+from kegg_mcp.analysis.contracts import ModuleAnalysisLimits
+from kegg_mcp.analysis.pathway_coverage import PathwayCoverageLimits
+from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, EvidenceMode, FrozenModel
 from kegg_mcp.importers.contracts import ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
+from kegg_mcp.report_limits import ReportLimits
 
 ANALYSIS_SERVICE_NAME = "kegg_mcp_plain_ko_analysis"
 ANNOTATION_ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
-ANALYSIS_SERVICE_VERSION = "1"
+ANALYSIS_SERVICE_VERSION = "2"
 
 
 class ReferenceLoadingLimits(FrozenModel):
@@ -73,12 +76,19 @@ class AnalysisServiceLimits(FrozenModel):
     max_pathway_previews: int = Field(default=10, strict=True, ge=0, le=1_000)
 
 
+class PathwayExecutionParameters(FrozenModel):
+    """Caller-controlled pathway semantics shared by one analysis run."""
+
+    evidence_mode: EvidenceMode = EvidenceMode.STRICT
+    allow_global_or_overview: bool = False
+
+
 class AnalysisExecutionProvenance(FrozenModel):
     """Sanitized one-call parameters needed to reproduce a stored analysis run."""
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:1",
+            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -87,10 +97,16 @@ class AnalysisExecutionProvenance(FrozenModel):
         "kegg_mcp_plain_ko_analysis",
         "kegg_mcp_annotation_analysis",
     ] = ANALYSIS_SERVICE_NAME
-    service_version: Literal["1"] = ANALYSIS_SERVICE_VERSION
+    service_version: Literal["2"] = ANALYSIS_SERVICE_VERSION
     import_limits: ImportLimits
     kegg_request_options: KeggRequestOptions
     reference_loading_limits: ReferenceLoadingLimits
+    module_analysis_limits: ModuleAnalysisLimits = Field(default_factory=ModuleAnalysisLimits)
+    pathway_parameters: PathwayExecutionParameters = Field(
+        default_factory=PathwayExecutionParameters
+    )
+    pathway_coverage_limits: PathwayCoverageLimits = Field(default_factory=PathwayCoverageLimits)
+    report_limits: ReportLimits = Field(default_factory=ReportLimits)
     direct_result_limits: AnalysisServiceLimits
 
 
@@ -100,5 +116,6 @@ __all__ = [
     "ANNOTATION_ANALYSIS_SERVICE_NAME",
     "AnalysisExecutionProvenance",
     "AnalysisServiceLimits",
+    "PathwayExecutionParameters",
     "ReferenceLoadingLimits",
 ]

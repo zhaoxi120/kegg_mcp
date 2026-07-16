@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kegg-render-mcp"
+version = "0.1.0"
+description = "Local stdio MCP companion for bounded KEGG evidence visualizations"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "kegg-mcp>=0.3,<0.4",
+    "mcp>=1.27,<2",
+    "pillow>=11,<13",
+    "pydantic>=2.12,<3",
+]
+
+[project.scripts]
+kegg-render-mcp = "kegg_render_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "build>=1.4,<2",
+    "jsonschema>=4.26,<5",
+    "pyright>=1.1.411,<2",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.15.21,<0.16",
+    "setuptools>=80.9,<83",
+]
+
+[tool.uv.sources]
+kegg-mcp = { path = "../..", editable = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kegg_render_mcp = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src", "../../src"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+venv = ".venv"
+venvPath = "."
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers", "-ra"]
+asyncio_mode = "strict"
+testpaths = ["tests"]

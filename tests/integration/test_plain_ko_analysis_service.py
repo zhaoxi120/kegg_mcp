@@ -201,7 +201,7 @@ def test_one_call_service_retains_complete_artifacts_and_returns_bounded_preview
     assert structured["renderer_name"] == "kegg_mcp_reporting"
     execution = structured["report"]["execution"]
     assert execution["service_name"] == "kegg_mcp_plain_ko_analysis"
-    assert execution["service_version"] == "1"
+    assert execution["service_version"] == "2"
     assert execution["import_limits"] == request.import_limits.model_dump(mode="json")
     assert execution["kegg_request_options"] == {
         "allow_stale": False,
@@ -209,6 +209,13 @@ def test_one_call_service_retains_complete_artifacts_and_returns_bounded_preview
         "refresh": True,
     }
     assert execution["reference_loading_limits"] == request.reference_limits.model_dump(mode="json")
+    assert execution["module_analysis_limits"] == request.module_limits.model_dump(mode="json")
+    assert execution["pathway_parameters"] == {
+        "allow_global_or_overview": request.allow_global_or_overview,
+        "evidence_mode": request.pathway_evidence_mode.value,
+    }
+    assert execution["pathway_coverage_limits"] == request.pathway_limits.model_dump(mode="json")
+    assert execution["report_limits"] == request.report_limits.model_dump(mode="json")
     assert execution["direct_result_limits"] == result.limits.model_dump(mode="json")
     assert structured["report"]["dataset"]["analysis_unit"] == "metagenomic_community"
     module_result = structured["report"]["module_evaluations"][0]["strict"]

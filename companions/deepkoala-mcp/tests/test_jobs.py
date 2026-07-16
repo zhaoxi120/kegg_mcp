@@ -175,8 +175,10 @@ async def test_success_returns_current_core_file_handoff_without_csv_interpretat
         assert handoff.source.source_name == "deepkoala"
         assert handoff.source.model_name == "frag"
         assert handoff.source.model_version == "202401"
-        assert handoff.source.input_path == handoff.output_path
+        assert handoff.source.input_path is None
+        assert handoff.source.input_uri == (f"mcp://deepkoala-mcp/jobs/{prepared.job_id}/output")
         assert not (output.parent / "input.fasta").exists()
+        assert str(output.parent / "input.fasta") not in handoff.model_dump_json()
 
         expected_core_fields = {
             "source_name",
@@ -191,6 +193,28 @@ async def test_success_returns_current_core_file_handoff_without_csv_interpretat
         assert set(handoff.source.model_dump(mode="json")) == expected_core_fields
         assert all(
             set(item.model_dump()) == {"name", "value"} for item in handoff.source.source_metadata
+        )
+
+
+@pytest.mark.asyncio
+async def test_path_input_preserves_original_fasta_provenance_separately(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    original = runtime_config.allowed_roots[0] / "proteins.faa"
+    original.write_text(">p\nMPEPTIDE\n", encoding="ascii")
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        prepared = await manager.prepare(PrepareDeepKoalaInput(fasta_path=str(original)))
+        await manager.submit(prepared.job_id)
+        assert await _wait_terminal(manager, prepared.job_id) is JobState.SUCCEEDED
+
+        result = await manager.get_job(prepared.job_id)
+        assert result.handoff is not None
+        handoff = result.handoff
+        assert handoff.source.input_path == str(original.resolve())
+        assert handoff.source.input_path != handoff.output_path
+        assert handoff.source.input_uri == (f"mcp://deepkoala-mcp/jobs/{prepared.job_id}/output")
+        assert (
+            str(Path(handoff.output_path).parent / "input.fasta") not in handoff.model_dump_json()
         )
 
 

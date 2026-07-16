@@ -8,16 +8,31 @@ Current status: **validated for the private v0.2.0 GitHub release candidate on 2
 applicable gates below must be verified against the merged commit before tagging. Candidate
 identity and distribution digests belong in the GitHub release notes, not biological workflows.
 
+The unreleased visualization extension adds a second independently packaged companion and a
+renderer-specific gate set. Its implementation uses the three-process boundary and synthetic-only
+renderer test policy approved on 2026-07-16. Final publication still requires passing the core,
+DeepKOALA companion, renderer companion, and Skill gates against the exact merged commit plus a
+specific rights review for any distributed rendered derivative.
+
+The `render_input.json` version 2 handoff first appears in the unreleased core 0.3 series. The
+renderer dependency must be `kegg-mcp>=0.3,<0.4`; published core 0.2.0 is incompatible and must
+fail dependency resolution rather than reaching a runtime schema error.
+
+The DeepKOALA provenance correction is the independently distributed companion's 0.2.0 contract.
+Its generated CSV and caller-supplied original FASTA are validated separately; 0.1.0 must not be
+presented as compatible with that corrected handoff.
+
 The current integration amendment was validated on 2026-07-16 with the full core and
 companion suites, one four-request authorized KEGG campaign, and one CPU-only companion handoff
 against fixed DeepKOALA commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9` using its bundled
 `202502` full resource. Final packaging is still rechecked against the exact merged commit.
-The earlier expanded 120-request KEGG campaign was additionally checked against the official API
-on 2026-07-16: 686 tests passed in 127.04 seconds from the implementation working tree. Current
-pull-request CI uses the reduced 20-request profile and is the automatic live gate for a candidate.
+The 120-request KEGG campaign was checked against the official API on 2026-07-16: 686 tests passed
+in 127.04 seconds from the implementation working tree. Current pull-request CI uses this same
+bounded profile and is the automatic live gate for a candidate.
 
-Version 0.2.0 supports and is tested only on Python 3.11.x. Its package metadata excludes
-Python 3.12 and later; a wider Python range requires a separately tested compatibility change.
+Core versions 0.2.0 and the unreleased 0.3.0 candidate support and are tested only on Python
+3.11.x. Their package metadata excludes Python 3.12 and later; a wider Python range requires a
+separately tested compatibility change.
 
 ## Candidate identity
 
@@ -28,6 +43,8 @@ Record these values in the release issue or signed release notes:
 - Python versions and operating systems tested;
 - `uv.lock` digest;
 - wheel and source-distribution SHA-256 digests;
+- independent `deepkoala-mcp` and `kegg-render-mcp` versions, lock digests, and distribution
+  digests when those companions are included;
 - reviewer for KEGG access and data-rights boundaries;
 - reviewer for security and privacy boundaries; and
 - date of the final test run.
@@ -54,8 +71,10 @@ The release-contract subset is available for focused auditing:
 uv run --frozen pytest tests/release
 ```
 
-Pull-request CI explicitly runs the serialized 20-request live campaign. A passing test run does
-not independently establish KEGG eligibility for another deployment.
+Pull-request CI explicitly runs the serialized 120-request live campaign. A passing test run does
+not independently establish KEGG eligibility for another deployment. The independent renderer job
+uses only synthetic offline assets and makes no live KEGG requests. The workflow has no `push`
+trigger, so merging to `main` does not repeat either validation campaign.
 
 When the optional companion is part of the candidate, validate its independent distribution with
 no installed DeepKOALA checkout or model data required:
@@ -73,6 +92,23 @@ uv build --no-sources --out-dir /tmp/deepkoala-mcp-dist
 Its tests must use synthetic FASTA and fake subprocess fixtures. They must cover path
 escape, queue bounds, explicit acknowledgement, timeout, cancellation, process-group cleanup,
 output bounds, stdio cleanliness, and controlled core-import handoff.
+
+Validate the renderer as a third, independently locked distribution:
+
+```bash
+cd companions/kegg-render-mcp
+uv sync --frozen --all-groups
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen pyright
+uv run --frozen pytest
+uv build --no-sources --out-dir /tmp/kegg-render-mcp-dist
+```
+
+Renderer tests and release audits must use generated synthetic PNG, KGML, MODULE contracts, and
+handoffs only. They must validate version 2 compatibility, pathway and MODULE rendering semantics,
+XML/image/SVG bounds, filesystem and scope isolation, stdio schemas, binary resource MIME types,
+and independent wheel/source-distribution contents without contacting KEGG.
 
 ## Build and clean-install verification
 
@@ -96,10 +132,15 @@ response, generated analysis result, secret, model weight, KOfam profile, large 
 private fixture, bytecode, or local absolute path.
 
 The core Python wheel and Python source distribution deliver the core MCP Python server. They do
-not install the optional companion, the repository-scoped Skill, or the complete repository
-documentation and examples. Verify the companion as its own distribution and verify the Skill
+not install either optional companion, either repository-scoped Skill, or the complete repository
+documentation and examples. Verify each companion as its own distribution and verify both Skills
 separately from the exact GitHub repository checkout or tag source archive proposed for the
-release; do not treat a clean core-wheel installation as either verification.
+release; do not treat a clean core-wheel installation as verification of another component.
+
+The renderer wheel and source distribution must contain only `kegg_render_mcp` implementation,
+metadata, and required license material. They must not contain core or DeepKOALA implementation
+code, source or rendered KEGG assets, KGML, cache databases, biological inputs, private paths, or
+repository Skills. Its compatible `kegg-mcp` range is a dependency boundary, not copied code.
 
 Install the wheel into a newly created Python 3.11.x environment, confirm that package metadata
 rejects Python 3.12 or later, connect an MCP client in the default `public_academic` mode, and verify
@@ -114,7 +155,7 @@ all of the following:
 7. a failed request remains a technical retrieval error, not a biological absence claim; and
 8. unknown, expired, or cross-scope result identifiers fail as `RESULT_NOT_FOUND`.
 
-Pull-request CI makes 20 serialized requests at one request per second with zero retries: five each
+Pull-request CI makes 120 serialized requests at one request per second with zero retries: 30 each
 for `INFO`, `GET`, `LINK`, and `CONV`. Record the endpoint class and number of requests, but do not
 publish response bodies. An authorized manual run may configure 1 through 30 requests per
 operation when stronger repetition is justified. Record a successful campaign against the exact
@@ -132,7 +173,11 @@ candidate commit before release.
       tracked or packaged.
 - [x] No DeepKOALA weight, KOfam profile, annotation database, or third-party model code is tracked
       or packaged.
-- [x] The optional companion is independently packaged, imports neither the core package nor
+- [x] No real KEGG PNG, KGML, rendered derivative, or cache payload is used as a renderer fixture,
+      uploaded by CI, or packaged in either renderer archive.
+- [x] Source pathway assets remain local, and redistribution of rendered derivatives requires a
+      separate rights review rather than relying on the MIT source-code license.
+- [x] The DeepKOALA companion is independently packaged, imports neither the core package nor
       PyTorch, and never installs or downloads external code, weights, profiles, or data.
 - [x] Local cached payloads are excluded from version control, examples, CI artifacts, and
       releases.
@@ -163,6 +208,12 @@ This checklist is operational guidance, not legal advice.
 - [x] Cache corruption, network failure, unsupported MODULE syntax, and missing entries remain
       distinguishable from biological absence.
 - [x] Private annotation tables and protein sequences are not logged by default.
+- [x] Renderer input, XML, image dimensions and pixels, SVG nodes and bytes, artifact paths,
+      retained bytes, and disk use are explicitly bounded.
+- [x] Renderer XML resolution is closed; generated SVG has no scripts, event handlers, active
+      links, remote fonts, or external image resources.
+- [x] Renderer state, allowed roots, and outputs reject traversal, unsafe ancestry, and symlink
+      escape, while scoped IDs do not reveal cross-process result existence.
 - [x] The vulnerability-reporting path appropriate to the candidate visibility is verified: for
       this private repository, `SECURITY.md` documents the collaborator-only issue boundary; before
       any public supported release, GitHub private vulnerability reporting must be enabled and its
@@ -178,8 +229,15 @@ This checklist is operational guidance, not legal advice.
       or incomplete result.
 - [x] Every pathway ratio includes its reference namespace, numerator, denominator, and retrieval
       provenance.
+- [x] `AnalysisExecutionProvenance` version 2 records MODULE analysis limits, pathway parameters,
+      pathway coverage limits, and report limits used to construct the renderer handoff.
 - [x] Reports describe KO coverage as encoded-potential evidence and do not infer expression,
       activity, flux, phenotype, or statistical significance.
+- [x] Accepted and policy-defined uncertain rendering evidence remain visually distinct; rejected
+      predictions are excluded and unchanged pathway graphics are not labelled as biological
+      absence.
+- [x] Renderer diagrams display exact MODULE completion separately from project block coverage and
+      preserve unsupported, unresolved, cyclic, optional, grouping, and reference states.
 - [x] Community-level results are not phrased as completeness within one organism.
 - [x] KO-set comparison remains deterministic set comparison, not differential-function
       statistics.
@@ -197,6 +255,12 @@ This checklist is operational guidance, not legal advice.
       contract tests pass, and the six-prompt forward/manual review is repeated and recorded
       against the exact candidate.
 - [x] The Skill never guesses a KO from a sequence, gene name, or protein name.
+- [x] The core exposes a typed, immutable renderer handoff but no rendering tool; the renderer
+      neither normalizes KO evidence nor recomputes MODULE or pathway results.
+- [x] The independent renderer exposes explicit tool schemas, accurate open-world annotations,
+      a fixed status resource, scoped artifact templates, binary PNG resources, and deletion.
+- [x] The visualization Skill declares the actual core and renderer dependencies and contains no
+      inference, normalization, KGML parsing, pixel manipulation, or rendering code.
 
 ## Release sign-off
 
@@ -210,13 +274,19 @@ unauthorized request. The package, contract, and interpretation gates are still 
 The first Python distribution provides a local stdio MCP server for importing KO annotations,
 retrieving authorized KEGG references, evaluating MODULE definitions, reporting descriptive
 pathway KO coverage, comparing KO sets deterministically, and retrieving bounded full results.
-The exact GitHub repository checkout or tag source archive also provides a repository-scoped Codex
-Skill that selects workflows and explains evidence limits; the Python wheel and source
-distribution do not install that Skill.
+The exact GitHub repository checkout or tag source archive also provides repository-scoped Codex
+Skills for analysis and visualization routing; the Python wheel and source distribution do not
+install either Skill.
 
 The core distribution does not annotate sequences, redistribute KEGG or KOfam data, run
-enrichment, infer pathway activity, or provide a remote service. The optional companion is a
-separately reviewed local runner for an existing DeepKOALA installation and returns evidence to
-the same core importer. Public KEGG REST access is available only after an eligible academic
-operator uses the default confirmed academic profile; other users need an appropriately licensed
-endpoint.
+enrichment, infer pathway activity, or provide a remote service. The DeepKOALA companion is a
+separately reviewed local runner for an existing installation and returns evidence to the same
+core importer. Public KEGG REST access is available only after an eligible academic operator uses
+the default confirmed academic profile; other users need an appropriately licensed endpoint.
+
+The visualization extension adds `kegg-render-mcp` as another separately reviewed local stdio
+distribution. The core writes a complete renderer-specific version 2 handoff; the renderer creates
+bounded static regular-pathway overlays and project-owned MODULE diagrams without changing the
+analysis. Source assets remain local, tests are synthetic, global and overview maps are unsupported,
+and no output constitutes evidence of pathway activity, flux, phenotype, or experimental
+validation.

@@ -3,10 +3,14 @@
 KEGG MCP is a local stdio MCP server and repository-scoped Codex Skill for turning KEGG
 Orthology (KO) annotations into traceable KEGG mappings, module evaluations, pathway coverage
 summaries, and cautious biological interpretations. This repository is the canonical source for
-the project.
+the project. Its optional FASTA-to-image workflow uses three independent local stdio processes:
+`deepkoala-mcp` annotates proteins, `kegg-mcp` normalizes and analyzes evidence, and
+`kegg-render-mcp` renders the core's typed handoff.
 
 > Project status: Version 0.2.0 implements the reviewed workflow remediation and is verified with
-> automated tests. This release supports and is tested only on Python 3.11.x.
+> automated tests. The unreleased visualization extension adds an independently installed renderer
+> without changing the core server's process boundary. It is a core 0.3 series candidate; published
+> core 0.2.0 does not provide the version 2 handoff. These distributions support Python 3.11.x.
 
 ## Intended users
 
@@ -15,7 +19,9 @@ The project is designed for bioinformatics users who have one of the following:
 - a plain list of K numbers;
 - a CSV or TSV annotation table from DeepKOALA, KofamScan, BlastKOALA, GhostKOALA, or another tool;
 - a protein FASTA and an explicitly configured optional local DeepKOALA companion; or
-- two or more KO sets that need a deterministic, non-statistical comparison.
+- two or more KO sets that need a deterministic, non-statistical comparison; or
+- a compatible `render_input.json` version 2 handoff that should become a bounded pathway overlay
+  or MODULE logic diagram.
 
 The primary user experience is one high-level analysis request. Lower-level MCP tools remain
 available for users who need explicit control over normalization, KEGG retrieval, module
@@ -68,13 +74,15 @@ uv run --frozen pytest
 ```
 
 Local pytest skips live KEGG tests by default. Pull-request CI explicitly enables one serialized
-20-request campaign with five requests for each supported operation. It runs once for the pull
-request; merging to `main` does not repeat it. See `tests/live/README.md` for its controls and
-configurable manual budget. The package default remains confirmed `public_academic` access.
+120-request campaign with 30 requests for each supported operation, at one request per second with
+zero retries. It runs once for the pull request; merging to `main` does not repeat it. See
+`tests/live/README.md` for its controls. Separate companion jobs use synthetic offline inputs;
+renderer tests never retrieve or package real KEGG images or KGML. The package default remains
+confirmed `public_academic` access.
 
 ## Current implementation
 
-The Python package currently provides:
+The repository currently provides:
 
 - frozen Pydantic contracts for source provenance, annotation records, datasets, import reports,
   and derived KO evidence views;
@@ -106,8 +114,12 @@ The Python package currently provides:
   ten-entry GET batching and shared aggregate request and response budgets;
 - one-call KO import, automatic reference-pathway discovery, MODULE/pathway analysis, concise
   output-directory bundles, and scoped result retention with bounded direct previews;
+- an immutable, versioned `RenderInputV2` handoff with complete-within-limit accepted and uncertain
+  evidence, authoritative MODULE states, pathway coverage results, and calculation provenance;
+- a typed single-pathway PNG/KGML asset interface that reuses the core access gate, cache, rate
+  limiter, transport validation, and retrieval provenance without exposing arbitrary URLs;
 - deterministic structured JSON, concise Markdown, and flat annotation CSV report artifacts with
-  complete one-call execution provenance and explicit hard limits; and
+  `AnalysisExecutionProvenance` version 2, including MODULE, pathway, coverage, and report limits;
 - a scope-isolated SQLite result store with 24-hour default retention, a 512 MiB logical payload
   quota, a 640 MiB main-database page cap, a 10,000-result cap, metadata pagination, artifact
   byte-range reads, explicit deletion, and cleanup;
@@ -121,7 +133,9 @@ The Python package currently provides:
   statistics as `null` with `inspection_status=not_probed`, plus file-handoff readiness and an
   allowed-root count, rather than opening a database or exposing configured paths;
 - an instruction-only `kegg-ko-analysis` Skill for existing KO evidence and optional companion
-  handoff, with confidence, MODULE/pathway interpretation, and reporting references; and
+  handoff, with confidence, MODULE/pathway interpretation, and reporting references;
+- an independent `kegg-visualization` Skill that orchestrates compatible core and renderer tools
+  without parsing KGML, manipulating pixels, or reinterpreting analysis results; and
 - redistributable synthetic examples, installation guidance, release gates, and local package
   audit tests.
 
@@ -138,6 +152,8 @@ grammar, reference resolution, exact evaluation, and interpretation boundaries. 
 denominators, coverage, deterministic set comparison, and shared-reference outcome comparison. See
 the [Milestone 5 services, result storage, and reporting contract](docs/services-results-reporting.md)
 for the one-call workflow, report artifacts, result isolation, retention, and retrieval behavior.
+The complete visualization contract, three-process workflow, security bounds, and rights boundary
+are defined in the [visualization extension plan](docs/visualization-extension-plan.md).
 
 ## Optional local DeepKOALA companion
 
@@ -152,6 +168,21 @@ handoff. It returns detailed CSV and readable source provenance to the existing 
 core importer. It deliberately has no workflow or artifact hash protocol and does not duplicate KO
 normalization. See the [companion README](companions/deepkoala-mcp/README.md) for its independent
 installation and configuration contract.
+
+## Optional local renderer companion
+
+`companions/kegg-render-mcp/` is a separate stdio distribution that accepts only the complete
+`render_input.json` version 2 produced by the core. It renders regular reference-pathway evidence
+overlays and project-owned MODULE logic diagrams as bounded static SVG, with optional PNG
+derivatives. It does not import annotation tables, normalize KOs, evaluate MODULEs, recompute
+pathway coverage, run DeepKOALA, or add a rendering tool to the core MCP surface.
+
+The renderer uses the core package's typed one-pathway asset client. Source PNG and KGML remain
+local under the operator's KEGG access rights and are never included in repository fixtures, CI
+artifacts, wheels, source distributions, or releases. All checked-in renderer tests construct
+synthetic XML and images. Global and overview pathways remain unsupported. See the
+[renderer README](companions/kegg-render-mcp/README.md) for independent installation,
+configuration, tools, resources, retention, and output limits.
 
 ## MCP tools and resources
 
@@ -185,25 +216,28 @@ The instruction-only Skill is located at `.agents/skills/kegg-ko-analysis/` and 
 questions, and deterministic KO-set comparisons without duplicating normalization or analysis
 code. For FASTA without KO evidence, it may orchestrate an explicitly available local
 `deepkoala-mcp` companion and then hand the controlled detailed CSV path to the core importer.
-Inference, process control, weights, and normalization remain outside the Skill. Pathway rendering
-belongs to an independent Skill and MCP.
+Inference, process control, weights, and normalization remain outside the Skill. The separate
+`.agents/skills/kegg-visualization/` Skill requires a compatible `kegg-render-mcp`, passes the
+controlled version 2 handoff path, and returns renderer-provided resource URIs. It contains no
+rendering implementation.
 
-Deterministic static tests cover the Skill's instruction contract; they do not execute a language
-model. The six required prompts also have a recorded independent forward/manual review in the
-[Skill evaluation record](docs/skill-evaluation.md). That review was repeated against the exact
-v0.2.0 candidate for publication sign-off. Synthetic inputs and access-mode templates are under
-`examples/`.
+Deterministic static tests cover the Skills' instruction contracts; they do not execute a language
+model. The core routes were reviewed against the exact v0.2.0 candidate, and nine visualization
+routes were independently reviewed against the v0.3.0 candidate and actual renderer surface. See
+the [Skill evaluation record](docs/skill-evaluation.md). Synthetic inputs and access-mode
+templates are under `examples/`.
 
 ## Distribution boundary
 
 The core Python wheel and Python source distribution contain the MCP Python server, package
-metadata, and required license notices. They do not install the repository-scoped Skill, the
-optional companion, or the complete repository documentation and examples. The companion has its
-own package metadata, lock file, entry point, validation, and release review.
+metadata, and required license notices. They do not install either repository-scoped Skill, either
+optional companion, or the complete repository documentation and examples. Each companion has
+its own package metadata, lock file, entry point, validation, and release review.
 
-Use `.agents/skills/kegg-ko-analysis/` from an exact GitHub repository checkout or tag source archive when
-the Codex Skill is required. That Skill can depend on a separately installed `kegg-mcp` Python
-server, but installing the wheel alone does not make the Skill available to Codex.
+Use `.agents/skills/kegg-ko-analysis/` and `.agents/skills/kegg-visualization/` from an exact GitHub
+repository checkout or tag source archive when the Codex Skills are required. The Skills can
+depend on separately installed stdio servers, but installing the wheel alone does not make either
+Skill available to Codex.
 
 ## Scope
 
@@ -221,13 +255,18 @@ The implemented MVP can:
 The core MVP does not run sequence annotation software, perform enrichment or
 differential-abundance statistics, redistribute KEGG datasets, generate pathway images, host a
 public annotation service, or infer pathway activity from KO presence alone. The optional local
-companion is a separately installed MCP-side runner and does not broaden the core package boundary.
+companions are separately installed MCP-side processes and do not broaden the core package
+boundary. Only `kegg-render-mcp` generates graphics from the authoritative core handoff.
 
 ## Important KEGG usage constraint
 
 The public KEGG REST API is restricted to academic use by academic users and requests must be limited to no more than three calls per second. Non-academic use requires an appropriate KEGG license. This project's source-code license will not grant rights to KEGG content.
 
 Cached KEGG responses must remain local to the user, must not be committed to this repository, and must not be included in releases, test fixtures, or example outputs.
+
+The same restriction applies to source pathway PNG and KGML assets. Redistribution of a rendered
+derivative requires a separate rights review; the project's MIT license grants no KEGG content
+rights.
 
 See the [KEGG API page](https://www.kegg.jp/kegg/rest/) and [KEGG legal notice](https://www.kegg.jp/kegg/legal.html) before implementing or operating the live client.
 
@@ -240,6 +279,7 @@ See the [KEGG API page](https://www.kegg.jp/kegg/rest/) and [KEGG legal notice](
 - [Release-readiness checklist](docs/release-readiness.md)
 - [Codex Skill evaluation record](docs/skill-evaluation.md)
 - [Development plan](docs/development-plan.md)
+- [Pathway and MODULE visualization extension](docs/visualization-extension-plan.md)
 - [Milestone 1 import contracts](docs/import-contracts.md)
 - [Milestone 2 KEGG client and cache contract](docs/kegg-client.md)
 - [Milestone 3 KEGG MODULE analysis contract](docs/module-analysis.md)
@@ -270,8 +310,10 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── release-readiness.md
 │   ├── skill-evaluation.md
 │   ├── services-results-reporting.md
-│   └── troubleshooting.md
+│   ├── troubleshooting.md
+│   └── visualization-extension-plan.md
 ├── companions/deepkoala-mcp/         # Independent optional CPU-only runner distribution
+├── companions/kegg-render-mcp/        # Independent bounded renderer distribution
 ├── pyproject.toml
 ├── src/kegg_mcp/
 │   ├── execution.py                  # Neutral service limits and execution provenance
@@ -282,7 +324,8 @@ The development plan records the reviewed architecture, data contracts, biologic
 │   ├── reporting/                    # Bounded structured, Markdown, and CSV artifacts
 │   ├── services/                     # Reference loading, orchestration, and result storage
 │   └── mcp/                          # Stdio tools, resources, schemas, and configuration
-├── .agents/skills/kegg-ko-analysis/  # KO-analysis-only Codex Skill and references
+├── .agents/skills/kegg-ko-analysis/  # KO-analysis Codex Skill and references
+├── .agents/skills/kegg-visualization/ # Renderer orchestration Skill and references
 └── tests/                            # Unit, integration, MCP, Skill, release, and default live tests
 ```
 

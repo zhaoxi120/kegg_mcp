@@ -8,11 +8,22 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Added
 
+- A separately installed `kegg-render-mcp` 0.1.0 stdio companion for bounded regular-pathway
+  evidence overlays and project-owned MODULE logic diagrams, with static SVG, optional PNG, scoped
+  resource retention, and synthetic-only tests.
+- A complete immutable `render_input.json` version 2 contract that keeps accepted and
+  policy-defined uncertain evidence distinct, carries authoritative MODULE states and pathway
+  coverage results, and rejects incompatible preview-only version 1 input.
+- A typed single-pathway PNG/KGML asset service that reuses the core KEGG access, rate-limit,
+  cache, transport, validation, and provenance boundaries without accepting arbitrary URLs.
+- An instruction-only `kegg-visualization` Skill for routing compatible core handoffs through the
+  independent renderer without duplicating normalization, evaluation, KGML parsing, or rendering.
 - An independently installed, CPU-only `deepkoala-mcp` stdio companion with bounded local job
   control and controlled detailed-CSV handoff to the core importer.
 - KEGG BRITE htext parser support for compact roots under a validated metadata envelope.
 - An opt-in KEGG compatibility campaign covering all four supported operations with bounded,
-  configurable repetition and a 20-request pull-request CI profile.
+  configurable repetition and a serialized 120-request pull-request CI profile with 30 requests
+  per operation, one request per second, and zero retries.
 - A backward-compatible command-line facade with `serve` and a side-effect-free, redacted
   `doctor [--json]` deployment diagnostic.
 - Client initialization instructions, a high-star MCP repository benchmark, a Codex CLI quick
@@ -20,6 +31,17 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Changed
 
+- The core candidate advances to 0.3.0 for the first `RenderInputV2` public contract;
+  `kegg-render-mcp` requires `kegg-mcp>=0.3,<0.4`, so published core 0.2.0 cannot be selected as a
+  compatible renderer dependency.
+- The independently distributed DeepKOALA companion advances to 0.2.0 with a breaking provenance
+  correction: the caller's original FASTA path is distinct from the companion-produced detailed
+  CSV, and the private staged FASTA is never exposed.
+- Analysis bundles now serialize a validated renderer-specific version 2 handoff and record its
+  schema and MIME type separately from the complete bundle version.
+- Analysis execution provenance advances to schema and service version 2 and records the effective
+  MODULE, pathway, evidence-mode, report, reference-loading, import, request, and direct-result
+  bounds needed to reproduce the core calculation.
 - Pull-request CI is the single automatic validation run; local pre-commit validation is optional,
   default local pytest skips live KEGG calls, and merges to `main` do not repeat the same workflow.
 - The repository Skill may orchestrate an available DeepKOALA companion for FASTA input while
@@ -33,6 +55,14 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
   allowed roots without exposing their paths.
 - The installation guide now identifies JSON and TOML snippets as configuration file content and
   fixes the nested biological-context placement in the annotation-file example.
+
+### Security
+
+- Renderer input, XML, source images, SVG, PNG, output paths, retained artifacts, and resource URIs
+  are bounded, static, scope-isolated, traversal- and symlink-safe, and free of active or external
+  content.
+- Renderer CI and package audits use only generated synthetic assets and reject real KEGG PNG,
+  KGML, cache payloads, model resources, private paths, and cross-component implementation code.
 
 ## [0.2.0] - 2026-07-15
 

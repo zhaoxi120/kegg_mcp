@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -32,16 +33,25 @@ class InputPathError(ValueError):
     """A caller-supplied path violates the configured input boundary."""
 
 
+@dataclass(frozen=True, slots=True)
+class StagedFasta:
+    """Validated FASTA summary and bounded caller-visible origin."""
+
+    summary: FastaSummary
+    original_input_path: str | None
+
+
 def stage_fasta(
     *,
     fasta_text: str | None,
     fasta_path: str | None,
     allowed_roots: tuple[Path, ...],
     job_directory: Path,
-) -> FastaSummary:
-    """Read one source once, validate it, and retain only a canonical private copy."""
+) -> StagedFasta:
+    """Read one source once and retain a canonical copy plus safe origin metadata."""
     if (fasta_text is None) == (fasta_path is None):
         raise FastaValidationError("exactly one FASTA source is required")
+    original_input_path: str | None = None
     if fasta_text is not None:
         try:
             content = fasta_text.encode("ascii")
@@ -49,10 +59,11 @@ def stage_fasta(
             raise FastaValidationError("FASTA must be ASCII") from error
     else:
         assert fasta_path is not None
-        content = _read_allowed_file(Path(fasta_path), allowed_roots)
+        content, resolved = _read_allowed_file(Path(fasta_path), allowed_roots)
+        original_input_path = str(resolved)
     summary, canonical = validate_fasta_bytes(content)
     _write_private(job_directory / INPUT_FILENAME, canonical)
-    return summary
+    return StagedFasta(summary=summary, original_input_path=original_input_path)
 
 
 def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
@@ -120,7 +131,7 @@ def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
     )
 
 
-def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> bytes:
+def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[bytes, Path]:
     if not path.is_absolute() or ".." in path.parts or not allowed_roots:
         raise InputPathError("input path is not allowed")
     try:
@@ -158,7 +169,9 @@ def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> bytes:
             raise FastaLimitError("FASTA exceeds the byte limit")
         if _file_state(before) != _file_state(after):
             raise InputPathError("input file changed during intake")
-        return bytes(content)
+        if len(str(resolved)) > 4_096:
+            raise InputPathError("resolved input path exceeds the provenance limit")
+        return bytes(content), resolved
     finally:
         os.close(descriptor)
 
@@ -236,6 +249,7 @@ __all__ = [
     "FastaLimitError",
     "FastaValidationError",
     "InputPathError",
+    "StagedFasta",
     "stage_fasta",
     "validate_fasta_bytes",
 ]

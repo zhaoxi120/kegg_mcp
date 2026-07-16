@@ -97,19 +97,27 @@ the immutable server-retained plan, so no client-generated or echoed digest is u
 
 DeepKOALA always runs with detailed output and `multi=false`. A successful job returns:
 
-- an absolute private `output_path`;
+- an absolute private `output_path` for the generated detailed annotation CSV;
 - `input_format="deepkoala_detailed"`; and
-- readable source provenance aligned with the core `SourceProvenanceInput` contract.
+- readable source provenance aligned with the core `SourceProvenanceInput` contract, including a
+  sanitized annotation-artifact `input_uri` and the original allowlisted FASTA `input_path` when
+  path input was used.
 
-Configure the core server to allow the companion state root, then pass `output_path` as the core
-normalization tool's `file_path`, together with the supplied input format and provenance. The core
-importer is the only component that validates DeepKOALA CSV semantics or classifies KO evidence.
-The companion only enforces a non-empty regular output file and a 5,000,000-byte limit.
+For inline FASTA, provenance sets `input_path` to `null`. The companion never substitutes its
+private staged `input.fasta` path. The generated annotation `output_path` and optional original
+FASTA `source.input_path` are distinct fields with independent path validation.
+
+Configure the core server to allow the companion state root and, for path input, the original
+FASTA root. Then pass `output_path` as the core normalization tool's `file_path`, together with the
+supplied input format and provenance. The core importer is the only component that validates
+DeepKOALA CSV semantics or classifies KO evidence. The companion only enforces a non-empty regular
+output file and a 5,000,000-byte limit.
 
 The output path remains valid only while the companion process is alive and before retention expiry
 or explicit deletion. Normal shutdown cancels the owned process group and removes its complete
 session directory. FASTA headers, sequences, environment values, and local paths are not returned
-by status or error responses; the controlled output path is exposed only in a successful handoff.
+by status or error responses; only the controlled annotation output path and caller-supplied
+original FASTA path, when present, are exposed in a successful handoff.
 
 Compatibility was checked on 2026-07-16 with official DeepKOALA commit
 `bebbe0c43f50a26488f7092f6b355aae870a4ed9`, the `full` 202502 resources, CPU execution with two

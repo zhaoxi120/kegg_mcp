@@ -1,11 +1,13 @@
 # KEGG Client and Cache Contract
 
-Status: Milestone 2 client-layer contract as implemented on 2026-07-14.
+Status: Milestone 2 client-layer contract plus the post-MVP typed pathway-asset extension as
+implemented on 2026-07-16.
 
 This document describes the typed KEGG request contracts, access eligibility gate, bounded request
-preparation, response parsing, local cache, and retrieval provenance. It does not describe module
-evaluation, pathway coverage, reporting services, MCP transport, or the repository-scoped Codex
-Skill; those implemented layers are documented separately.
+preparation, response parsing, local cache, and retrieval provenance, including the public library
+interface used by the independent renderer. It does not describe module evaluation, pathway
+coverage, reporting services, MCP transport, or repository-scoped Codex Skills; those implemented
+layers are documented separately.
 
 ## Official service facts and eligibility
 
@@ -156,6 +158,24 @@ supported in Milestone 2 because their identifier syntax does not distinguish th
 hierarchy files. Misclassified content fails parsing rather than being returned as hierarchy data.
 The result echoes the typed request; documents and provenance follow prepared batch order, while
 explicit missing entries follow caller request order.
+
+### Pathway assets
+
+The post-MVP renderer extension adds a typed single-pathway asset interface reviewed against the
+official KEGG API manual on 2026-07-16. `PathwayAssetRequest` accepts one canonical pathway
+identifier and exactly one fixed kind: `image`, `image2x`, or `kgml`. It cannot accept a URL.
+`KeggClient.get_pathway_asset` reuses the same access gate, endpoint-scoped no-burst limiter,
+retry policy, HTTPS transport, response-size bound, local cache, and retrieval provenance as the
+text operations.
+
+PNG responses require a valid signature, bounded dimensions, pixel and decompressed-scanline
+counts, canonical critical-chunk ordering, valid CRC values, and one complete zlib IDAT stream whose
+scanlines match the IHDR contract. The core applies only bounded UTF-8, DTD/entity declaration, and
+obvious `pathway` root-prefix preflight checks to KGML bytes; it does not parse XML, require a
+well-formed complete document, or assert pathway identity. The independent renderer owns bounded
+XML structure parsing, pathway-identity checks, and PNG/KGML dimension compatibility. Cached assets
+are validator-versioned and revalidated before use. This public library interface supports the
+separately installed renderer and is intentionally not exposed as a core MCP tool.
 
 ### LINK
 

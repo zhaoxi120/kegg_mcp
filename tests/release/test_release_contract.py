@@ -14,13 +14,18 @@ from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNED_RELEASE_FILES = (
+    PROJECT_ROOT / "README.md",
     PROJECT_ROOT / "CHANGELOG.md",
+    PROJECT_ROOT / "docs" / "development-plan.md",
     PROJECT_ROOT / "docs" / "mcp-benchmark-review.md",
     PROJECT_ROOT / "docs" / "installation.md",
+    PROJECT_ROOT / "docs" / "mcp-server.md",
     PROJECT_ROOT / "docs" / "release-readiness.md",
     PROJECT_ROOT / "docs" / "skill-evaluation.md",
     PROJECT_ROOT / "docs" / "troubleshooting.md",
+    PROJECT_ROOT / "docs" / "visualization-extension-plan.md",
     PROJECT_ROOT / "companions" / "deepkoala-mcp" / "README.md",
+    PROJECT_ROOT / "companions" / "kegg-render-mcp" / "README.md",
     PROJECT_ROOT / "tests" / "live" / "README.md",
     PROJECT_ROOT / "examples" / "README.md",
     PROJECT_ROOT / "examples" / "plain-ko" / "ko-list.txt",
@@ -40,7 +45,9 @@ FORBIDDEN_DISTRIBUTION_SUFFIXES = {
     ".h3m",
     ".h3p",
     ".hmm",
+    ".kgml",
     ".onnx",
+    ".png",
     ".pt",
     ".pth",
     ".safetensors",
@@ -50,6 +57,7 @@ FORBIDDEN_DISTRIBUTION_SUFFIXES = {
 FORBIDDEN_ARCHIVE_PARTS = {
     ".git",
     ".kegg-cache",
+    ".kegg-render",
     ".pytest_cache",
     ".pyright",
     ".ruff_cache",
@@ -57,6 +65,10 @@ FORBIDDEN_ARCHIVE_PARTS = {
     "__pycache__",
     "build",
     "dist",
+    "analysis-results",
+    "pathway-assets",
+    "render-output",
+    "renderer-state",
     "results",
 }
 CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
@@ -97,7 +109,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.2.0"
+    assert project["version"] == "0.3.0"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
     assert scripts == {"kegg-mcp": "kegg_mcp.mcp.cli:main"}
@@ -161,11 +173,79 @@ def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
 
     for path in candidate_files:
         assert path.suffix.lower() not in FORBIDDEN_DISTRIBUTION_SUFFIXES, path
+        assert path.name not in {"render_input.json", "render_manifest.json"}, path
         assert path.stat().st_size <= 5 * 1024 * 1024, path
+        if path.suffix.lower() == ".svg":
+            assert "data:image/png;base64," not in path.read_text(encoding="utf-8"), path
 
     ignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "*.zh-CN.md" in ignore
+    assert ".kegg-render/" in ignore
+    assert "renderer-state/" in ignore
+    assert "analysis-results/" in ignore
+    assert "pathway-assets/" in ignore
+    assert "*.kgml" in ignore
+    assert "*.png" in ignore
+    assert "render_input.json" in ignore
+    assert "render_manifest.json" in ignore
     assert all(not path.name.endswith(".zh-CN.md") for path in candidate_files)
+
+
+def test_visualization_extension_has_an_independent_synthetic_release_boundary() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
+    server_doc = (PROJECT_ROOT / "docs/mcp-server.md").read_text(encoding="utf-8")
+    readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
+    renderer_readme = (PROJECT_ROOT / "companions" / "kegg-render-mcp" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    renderer_project_path = PROJECT_ROOT / "companions" / "kegg-render-mcp" / "pyproject.toml"
+    renderer_lock = PROJECT_ROOT / "companions" / "kegg-render-mcp" / "uv.lock"
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert renderer_project_path.is_file()
+    assert renderer_lock.is_file()
+    renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
+    assert renderer_project["name"] == "kegg-render-mcp"
+    assert "kegg-mcp>=0.3,<0.4" in renderer_project["dependencies"]
+    assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
+    lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
+    locked_packages = cast(list[dict[str, object]], lock_document["package"])
+    locked_core = next(package for package in locked_packages if package["name"] == "kegg-mcp")
+    locked_renderer = next(
+        package for package in locked_packages if package["name"] == "kegg-render-mcp"
+    )
+    assert locked_core["version"] == "0.3.0"
+    assert locked_renderer["version"] == renderer_project["version"]
+
+    for document in (readme, installation, server_doc, readiness, renderer_readme):
+        normalized = re.sub(r"\s+", " ", document)
+        assert "render_input.json" in normalized
+        assert "version 2" in normalized
+        assert "separate" in normalized or "independent" in normalized
+    for document in (readme, installation, server_doc, readiness):
+        assert "AnalysisExecutionProvenance` version 2" in re.sub(r"\s+", " ", document)
+
+    renderer_job = ci.split("validate-renderer-companion:", maxsplit=1)[1]
+    for command in (
+        "uv sync --frozen",
+        "uv run --frozen ruff check .",
+        "uv run --frozen ruff format --check .",
+        "uv run --frozen pyright",
+        "uv run --frozen pytest",
+        "uv build --no-sources",
+    ):
+        assert command in renderer_job
+    assert "companions/kegg-render-mcp/uv.lock" in renderer_job
+    assert "KEGG_MCP_RUN_LIVE_TESTS" not in renderer_job
+    assert "push:" not in ci
+
+    normalized_readiness = re.sub(r"\s+", " ", readiness.lower())
+    normalized_renderer = re.sub(r"\s+", " ", renderer_readme.lower())
+    assert "synthetic" in normalized_readiness
+    assert "no live kegg requests" in normalized_readiness
+    assert "no kegg payload" in normalized_renderer
+    assert "global and overview" in normalized_renderer
 
 
 def test_rights_and_release_status_are_prominent() -> None:
@@ -182,10 +262,11 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "https://www.kegg.jp/kegg/rest/" in installation
     assert "https://www.kegg.jp/kegg/legal.html" in installation
     assert "KEGG_MCP_ALLOWED_ROOTS" in installation
-    assert "confirmed `public_academic`" in readme
+    assert "confirmed `public_academic`" in re.sub(r"\s+", " ", readme)
     assert "KEGG_MCP_ACCESS_MODE: public_academic" in ci
     assert 'KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"' in ci
-    assert "20 live KEGG requests" in ci
+    assert 'KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "30"' in ci
+    assert "120 live KEGG requests" in ci
     assert "push:" not in ci
     assert "probe connectivity once" in installation
     assert "Retrieve only KO entry `K00844`" in installation
@@ -203,6 +284,7 @@ def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review(
     assert "independent forward/manual review" in record
     assert record.count("Observed route: passed.") == 6
     assert "exact v0.2.0 candidate" in re.sub(r"\s+", " ", record)
+    assert "separate nine-route forward review" in re.sub(r"\s+", " ", record)
 
 
 def test_distribution_boundary_is_explicit() -> None:
@@ -217,9 +299,9 @@ def test_distribution_boundary_is_explicit() -> None:
     normalized_readme = re.sub(r"\s+", " ", readme)
     normalized_installation = re.sub(r"\s+", " ", installation)
     normalized_readiness = re.sub(r"\s+", " ", readiness)
-    assert "installing the wheel alone does not make the Skill available" in normalized_readme
-    assert "does not install this repository-scoped Skill" in normalized_installation
-    assert "do not install that Skill" in normalized_readiness
+    assert "installing the wheel alone does not make either Skill available" in normalized_readme
+    assert "does not install either repository-scoped Skill" in normalized_installation
+    assert "do not install either Skill" in normalized_readiness
 
 
 def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:

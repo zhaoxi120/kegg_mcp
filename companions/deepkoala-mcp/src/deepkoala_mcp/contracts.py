@@ -327,12 +327,14 @@ class SourceProvenance(FrozenModel):
     model_version: ResolvedModelDate
     annotation_date: datetime
     input_uri: str = Field(pattern=r"^mcp://deepkoala-mcp/jobs/job_[a-f0-9]{32}/output$")
-    input_path: str = Field(min_length=1, max_length=4_096)
+    input_path: str | None = Field(default=None, min_length=1, max_length=4_096)
     source_metadata: Annotated[tuple[SourceMetadataField, ...], Field(max_length=16)] = ()
 
     @field_validator("input_path")
     @classmethod
-    def validate_output_path(cls, value: str) -> str:
+    def validate_original_input_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         path = Path(value)
         if not path.is_absolute() or ".." in path.parts or "\x00" in value:
             raise ValueError("input_path must be a safe absolute path")
@@ -346,14 +348,13 @@ class ImportHandoff(FrozenModel):
     input_format: Literal["deepkoala_detailed"] = "deepkoala_detailed"
     source: SourceProvenance
 
-    @model_validator(mode="after")
-    def validate_paths(self) -> Self:
-        path = Path(self.output_path)
-        if not path.is_absolute() or ".." in path.parts or "\x00" in self.output_path:
+    @field_validator("output_path")
+    @classmethod
+    def validate_output_path(cls, value: str) -> str:
+        path = Path(value)
+        if not path.is_absolute() or ".." in path.parts or "\x00" in value:
             raise ValueError("output_path must be a safe absolute path")
-        if self.output_path != self.source.input_path:
-            raise ValueError("handoff paths must match")
-        return self
+        return value
 
 
 class GetDeepKoalaJobResult(FrozenModel):

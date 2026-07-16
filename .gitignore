@@ -17,6 +17,15 @@ htmlcov/
 
 # Local application state and biological data
 .kegg-cache/
+.kegg-render/
+renderer-state/
+render-output/
+analysis-results/
+pathway-assets/
+*.kgml
+*.png
+render_input.json
+render_manifest.json
 *.db
 *.db-*
 *.sqlite

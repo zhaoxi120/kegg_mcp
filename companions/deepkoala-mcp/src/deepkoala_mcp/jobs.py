@@ -79,6 +79,7 @@ class _JobRecord:
     prepared_at: datetime
     expires_at: datetime
     source_version: str
+    original_input_path: str | None
     state: JobState = JobState.PREPARED
     submitted_at: datetime | None = None
     started_at: datetime | None = None
@@ -193,7 +194,7 @@ class DeepKoalaJobManager:
             directory.mkdir(mode=0o700)
             os.chmod(directory, 0o700)
             try:
-                summary = stage_fasta(
+                staged = stage_fasta(
                     fasta_text=request.fasta_text,
                     fasta_path=request.fasta_path,
                     allowed_roots=self.config.allowed_roots,
@@ -249,7 +250,7 @@ class DeepKoalaJobManager:
             )
             notice = ExecutionNotice(
                 plan=plan,
-                fasta=summary,
+                fasta=staged.summary,
                 deepkoala_version=installation.source_version,
                 queued_jobs_ahead=queued_ahead,
             )
@@ -261,6 +262,7 @@ class DeepKoalaJobManager:
                 prepared_at=prepared_at,
                 expires_at=prepared_at + timedelta(seconds=self.config.plan_ttl_seconds),
                 source_version=installation.source_version,
+                original_input_path=staged.original_input_path,
             )
             async with self._lock:
                 if self._closing:
@@ -557,7 +559,7 @@ class DeepKoalaJobManager:
             model_version=plan.resolved_model_date,
             annotation_date=record.completed_at,
             input_uri=f"mcp://deepkoala-mcp/jobs/{record.job_id}/output",
-            input_path=str(resolved_output),
+            input_path=record.original_input_path,
             source_metadata=metadata,
         )
         return ImportHandoff(output_path=str(resolved_output), source=source)

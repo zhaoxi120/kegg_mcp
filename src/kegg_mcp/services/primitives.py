@@ -54,6 +54,7 @@ from kegg_mcp.execution import (
     ANNOTATION_ANALYSIS_SERVICE_NAME,
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
+    PathwayExecutionParameters,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -659,6 +660,8 @@ def analyze_annotation_targets(
 ) -> PrimitiveAnalysisResult:
     """Normalize any supported inline format and analyze all selected targets in one call."""
     effective_report_limits = report_limits or ReportLimits()
+    effective_module_limits = module_limits or ModuleAnalysisLimits()
+    effective_pathway_limits = pathway_limits or PathwayCoverageLimits()
     _validate_report_capacity(effective_report_limits, result_store)
     result_store.list_results(scope_id, limit=1)
     dataset = _import_dataset(request)
@@ -679,18 +682,20 @@ def analyze_annotation_targets(
             module_ids,
             options=effective_options,
             limits=effective_reference_limits,
-            analysis_limits=module_limits,
+            analysis_limits=effective_module_limits,
         )
         if module_ids
         else ()
     )
-    modules = tuple(evaluate_module_pair(graph, dataset, module_limits) for graph in graphs)
+    modules = tuple(
+        evaluate_module_pair(graph, dataset, effective_module_limits) for graph in graphs
+    )
     references = load_pathway_references(
         budgeted_client,
         pathways,
         options=effective_options,
         limits=effective_reference_limits,
-        pathway_limits=pathway_limits,
+        pathway_limits=effective_pathway_limits,
     )
     coverages = tuple(
         evaluate_pathway_coverage(
@@ -701,7 +706,7 @@ def analyze_annotation_targets(
                 evidence_mode=pathway_evidence_mode,
                 allow_global_or_overview=allow_global_or_overview,
             ),
-            pathway_limits,
+            effective_pathway_limits,
         )
         for reference in references
     )
@@ -710,6 +715,13 @@ def analyze_annotation_targets(
         import_limits=request.import_limits,
         kegg_request_options=effective_options,
         reference_loading_limits=effective_reference_limits,
+        module_analysis_limits=effective_module_limits,
+        pathway_parameters=PathwayExecutionParameters(
+            evidence_mode=pathway_evidence_mode,
+            allow_global_or_overview=allow_global_or_overview,
+        ),
+        pathway_coverage_limits=effective_pathway_limits,
+        report_limits=effective_report_limits,
         direct_result_limits=AnalysisServiceLimits(
             max_module_previews=MAX_DIRECT_ANALYSIS_TARGETS,
             max_pathway_previews=MAX_DIRECT_ANALYSIS_TARGETS,
@@ -731,8 +743,11 @@ def analyze_annotation_targets(
         )
         output_bundle = write_analysis_bundle(
             dataset,
+            graphs,
             modules,
+            references,
             coverages,
+            execution=execution,
             analysis_report=summary_artifact.content,
             output_directory=output_directory,
         )
