@@ -185,7 +185,8 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "confirmed `public_academic`" in readme
     assert "KEGG_MCP_ACCESS_MODE: public_academic" in ci
     assert 'KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"' in ci
-    assert "120 live KEGG requests" in ci
+    assert "20 live KEGG requests" in ci
+    assert "push:" not in ci
     assert "probe connectivity once" in installation
     assert "Retrieve only KO entry `K00844`" in installation
     assert "Current status:" in readiness

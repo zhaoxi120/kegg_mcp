@@ -4,15 +4,14 @@ Describe the focused change and the affected architectural layer or public contr
 
 ## Validation
 
-- [ ] `uv run ruff check .`
-- [ ] `uv run ruff format --check .`
-- [ ] `uv run pyright`
-- [ ] `uv run pytest`
+- [ ] GitHub Actions passes.
+- [ ] Any optional local checks are listed in the pull-request description.
 
 ## Review checklist
 
 - [ ] The change stays within the assigned issue and MVP scope.
-- [ ] Tests use synthetic or independently authored data and do not call live KEGG services.
+- [ ] Tracked fixtures use synthetic or independently authored data; live checks stay within the
+      reviewed request budget and do not upload KEGG responses.
 - [ ] Provenance, ambiguity, and multiple KO assignments are preserved where relevant.
 - [ ] Biological claims are no stronger than the evidence.
 - [ ] KEGG licensing, rate limits, and cache boundaries remain enforced where relevant.

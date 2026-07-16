@@ -61,6 +61,6 @@ venvPath = "."
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra", "-x"]
 markers = [
-    "live_kegg: 120-request compatibility campaign against a live KEGG endpoint",
+    "live_kegg: opt-in compatibility campaign against a live KEGG endpoint",
 ]
 testpaths = ["tests"]

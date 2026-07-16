@@ -1,6 +1,8 @@
-"""Opt-in 120-request compatibility campaign for an authorized KEGG endpoint."""
+"""Opt-in compatibility campaign for an authorized KEGG endpoint."""
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -23,7 +25,6 @@ from kegg_mcp.kegg import (
 )
 from kegg_mcp.kegg.contracts import KeggBriteHtextDocument
 
-_REQUESTS_PER_OPERATION = 30
 _REFRESH = KeggRequestOptions(refresh=True)
 _INFO_REQUEST = InfoRequest(database=KeggInfoDatabase.KO)
 _GET_REQUEST = GetRequest(
@@ -45,6 +46,14 @@ _CONV_REQUEST = ConvRequest(
     source_identifiers=("hsa:7157",),
 )
 
+pytestmark = [
+    pytest.mark.live_kegg,
+    pytest.mark.skipif(
+        os.environ.get("KEGG_MCP_RUN_LIVE_TESTS", "").lower() != "true",
+        reason="set KEGG_MCP_RUN_LIVE_TESTS=true to run live KEGG tests",
+    ),
+]
+
 
 def _assert_single_network_request(batch: KeggBatchProvenance) -> None:
     assert batch.origin is ResponseOrigin.NETWORK
@@ -55,9 +64,11 @@ def _assert_single_network_request(batch: KeggBatchProvenance) -> None:
     assert not batch.is_stale
 
 
-@pytest.mark.live_kegg
-def test_live_info_thirty_times(live_kegg_client: KeggClient) -> None:
-    for _ in range(_REQUESTS_PER_OPERATION):
+def test_live_info_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
         result = live_kegg_client.info(_INFO_REQUEST, options=_REFRESH)
 
         _assert_single_network_request(result.batch)
@@ -65,9 +76,11 @@ def test_live_info_thirty_times(live_kegg_client: KeggClient) -> None:
         assert result.document.lines
 
 
-@pytest.mark.live_kegg
-def test_live_get_thirty_times(live_kegg_client: KeggClient) -> None:
-    for _ in range(_REQUESTS_PER_OPERATION):
+def test_live_get_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
         result = live_kegg_client.get(_GET_REQUEST, options=_REFRESH)
 
         assert result.missing_entries == ()
@@ -80,9 +93,11 @@ def test_live_get_thirty_times(live_kegg_client: KeggClient) -> None:
         assert document.lines
 
 
-@pytest.mark.live_kegg
-def test_live_link_thirty_times(live_kegg_client: KeggClient) -> None:
-    for _ in range(_REQUESTS_PER_OPERATION):
+def test_live_link_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
         result = live_kegg_client.link(_LINK_REQUEST, options=_REFRESH)
 
         assert len(result.batches) == 1
@@ -90,9 +105,11 @@ def test_live_link_thirty_times(live_kegg_client: KeggClient) -> None:
         assert result.rows
 
 
-@pytest.mark.live_kegg
-def test_live_conv_thirty_times(live_kegg_client: KeggClient) -> None:
-    for _ in range(_REQUESTS_PER_OPERATION):
+def test_live_conv_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
         result = live_kegg_client.conv(_CONV_REQUEST, options=_REFRESH)
 
         assert len(result.batches) == 1

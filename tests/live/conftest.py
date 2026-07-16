@@ -1,4 +1,4 @@
-"""Strict controls for the default 120-request KEGG compatibility campaign."""
+"""Safety controls for the opt-in KEGG compatibility campaign."""
 
 from __future__ import annotations
 
@@ -20,15 +20,18 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.transport import HttpsTransport, TransportError, TransportResponse
 from kegg_mcp.mcp.config import load_runtime_config
 
-_MAX_LIVE_REQUESTS = 120
+_DEFAULT_REQUESTS_PER_OPERATION = 5
+_MAX_REQUESTS_PER_OPERATION = 30
+_OPERATION_COUNT = 4
 _MIN_START_GAP_SECONDS = 0.95
 
 
 class _BoundedLiveTransport:
     """Enforce the wire budget and stop after any failed response."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_requests: int) -> None:
         self._inner = HttpsTransport()
+        self._max_requests = max_requests
         self._starts: list[float] = []
         self._circuit_open = False
 
@@ -45,8 +48,8 @@ class _BoundedLiveTransport:
     ) -> TransportResponse:
         if self._circuit_open:
             raise RuntimeError("the live KEGG circuit is open")
-        if len(self._starts) >= _MAX_LIVE_REQUESTS:
-            raise RuntimeError("the 120-request live KEGG budget is exhausted")
+        if len(self._starts) >= self._max_requests:
+            raise RuntimeError("the live KEGG request budget is exhausted")
         self._starts.append(time.monotonic())
         try:
             response = self._inner.request(
@@ -63,13 +66,30 @@ class _BoundedLiveTransport:
 
 
 @pytest.fixture(scope="session")
-def live_kegg_client() -> Iterator[KeggClient]:
+def live_requests_per_operation() -> int:
+    """Return the bounded request count configured for each operation."""
+    raw_value = os.environ.get(
+        "KEGG_MCP_LIVE_REQUESTS_PER_OPERATION",
+        str(_DEFAULT_REQUESTS_PER_OPERATION),
+    )
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise pytest.UsageError("KEGG_MCP_LIVE_REQUESTS_PER_OPERATION must be an integer") from exc
+    if not 1 <= value <= _MAX_REQUESTS_PER_OPERATION:
+        raise pytest.UsageError("KEGG_MCP_LIVE_REQUESTS_PER_OPERATION must be between 1 and 30")
+    return value
+
+
+@pytest.fixture(scope="session")
+def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
     """Provide one one-request-per-second client backed by a temporary cache."""
     if os.environ.get("PYTEST_XDIST_WORKER") is not None:
         raise pytest.UsageError("live KEGG tests must run in one non-xdist process")
     runtime = load_runtime_config(os.environ)
 
-    transport = _BoundedLiveTransport()
+    max_requests = live_requests_per_operation * _OPERATION_COUNT
+    transport = _BoundedLiveTransport(max_requests=max_requests)
     with TemporaryDirectory(prefix="kegg-mcp-live-") as directory:
         yield KeggClient(
             KeggClientConfig(
@@ -95,7 +115,7 @@ def live_kegg_client() -> Iterator[KeggClient]:
         )
 
     starts = transport.starts
-    assert len(starts) <= _MAX_LIVE_REQUESTS
+    assert len(starts) <= max_requests
     assert all(
         current - previous >= _MIN_START_GAP_SECONDS for previous, current in pairwise(starts)
     )

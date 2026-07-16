@@ -344,7 +344,8 @@ behavior.
 
 ## Test policy
 
-The default pytest suite and pull-request CI include the 120-request live compatibility campaign.
-It makes 30 real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, uses one request per
-second, zero retries, a temporary cache, and no uploaded KEGG payloads. Other unit and integration
-network behavior uses injected transports or local mock servers.
+Local pytest skips the live compatibility campaign by default. Pull-request CI explicitly runs
+five real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, for 20 total, using one request
+per second, zero retries, a temporary cache, and no uploaded KEGG payloads. Authorized manual runs
+may configure 1 through 30 requests per operation. Other unit and integration network behavior
+uses injected transports or local mock servers.
