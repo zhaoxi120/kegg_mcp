@@ -84,6 +84,7 @@ def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
 class _FakeReferenceClient:
     def __init__(self) -> None:
         self._config = KeggClientConfig()
+        self.call_log: list[tuple[str, str]] = []
 
     @property
     def config(self) -> KeggClientConfig:
@@ -97,6 +98,7 @@ class _FakeReferenceClient:
     ) -> GetResult:
         del options
         first = request.entries[0]
+        self.call_log.append(("get", first.identifier))
         if first.database is KeggGetDatabase.MODULE:
             body = (
                 b"ENTRY       M00001            Module\n"
@@ -141,6 +143,7 @@ class _FakeReferenceClient:
         options: KeggRequestOptions | None = None,
     ) -> LinkResult:
         del options
+        self.call_log.append(("link", request.relationship.value))
         if request.relationship.value == "pathway_to_ko":
             source = request.source_identifiers[0]
             rows = (
@@ -160,6 +163,34 @@ class _FakeReferenceClient:
             request=request,
             rows=rows,
             batches=(_provenance(KeggOperation.LINK, "3"),),
+        )
+
+
+class _LargeRankingReferenceClient(_FakeReferenceClient):
+    """Synthetic 73-KO mapping with 115 candidates and 562 complete rows."""
+
+    def link(
+        self,
+        request: LinkRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> LinkResult:
+        if request.relationship.value != "ko_to_pathway":
+            return super().link(request, options=options)
+        del options
+        self.call_log.append(("link", request.relationship.value))
+        rows = tuple(
+            KeggPairRow(
+                line_number=index + 1,
+                source_id=f"ko:{request.source_identifiers[index % 73]}",
+                target_id=f"path:ko{(index % 115) + 1:05d}",
+            )
+            for index in range(562)
+        )
+        return LinkResult(
+            request=request,
+            rows=rows,
+            batches=(_provenance(KeggOperation.LINK, "ranking-562"),),
         )
 
 
@@ -256,6 +287,11 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert internal_field not in normalize_properties
         mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
         assert set(mapping_schema["properties"]) == {"ko_ids", "target"}
+        analysis_schema = _tool_by_name(tools, "analyze_ko_annotations").inputSchema
+        assert "pathway_selection" in analysis_schema["properties"]
+        selection_schema = analysis_schema["$defs"]["PathwaySelection"]["properties"]
+        assert selection_schema["top_n"]["minimum"] == 1
+        assert selection_schema["top_n"]["maximum"] == 25
         entries_output_schema = _tool_by_name(tools, "get_kegg_entries").outputSchema
         assert entries_output_schema is not None
         assert (
@@ -301,6 +337,9 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert primitive_properties["pathway_previews"]["maxItems"] == 25
         assert primitive_properties["caveats"]["maxItems"] == 3
         assert primitive_properties["reference_provenance"]["maxItems"] == 100
+        assert primitive_properties["selected_pathways"]["maxItems"] == 25
+        assert primitive_properties["execution_metrics"]["minItems"] == 6
+        assert primitive_properties["execution_metrics"]["maxItems"] == 6
 
         mapping_output = _tool_by_name(tools, "map_ko_ids").outputSchema
         assert mapping_output is not None
@@ -582,6 +621,20 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
         assert organism.structuredContent is not None
         assert organism.structuredContent["error"]["code"] == ("ANALYSIS_CONFIGURATION_INVALID")
 
+        mixed_selection = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "K00844",
+                "pathways": [{"pathway_id": "ko00010"}],
+                "pathway_selection": {"mode": "top_detected", "top_n": 1},
+            },
+        )
+        assert mixed_selection.isError is True
+        assert mixed_selection.structuredContent is not None
+        assert mixed_selection.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("annotation_date", ["2026-07-15T10:20:30Z", "2026-07-15T19:20:30+09:00"])
@@ -723,6 +776,125 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
         }
+
+
+@pytest.mark.asyncio
+async def test_top_one_selection_ranks_large_mapping_before_loading_references(
+    tmp_path: Path,
+) -> None:
+    client = _LargeRankingReferenceClient()
+    runtime = McpRuntime(
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="top-one-contract",
+        allowed_roots=(str(tmp_path.resolve()),),
+    )
+    server = create_server(runtime)
+    output = tmp_path / "top-one"
+    ko_text = "\n".join(f"K{index:05d}" for index in range(1, 74))
+
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": ko_text,
+                "pathway_selection": {
+                    "mode": "top_detected",
+                    "top_n": 1,
+                    "metric": "unique_selected_ko_count",
+                },
+                "output_directory": str(output),
+            },
+        )
+
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["input_records"] == 73
+        assert data["accepted_records"] == 73
+        assert data["selected_unique_ko_count"] == 73
+        assert data["candidate_pathway_count"] == 115
+        assert data["selected_pathways"] == [
+            {
+                "rank": 1,
+                "pathway_id": "ko00001",
+                "pathway_number": "00001",
+                "detected_unique_ko_count": 5,
+                "relationship_row_count": 5,
+            }
+        ]
+        assert data["pathway_target_count"] == 1
+        assert data["reference_provenance"] == []
+        assert data["kegg_request_count"] == 3
+        assert data["network_request_count"] == 3
+        assert data["cache_hit_count"] == 0
+        assert [item["stage"] for item in data["execution_metrics"]] == [
+            "annotation_import",
+            "ko_pathway_mapping",
+            "pathway_ranking",
+            "reference_loading",
+            "analysis",
+            "bundle_write",
+        ]
+        assert data["execution_metrics"][1]["request_count"] == 1
+        assert data["execution_metrics"][3]["request_count"] == 2
+        assert client.call_log == [
+            ("link", "ko_to_pathway"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00001"),
+        ]
+
+        serialized_direct = json.dumps(data, separators=(",", ":"))
+        assert len(serialized_direct.encode("utf-8")) < 64 * 1024
+        assert '"source_ko_id"' not in serialized_direct
+        assert '"detected_ko_ids"' not in serialized_direct
+
+        assert tuple(item["section"] for item in data["artifacts"]) == (
+            "structured",
+            "summary",
+            "annotations",
+            "pathway_ranking",
+            "ko_pathway_relationships",
+        )
+        retained_id = data["result"]["result_id"]
+        retained_ranking = json.loads(
+            runtime.result_store.read_artifact(
+                "top-one-contract",
+                retained_id,
+                "pathway_ranking",
+                limit=1_000_000,
+            ).content
+        )
+        retained_relationships = json.loads(
+            runtime.result_store.read_artifact(
+                "top-one-contract",
+                retained_id,
+                "ko_pathway_relationships",
+                limit=1_000_000,
+            ).content
+        )
+        assert len(retained_ranking["ranking"]["rows"]) == 115
+        assert "relationships" not in retained_ranking["ranking"]
+        assert len(retained_relationships["relationships"]) == 562
+        bundle = data["output_bundle"]
+        ranking_lines = Path(bundle["pathway_ranking"]).read_text(encoding="utf-8").splitlines()
+        relationship_lines = (
+            Path(bundle["ko_pathway_relationships"]).read_text(encoding="utf-8").splitlines()
+        )
+        assert len(ranking_lines) == 116
+        assert len(relationship_lines) == 563
+        assert all(Path(item["path"]).is_file() for item in bundle["artifacts"])
+        assert all(
+            item["byte_size"] == Path(item["path"]).stat().st_size for item in bundle["artifacts"]
+        )
+        report = Path(bundle["analysis_report"]).read_text(encoding="utf-8")
+        assert "## Pathway target selection" in report
+        assert "Candidate pathway count: 115" in report
+        manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
+        assert manifest["pathway_selection"]["candidate_pathway_count"] == 115
+        assert manifest["pathway_selection"]["selected_pathway_ids"] == ["ko00001"]
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,12 @@ official DeepKOALA checkout with an existing Python/PyTorch environment. It is n
 `kegg-mcp` package and does not add DeepKOALA, PyTorch, model code, weights, or databases to that
 package.
 
+This companion is the only supported DeepKOALA automation route for this project. The GenomeNet
+DeepKOALA page is a web form and does not document a remote job API, so Skills must not open,
+submit to, or simulate that form. When this companion or its runtime is missing or unready, the
+Skill reports the local component state and obtains permission before installation, downloads,
+environment changes, state creation, or MCP registration.
+
 The companion is deliberately CPU-only. It fixes `--device cpu`, fixes `--num_workers 0`, limits
 inference batches to at most 64, limits thread pools to at most four threads, runs one job at a
 time, hides CUDA/HIP/ROCm devices, and owns the complete POSIX child process group. The companion

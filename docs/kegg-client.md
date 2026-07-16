@@ -100,7 +100,8 @@ authorizing the configured service.
 | `timeout_seconds` | `15.0` | Per-request timeout, at most 120 seconds |
 | `max_response_bytes` | `5_000_000` | Checked before and while reading a response |
 | `max_identifiers` | `100` | Per public operation before batching |
-| `relation_batch_size` | `10` | LINK and CONV batch size, at most 100 |
+| `relation_batch_size` | `10` | Maximum CONV identifiers per prepared batch |
+| `link_batch_size` | `100` | Maximum LINK identifiers per prepared batch; URL packing may lower it |
 | `max_url_bytes` | `8_192` | Bound on each prepared path and complete request URL |
 
 Rate limiting is process-wide for one endpoint namespace. Request starts are spaced uniformly and
@@ -189,10 +190,14 @@ separately installed renderer and is intentionally not exposed as a core MCP too
 - pathway to KO.
 
 Source identifiers must match the selected direction and must be unique. Broad gene expansion is
-not part of this contract. Equivalent identifier sets are sorted before relationship batching so
-their cache keys do not depend on caller order; raw response-row order is preserved. Successful
-response rows are checked before caching: every source must belong to its prepared batch and every
-target must match the selected relationship namespace.
+not part of this contract. LINK preparation canonicalizes the identifier order and greedily packs
+the largest next batch that satisfies the configured identifier count, LINK-batch ceiling, and
+complete URL-byte limit. The transport independently enforces the response-byte limit. Thus 73
+ordinary K numbers fit in one default KO-to-pathway request, while longer or future identifiers
+split deterministically when the URL boundary requires it. Equivalent identifier sets produce the
+same batches and cache keys regardless of caller order; raw response-row order is preserved.
+Successful response rows are checked before caching: every source must belong to its prepared batch
+and every target must match the selected relationship namespace.
 
 ### CONV
 
@@ -264,8 +269,10 @@ parsing and identifier reconciliation. A later single-entry GET or any fully cac
 reconstructed from those records without a network call. The live request still obeys KEGG's
 maximum of ten GET entries.
 
-The current parser contract version is `4`. It records nested flat-file field indentation,
-accepts both legacy BRITE root lines and the current compact BRITE root only within a complete
+The current response parser contract version is `4`. LINK request preparation and cache keys use
+version `2` after adaptive packing; prior `v1` rows remain isolated in the local cache and expire
+under their existing TTL rather than being partially reused for a new batch. The parser records
+nested flat-file field indentation, accepts both legacy BRITE root lines and the current compact BRITE root only within a complete
 htext metadata envelope, and applies the current identifier reconciliation rules before cache
 use. Cache rows produced under an incompatible parser version fail closed instead of being
 silently reinterpreted.

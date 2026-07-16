@@ -4,10 +4,13 @@ Choose the route from KO evidence already supplied. Do not ask the user to resta
 
 ## Protein FASTA without K numbers
 
-The core `kegg-mcp` server does not annotate proteins. If the optional local `deepkoala-mcp`
-companion is discovered, follow [deepkoala-companion.md](deepkoala-companion.md). Otherwise route
-the request to an independent annotation Skill and MCP. Resume core analysis only from a controlled
-absolute annotation path and source provenance, not a private result identifier or workflow hash.
+The core `kegg-mcp` server does not annotate proteins. Always discover the optional local
+`deepkoala-mcp` companion first and follow [deepkoala-companion.md](deepkoala-companion.md).
+If it is absent or unready, report the local state and ask whether to install, register, or repair
+the local runtime and companion. Stop when permission is declined. There is no remote execution
+fallback: never open, submit to, or automate the DeepKOALA web form. GenomeNet does not provide a
+DeepKOALA API for MCP automation. Resume core analysis only from a controlled absolute annotation
+path and source provenance, not a private result identifier or workflow hash.
 
 Keep the successful companion job until `analyze_ko_annotations` has imported its controlled
 detailed CSV and written the complete output bundle. Do not delete the retained job after only a
@@ -18,6 +21,8 @@ preview or partial analysis succeeds.
 - Preserve the user's analysis unit and context.
 - Prefer `analyze_ko_annotations`. Supply explicit targets when the question names them; otherwise
   allow the high-level tool to discover canonical KO-reference pathways from accepted K numbers.
+- For a Top-N request, set `pathway_selection.mode="top_detected"` and the requested bounded
+  `top_n`. Do not call `map_ko_ids` and aggregate its full rows in the model context.
 - Resolve a named target from supported KEGG evidence rather than guessing an identifier.
 - Do not recommend or invoke annotation software when usable KO evidence is already present.
 
@@ -55,6 +60,11 @@ and complete the smallest necessary analysis. Pass the canonical absolute `rende
 version 2 path from the output bundle to the independent visualization Skill and
 `kegg-render-mcp`. Read [visualization-handoff.md](visualization-handoff.md) before transfer. Do not
 parse KGML, manipulate pixels, or generate images inside this Skill.
+
+For protein FASTA without KO evidence, retain the local DeepKOALA job through the core bundle
+write, call `analyze_ko_annotations(pathway_selection=top_detected, top_n=N)` for a Top-N request,
+and then pass the version 2 handoff. Do not parse the detailed CSV, KO-to-pathway rows, ranking
+artifact, or renderer input inside the Skill.
 
 ## Requests that need explanation rather than analysis
 

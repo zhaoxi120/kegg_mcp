@@ -99,6 +99,7 @@ def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
                     timeout_seconds=30.0,
                     max_identifiers=1,
                     relation_batch_size=1,
+                    link_batch_size=1,
                 ),
                 retry=RetryPolicy(
                     max_retries=0,

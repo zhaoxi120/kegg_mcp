@@ -14,6 +14,7 @@ from kegg_mcp.analysis.functional_comparison import (
     PathwayComparisonResult,
 )
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageResult
+from kegg_mcp.analysis.pathway_ranking import PathwayRankingRow, PathwaySelection
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     AnnotationDataset,
@@ -53,6 +54,8 @@ class ReportInput(FrozenModel):
     execution: AnalysisExecutionProvenance | None = None
     module_evaluations: tuple[PairedModuleEvaluation, ...] = ()
     pathway_coverages: tuple[PathwayCoverageResult, ...] = ()
+    pathway_selection: PathwaySelection | None = None
+    pathway_ranking: tuple[PathwayRankingRow, ...] = ()
     ko_comparison: KoSetComparisonSummary | None = None
     module_comparison: ModuleComparisonResult | None = None
     pathway_comparison: PathwayComparisonResult | None = None
@@ -75,6 +78,12 @@ class ReportInput(FrozenModel):
             raise ValueError("module evaluations must identify the primary report dataset")
         if any(item.dataset_id != self.dataset.dataset_id for item in self.pathway_coverages):
             raise ValueError("pathway coverage results must identify the primary report dataset")
+        if self.pathway_selection is None and self.pathway_ranking:
+            raise ValueError("pathway ranking rows require a recorded selection")
+        if self.pathway_ranking:
+            ranks = tuple(item.rank for item in self.pathway_ranking)
+            if ranks != tuple(range(1, len(self.pathway_ranking) + 1)):
+                raise ValueError("pathway ranking rows must retain contiguous rank order")
         return self
 
 

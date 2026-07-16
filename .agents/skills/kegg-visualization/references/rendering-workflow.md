@@ -18,19 +18,32 @@ expand, or reinterpret the old JSON in the Skill.
 Never invoke DeepKOALA when usable KO evidence already exists. Request an allowed
 `output_directory`, route the evidence to `analyze_ko_annotations` through `$kegg-ko-analysis`, and
 pass the completed bundle's controlled absolute version 2 path to `kegg-render-mcp`.
+For a most-detected or Top-N request, include `pathway_selection.mode="top_detected"` and the
+bounded `top_n`; do not call `map_ko_ids` and rank its relationship preview in the Skill.
 
 ## Protein FASTA without KO evidence
 
 Use the ordered local stdio route `deepkoala-mcp -> kegg-mcp -> kegg-render-mcp`:
 
-1. Route preparation, explicit acknowledgement, bounded polling, and the detailed-CSV handoff
-   through `$kegg-ko-analysis` and the explicitly configured DeepKOALA companion.
-2. Keep the successful DeepKOALA job until `kegg-mcp` has imported the evidence and atomically
+1. Route discovery and `get_deepkoala_runner_status` through `$kegg-ko-analysis`. If the local
+   runtime or companion is missing or unready, request installation, registration, or repair
+   permission. Never open or automate the DeepKOALA web form; GenomeNet provides no DeepKOALA API
+   for MCP automation.
+2. Route preparation, explicit acknowledgement, bounded polling, and the detailed-CSV handoff
+   through `$kegg-ko-analysis` and the configured local DeepKOALA companion.
+3. Keep the successful DeepKOALA job until `kegg-mcp` has imported the evidence and atomically
    written the complete version 2 output bundle.
-3. Pass the controlled absolute renderer-input path, never the DeepKOALA or core private result
+4. Call `analyze_ko_annotations` with
+   `pathway_selection={"mode":"top_detected","top_n":N,"metric":"unique_selected_ko_count"}`
+   when the request asks for the most detected pathway or Top-N pathways. Let the core retain the
+   complete ranking and relationships.
+5. Pass the controlled absolute renderer-input path, never the DeepKOALA or core private result
    identifier, to the renderer.
-4. Delete the DeepKOALA job only after the bundle succeeds and its private output is no longer
+6. Delete the DeepKOALA job only after the bundle succeeds and its private output is no longer
    required.
+
+Do not parse the DeepKOALA CSV, KO-to-pathway rows, ranking artifact, or renderer input in the
+Skill, and do not repeat a successfully completed stage.
 
 ## Renderer unavailable or incompatible
 

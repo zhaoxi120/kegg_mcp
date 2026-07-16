@@ -10,6 +10,7 @@ from typing import ClassVar, NoReturn
 import pytest
 
 import kegg_mcp.kegg.client as client_module
+from kegg_mcp.analysis import PathwaySelection, PathwaySelectionMode
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
 from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.client import KeggClient
@@ -51,6 +52,11 @@ from kegg_mcp.kegg.transport import (
     TransportError,
     TransportErrorKind,
     TransportResponse,
+)
+from kegg_mcp.services import (
+    NormalizeAnnotationsRequest,
+    SQLiteResultStore,
+    analyze_annotation_targets,
 )
 
 _NOW = datetime(2026, 7, 14, 3, 0, tzinfo=UTC)
@@ -337,6 +343,108 @@ def test_relationship_cache_key_is_independent_of_identifier_order(tmp_path: Pat
         ("ko:K00001", "md:M00001"),
         ("ko:K00002", "md:M00002"),
     ]
+
+
+def test_seventy_three_ko_link_request_uses_one_batch_and_reuses_its_cache(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "adaptive-link.sqlite3"
+    ko_ids = tuple(f"K{index:05d}" for index in range(1, 74))
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+        source_identifiers=ko_ids,
+    )
+    body = b"".join(
+        f"ko:{ko_id}\tpath:ko{index:05d}\n".encode("ascii")
+        for index, ko_id in enumerate(ko_ids, start=1)
+    )
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    first = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    ).link(request)
+
+    reused = KeggClient(
+        _public_config(cache_path),
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+            source_identifiers=tuple(reversed(ko_ids)),
+        ),
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
+
+    assert len(transport.urls) == 1
+    assert len(first.batches) == 1
+    assert len(first.rows) == 73
+    assert len(reused.batches) == 1
+    assert reused.batches[0].origin is ResponseOrigin.CACHE
+    assert len(reused.rows) == 73
+
+
+def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repeats(
+    tmp_path: Path,
+) -> None:
+    ko_ids = tuple(f"K{index:05d}" for index in range(1, 74))
+    mapping_body = b"".join(f"ko:{ko_id}\tpath:ko00001\n".encode("ascii") for ko_id in ko_ids)
+    denominator_body = b"".join(
+        f"path:ko00001\tko:{ko_id}\n".encode("ascii") for ko_id in ko_ids[:3]
+    )
+    metadata_body = (
+        b"ENTRY       ko00001                    Pathway\n"
+        b"NAME        Synthetic cached pathway\n"
+        b"CLASS       Metabolism; Synthetic class\n"
+        b"///\n"
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(status_code=200, body=mapping_body),
+            TransportResponse(status_code=200, body=denominator_body),
+            TransportResponse(status_code=200, body=metadata_body),
+        ]
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "analysis-cache.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    request = NormalizeAnnotationsRequest(text="\n".join(ko_ids))
+    selection = PathwaySelection(mode=PathwaySelectionMode.TOP_DETECTED, top_n=1)
+
+    first = analyze_annotation_targets(
+        request,
+        module_ids=(),
+        pathways=(),
+        pathway_selection=selection,
+        client=client,
+        result_store=store,
+        scope_id="cache-summary",
+    )
+    second = analyze_annotation_targets(
+        request,
+        module_ids=(),
+        pathways=(),
+        pathway_selection=selection,
+        client=client,
+        result_store=store,
+        scope_id="cache-summary",
+    )
+
+    assert len(transport.urls) == 3
+    assert first.kegg_request_count == 3
+    assert first.network_request_count == 3
+    assert first.cache_hit_count == 0
+    assert second.kegg_request_count == 3
+    assert second.network_request_count == 0
+    assert second.cache_hit_count == 3
+    assert second.execution_metrics[1].cache_hit_count == 1
+    assert second.execution_metrics[3].cache_hit_count == 2
 
 
 def test_cache_only_miss_never_calls_injected_transport(tmp_path: Path) -> None:
@@ -813,7 +921,7 @@ def test_link_rows_record_their_batch_index(tmp_path: Path) -> None:
         relationship=KeggLinkRelationship.KO_TO_MODULE,
         source_identifiers=("K00001", "K00002"),
     )
-    limits = KeggClientLimits(relation_batch_size=1)
+    limits = KeggClientLimits(link_batch_size=1)
     client = KeggClient(
         _public_config(tmp_path / "link.sqlite3", limits=limits),
         transport=QueueTransport(

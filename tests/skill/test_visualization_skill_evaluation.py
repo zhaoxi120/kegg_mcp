@@ -29,6 +29,15 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
             ),
         ),
         (
+            "Annotate this FASTA locally and draw the pathway with the most detected KO nodes.",
+            (
+                "get_deepkoala_runner_status",
+                'pathway_selection={"mode":"top_detected"',
+                "complete ranking and relationships",
+                "do not repeat a successfully completed stage",
+            ),
+        ),
+        (
             "Render this existing render_input.json version 2 bundle.",
             (
                 "Skip annotation and core analysis",
@@ -95,3 +104,6 @@ def test_visualization_never_duplicates_renderer_or_analysis_logic() -> None:
     assert "The Skill does not\nchoose colors" in CORPUS
     assert "Do not claim validated\n   pathway activity" in CORPUS
     assert "Never claim that\nadding the shown genes will activate a biological process" in CORPUS
+    assert "Never open or automate the DeepKOALA web form" in CORPUS
+    assert "GenomeNet provides no DeepKOALA API" in CORPUS
+    assert "Do not parse the DeepKOALA CSV, KO-to-pathway rows" in CORPUS

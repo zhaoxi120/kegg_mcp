@@ -1,6 +1,6 @@
 ---
 name: kegg-ko-analysis
-description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, descriptive comparisons of multiple KO sets, and optional local DeepKOALA companion handoff into cautious KO/KEGG analysis. Use when a user has KO evidence or explicitly wants an available DeepKOALA companion to produce it. Do not use this Skill to implement annotation inference, manage models or weights, launch arbitrary subprocesses, perform pathway rendering or MODULE rendering, or perform general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
+description: Route K numbers, KO annotation tables, KEGG module or pathway questions, metabolic reconstruction requests, descriptive comparisons of multiple KO sets, and an optional local DeepKOALA companion with local-first routing into cautious KO/KEGG analysis. Use when a user has KO evidence or asks to produce it from protein FASTA, including installation-permission routing when the local companion is unavailable. Do not use this Skill to implement annotation inference, manage models or weights, launch arbitrary subprocesses, perform pathway rendering or MODULE rendering, or perform general gene-expression analysis, nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
 ---
 
 # KEGG KO analysis
@@ -15,9 +15,12 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
 3. Read [workflow-selection.md](references/workflow-selection.md), select the smallest applicable
    workflow, and ask only for information that changes the route or interpretation.
 4. If the input is protein FASTA without K numbers, read
-   [deepkoala-companion.md](references/deepkoala-companion.md). Use an explicitly configured local
-   companion when it is available and ready; otherwise stop and route annotation to an independent
-   annotation Skill and MCP. Never send FASTA to the core `kegg-mcp` server.
+   [deepkoala-companion.md](references/deepkoala-companion.md). Always attempt the configured local
+   `deepkoala-mcp` route first, and make `get_deepkoala_runner_status` the first annotation-tool
+   call after discovery. Never open, submit to, or automate the DeepKOALA web service. If the local
+   runtime or companion is absent or unready, report the local state and ask whether to install,
+   register, or repair it. DeepKOALA execution is local-only because GenomeNet does not provide a
+   DeepKOALA API for MCP automation. Never send FASTA to the core `kegg-mcp` server.
 5. If the user requests pathway or MODULE graphics, read
    [visualization-handoff.md](references/visualization-handoff.md). Obtain an allowed
    `output_directory` before analysis, require `render_input.json` version 2, and hand its
@@ -31,6 +34,10 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
 - Prefer `analyze_ko_annotations` for the common KO-to-module/pathway workflow. When the user
   supplies a shared annotation file, pass its absolute `file_path`, source provenance, and an
   allowed `output_directory`; do not copy a private result identifier across MCP processes.
+- When the user asks for the most detected pathway or a Top-N pathway result, pass
+  `pathway_selection={"mode":"top_detected","top_n":N,"metric":"unique_selected_ko_count"}`
+  to `analyze_ko_annotations`. Let the server aggregate, rank, select, and retain the full
+  KO-to-pathway detail. Do not parse or rank relationship rows in the Skill.
 - Use `normalize_ko_annotations`, `get_kegg_entries`, `map_ko_ids`, `analyze_modules`,
   `analyze_pathways`, or `compare_ko_sets` only for the corresponding primitive or an advanced
   staged workflow. Let the tools perform validation, normalization, and analysis exactly once.
@@ -49,6 +56,9 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
 - Keep a successful DeepKOALA job and its controlled output until the core import and complete
   output-bundle write have succeeded. Delete it only after the renderer handoff no longer depends
   on that private output.
+- For the ordinary protein-FASTA-to-pathway workflow, keep the fixed local order
+  `deepkoala-mcp -> analyze_ko_annotations(pathway_selection=top_detected) -> kegg-render-mcp`.
+  Skip completed stages and pass only controlled absolute artifact paths plus source provenance.
 
 ## Interpret the result
 

@@ -77,7 +77,7 @@ def test_link_uses_bounded_selected_identifier_batches() -> None:
         source_identifiers=tuple(f"K{index:05d}" for index in range(1, 6)),
     )
 
-    batches = prepare_link(request, KeggClientLimits(relation_batch_size=2))
+    batches = prepare_link(request, KeggClientLimits(link_batch_size=2))
 
     assert [batch.requested_identifiers for batch in batches] == [
         ("K00001", "K00002"),
@@ -87,6 +87,53 @@ def test_link_uses_bounded_selected_identifier_batches() -> None:
     assert batches[0].path == "/link/module/K00001+K00002"
     assert batches[0].expected_pair_source_ids == frozenset({"ko:K00001", "ko:K00002"})
     assert batches[0].pair_target_database is PairTargetDatabase.MODULE
+
+
+def test_link_greedily_packs_seventy_three_kos_into_one_default_request() -> None:
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+        source_identifiers=tuple(f"K{index:05d}" for index in range(1, 74)),
+    )
+
+    batches = prepare_link(request, KeggClientLimits())
+
+    assert len(batches) == 1
+    assert len(batches[0].requested_identifiers) == 73
+    assert batches[0].normalized_request_key.startswith("v2:/link/pathway/")
+
+
+def test_link_greedy_batches_are_canonical_and_respect_the_url_limit() -> None:
+    identifiers = tuple(f"K{index:05d}" for index in range(1, 101))
+    forward = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+        source_identifiers=identifiers,
+    )
+    reversed_request = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+        source_identifiers=tuple(reversed(identifiers)),
+    )
+    limits = KeggClientLimits(max_url_bytes=256)
+    endpoint_bytes = len("https://rest.kegg.jp".encode("ascii"))
+
+    batches = prepare_link(forward, limits, url_prefix_bytes=endpoint_bytes)
+    reversed_batches = prepare_link(
+        reversed_request,
+        limits,
+        url_prefix_bytes=endpoint_bytes,
+    )
+
+    assert len(batches) > 1
+    assert [batch.normalized_request_key for batch in batches] == [
+        batch.normalized_request_key for batch in reversed_batches
+    ]
+    assert all(
+        endpoint_bytes + len(batch.path.encode("ascii")) <= limits.max_url_bytes
+        for batch in batches
+    )
+    assert (
+        tuple(identifier for batch in batches for identifier in batch.requested_identifiers)
+        == identifiers
+    )
 
 
 def test_conv_never_prepares_a_whole_database_conversion() -> None:

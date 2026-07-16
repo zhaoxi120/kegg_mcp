@@ -148,6 +148,7 @@ class KeggClientLimits(FrozenModel):
         le=MAX_CONFIGURED_IDENTIFIERS,
     )
     relation_batch_size: int = Field(default=10, strict=True, gt=0, le=100)
+    link_batch_size: int = Field(default=100, strict=True, gt=0, le=100)
     max_url_bytes: int = Field(default=8_192, strict=True, ge=256, le=65_536)
 
 

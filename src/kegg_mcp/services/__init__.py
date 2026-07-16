@@ -1,11 +1,23 @@
 """Public Milestone 5 orchestration, reference, and result-store interfaces."""
 
+from kegg_mcp.analysis import (
+    KoPathwayRelationship,
+    PathwayRankingMetric,
+    PathwayRankingResult,
+    PathwayRankingRow,
+    PathwaySelection,
+    PathwaySelectionMode,
+    rank_pathways,
+)
 from kegg_mcp.execution import (
     ANALYSIS_SERVICE_NAME,
     ANALYSIS_SERVICE_VERSION,
     ANNOTATION_ANALYSIS_SERVICE_NAME,
     AnalysisExecutionProvenance,
+    ExecutionStage,
     PathwayExecutionParameters,
+    PathwayRankingExecution,
+    StageMetric,
 )
 from kegg_mcp.services.contracts import (
     AnalysisServiceLimits,
@@ -16,7 +28,7 @@ from kegg_mcp.services.contracts import (
     PlainKoAnalysisResult,
 )
 from kegg_mcp.services.orchestration import analyze_plain_ko
-from kegg_mcp.services.output_bundle import OutputBundle
+from kegg_mcp.services.output_bundle import OutputBundle, OutputBundleArtifact
 from kegg_mcp.services.primitives import (
     DATASET_SECTION,
     DEFAULT_IMPORT_LIMITS,
@@ -41,6 +53,7 @@ from kegg_mcp.services.primitives import (
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
     PrimitiveAnalysisResult,
+    SelectedPathwaySummary,
     ServerStatusResult,
     analyze_annotation_targets,
     analyze_module_targets,
@@ -143,6 +156,7 @@ __all__ = [
     "ConnectivityState",
     "DatasetSource",
     "DeletedResult",
+    "ExecutionStage",
     "GenericDecisionPolicy",
     "ImportSummary",
     "KeggConnectivityClient",
@@ -151,6 +165,7 @@ __all__ = [
     "KeggPrimitiveClient",
     "KeggReferenceClient",
     "KoMappingServiceResult",
+    "KoPathwayRelationship",
     "KoSetComparisonPreview",
     "ModuleAnalysisPreview",
     "ModuleCompletionRenderResult",
@@ -161,9 +176,16 @@ __all__ = [
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",
     "OutputBundle",
+    "OutputBundleArtifact",
     "PathwayAnalysisPreview",
     "PathwayExecutionParameters",
+    "PathwayRankingExecution",
+    "PathwayRankingMetric",
+    "PathwayRankingResult",
+    "PathwayRankingRow",
     "PathwayRenderTarget",
+    "PathwaySelection",
+    "PathwaySelectionMode",
     "PathwaySpec",
     "PlainKoAnalysisRequest",
     "PlainKoAnalysisResult",
@@ -184,7 +206,9 @@ __all__ = [
     "ResultStoreError",
     "ResultStoreLimits",
     "SQLiteResultStore",
+    "SelectedPathwaySummary",
     "ServerStatusResult",
+    "StageMetric",
     "VisualizationEvidence",
     "analyze_annotation_targets",
     "analyze_module_targets",
@@ -199,6 +223,7 @@ __all__ = [
     "normalize_annotations",
     "parse_render_input_json",
     "probe_kegg_connectivity_service",
+    "rank_pathways",
     "read_cached_kegg_entry",
     "retrieve_kegg_entries",
     "serialize_render_input",

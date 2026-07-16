@@ -54,6 +54,23 @@ MCP process boundary:
 - renderer CI, fixtures, and distribution audits are synthetic and offline. Real KEGG source
   assets remain local, and distributing rendered derivatives requires a separate rights review.
 
+## Local annotation and Top-N pathway optimization amendment
+
+The assigned post-MVP workflow optimization adds these compatible requirements:
+
+- protein FASTA without KO evidence always routes first to discovered local `deepkoala-mcp`; an
+  absent or unready local runtime requires explicit installation or repair permission, and the
+  GenomeNet DeepKOALA web form is never an automation fallback;
+- `analyze_ko_annotations` accepts optional server-side `pathway_selection`, ranks canonical
+  pathways by unique K numbers selected under the requested evidence mode, uses pathway ID as the
+  stable tie-breaker, and loads denominator/metadata references only for the selected Top-N;
+- duplicate annotation and LINK rows never inflate detected node counts, while complete ranking
+  and relationship evidence remains in retained and output-bundle artifacts;
+- direct Top-N results contain bounded summaries, bundle metadata, and sanitized six-stage
+  execution/cache metrics rather than full relationship or detected-KO tables; and
+- LINK request preparation uses canonical greedy packing under identifier and URL bounds with a
+  versioned cache key, while the existing no-burst rate and response-size limits remain enforced.
+
 ## Table of contents
 
 1. [Executive decision](#1-executive-decision)

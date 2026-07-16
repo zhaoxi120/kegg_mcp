@@ -10,18 +10,22 @@ import secrets
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field
 
 from kegg_mcp.analysis import (
+    KoPathwayRelationship,
     PairedModuleEvaluation,
     PathwayCoverageResult,
     PathwayKoReference,
+    PathwayRankingResult,
+    PathwayRankingRow,
     ResolvedModuleGraph,
 )
 from kegg_mcp.domain.annotations import AnnotationDataset, FrozenModel
 from kegg_mcp.domain.errors import ErrorCode, fail
-from kegg_mcp.execution import AnalysisExecutionProvenance
+from kegg_mcp.execution import AnalysisExecutionProvenance, PathwayRankingExecution
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
@@ -39,11 +43,26 @@ class OutputBundle(FrozenModel):
     output_directory: str = Field(min_length=1, max_length=4_096)
     normalized_annotations: str = Field(min_length=1, max_length=4_096)
     protein_ko_mapping: str = Field(min_length=1, max_length=4_096)
+    pathway_ranking: str | None = Field(default=None, max_length=4_096)
+    ko_pathway_relationships: str | None = Field(default=None, max_length=4_096)
     pathway_coverage: str | None = Field(default=None, max_length=4_096)
     module_completion: str | None = Field(default=None, max_length=4_096)
     analysis_report: str | None = Field(default=None, max_length=4_096)
     render_input: str | None = Field(default=None, max_length=4_096)
     manifest: str = Field(min_length=1, max_length=4_096)
+    artifacts: Annotated[
+        tuple[OutputBundleArtifact, ...],
+        Field(min_length=3, max_length=9),
+    ]
+
+
+class OutputBundleArtifact(FrozenModel):
+    """MIME type, exact byte size, and controlled path for one bundle file."""
+
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    mime_type: str = Field(min_length=1, max_length=100)
+    byte_size: int = Field(strict=True, ge=0)
+    path: str = Field(min_length=1, max_length=4_096)
 
 
 def write_normalization_bundle(dataset: AnnotationDataset, output_directory: Path) -> OutputBundle:
@@ -61,7 +80,7 @@ def write_normalization_bundle(dataset: AnnotationDataset, output_directory: Pat
     )
     files["bundle_manifest.json"] = manifest
     _write_files(output_directory, files)
-    return _bundle_paths(output_directory)
+    return _bundle_paths(output_directory, files=files)
 
 
 def write_analysis_bundle(
@@ -75,6 +94,7 @@ def write_analysis_bundle(
     analysis_report: str,
     output_directory: Path,
     render_limits: RenderInputLimits | None = None,
+    pathway_ranking: PathwayRankingResult | None = None,
 ) -> OutputBundle:
     """Write canonical handoff tables, report, and renderer input as one stable bundle."""
     render_input = build_render_input(
@@ -94,14 +114,25 @@ def write_analysis_bundle(
         "analysis_report.md": analysis_report,
         "render_input.json": serialize_render_input(render_input),
     }
+    if pathway_ranking is not None:
+        files["pathway_ranking.tsv"] = _pathway_ranking_tsv(pathway_ranking.rows)
+        files["ko_pathway_relationships.tsv"] = _ko_pathway_relationships_tsv(
+            pathway_ranking.relationships
+        )
     files["bundle_manifest.json"] = _manifest(
         dataset,
         (*files, "bundle_manifest.json"),
         stage="analysis",
         render_input_schema=(RENDER_INPUT_SCHEMA_VERSION, RENDER_INPUT_MIME_TYPE),
+        pathway_ranking_execution=execution.pathway_parameters.ranking,
     )
     _write_files(output_directory, files)
-    return _bundle_paths(output_directory, include_analysis=True)
+    return _bundle_paths(
+        output_directory,
+        files=files,
+        include_analysis=True,
+        include_pathway_ranking=pathway_ranking is not None,
+    )
 
 
 def _normalized_annotations_tsv(dataset: AnnotationDataset) -> str:
@@ -227,12 +258,63 @@ def _pathway_coverage_tsv(pathways: tuple[PathwayCoverageResult, ...]) -> str:
     )
 
 
+def _pathway_ranking_tsv(rows: tuple[PathwayRankingRow, ...]) -> str:
+    return _tsv(
+        (
+            "rank",
+            "pathway_id",
+            "pathway_number",
+            "detected_unique_ko_count",
+            "detected_ko_ids",
+            "relationship_row_count",
+        ),
+        (
+            (
+                row.rank,
+                row.pathway_id,
+                row.pathway_number,
+                row.detected_unique_ko_count,
+                ";".join(row.detected_ko_ids),
+                row.relationship_row_count,
+            )
+            for row in rows
+        ),
+    )
+
+
+def _ko_pathway_relationships_tsv(rows: tuple[KoPathwayRelationship, ...]) -> str:
+    return _tsv(
+        (
+            "source_ko_id",
+            "target_id",
+            "pathway_number",
+            "canonical_pathway_id",
+            "target_namespace",
+            "batch_index",
+            "line_number",
+        ),
+        (
+            (
+                row.source_ko_id,
+                row.target_id,
+                row.pathway_number,
+                row.canonical_pathway_id,
+                row.target_namespace,
+                row.batch_index,
+                row.line_number,
+            )
+            for row in rows
+        ),
+    )
+
+
 def _manifest(
     dataset: AnnotationDataset,
     files: tuple[str, ...],
     *,
     stage: str,
     render_input_schema: tuple[str, str] | None = None,
+    pathway_ranking_execution: PathwayRankingExecution | None = None,
 ) -> str:
     value: dict[str, object] = {
         "schema_version": OUTPUT_BUNDLE_SCHEMA_VERSION,
@@ -249,6 +331,8 @@ def _manifest(
             "schema_version": schema_version,
             "mime_type": mime_type,
         }
+    if pathway_ranking_execution is not None:
+        value["pathway_selection"] = pathway_ranking_execution.model_dump(mode="json")
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
@@ -341,12 +425,26 @@ def _open_directory_fd(path: Path) -> int:
         raise
 
 
-def _bundle_paths(output_directory: Path, *, include_analysis: bool = False) -> OutputBundle:
+def _bundle_paths(
+    output_directory: Path,
+    *,
+    files: dict[str, str],
+    include_analysis: bool = False,
+    include_pathway_ranking: bool = False,
+) -> OutputBundle:
     directory = str(output_directory)
     return OutputBundle(
         output_directory=directory,
         normalized_annotations=str(output_directory / "normalized_annotations.tsv"),
         protein_ko_mapping=str(output_directory / "protein_ko_mapping.tsv"),
+        pathway_ranking=(
+            str(output_directory / "pathway_ranking.tsv") if include_pathway_ranking else None
+        ),
+        ko_pathway_relationships=(
+            str(output_directory / "ko_pathway_relationships.tsv")
+            if include_pathway_ranking
+            else None
+        ),
         pathway_coverage=(
             str(output_directory / "pathway_coverage.tsv") if include_analysis else None
         ),
@@ -358,11 +456,31 @@ def _bundle_paths(output_directory: Path, *, include_analysis: bool = False) -> 
         ),
         render_input=(str(output_directory / "render_input.json") if include_analysis else None),
         manifest=str(output_directory / "bundle_manifest.json"),
+        artifacts=tuple(
+            OutputBundleArtifact(
+                name=name,
+                mime_type=_bundle_mime_type(name),
+                byte_size=len(content.encode("utf-8")),
+                path=str(output_directory / name),
+            )
+            for name, content in files.items()
+        ),
     )
+
+
+def _bundle_mime_type(name: str) -> str:
+    if name.endswith(".json"):
+        return "application/json"
+    if name.endswith(".md"):
+        return "text/markdown"
+    if name.endswith(".tsv"):
+        return "text/tab-separated-values"
+    raise AssertionError("output bundle contains an unsupported file extension")
 
 
 __all__ = (
     "OutputBundle",
+    "OutputBundleArtifact",
     "write_analysis_bundle",
     "write_normalization_bundle",
 )

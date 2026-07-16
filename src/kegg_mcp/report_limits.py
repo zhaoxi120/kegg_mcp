@@ -18,6 +18,12 @@ class ReportLimits(FrozenModel):
     max_source_entries: int = Field(default=10_000, strict=True, gt=0, le=1_000_000)
     max_module_targets: int = Field(default=1_000, strict=True, ge=0, le=100_000)
     max_pathway_targets: int = Field(default=1_000, strict=True, ge=0, le=100_000)
+    max_pathway_ranking_rows: int = Field(
+        default=10_000,
+        strict=True,
+        ge=0,
+        le=100_000,
+    )
     max_total_targets: int = Field(default=2_000, strict=True, ge=0, le=200_000)
     max_warning_entries: int = Field(default=10_000, strict=True, ge=0, le=1_000_000)
     max_structured_json_bytes: int = Field(
@@ -41,6 +47,12 @@ class ReportLimits(FrozenModel):
     max_markdown_sources: int = Field(default=10, strict=True, ge=0, le=10_000)
     max_markdown_module_targets: int = Field(default=25, strict=True, ge=0, le=10_000)
     max_markdown_pathway_targets: int = Field(default=25, strict=True, ge=0, le=10_000)
+    max_markdown_pathway_ranking_rows: int = Field(
+        default=25,
+        strict=True,
+        ge=0,
+        le=10_000,
+    )
     max_markdown_comparison_targets: int = Field(
         default=25,
         strict=True,

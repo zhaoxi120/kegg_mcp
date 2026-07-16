@@ -477,7 +477,11 @@ class KeggClient:
     ) -> LinkResult:
         """Retrieve one approved selected-entry KEGG relationship."""
         rows, provenance = self._execute_pair_batches(
-            prepare_link(request, self._config.limits),
+            prepare_link(
+                request,
+                self._config.limits,
+                url_prefix_bytes=len(self._endpoint.encode("ascii")),
+            ),
             options or KeggRequestOptions(),
         )
         return LinkResult(request=request, rows=rows, batches=provenance)

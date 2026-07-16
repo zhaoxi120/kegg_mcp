@@ -1,7 +1,7 @@
 interface:
   display_name: "KEGG KO Analysis"
-  short_description: "Route KO evidence or an optional local annotation handoff"
-  default_prompt: "Use $kegg-ko-analysis to analyze these KO annotations with explicit provenance and conservative interpretation."
+  short_description: "Route KO evidence or a local-first annotation handoff"
+  default_prompt: "Use $kegg-ko-analysis to analyze KO evidence, preferring the local DeepKOALA companion for protein FASTA and requesting permission before local installation or repair."
 
 dependencies:
   tools:

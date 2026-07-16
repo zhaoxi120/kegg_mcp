@@ -1,12 +1,24 @@
-"""Neutral serializable limits and provenance for high-level analysis execution."""
+"""Neutral serializable limits, metrics, and provenance for analysis execution."""
 
-from typing import Literal, Self
+from enum import StrEnum
+from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
 from kegg_mcp.analysis.contracts import ModuleAnalysisLimits
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageLimits
-from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, EvidenceMode, FrozenModel
+from kegg_mcp.analysis.pathway_ranking import (
+    PATHWAY_RANKING_METHOD,
+    PATHWAY_RANKING_VERSION,
+    PathwaySelection,
+    PathwaySelectionMode,
+)
+from kegg_mcp.domain.annotations import (
+    JSON_SCHEMA_DIALECT,
+    DecisionPolicyReference,
+    EvidenceMode,
+    FrozenModel,
+)
 from kegg_mcp.importers.contracts import ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
 from kegg_mcp.report_limits import ReportLimits
@@ -14,6 +26,60 @@ from kegg_mcp.report_limits import ReportLimits
 ANALYSIS_SERVICE_NAME = "kegg_mcp_plain_ko_analysis"
 ANNOTATION_ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
 ANALYSIS_SERVICE_VERSION = "2"
+
+
+class ExecutionStage(StrEnum):
+    """Stable high-level stages used by compact performance summaries."""
+
+    ANNOTATION_IMPORT = "annotation_import"
+    KO_PATHWAY_MAPPING = "ko_pathway_mapping"
+    PATHWAY_RANKING = "pathway_ranking"
+    REFERENCE_LOADING = "reference_loading"
+    ANALYSIS = "analysis"
+    BUNDLE_WRITE = "bundle_write"
+
+
+class StageMetric(FrozenModel):
+    """Sanitized integer timing, request, cache, and byte counts for one stage."""
+
+    stage: ExecutionStage
+    elapsed_ms: int = Field(strict=True, ge=0)
+    request_count: int = Field(default=0, strict=True, ge=0)
+    network_request_count: int = Field(default=0, strict=True, ge=0)
+    cache_hit_count: int = Field(default=0, strict=True, ge=0)
+    response_bytes: int = Field(default=0, strict=True, ge=0)
+
+
+class PathwayRankingExecution(FrozenModel):
+    """Compact, reproducible provenance for one automatic pathway selection."""
+
+    method: Literal["selected_unique_ko_count"] = PATHWAY_RANKING_METHOD
+    method_version: Literal["1"] = PATHWAY_RANKING_VERSION
+    selection: PathwaySelection
+    evidence_mode: EvidenceMode
+    decision_policy: DecisionPolicyReference
+    selected_unique_ko_count: int = Field(strict=True, gt=0)
+    candidate_pathway_count: int = Field(strict=True, gt=0)
+    selected_pathway_ids: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^ko[0-9]{5}$")], ...],
+        Field(min_length=1, max_length=25),
+    ]
+    mapping_request_count: int = Field(strict=True, gt=0)
+    mapping_network_request_count: int = Field(strict=True, ge=0)
+    mapping_cache_hit_count: int = Field(strict=True, ge=0)
+    mapping_response_bytes: int = Field(strict=True, ge=0)
+
+    @model_validator(mode="after")
+    def validate_ranking_summary(self) -> Self:
+        if self.selection.mode is not PathwaySelectionMode.TOP_DETECTED:
+            raise ValueError("pathway ranking execution requires top_detected selection")
+        if len(self.selected_pathway_ids) > self.selection.top_n:
+            raise ValueError("selected pathway identifiers exceed the requested top_n")
+        if self.candidate_pathway_count < len(self.selected_pathway_ids):
+            raise ValueError("candidate pathway count cannot be smaller than selected targets")
+        if self.mapping_cache_hit_count > self.mapping_request_count:
+            raise ValueError("mapping cache hits cannot exceed logical requests")
+        return self
 
 
 class ReferenceLoadingLimits(FrozenModel):
@@ -81,6 +147,10 @@ class PathwayExecutionParameters(FrozenModel):
 
     evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
+    ranking: PathwayRankingExecution | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class AnalysisExecutionProvenance(FrozenModel):
@@ -116,6 +186,9 @@ __all__ = [
     "ANNOTATION_ANALYSIS_SERVICE_NAME",
     "AnalysisExecutionProvenance",
     "AnalysisServiceLimits",
+    "ExecutionStage",
     "PathwayExecutionParameters",
+    "PathwayRankingExecution",
     "ReferenceLoadingLimits",
+    "StageMetric",
 ]

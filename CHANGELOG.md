@@ -8,6 +8,9 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Added
 
+- Deterministic server-side pathway ranking and bounded Top-N selection in
+  `analyze_ko_annotations`, with complete ranking and KO-to-pathway relationship artifacts,
+  compact direct summaries, and six-stage execution/cache metrics.
 - A separately installed `kegg-render-mcp` 0.1.0 stdio companion for bounded regular-pathway
   evidence overlays and project-owned MODULE logic diagrams, with static SVG, optional PNG, scoped
   resource retention, and synthetic-only tests.
@@ -31,6 +34,11 @@ structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 
 ### Changed
 
+- Protein FASTA routing now treats DeepKOALA as local-only, checks the local companion first, and
+  requires explicit permission before installation, resource downloads, environment changes, or
+  MCP registration; the GenomeNet web form is never automated as an API substitute.
+- KEGG LINK preparation now uses canonical greedy packing under identifier and complete-URL
+  bounds, with isolated version 2 request keys and fresh-cache-first high-level analysis.
 - The core candidate advances to 0.3.0 for the first `RenderInputV2` public contract;
   `kegg-render-mcp` requires `kegg-mcp>=0.3,<0.4`, so published core 0.2.0 cannot be selected as a
   compatible renderer dependency.

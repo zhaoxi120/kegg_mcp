@@ -175,6 +175,7 @@ def create_server(runtime: McpRuntime | None = None) -> Server[object]:
                     result_store=state.result_store,
                     scope_id=state.scope_id,
                     pathway_evidence_mode=supplied.pathway_evidence_mode,
+                    pathway_selection=supplied.pathway_selection,
                     allow_global_or_overview=supplied.allow_global_or_overview,
                     output_directory=_resolve_output_directory(
                         supplied.output_directory or normalization.output_directory,
@@ -598,8 +599,8 @@ def _tool_definitions() -> list[types.Tool]:
             "Analyze KO annotations",
             (
                 "Normalize an inline KO list or supported annotation table and run requested "
-                "MODULE and pathway analyses in one call; when no target is supplied, discover "
-                "reference pathways from accepted K numbers."
+                "MODULE and pathway analyses in one call; pathway_selection can rank candidates "
+                "server-side and load references only for a bounded Top-N."
             ),
             AnalyzeKoAnnotationsInput,
             PrimitiveAnalysisToolEnvelope,
