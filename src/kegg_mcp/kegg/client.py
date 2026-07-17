@@ -33,6 +33,7 @@ from kegg_mcp.kegg.contracts import (
     LinkResult,
     PublicAcademicAccess,
     RetrievalEndpointClass,
+    endpoint_fingerprint,
 )
 from kegg_mcp.kegg.executor import ExecutedBatch, KeggRequestExecutor, RateLimiter
 from kegg_mcp.kegg.operations import (
@@ -48,7 +49,7 @@ from kegg_mcp.kegg.pathway_assets import (
     PathwayAssetResult,
     prepare_pathway_asset,
 )
-from kegg_mcp.kegg.rate_limit import ProcessWideRateLimiter
+from kegg_mcp.kegg.rate_limit import DeploymentRateLimiter
 from kegg_mcp.kegg.transport import HttpsTransport, Transport
 
 
@@ -67,7 +68,12 @@ class KeggClient:
         random_uniform: Callable[[float, float], float] = random.uniform,
     ) -> None:
         self._config = config
-        self._cache = cache or SQLiteKeggCache(config.cache.path)
+        self._cache = cache or SQLiteKeggCache(
+            config.cache.path,
+            max_entries=config.cache.max_entries,
+            max_payload_bytes=config.cache.max_payload_bytes,
+            max_database_bytes=config.cache.max_database_bytes,
+        )
         access = config.access
         if isinstance(access, PublicAcademicAccess):
             self._endpoint = access.endpoint
@@ -77,15 +83,18 @@ class KeggClient:
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.LICENSED
             self._endpoint_label = access.endpoint_label
-        mandatory_rate_limiter = ProcessWideRateLimiter(
-            self._endpoint_label,
+        self._endpoint_fingerprint = endpoint_fingerprint(self._endpoint)
+        mandatory_rate_limiter = DeploymentRateLimiter(
+            self._endpoint_fingerprint,
             config.limits.requests_per_second,
+            state_root=config.rate_limit.state_root,
         )
         self._executor = KeggRequestExecutor(
             config,
             endpoint=self._endpoint,
             retrieval_endpoint_class=self._retrieval_endpoint_class,
             endpoint_label=self._endpoint_label,
+            endpoint_fingerprint=self._endpoint_fingerprint,
             transport=transport or HttpsTransport(),
             cache=self._cache,
             mandatory_rate_limiter=mandatory_rate_limiter,
@@ -220,7 +229,7 @@ class KeggClient:
                 prepared.operation,
                 prepared.normalized_request_key,
                 self._retrieval_endpoint_class,
-                self._endpoint_label,
+                self._endpoint_fingerprint,
                 now=now,
                 expected_parser_version=PARSER_VERSION,
             )
@@ -280,7 +289,7 @@ class KeggClient:
                 single.operation,
                 single.normalized_request_key,
                 self._retrieval_endpoint_class,
-                self._endpoint_label,
+                self._endpoint_fingerprint,
                 body=body,
                 retrieved_at=provenance.retrieved_at,
                 expires_at=provenance.expires_at,

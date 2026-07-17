@@ -93,9 +93,12 @@ def test_openai_metadata_declares_real_stdio_dependency() -> None:
     for key in ("display_name", "short_description", "default_prompt"):
         assert re.search(rf'^  {key}: "[^"\n]+"$', metadata, flags=re.MULTILINE)
     assert "$kegg-ko-analysis" in metadata
-    assert 'type: "mcp"' in metadata
+    assert metadata.count('type: "mcp"') == 2
+    assert metadata.count('transport: "stdio"') == 2
     assert 'value: "kegg-mcp"' in metadata
-    assert 'transport: "stdio"' in metadata
+    assert 'value: "deepkoala-mcp"' in metadata
+    assert "check deepkoala-mcp status first" in metadata
+    assert "automatically prepare, submit, and poll" in metadata
     assert "allow_implicit_invocation: true" in metadata
 
 

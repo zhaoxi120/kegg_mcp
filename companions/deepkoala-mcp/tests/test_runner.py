@@ -1,4 +1,4 @@
-"""Fixed argv, CPU isolation, output cap, and process-group lifecycle tests."""
+"""Fixed argv, device policy, output cap, and process-group lifecycle tests."""
 
 from __future__ import annotations
 
@@ -59,19 +59,20 @@ def _write_cli(checkout: Path, body: str) -> None:
     (checkout / "deepkoala" / "cli.py").write_text(_ARGPARSE + body, encoding="utf-8")
 
 
-def test_build_argv_is_fixed_cpu_only_and_worker_free(checkout: Path, tmp_path: Path) -> None:
+def test_build_argv_is_fixed_auto_device_and_worker_free(checkout: Path, tmp_path: Path) -> None:
     plan = _plan(checkout, tmp_path, model="frag", batch_size=4, topk=3)
     argv = build_argv(plan)
     assert argv[0] == str(plan.python_executable)
     assert argv[1] == "-c"
-    assert argv[argv.index("--device") + 1] == "cpu"
+    assert argv[3] == str(os.getpid())
+    assert argv[argv.index("--device") + 1] == "auto"
     assert argv[argv.index("--num_workers") + 1] == "0"
     assert argv[argv.index("--model") + 1] == "frag"
     assert "--detail" in argv
-    assert len(argv) == 21
+    assert len(argv) == 22
 
 
-def test_child_environment_hides_gpus_and_bounds_threads(
+def test_child_environment_inherits_gpu_visibility_and_bounds_threads(
     checkout: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -80,9 +81,9 @@ def test_child_environment_hides_gpus_and_bounds_threads(
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "1")
     monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "2")
     environment = build_child_environment(_plan(checkout, tmp_path, cpu_threads=3))
-    assert environment["CUDA_VISIBLE_DEVICES"] == ""
-    assert environment["HIP_VISIBLE_DEVICES"] == ""
-    assert environment["ROCR_VISIBLE_DEVICES"] == ""
+    assert environment["CUDA_VISIBLE_DEVICES"] == "0"
+    assert environment["HIP_VISIBLE_DEVICES"] == "1"
+    assert environment["ROCR_VISIBLE_DEVICES"] == "2"
     for name in (
         "OMP_NUM_THREADS",
         "MKL_NUM_THREADS",
@@ -93,7 +94,10 @@ def test_child_environment_hides_gpus_and_bounds_threads(
 
 
 @pytest.mark.asyncio
-async def test_runner_executes_local_cli_with_cpu_contract(checkout: Path, tmp_path: Path) -> None:
+async def test_runner_executes_local_cli_with_auto_device_contract(
+    checkout: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     _write_cli(
         checkout,
         """
@@ -112,7 +116,7 @@ Path(args.output_path).write_text(json.dumps({
     outcome = await DeepKoalaProcessRunner().run(plan)
     payload = json.loads(plan.output_path.read_text(encoding="utf-8"))
     assert outcome.return_code == 0
-    assert payload == {"device": "cpu", "workers": 0, "threads": "2", "cuda": ""}
+    assert payload == {"device": "auto", "workers": 0, "threads": "2", "cuda": "0"}
 
 
 @pytest.mark.asyncio
@@ -219,6 +223,65 @@ Path(args.output_path).write_text(str(child.pid), encoding='ascii')
     async with asyncio.timeout(3):
         while _pid_exists(child_pid):
             await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_parent_sigkill_terminates_deepkoala_child(checkout: Path, tmp_path: Path) -> None:
+    _write_cli(
+        checkout,
+        """
+import os
+import time
+from pathlib import Path
+Path(args.output_path).write_text(str(os.getpid()), encoding='ascii')
+time.sleep(30)
+""",
+    )
+    plan = _plan(checkout, tmp_path, timeout_seconds=30)
+    parent_code = """
+import asyncio
+import sys
+from pathlib import Path
+from deepkoala_mcp.runner import DeepKoalaProcessRunner, RunnerPlan
+
+plan = RunnerPlan(
+    python_executable=Path(sys.argv[1]),
+    checkout=Path(sys.argv[2]),
+    job_directory=Path(sys.argv[3]),
+    model='full',
+    resolved_date='202502',
+    batch_size=1,
+    topk=1,
+    timeout_seconds=30,
+    cpu_threads=2,
+)
+asyncio.run(DeepKoalaProcessRunner().run(plan))
+"""
+    parent = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        parent_code,
+        str(plan.python_executable),
+        str(plan.checkout),
+        str(plan.job_directory),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        async with asyncio.timeout(5):
+            while not plan.output_path.exists():
+                await asyncio.sleep(0.01)
+        child_pid = int(plan.output_path.read_text(encoding="ascii"))
+        parent.kill()
+        await parent.wait()
+        async with asyncio.timeout(3):
+            while _pid_exists(child_pid):
+                await asyncio.sleep(0.01)
+    finally:
+        if parent.returncode is None:
+            parent.kill()
+            await parent.wait()
 
 
 def _pid_exists(pid: int) -> bool:

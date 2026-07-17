@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -68,7 +69,8 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Prepare and run bounded local CPU-only DeepKOALA jobs after explicit acknowledgement. "
+            "Prepare and run bounded local DeepKOALA jobs with the service-owned auto device "
+            "policy. Preparation returns non-blocking provenance and submission is idempotent. "
             "This server never downloads weights and never interprets KO predictions. Pass the "
             "successful file handoff through the core kegg-mcp DeepKOALA importer."
         ),
@@ -92,7 +94,7 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
                 request = _parse(PrepareDeepKoalaInput, arguments)
                 return _success(
                     await state.prepare(request),
-                    "Prepared a CPU-only job without starting DeepKOALA; review the notice.",
+                    "Prepared a bounded local job without starting DeepKOALA.",
                 )
             if name == "submit_deepkoala_job":
                 request = _parse(SubmitDeepKoalaInput, arguments)
@@ -128,15 +130,14 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
                 )
             )
         except DeepKoalaMcpError as error:
-            return _error(error.detail)
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return _error(
-                ErrorDetail(
-                    code=ErrorCode.INTERNAL_ERROR,
-                    message="The companion could not complete the local request safely.",
-                    suggested_action="Check runner status and retry the bounded request.",
-                )
+            detail = (
+                _internal_error(error, stage=f"tool:{name}")
+                if error.detail.code is ErrorCode.INTERNAL_ERROR
+                else error.detail
             )
+            return _error(detail)
+        except Exception as error:
+            return _error(_internal_error(error, stage=f"tool:{name}"))
 
     return server
 
@@ -169,7 +170,7 @@ def _tool_definitions() -> list[types.Tool]:
     delete = types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=True,
-        idempotentHint=False,
+        idempotentHint=True,
         openWorldHint=False,
     )
     definitions: tuple[
@@ -178,7 +179,7 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "get_deepkoala_runner_status",
             "Get local DeepKOALA runner status",
-            "Return redacted CPU-only readiness, bounds, and scheduler counts.",
+            "Return redacted local readiness, device policy, bounds, and scheduler counts.",
             GetDeepKoalaStatusInput,
             CompanionStatus,
             read_only,
@@ -186,15 +187,15 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "prepare_deepkoala_job",
             "Prepare a local DeepKOALA job",
-            "Validate and privately stage protein FASTA, then return a CPU execution notice.",
+            "Validate and privately stage protein FASTA, then return execution provenance.",
             PrepareDeepKoalaInput,
             PrepareDeepKoalaResult,
             prepare,
         ),
         (
             "submit_deepkoala_job",
-            "Submit an acknowledged DeepKOALA job",
-            "Start or queue one retained plan only after acknowledged=true.",
+            "Submit a prepared DeepKOALA job",
+            "Idempotently start or queue one server-retained prepared plan.",
             SubmitDeepKoalaInput,
             JobSummary,
             submit,
@@ -267,6 +268,24 @@ def _error(detail: ErrorDetail) -> types.CallToolResult:
         ],
         structuredContent=structured,
         isError=True,
+    )
+
+
+def _internal_error(error: Exception, *, stage: str) -> ErrorDetail:
+    correlation_id = f"err_{secrets.token_urlsafe(9)}"
+    print(
+        f"deepkoala-mcp internal error correlation_id={correlation_id} "
+        f"stage={stage} type={type(error).__name__}",
+        file=sys.stderr,
+    )
+    return ErrorDetail(
+        code=ErrorCode.INTERNAL_ERROR,
+        message="The companion could not complete the local request safely.",
+        suggested_action="Retry once, then report the correlation ID if the failure repeats.",
+        safe_details=(
+            SafeDetail(name="correlation_id", value=correlation_id),
+            SafeDetail(name="stage", value=stage),
+        ),
     )
 
 

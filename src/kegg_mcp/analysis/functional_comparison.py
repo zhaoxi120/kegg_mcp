@@ -6,12 +6,12 @@ from typing import Annotated, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from kegg_mcp.analysis.comparison import (
+from kegg_mcp.analysis.comparison import compare_ko_datasets
+from kegg_mcp.analysis.comparison_contracts import (
     ComparisonDatasetInput,
     ComparisonDatasetProvenance,
     ComparisonLimits,
     ComparisonWarning,
-    compare_ko_datasets,
 )
 from kegg_mcp.analysis.contracts import (
     CalculationMethodReference,

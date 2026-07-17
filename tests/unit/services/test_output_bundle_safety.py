@@ -8,6 +8,7 @@ import pytest
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.services.output_bundle import (
     _open_directory_fd,  # pyright: ignore[reportPrivateUsage]
+    _validate_output_directory_fd,  # pyright: ignore[reportPrivateUsage]
     _write_files,  # pyright: ignore[reportPrivateUsage]
 )
 
@@ -22,6 +23,34 @@ def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
         _open_directory_fd(alias / "bundle")
 
     assert not (real / "bundle").exists()
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o707])
+def test_directory_open_rejects_writable_user_owned_ancestors(
+    tmp_path: Path,
+    mode: int,
+) -> None:
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir(mode=mode)
+    unsafe.chmod(mode)
+
+    with pytest.raises(OSError):
+        _open_directory_fd(unsafe / "bundle")
+
+    assert not (unsafe / "bundle").exists()
+
+
+def test_directory_validation_rejects_non_owner_below_owner_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        monkeypatch.setattr(os, "geteuid", lambda: os.fstat(descriptor).st_uid + 1)
+        with pytest.raises(OSError):
+            _validate_output_directory_fd(descriptor, owner_boundary=True)
+    finally:
+        os.close(descriptor)
 
 
 def test_existing_bundle_is_rejected_without_modification(tmp_path: Path) -> None:

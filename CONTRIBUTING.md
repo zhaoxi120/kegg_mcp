@@ -32,7 +32,8 @@ uv run pytest
 - Use synthetic or independently authored fixtures. Do not commit KEGG payload collections, KOfam profiles, model weights, secrets, or large biological inputs.
 - Do not execute DeepKOALA or another external annotation tool from the core package or core
   server. Changes to the separately installed companion must preserve its independent entry point,
-  CPU-only bounds, fixed subprocess interface, and no-download policy.
+  service-owned automatic-device policy, fixed subprocess interface, bounded lifecycle, and
+  no-download policy.
 - Update documentation and tests whenever a public contract or biological interpretation rule changes.
 
 ## Pull requests

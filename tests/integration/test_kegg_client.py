@@ -16,6 +16,7 @@ from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.client import KeggClient
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
@@ -35,6 +36,7 @@ from kegg_mcp.kegg.contracts import (
     KeggLinkRelationship,
     KeggOperation,
     KeggRequestOptions,
+    LicensedAccess,
     LinkRequest,
     PublicAcademicAccess,
     ResponseOrigin,
@@ -121,7 +123,7 @@ class WriteFailingCache(SQLiteKeggCache):
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_label: str,
+        endpoint_fingerprint: str,
         *,
         body: bytes,
         retrieved_at: datetime,
@@ -133,7 +135,7 @@ class WriteFailingCache(SQLiteKeggCache):
         del (
             normalized_request_key,
             retrieval_endpoint_class,
-            endpoint_label,
+            endpoint_fingerprint,
             body,
             retrieved_at,
             expires_at,
@@ -152,8 +154,15 @@ class WriteFailingCache(SQLiteKeggCache):
 class _NoWaitMandatoryLimiter:
     instances: ClassVar[list[_NoWaitMandatoryLimiter]] = []
 
-    def __init__(self, scope: str, requests_per_second: float) -> None:
-        del scope, requests_per_second
+    def __init__(
+        self,
+        scope: str,
+        requests_per_second: float,
+        *,
+        state_root: str,
+    ) -> None:
+        del requests_per_second, state_root
+        self.scope = scope
         self.acquire_count = 0
         self.instances.append(self)
 
@@ -166,7 +175,7 @@ def replace_mandatory_limiter_for_network_free_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _NoWaitMandatoryLimiter.instances.clear()
-    monkeypatch.setattr(client_module, "ProcessWideRateLimiter", _NoWaitMandatoryLimiter)
+    monkeypatch.setattr(client_module, "DeploymentRateLimiter", _NoWaitMandatoryLimiter)
 
 
 def _public_config(
@@ -184,6 +193,22 @@ def _public_config(
     )
 
 
+def _licensed_config(
+    cache_path: Path,
+    *,
+    endpoint: str,
+    label: str,
+) -> KeggClientConfig:
+    return KeggClientConfig(
+        access=LicensedAccess(
+            authorized_use_confirmed=True,
+            endpoint=endpoint,
+            endpoint_label=label,
+        ),
+        cache=CachePolicy(path=str(cache_path), ttl_seconds=60),
+    )
+
+
 def _clock(value: datetime) -> Callable[[], datetime]:
     return lambda: value
 
@@ -195,7 +220,7 @@ def _read_public_cache(
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_LABEL,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         now=now,
         expected_parser_version=PARSER_VERSION,
     )
@@ -253,6 +278,63 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     assert limiter.acquire_count == 1
     assert sum(instance.acquire_count for instance in _NoWaitMandatoryLimiter.instances) == 1
     assert len(transport.urls) == 1
+
+
+def test_same_licensed_endpoint_uses_one_cache_and_rate_scope_across_labels(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "licensed.sqlite3"
+    endpoint = "https://licensed.example.test/api"
+    request = InfoRequest(database=KeggInfoDatabase.KO)
+    first = KeggClient(
+        _licensed_config(cache_path, endpoint=endpoint, label="operator-a"),
+        transport=QueueTransport([TransportResponse(status_code=200, body=_INFO_BODY)]),
+        clock=_clock(_NOW),
+    ).info(request)
+    second = KeggClient(
+        _licensed_config(cache_path, endpoint=endpoint, label="operator-b"),
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).info(request, options=KeggRequestOptions(refresh=False, cache_only=True))
+
+    assert first.batch.endpoint_label == "operator-a"
+    assert second.batch.endpoint_label == "operator-b"
+    assert second.batch.origin is ResponseOrigin.CACHE
+    assert (
+        _NoWaitMandatoryLimiter.instances[-2].scope == _NoWaitMandatoryLimiter.instances[-1].scope
+    )
+
+
+def test_distinct_licensed_endpoints_do_not_share_cache_with_the_same_label(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "licensed.sqlite3"
+    request = InfoRequest(database=KeggInfoDatabase.KO)
+    KeggClient(
+        _licensed_config(
+            cache_path,
+            endpoint="https://licensed-a.example.test/api",
+            label="institutional",
+        ),
+        transport=QueueTransport([TransportResponse(status_code=200, body=_INFO_BODY)]),
+        clock=_clock(_NOW),
+    ).info(request)
+
+    with pytest.raises(KeggMcpError) as caught:
+        KeggClient(
+            _licensed_config(
+                cache_path,
+                endpoint="https://licensed-b.example.test/api",
+                label="institutional",
+            ),
+            transport=BombTransport(),
+            clock=_clock(_NOW + timedelta(seconds=1)),
+        ).info(request, options=KeggRequestOptions(refresh=False, cache_only=True))
+
+    assert caught.value.detail.code is ErrorCode.CACHE_ENTRY_NOT_FOUND
+    assert (
+        _NoWaitMandatoryLimiter.instances[-2].scope != _NoWaitMandatoryLimiter.instances[-1].scope
+    )
 
 
 def test_multi_entry_get_populates_single_entry_and_arbitrary_subset_cache(tmp_path: Path) -> None:
@@ -764,7 +846,7 @@ def test_unrequested_get_entry_fails_before_the_response_is_cached(tmp_path: Pat
         KeggOperation.GET,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_LABEL,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         now=_NOW,
         expected_parser_version=PARSER_VERSION,
     )
@@ -892,7 +974,7 @@ def test_cache_only_read_rechecks_cached_response_size_under_current_limit(
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_LABEL,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         body=_INFO_BODY,
         retrieved_at=_NOW,
         expires_at=_NOW + timedelta(seconds=60),
@@ -1025,7 +1107,7 @@ def test_cached_parser_failure_is_reported_as_cache_failure(tmp_path: Path) -> N
         prepared.operation,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_LABEL,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         body=b"not an INFO response\n",
         retrieved_at=_NOW,
         expires_at=_NOW + timedelta(seconds=60),

@@ -41,7 +41,7 @@ def _validate(tool: types.Tool, result: types.CallToolResult) -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_declares_six_small_cpu_only_tools(
+async def test_discovery_declares_six_bounded_auto_device_tools(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     server = create_server(DeepKoalaJobManager(runtime_config, runner=_Runner()))
@@ -66,6 +66,10 @@ async def test_discovery_declares_six_small_cpu_only_tools(
         submit = _tool(tools, "submit_deepkoala_job")
         assert submit.annotations is not None
         assert submit.annotations.idempotentHint is True
+        assert set(cast(dict[str, object], submit.inputSchema["properties"])) == {"job_id"}
+        delete = _tool(tools, "delete_deepkoala_job")
+        assert delete.annotations is not None
+        assert delete.annotations.idempotentHint is True
 
 
 @pytest.mark.asyncio
@@ -92,15 +96,14 @@ async def test_memory_transport_workflow_returns_schema_valid_file_handoff(
         job_id = cast(str, prepared_data["job_id"])
 
         invalid = await session.call_tool(
-            "submit_deepkoala_job",
-            {"job_id": job_id, "acknowledged": False},
+            "submit_deepkoala_job", {"job_id": job_id, "acknowledged": True}
         )
         assert invalid.isError is True
         _validate(_tool(tools, "submit_deepkoala_job"), invalid)
 
         submitted = await session.call_tool(
             "submit_deepkoala_job",
-            {"job_id": job_id, "acknowledged": True},
+            {"job_id": job_id},
         )
         assert submitted.isError is False
         async with asyncio.timeout(5):

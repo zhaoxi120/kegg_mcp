@@ -82,6 +82,9 @@ jobs:
       - name: Test companion
         run: uv run --frozen pytest
 
+      - name: Build independent DeepKOALA distributions
+        run: uv build --no-sources --out-dir "${RUNNER_TEMP}/deepkoala-mcp-dist"
+
   validate-renderer-companion:
     runs-on: ubuntu-latest
     timeout-minutes: 10

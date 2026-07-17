@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import os
 import secrets
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -43,7 +44,9 @@ from deepkoala_mcp.installation import (
     select_installation,
 )
 from deepkoala_mcp.job_storage import (
-    prepare_state_root,
+    acquire_state_root,
+    cleanup_abandoned_sessions,
+    release_state_root,
     remove_job_directory,
     remove_session_directory,
     validate_output,
@@ -81,13 +84,14 @@ class _JobRecord:
     completed_at: datetime | None = None
     exit_code: int | None = None
     failure_reason: str | None = None
+    correlation_id: str | None = None
     output_bytes: int | None = None
     task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
 
 
 class DeepKoalaJobManager:
-    """Own one bounded CPU runner, one queue, and one opaque job namespace."""
+    """Own one bounded local runner, one queue, and one opaque job namespace."""
 
     def __init__(
         self,
@@ -103,20 +107,30 @@ class DeepKoalaJobManager:
         self._jobs: dict[str, _JobRecord] = {}
         self._scheduler = JobScheduler(config.max_queue_size)
         self._session_directory: Path | None = None
+        self._state_directory_fd: int | None = None
+        self._state_lock_fd: int | None = None
         self._sweeper: asyncio.Task[None] | None = None
         self._opened = False
         self._closing = False
 
     async def open(self) -> None:
-        """Create one owner-only process scope without loading a model."""
+        """Acquire one deployment scope and create a private process session."""
         async with self._lifecycle_lock:
             if self._opened:
                 return
-            root = prepare_state_root(self.config.state_root)
-            session = root / f"session_{secrets.token_hex(16)}"
-            session.mkdir(mode=0o700)
-            os.chmod(session, 0o700)
+            root, directory_fd, lock_fd = acquire_state_root(self.config.state_root)
+            try:
+                cleanup_abandoned_sessions(directory_fd)
+                session_name = f"session_{secrets.token_hex(16)}"
+                os.mkdir(session_name, mode=0o700, dir_fd=directory_fd)
+                session = root / session_name
+                os.chmod(session, 0o700)
+            except BaseException:
+                release_state_root(directory_fd, lock_fd)
+                raise
             self._session_directory = session
+            self._state_directory_fd = directory_fd
+            self._state_lock_fd = lock_fd
             self._opened = True
             self._closing = False
             self._sweeper = asyncio.create_task(self._sweep_expired())
@@ -156,10 +170,17 @@ class DeepKoalaJobManager:
                 except (OSError, ValueError) as error:
                     self._sweeper = None
                     raise RuntimeError("private session cleanup failed") from error
+        state_directory_fd = self._state_directory_fd
+        state_lock_fd = self._state_lock_fd
+        if state_directory_fd is None or state_lock_fd is None:
+            raise RuntimeError("state-root lease is unavailable during close")
+        release_state_root(state_directory_fd, state_lock_fd)
         async with self._lock:
             self._jobs.clear()
             self._scheduler.clear()
             self._session_directory = None
+            self._state_directory_fd = None
+            self._state_lock_fd = None
             self._sweeper = None
             self._opened = False
             self._closing = False
@@ -260,7 +281,7 @@ class DeepKoalaJobManager:
             return self._prepare_result(record)
 
     async def submit(self, job_id: str) -> JobSummary:
-        """Idempotently submit one explicitly acknowledged retained plan."""
+        """Idempotently submit one server-retained prepared plan."""
         self._require_open()
         await self._cleanup_expired()
         async with self._lock:
@@ -414,6 +435,7 @@ class DeepKoalaJobManager:
         state = JobState.FAILED
         reason: str | None = "The local DeepKOALA process or output failed safely."
         output_bytes: int | None = None
+        stage = "installation_check"
         try:
             installation = select_installation(
                 self.config.checkout,
@@ -421,14 +443,16 @@ class DeepKoalaJobManager:
                 record.notice.plan.resolved_model_date,
             )
             record.source_version = installation.source_version
+            stage = "runner_execution"
             outcome = await self._runner.run(self._runner_plan(record))
             record.exit_code = outcome.return_code
             if outcome.return_code != 0:
                 reason = "DeepKOALA exited without a successful result."
             else:
+                stage = "output_validation"
                 output_path = record.directory / OUTPUT_FILENAME
                 output_bytes = validate_output(output_path)
-                os.chmod(output_path, 0o600, follow_symlinks=False)
+                stage = "private_input_cleanup"
                 (record.directory / INPUT_FILENAME).unlink()
                 state = JobState.SUCCEEDED
                 reason = None
@@ -440,12 +464,18 @@ class DeepKoalaJobManager:
             reason = None
         except InstallationError:
             reason = "The configured DeepKOALA installation became unavailable."
-        except Exception:
-            pass
+        except Exception as error:
+            reason, record.correlation_id = _record_background_failure(stage, error)
         finally:
             if state is not JobState.SUCCEEDED:
-                with contextlib.suppress(OSError, ValueError):
+                try:
                     remove_job_directory(record.directory, self._require_session())
+                except (OSError, ValueError) as error:
+                    state = JobState.FAILED
+                    if record.correlation_id is None:
+                        reason, record.correlation_id = _record_background_failure(
+                            "private_job_cleanup", error
+                        )
             async with self._lock:
                 record.state = state
                 record.failure_reason = reason
@@ -518,6 +548,7 @@ class DeepKoalaJobManager:
             completed_at=record.completed_at,
             exit_code=record.exit_code,
             failure_reason=record.failure_reason,
+            correlation_id=record.correlation_id,
             output_bytes=record.output_bytes if record.state is JobState.SUCCEEDED else None,
         )
 
@@ -534,7 +565,7 @@ class DeepKoalaJobManager:
             raise RuntimeError("retained DeepKOALA output escaped private state")
         metadata = (
             SourceMetadataField(name="runner_version", value=__version__),
-            SourceMetadataField(name="device", value="cpu"),
+            SourceMetadataField(name="device_requested", value="auto"),
             SourceMetadataField(name="detail", value=True),
             SourceMetadataField(name="batch_size", value=plan.batch_size),
             SourceMetadataField(name="num_workers", value=0),
@@ -584,6 +615,23 @@ def _record_expired(record: _JobRecord, now: datetime, retention_seconds: int) -
         and record.completed_at is not None
         and record.completed_at + timedelta(seconds=retention_seconds) <= now
     )
+
+
+def _record_background_failure(stage: str, error: Exception) -> tuple[str, str]:
+    correlation_id = f"joberr_{secrets.token_urlsafe(9)}"
+    reasons = {
+        "installation_check": "The configured DeepKOALA installation changed during execution.",
+        "runner_execution": "The DeepKOALA process could not be started or completed safely.",
+        "output_validation": "The DeepKOALA output failed bounded validation.",
+        "private_input_cleanup": "The private staged input could not be removed safely.",
+        "private_job_cleanup": "The private failed-job state could not be removed safely.",
+    }
+    print(
+        f"deepkoala-mcp background failure correlation_id={correlation_id} "
+        f"stage={stage} type={type(error).__name__}",
+        file=sys.stderr,
+    )
+    return reasons.get(stage, "The local DeepKOALA job failed unexpectedly."), correlation_id
 
 
 __all__ = ["DeepKoalaJobManager", "Runner"]

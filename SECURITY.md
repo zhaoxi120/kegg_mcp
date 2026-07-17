@@ -38,8 +38,9 @@ details, and biological data.
 - External annotation tools, model code, model weights, and databases are outside the core
   package runtime boundary. The optional companion is a separate local process that accepts only
   an explicitly configured checkout, interpreter, private state root, and allowed input/handoff
-  roots. It uses fixed arguments, CPU-only execution, bounded files, process-group cancellation,
-  and never downloads or updates dependencies or weights.
+  roots. It uses fixed automatic-device arguments, inherits existing accelerator visibility,
+  enforces bounded files and one process per state root, terminates its process group and Linux
+  child on parent death, and never downloads or updates dependencies or weights.
 - Default local tests must not access live KEGG services. Pull-request CI runs one serialized,
   request-bounded 120-request live campaign and must never upload KEGG payloads; merging to `main`
   does not repeat that workflow.

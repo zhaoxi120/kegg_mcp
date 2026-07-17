@@ -99,8 +99,8 @@ result deletion, and safe output-bundle behavior.
 
 - Public KEGG REST access is presented only for eligible academic users performing academic work.
 - Licensed deployments require explicit confirmation and an authorized HTTPS endpoint.
-- The process-wide request rate cannot exceed three requests per second and defaults to a safer
-  no-burst rate.
+- The deployment-wide request rate across Core and Renderer cannot exceed three requests per
+  second and defaults to a safer no-burst rate.
 - No KEGG payload, source asset, cache database, or bulk export is tracked, packaged, or uploaded
   by CI.
 - Rendered derivatives require a separate rights review before redistribution.
@@ -130,8 +130,9 @@ This checklist is operational guidance, not legal advice.
   local paths.
 - Renderer XML, images, SVG, artifacts, and resources are bounded, static, and free of active or
   external content.
-- DeepKOALA execution is CPU-only, explicitly configured, process-group controlled, bounded, and
-  unable to install or download dependencies or data.
+- DeepKOALA execution uses a service-owned automatic-device policy, inherits existing accelerator
+  visibility, holds one owner-only state root exclusively, remains process-group and parent-death
+  controlled, and cannot install or download dependencies or data.
 - The vulnerability-reporting route in `SECURITY.md` is verified for the repository visibility.
 
 ## Scientific and contract gates

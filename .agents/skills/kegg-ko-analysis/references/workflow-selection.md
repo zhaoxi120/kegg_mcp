@@ -6,11 +6,13 @@ Choose the route from KO evidence already supplied. Do not ask the user to resta
 
 The core `kegg-mcp` server does not annotate proteins. Always discover the optional local
 `deepkoala-mcp` companion first and follow [deepkoala-companion.md](deepkoala-companion.md).
-If it is absent or unready, report the local state and ask whether to install, register, or repair
-the local runtime and companion. Stop when permission is declined. There is no remote execution
-fallback: never open, submit to, or automate the DeepKOALA web form. GenomeNet does not provide a
-DeepKOALA API for MCP automation. Resume core analysis only from a controlled absolute annotation
-path and source provenance, not a private result identifier or workflow hash.
+If it is absent or unready, report the precise route state and ask permission for the required
+installation, registration, download, allowed-root change, or repair. Stop when permission is
+declined. If it is ready, automatically prepare, submit, and poll the local job without a repeated
+per-job confirmation. There is no remote execution fallback: never open, submit to, or automate the
+DeepKOALA web form. GenomeNet does not provide a DeepKOALA API for MCP automation. Resume core
+analysis only from a controlled absolute annotation path and source provenance, not a private
+result identifier or workflow hash.
 
 Keep the successful companion job until `analyze_ko_annotations` has imported its controlled
 detailed CSV and written the complete output bundle. Do not delete the retained job after only a

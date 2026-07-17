@@ -104,8 +104,8 @@ entry through an ordinary network-enabled operation.
 
 After `get_server_status` confirms the intended live mode, call `probe_kegg_connectivity` once from
 the MCP client. It makes one explicit low-cost request and classifies the failure. Do not loop the
-probe, bypass the process-wide rate limiter, or reinterpret a transport failure as an absent KEGG
-entry.
+probe, bypass the deployment-wide rate limiter, or reinterpret a transport failure as an absent
+KEGG entry.
 
 ## Protocol and support hygiene
 

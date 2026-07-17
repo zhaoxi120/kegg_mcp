@@ -89,8 +89,14 @@ class _BombTransport:
 
 
 class _NoWaitLimiter:
-    def __init__(self, scope: str, requests_per_second: float) -> None:
-        del scope, requests_per_second
+    def __init__(
+        self,
+        scope: str,
+        requests_per_second: float,
+        *,
+        state_root: str,
+    ) -> None:
+        del scope, requests_per_second, state_root
 
     def acquire(self) -> None:
         return None
@@ -98,7 +104,7 @@ class _NoWaitLimiter:
 
 @pytest.fixture(autouse=True)
 def replace_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(client_module, "ProcessWideRateLimiter", _NoWaitLimiter)
+    monkeypatch.setattr(client_module, "DeploymentRateLimiter", _NoWaitLimiter)
 
 
 def _config(cache_path: Path) -> KeggClientConfig:

@@ -1,5 +1,6 @@
 """Typed public contracts for bounded KEGG retrieval and local caching."""
 
+import hashlib
 import ipaddress
 import os
 import re
@@ -15,20 +16,44 @@ from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel, valida
 
 PUBLIC_KEGG_ENDPOINT = "https://rest.kegg.jp"
 PUBLIC_KEGG_ENDPOINT_LABEL = "public-academic"
+ENDPOINT_LABEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
 PARSER_VERSION = "4"
 MAX_GET_ENTRIES_PER_BATCH = 10
 MAX_CONFIGURED_IDENTIFIERS = 1_000
+DEFAULT_CACHE_MAX_ENTRIES = 10_000
+DEFAULT_CACHE_MAX_PAYLOAD_BYTES = 512 * 1024 * 1024
+DEFAULT_CACHE_MAX_DATABASE_BYTES = 640 * 1024 * 1024
 
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 KeggIdentifier = Annotated[str, Field(min_length=1, max_length=256)]
 
 
+def _default_cache_root() -> Path:
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    return Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+
+
 def default_cache_path() -> str:
     """Return the user-local default cache path without creating it."""
-    cache_home = os.environ.get("XDG_CACHE_HOME")
-    root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
-    return str(root / "kegg-mcp" / "kegg.sqlite3")
+    return str(_default_cache_root() / "kegg-mcp" / "kegg.sqlite3")
+
+
+def default_rate_limit_root() -> str:
+    """Return the user-local shared rate-limit root without creating it."""
+    return str(_default_cache_root() / "kegg-mcp" / "rate-limit")
+
+
+def endpoint_fingerprint(endpoint: str) -> str:
+    """Return the opaque identity used for cache and rate-limit isolation."""
+    try:
+        encoded = endpoint.encode("ascii", errors="strict")
+    except (AttributeError, UnicodeEncodeError) as error:
+        raise ValueError("canonical KEGG endpoints must contain ASCII characters only") from error
+    return hashlib.sha256(encoded).hexdigest()
+
+
+PUBLIC_KEGG_ENDPOINT_FINGERPRINT = endpoint_fingerprint(PUBLIC_KEGG_ENDPOINT)
 
 
 class AccessMode(StrEnum):
@@ -59,7 +84,7 @@ class LicensedAccess(FrozenModel):
     mode: Literal[AccessMode.LICENSED] = AccessMode.LICENSED
     authorized_use_confirmed: Literal[True]
     endpoint: str = Field(min_length=1, max_length=2_048)
-    endpoint_label: str = Field(min_length=1, max_length=100)
+    endpoint_label: str = Field(pattern=ENDPOINT_LABEL_PATTERN, min_length=1, max_length=100)
 
     @field_validator("endpoint")
     @classmethod
@@ -120,13 +145,8 @@ class LicensedAccess(FrozenModel):
     @field_validator("endpoint_label")
     @classmethod
     def validate_endpoint_label(cls, value: str) -> str:
-        normalized = value.strip()
-        validate_utf8_text(normalized, field_name="endpoint_label")
-        if not normalized or any(
-            ord(character) < 32 or ord(character) == 127 for character in normalized
-        ):
-            raise ValueError("endpoint_label must be a safe non-empty logical label")
-        return normalized
+        validate_utf8_text(value, field_name="endpoint_label")
+        return value
 
 
 KeggAccess = Annotated[
@@ -172,6 +192,19 @@ class CachePolicy(FrozenModel):
 
     path: str = Field(default_factory=default_cache_path, min_length=1, max_length=4_096)
     ttl_seconds: int = Field(default=604_800, strict=True, gt=0, le=31_536_000)
+    max_entries: int = Field(default=DEFAULT_CACHE_MAX_ENTRIES, strict=True, gt=0, le=1_000_000)
+    max_payload_bytes: int = Field(
+        default=DEFAULT_CACHE_MAX_PAYLOAD_BYTES,
+        strict=True,
+        gt=0,
+        le=8 * 1024 * 1024 * 1024,
+    )
+    max_database_bytes: int = Field(
+        default=DEFAULT_CACHE_MAX_DATABASE_BYTES,
+        strict=True,
+        ge=1024 * 1024,
+        le=10 * 1024 * 1024 * 1024,
+    )
 
     @field_validator("path")
     @classmethod
@@ -180,6 +213,31 @@ class CachePolicy(FrozenModel):
         if "\x00" in value:
             raise ValueError("cache path must not contain NUL characters")
         return value
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> Self:
+        if self.max_payload_bytes >= self.max_database_bytes:
+            raise ValueError("max_payload_bytes must leave database space for cache metadata")
+        return self
+
+
+class RateLimitPolicy(FrozenModel):
+    """Owner-only state used to coordinate request starts across local processes."""
+
+    state_root: str = Field(
+        default_factory=default_rate_limit_root,
+        min_length=1,
+        max_length=4_096,
+    )
+
+    @field_validator("state_root")
+    @classmethod
+    def validate_state_root(cls, value: str) -> str:
+        validate_utf8_text(value, field_name="rate-limit state root")
+        path = Path(value).expanduser()
+        if "\x00" in value or not path.is_absolute() or ".." in path.parts:
+            raise ValueError("rate-limit state root must be absolute and traversal-free")
+        return str(path)
 
 
 class KeggClientConfig(FrozenModel):
@@ -202,6 +260,7 @@ class KeggClientConfig(FrozenModel):
     limits: KeggClientLimits = Field(default_factory=KeggClientLimits)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     cache: CachePolicy = Field(default_factory=CachePolicy)
+    rate_limit: RateLimitPolicy = Field(default_factory=RateLimitPolicy)
 
 
 class KeggOperation(StrEnum):
@@ -544,7 +603,7 @@ class KeggBatchProvenance(FrozenModel):
     request_key: str = Field(default="unavailable", min_length=1, max_length=4_096)
     access_mode: AccessMode
     retrieval_endpoint_class: RetrievalEndpointClass
-    endpoint_label: str = Field(min_length=1, max_length=100)
+    endpoint_label: str = Field(pattern=ENDPOINT_LABEL_PATTERN, min_length=1, max_length=100)
     origin: ResponseOrigin
     cache_lookup_state: CacheLookupState
     retrieved_at: datetime

@@ -1,4 +1,4 @@
-"""Fixed CPU-only subprocess adapter with complete POSIX lifecycle ownership."""
+"""Fixed local subprocess adapter with bounded Linux lifecycle ownership."""
 
 from __future__ import annotations
 
@@ -17,28 +17,49 @@ OUTPUT_FILENAME: Final = "output.csv"
 _TERMINATION_GRACE_SECONDS: Final = 5.0
 _INHERITED_ENVIRONMENT: Final = (
     "CONDA_PREFIX",
+    "CUDA_VISIBLE_DEVICES",
     "DYLD_LIBRARY_PATH",
     "HOME",
+    "HIP_VISIBLE_DEVICES",
     "LANG",
     "LC_ALL",
     "LD_LIBRARY_PATH",
     "PATH",
+    "ROCR_VISIBLE_DEVICES",
     "SYSTEMROOT",
     "TMPDIR",
     "VIRTUAL_ENV",
     "XDG_CACHE_HOME",
 )
 
-# This fixed launcher installs the output-file limit before importing upstream code. Caller text is
-# never interpolated into it, and the child receives only fixed flags plus validated scalar values.
-_CPU_LAUNCHER: Final = """\
+# This fixed launcher installs parent-death and output-file controls before importing upstream
+# code. Caller text is never interpolated into it, and the child receives only fixed flags plus
+# validated scalar values.
+_CHILD_LAUNCHER: Final = """\
+import ctypes
 import os
 import resource
 import runpy
 import signal
 import sys
 
-limit = int(sys.argv[1])
+def terminate_process_group(_signal_number, _frame):
+    os.killpg(os.getpgrp(), signal.SIGKILL)
+
+expected_parent_pid = int(sys.argv[1])
+if expected_parent_pid <= 1:
+    raise SystemExit("invalid parent process")
+signal.signal(signal.SIGTERM, terminate_process_group)
+libc = ctypes.CDLL(None, use_errno=True)
+prctl = libc.prctl
+prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+prctl.restype = ctypes.c_int
+if prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_PDEATHSIG failed")
+if os.getppid() != expected_parent_pid:
+    terminate_process_group(signal.SIGTERM, None)
+
+limit = int(sys.argv[2])
 if limit < 1:
     raise SystemExit("invalid output limit")
 soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -46,7 +67,7 @@ effective = limit if hard == resource.RLIM_INFINITY else min(limit, hard)
 resource.setrlimit(resource.RLIMIT_FSIZE, (effective, effective))
 signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
 os.umask(0o077)
-del sys.argv[1]
+del sys.argv[1:3]
 runpy.run_module("deepkoala.cli", run_name="__main__", alter_sys=True)
 """
 
@@ -87,7 +108,7 @@ class RunnerTimedOutError(TimeoutError):
 
 
 class DeepKoalaProcessRunner:
-    """Run only the fixed local DeepKOALA CPU command without a shell."""
+    """Run only the fixed local DeepKOALA command without a shell."""
 
     async def run(self, plan: RunnerPlan) -> ProcessOutcome:
         if plan.output_path.exists() or plan.output_path.is_symlink():
@@ -137,7 +158,8 @@ def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
     return (
         str(plan.python_executable),
         "-c",
-        _CPU_LAUNCHER,
+        _CHILD_LAUNCHER,
+        str(os.getpid()),
         str(plan.max_output_bytes),
         "--input_path",
         str(plan.input_path),
@@ -148,7 +170,7 @@ def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
         "--date",
         plan.resolved_date,
         "--device",
-        "cpu",
+        "auto",
         "--detail",
         "--batch_size",
         str(plan.batch_size),
@@ -160,14 +182,11 @@ def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
 
 
 def build_child_environment(plan: RunnerPlan) -> dict[str, str]:
-    """Build a small environment that hides GPUs and bounds CPU thread pools."""
+    """Build a small environment that preserves deployment GPU visibility and bounds threads."""
     environment = {name: os.environ[name] for name in _INHERITED_ENVIRONMENT if name in os.environ}
     threads = str(plan.cpu_threads)
     environment.update(
         {
-            "CUDA_VISIBLE_DEVICES": "",
-            "HIP_VISIBLE_DEVICES": "",
-            "ROCR_VISIBLE_DEVICES": "",
             "OMP_NUM_THREADS": threads,
             "MKL_NUM_THREADS": threads,
             "OPENBLAS_NUM_THREADS": threads,

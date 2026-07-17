@@ -243,7 +243,7 @@ and completed inference, and a generated detailed top-k CSV imported without sch
 manual check did not add DeepKOALA code, weights, dependencies, or generated output to this
 repository and is not part of the default test suite.
 
-The optional companion's 2026-07-16 CPU-only handoff check is recorded in
+The optional companion's local detailed-handoff check is governed by
 [release readiness](release-readiness.md) and uses this same importer boundary.
 
 ## Duplicate and conflict reporting

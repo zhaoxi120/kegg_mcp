@@ -7,6 +7,7 @@ import io
 import json
 import os
 import secrets
+import stat
 from collections.abc import Iterable
 from contextlib import suppress
 from enum import StrEnum
@@ -26,7 +27,10 @@ from kegg_mcp.analysis import (
 )
 from kegg_mcp.domain.annotations import AnnotationDataset, FrozenModel
 from kegg_mcp.domain.errors import ErrorCode, fail
-from kegg_mcp.execution import AnalysisExecutionProvenance, PathwayRankingExecution
+from kegg_mcp.execution import (
+    AnalysisExecutionProvenance,
+    PathwayExecutionParameters,
+)
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
@@ -140,7 +144,7 @@ def write_analysis_bundle(
         stage="analysis",
         manifest_path_mode=manifest_path_mode,
         render_input_schema=(RENDER_INPUT_SCHEMA_VERSION, RENDER_INPUT_MIME_TYPE),
-        pathway_ranking_execution=execution.pathway_parameters.ranking,
+        pathway_execution=execution.pathway_parameters,
     )
     _write_files(output_directory, files)
     return _bundle_paths(
@@ -331,7 +335,7 @@ def _manifest(
     stage: str,
     manifest_path_mode: ManifestPathMode,
     render_input_schema: tuple[str, str] | None = None,
-    pathway_ranking_execution: PathwayRankingExecution | None = None,
+    pathway_execution: PathwayExecutionParameters | None = None,
 ) -> str:
     input_paths = tuple(
         sorted({source.input_path for source in dataset.sources if source.input_path is not None})
@@ -358,8 +362,17 @@ def _manifest(
             "schema_version": schema_version,
             "mime_type": mime_type,
         }
-    if pathway_ranking_execution is not None:
-        value["pathway_selection"] = pathway_ranking_execution.model_dump(mode="json")
+    if pathway_execution is not None and pathway_execution.ranking is not None:
+        value["pathway_selection"] = pathway_execution.ranking.model_dump(mode="json")
+    if (
+        pathway_execution is not None
+        and pathway_execution.pathway_discovery_policy is not None
+        and pathway_execution.pathway_discovery_evidence_mode is not None
+    ):
+        value["pathway_discovery"] = {
+            "policy": pathway_execution.pathway_discovery_policy,
+            "evidence_mode": pathway_execution.pathway_discovery_evidence_mode.value,
+        }
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
@@ -477,6 +490,7 @@ def _open_directory_fd(path: Path) -> int:
         raise OSError("output directory must be an absolute normalized path")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     current_fd = os.open(os.sep, flags)
+    owner_boundary = os.fstat(current_fd).st_uid == os.geteuid()
     try:
         for component in path.parts[1:]:
             if component in {"", ".", ".."}:
@@ -484,12 +498,29 @@ def _open_directory_fd(path: Path) -> int:
             with suppress(FileExistsError):
                 os.mkdir(component, mode=0o700, dir_fd=current_fd)
             next_fd = os.open(component, flags, dir_fd=current_fd)
+            owner_boundary = _validate_output_directory_fd(
+                next_fd,
+                owner_boundary=owner_boundary,
+            )
             os.close(current_fd)
             current_fd = next_fd
         return current_fd
     except BaseException:
         os.close(current_fd)
         raise
+
+
+def _validate_output_directory_fd(descriptor: int, *, owner_boundary: bool) -> bool:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise OSError("output ancestor must be a directory")
+    owned = metadata.st_uid == os.geteuid()
+    effective_boundary = owner_boundary or owned
+    if effective_boundary and not owned:
+        raise OSError("output ancestors below the user boundary must retain ownership")
+    if effective_boundary and stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise OSError("output ancestors must not be group- or world-writable")
+    return effective_boundary
 
 
 def _bundle_paths(

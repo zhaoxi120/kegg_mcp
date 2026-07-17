@@ -10,11 +10,8 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
-from kegg_mcp.analysis.comparison import (
-    ComparisonDatasetInput,
-    compare_ko_datasets,
-    summarize_ko_comparison,
-)
+from kegg_mcp.analysis.comparison import compare_ko_datasets, summarize_ko_comparison
+from kegg_mcp.analysis.comparison_contracts import ComparisonDatasetInput
 from kegg_mcp.analysis.contracts import ModuleDefinition, ModuleDefinitionCollection
 from kegg_mcp.analysis.functional_comparison import (
     compare_module_graphs,

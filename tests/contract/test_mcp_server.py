@@ -25,6 +25,7 @@ from kegg_mcp.kegg import (
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
+    RateLimitPolicy,
     ResponseOrigin,
     RetrievalEndpointClass,
     RetryPolicy,
@@ -32,6 +33,7 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     PUBLIC_KEGG_ENDPOINT_LABEL,
     AccessMode,
     CacheLookupState,
@@ -229,6 +231,7 @@ def _runtime(
         client=KeggClient(
             KeggClientConfig(
                 cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")),
+                rate_limit=RateLimitPolicy(state_root=str(tmp_path / "rate-limit")),
                 retry=RetryPolicy(max_retries=0),
             ),
             transport=_UnavailableTransport(),
@@ -875,7 +878,8 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         "sequence_id,protein_name,ko_id\nprotein-1,alpha enzyme,K00001\n",
         encoding="utf-8",
     )
-    server = create_server(_fake_runtime(tmp_path))
+    runtime = _fake_runtime(tmp_path)
+    server = create_server(runtime)
 
     async with create_connected_server_and_client_session(server) as session:
         result = await session.call_tool(
@@ -889,6 +893,7 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
                         "input_path": str(fasta),
                     },
                 },
+                "pathway_evidence_mode": "lenient",
                 "output_directory": str(output),
             },
         )
@@ -899,7 +904,10 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert data["pathway_target_count"] == 1
         assert data["pathway_previews"][0]["pathway_id"] == "ko00001"
         report_path = Path(data["output_bundle"]["analysis_report"])
-        assert str(fasta) in report_path.read_text(encoding="utf-8")
+        report_text = report_path.read_text(encoding="utf-8")
+        assert str(fasta) in report_text
+        assert "Automatic pathway discovery policy" in report_text
+        assert "`accepted_only` using `strict` evidence" in report_text
         render_input_path = Path(data["output_bundle"]["render_input"])
         assert render_input_path.is_file()
         render_input = RenderInput.model_validate_json(
@@ -908,12 +916,38 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         )
         assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION
         assert render_input.pathways[0].detected_ko_ids == ("K00001",)
+        pathway_parameters = render_input.execution.analysis.pathway_parameters
+        assert pathway_parameters.evidence_mode.value == "lenient"
+        assert pathway_parameters.pathway_discovery_policy == "accepted_only"
+        discovery_mode = pathway_parameters.pathway_discovery_evidence_mode
+        assert discovery_mode is not None
+        assert discovery_mode.value == "strict"
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
         assert manifest["schema_version"] == "2"
         assert manifest["render_input"] == {
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
         }
+        assert manifest["pathway_discovery"] == {
+            "policy": "accepted_only",
+            "evidence_mode": "strict",
+        }
+        assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
+
+        repeated = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "file_path": str(annotations),
+                    "input_format": "generic_csv",
+                },
+                "output_directory": str(output),
+            },
+        )
+        assert repeated.isError is True
+        assert repeated.structuredContent is not None
+        assert repeated.structuredContent["error"]["code"] == "OUTPUT_ALREADY_EXISTS"
+        assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
 
 
 @pytest.mark.asyncio
@@ -1062,9 +1096,7 @@ async def test_file_handoff_rejects_incomplete_csv_and_symlink_escape(tmp_path: 
         assert malformed.structuredContent["error"]["code"] == "MISSING_REQUIRED_COLUMN"
         assert escaped_result.isError is True
         assert escaped_result.structuredContent is not None
-        assert escaped_result.structuredContent["error"]["code"] == (
-            "ANALYSIS_CONFIGURATION_INVALID"
-        )
+        assert escaped_result.structuredContent["error"]["code"] == "INVALID_ANNOTATION_TABLE"
 
 
 @pytest.mark.asyncio
@@ -1121,9 +1153,9 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert mapping.structuredContent is not None
         mapping_data = mapping.structuredContent["result"]["data"]
         assert mapping_data["raw_relationship_row_count"] == 1
-        assert mapping_data["unique_ko_pathway_count"] == 1
-        assert mapping_data["unique_map_pathway_count"] == 1
-        assert mapping_data["unique_pathway_number_count"] == 1
+        assert mapping_data["unique_reference_pathway_number_count"] == 1
+        assert mapping_data["available_ko_reference_view_count"] == 1
+        assert mapping_data["available_map_reference_view_count"] == 1
         assert mapping_data["row_preview"][0] == {
             "source_ko_id": "K00001",
             "target_id": "ko00001",
@@ -1291,7 +1323,7 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         KeggOperation.GET,
         prepared.normalized_request_key,
         RetrievalEndpointClass.PUBLIC_ACADEMIC,
-        PUBLIC_KEGG_ENDPOINT_LABEL,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         body=(b"ENTRY       K00001            KO\nNAME        Cached synthetic entry\n///\n"),
         retrieved_at=_NOW,
         expires_at=datetime(2099, 1, 1, tzinfo=UTC),

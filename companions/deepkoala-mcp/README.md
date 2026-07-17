@@ -11,11 +11,13 @@ submit to, or simulate that form. When this companion or its runtime is missing 
 Skill reports the local component state and obtains permission before installation, downloads,
 environment changes, state creation, or MCP registration.
 
-The companion is deliberately CPU-only. It fixes `--device cpu`, fixes `--num_workers 0`, limits
-inference batches to at most 64, limits thread pools to at most four threads, runs one job at a
-time, hides CUDA/HIP/ROCm devices, and owns the complete POSIX child process group. The companion
-does not make network requests and never downloads, updates, or replaces model resources. It does
-not claim to provide an OS network sandbox for arbitrary operator-provided child code.
+The companion fixes `--device auto` and `--num_workers 0`, limits inference batches to at most 64,
+limits CPU thread pools to at most four threads, and runs one job at a time. It inherits the MCP
+process's existing accelerator visibility; callers cannot select a device or expand that
+visibility. Provenance records `device_requested=auto` and does not claim which device was selected
+unless DeepKOALA exposes a reliable result. The companion owns the complete POSIX child process
+group, makes no network requests, and never downloads, updates, or replaces model resources. It
+does not claim to provide an OS network sandbox for arbitrary operator-provided child code.
 
 ## Install
 
@@ -34,7 +36,8 @@ command -v python
 ```
 
 The companion requires POSIX process groups and `RLIMIT_FSIZE`. It fails closed on unsupported
-platforms.
+platforms. The release-supported behavior is Linux accelerator selection when available and CPU
+fallback otherwise; macOS-specific accelerators are outside the supported platform matrix.
 
 ## Configure
 
@@ -53,7 +56,7 @@ install -d -m 700 /absolute/private/path/deepkoala-jobs
 | `DEEPKOALA_MCP_PYTHON` | Required absolute executable in the existing DeepKOALA/PyTorch environment. |
 | `DEEPKOALA_MCP_STATE_ROOT` | Required dedicated state directory; an existing directory must be owner-only. |
 | `DEEPKOALA_MCP_ALLOWED_ROOTS` | Optional path-separator list of roots accepted by `fasta_path`. |
-| `DEEPKOALA_MCP_CPU_THREADS` | CPU thread limit, default 2, range 1–4. |
+| `DEEPKOALA_MCP_CPU_THREADS` | CPU thread-pool limit, default 2, range 1–4. |
 | `DEEPKOALA_MCP_MAX_QUEUE_SIZE` | Queue bound, default 4, range 1–8. |
 | `DEEPKOALA_MCP_DEFAULT_TIMEOUT_SECONDS` | Execution timeout, default 3600, maximum 86400. |
 | `DEEPKOALA_MCP_PLAN_TTL_SECONDS` | Prepared-plan lifetime, default 600, maximum 86400. |
@@ -85,6 +88,19 @@ Example client registration:
 }
 ```
 
+Before registering the MCP server, inspect the local deployment without starting inference or
+downloading anything:
+
+```bash
+deepkoala-mcp doctor --json
+```
+
+The redacted diagnostic reports one stable route state such as `local_ready`,
+`deepkoala_checkout_missing`, `deepkoala_python_missing`, `model_resources_missing`,
+`state_root_missing`, or `runner_misconfigured`. It never prints configured paths. Registration
+state and whether the core allowed roots include the handoff root must still be checked by the MCP
+client or operator because an unregistered companion cannot diagnose itself through MCP.
+
 ## Workflow
 
 The server exposes six tools:
@@ -97,9 +113,11 @@ The server exposes six tools:
 6. `delete_deepkoala_job`
 
 Preparation validates and privately stages one inline or allowlisted protein FASTA. It returns the
-effective model/date, CPU settings, input summary, expiry, and one opaque `job_id` without starting
-inference. Submission requires the same `job_id` and `acknowledged=true`. The identifier references
-the immutable server-retained plan, so no client-generated or echoed digest is used.
+effective model/date, service-owned device and resource settings, input summary, expiry, and one
+opaque `job_id` without starting inference. The retained notice is provenance, not a per-job
+confirmation gate. Submission accepts only that `job_id` and is idempotent, so an already prepared
+job can be submitted immediately without duplicating execution. The identifier references the
+immutable server-retained plan; no client-generated or echoed digest is used.
 
 DeepKOALA always runs with detailed output and `multi=false`. A successful job returns:
 
@@ -125,9 +143,9 @@ session directory. FASTA headers, sequences, environment values, and local paths
 by status or error responses; only the controlled annotation output path and caller-supplied
 original FASTA path, when present, are exposed in a successful handoff.
 
-Compatibility was checked on 2026-07-16 with official DeepKOALA commit
-`bebbe0c43f50a26488f7092f6b355aae870a4ed9`, the `full` 202502 resources, CPU execution with two
-threads, and the complete prepare, submit, poll, handoff, core-import, delete, and shutdown flow.
-The bounded detailed output produced one schema-valid imported record, classified as rejected by
-the source policy with zero import diagnostics, and private session state was cleared. This is an
-interoperability check, not experimental validation of the assigned function.
+One owner-only state root can be held by only one companion process. After acquiring that lock, a
+new process removes only strictly named, owner-only abandoned session directories and fails closed
+on unexpected entries. On Linux, the child also requests a parent-death signal in addition to the
+normal timeout, cancellation, and process-group cleanup paths. Unexpected background failures
+return a safe correlation ID while stderr records only that ID, a logical stage, and the exception
+type. Repeating deletion may return not-found, but its filesystem effect is idempotent.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from kegg_mcp.kegg import (
     KeggClientConfig,
     LicensedAccess,
     PublicAcademicAccess,
+    RateLimitPolicy,
 )
 
 ACCESS_MODE_ENV = "KEGG_MCP_ACCESS_MODE"
@@ -21,6 +23,10 @@ ACADEMIC_CONFIRMATION_ENV = "KEGG_MCP_ACADEMIC_USE_CONFIRMED"
 LICENSED_ENDPOINT_ENV = "KEGG_MCP_LICENSED_ENDPOINT"
 LICENSED_CONFIRMATION_ENV = "KEGG_MCP_LICENSED_USE_CONFIRMED"
 CACHE_PATH_ENV = "KEGG_MCP_CACHE_PATH"
+CACHE_MAX_ENTRIES_ENV = "KEGG_MCP_CACHE_MAX_ENTRIES"
+CACHE_MAX_PAYLOAD_BYTES_ENV = "KEGG_MCP_CACHE_MAX_PAYLOAD_BYTES"
+CACHE_MAX_DATABASE_BYTES_ENV = "KEGG_MCP_CACHE_MAX_DATABASE_BYTES"
+RATE_LIMIT_ROOT_ENV = "KEGG_MCP_RATE_LIMIT_ROOT"
 RESULT_STORE_PATH_ENV = "KEGG_MCP_RESULT_STORE_PATH"
 ALLOWED_ROOTS_ENV = "KEGG_MCP_ALLOWED_ROOTS"
 
@@ -69,12 +75,33 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRunt
             endpoint=endpoint,
             endpoint_label="licensed-endpoint",
         )
-    cache_path = values.get(CACHE_PATH_ENV)
-    cache = CachePolicy(path=cache_path) if cache_path is not None else CachePolicy()
+    cache_defaults = CachePolicy()
+    cache = CachePolicy(
+        path=values.get(CACHE_PATH_ENV, cache_defaults.path),
+        max_entries=_positive_integer(
+            values,
+            CACHE_MAX_ENTRIES_ENV,
+            cache_defaults.max_entries,
+        ),
+        max_payload_bytes=_positive_integer(
+            values,
+            CACHE_MAX_PAYLOAD_BYTES_ENV,
+            cache_defaults.max_payload_bytes,
+        ),
+        max_database_bytes=_positive_integer(
+            values,
+            CACHE_MAX_DATABASE_BYTES_ENV,
+            cache_defaults.max_database_bytes,
+        ),
+    )
+    rate_defaults = RateLimitPolicy()
+    rate_limit = RateLimitPolicy(
+        state_root=values.get(RATE_LIMIT_ROOT_ENV, rate_defaults.state_root)
+    )
     result_path = values.get(RESULT_STORE_PATH_ENV, default_result_store_path(values))
     allowed_roots = _load_allowed_roots(values.get(ALLOWED_ROOTS_ENV))
     return McpRuntimeConfig(
-        kegg=KeggClientConfig(access=access, cache=cache),
+        kegg=KeggClientConfig(access=access, cache=cache, rate_limit=rate_limit),
         result_store_path=result_path,
         allowed_roots=allowed_roots,
     )
@@ -96,19 +123,41 @@ def _load_allowed_roots(raw_value: str | None) -> tuple[str, ...]:
             raise ValueError(f"{ALLOWED_ROOTS_ENV} paths must exist") from error
         if not resolved.is_dir():
             raise ValueError(f"{ALLOWED_ROOTS_ENV} paths must be directories")
+        metadata = resolved.lstat()
+        if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise ValueError(
+                f"{ALLOWED_ROOTS_ENV} paths must be user-owned and not group- or world-writable"
+            )
         value = str(resolved)
         if value not in roots:
             roots.append(value)
     return tuple(roots)
 
 
+def _positive_integer(
+    values: Mapping[str, str],
+    name: str,
+    default: int,
+) -> int:
+    raw = values.get(name)
+    if raw is None:
+        return default
+    if not raw.isascii() or not raw.isdigit() or raw.startswith("0"):
+        raise ValueError(f"{name} must be a positive decimal integer")
+    return int(raw)
+
+
 __all__ = [
     "ACADEMIC_CONFIRMATION_ENV",
     "ACCESS_MODE_ENV",
     "ALLOWED_ROOTS_ENV",
+    "CACHE_MAX_DATABASE_BYTES_ENV",
+    "CACHE_MAX_ENTRIES_ENV",
+    "CACHE_MAX_PAYLOAD_BYTES_ENV",
     "CACHE_PATH_ENV",
     "LICENSED_CONFIRMATION_ENV",
     "LICENSED_ENDPOINT_ENV",
+    "RATE_LIMIT_ROOT_ENV",
     "RESULT_STORE_PATH_ENV",
     "McpRuntimeConfig",
     "default_result_store_path",

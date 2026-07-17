@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Self
@@ -114,7 +115,7 @@ def load_runtime_config(
     checkout = _required_existing(values, CHECKOUT_ENV, directory=True)
     python = _required_existing(values, PYTHON_ENV, directory=False)
     raw_state = _required(values, STATE_ROOT_ENV)
-    state = _absolute(raw_state, STATE_ROOT_ENV).resolve(strict=False)
+    state = _absolute(raw_state, STATE_ROOT_ENV)
     roots = _allowed_roots(values.get(ALLOWED_ROOTS_ENV))
     return DeepKoalaRuntimeConfig(
         checkout=checkout,
@@ -159,7 +160,8 @@ def _require_posix_runtime() -> None:
     except ImportError:
         resource = None  # type: ignore[assignment]
     if (
-        os.name != "posix"
+        sys.platform != "linux"
+        or os.name != "posix"
         or not hasattr(os, "killpg")
         or not hasattr(os, "setsid")
         or not hasattr(os, "geteuid")
@@ -170,7 +172,9 @@ def _require_posix_runtime() -> None:
         or not hasattr(resource, "RLIMIT_FSIZE")
         or not hasattr(resource, "setrlimit")
     ):
-        raise ValueError("deepkoala-mcp requires POSIX process groups and RLIMIT_FSIZE")
+        raise ValueError(
+            "deepkoala-mcp requires Linux process groups, parent-death signals, and RLIMIT_FSIZE"
+        )
 
 
 def _required(values: Mapping[str, str], name: str) -> str:

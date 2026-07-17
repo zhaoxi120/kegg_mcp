@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from kegg_render_mcp.contracts import (
     RenderModuleInput,
     RenderPathwayInput,
     RenderResult,
+    SafeDetail,
     ToolEnvelope,
 )
 from kegg_render_mcp.input_validation import validate_tool_input
@@ -85,6 +87,7 @@ def build_runtime(config: RendererRuntimeConfig | None = None) -> RendererRuntim
             KeggClientLimits,
             LicensedAccess,
             PublicAcademicAccess,
+            RateLimitPolicy,
             RetryPolicy,
         )
 
@@ -103,6 +106,7 @@ def build_runtime(config: RendererRuntimeConfig | None = None) -> RendererRuntim
                     access=access,
                     limits=KeggClientLimits(max_response_bytes=effective.limits.max_asset_bytes),
                     retry=RetryPolicy(max_retries=0),
+                    rate_limit=RateLimitPolicy(state_root=effective.rate_limit_root),
                 )
             )
         )
@@ -207,15 +211,14 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                 )
             )
         except RenderMcpError as error:
-            return _error(error.detail)
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return _error(
-                ErrorDetail(
-                    code=ErrorCode.INTERNAL_ERROR,
-                    message="The renderer could not complete the local request safely.",
-                    suggested_action="Check renderer status and retry the bounded request.",
-                )
+            detail = (
+                _internal_error(error, stage=f"tool:{name}")
+                if error.detail.code is ErrorCode.INTERNAL_ERROR
+                else error.detail
             )
+            return _error(detail)
+        except Exception as error:
+            return _error(_internal_error(error, stage=f"tool:{name}"))
 
     @server.list_resources()
     async def _list_resources() -> list[types.Resource]:  # pyright: ignore[reportUnusedFunction]
@@ -291,7 +294,7 @@ def _tool_definitions() -> list[types.Tool]:
         readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
     )
     delete_annotations = types.ToolAnnotations(
-        readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
     )
     definitions: tuple[
         tuple[str, str, str, type[BaseModel], type[BaseModel], types.ToolAnnotations], ...
@@ -360,6 +363,7 @@ def _tool_definitions() -> list[types.Tool]:
 
 def _status(runtime: RendererRuntime) -> RendererStatus:
     limits = runtime.config.limits
+    snapshot = runtime.service.store.snapshot()
     return RendererStatus(
         server_version=__version__,
         ready=True,
@@ -367,7 +371,9 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
         access_mode=runtime.config.access_mode,
         allowed_root_count=len(runtime.config.allowed_roots),
         retention_seconds=runtime.config.retention_seconds,
-        retained_result_count=runtime.service.store.result_count,
+        retained_result_count=snapshot.active_result_count,
+        cleanup_pending_result_count=snapshot.cleanup_pending_result_count,
+        retained_bytes=snapshot.retained_bytes,
         bounds=RendererBounds(
             max_input_bytes=limits.max_input_bytes,
             max_targets=32,
@@ -375,6 +381,7 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
             max_pixels=limits.max_pixels,
             max_svg_bytes=limits.max_svg_bytes,
             max_result_bytes=limits.max_result_bytes,
+            max_disk_bytes=limits.max_disk_bytes,
         ),
     )
 
@@ -412,6 +419,24 @@ def _error(detail: ErrorDetail) -> types.CallToolResult:
             "error": detail.model_dump(mode="json"),
         },
         isError=True,
+    )
+
+
+def _internal_error(error: Exception, *, stage: str) -> ErrorDetail:
+    correlation_id = f"err_{secrets.token_urlsafe(9)}"
+    print(
+        f"kegg-render-mcp internal error correlation_id={correlation_id} "
+        f"stage={stage} type={type(error).__name__}",
+        file=sys.stderr,
+    )
+    return ErrorDetail(
+        code=ErrorCode.INTERNAL_ERROR,
+        message="The renderer could not complete the local request safely.",
+        suggested_action="Retry once, then report the correlation ID if the failure repeats.",
+        safe_details=(
+            SafeDetail(name="correlation_id", value=correlation_id),
+            SafeDetail(name="stage", value=stage),
+        ),
     )
 
 

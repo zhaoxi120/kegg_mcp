@@ -64,6 +64,7 @@ class KeggRequestExecutor:
         endpoint: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
         endpoint_label: str,
+        endpoint_fingerprint: str,
         transport: Transport,
         cache: SQLiteKeggCache,
         mandatory_rate_limiter: RateLimiter,
@@ -76,6 +77,7 @@ class KeggRequestExecutor:
         self._endpoint = endpoint
         self._retrieval_endpoint_class = retrieval_endpoint_class
         self._endpoint_label = endpoint_label
+        self._endpoint_fingerprint = endpoint_fingerprint
         self._transport = transport
         self._cache = cache
         self._mandatory_rate_limiter = mandatory_rate_limiter
@@ -92,6 +94,11 @@ class KeggRequestExecutor:
     def endpoint_label(self) -> str:
         return self._endpoint_label
 
+    @property
+    def endpoint_fingerprint(self) -> str:
+        """Return the opaque cache and rate-limit endpoint identity."""
+        return self._endpoint_fingerprint
+
     def execute(
         self,
         prepared: PreparedRequest,
@@ -107,7 +114,7 @@ class KeggRequestExecutor:
                 prepared.operation,
                 prepared.normalized_request_key,
                 self._retrieval_endpoint_class,
-                self._endpoint_label,
+                self._endpoint_fingerprint,
                 now=now,
                 expected_parser_version=PARSER_VERSION,
             )
@@ -157,7 +164,7 @@ class KeggRequestExecutor:
             prepared.operation,
             prepared.normalized_request_key,
             self._retrieval_endpoint_class,
-            self._endpoint_label,
+            self._endpoint_fingerprint,
             body=response.body,
             retrieved_at=retrieved_at,
             expires_at=expires_at,

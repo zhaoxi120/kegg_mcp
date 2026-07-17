@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from kegg_mcp.analysis.comparison import ComparisonDatasetInput, ComparisonLimits
+from kegg_mcp.analysis.comparison_contracts import ComparisonDatasetInput, ComparisonLimits
 from kegg_mcp.analysis.contracts import (
     ModuleDefinition,
     ModuleDefinitionCollection,

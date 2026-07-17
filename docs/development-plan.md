@@ -79,7 +79,8 @@ The assigned post-MVP workflow optimization adds these compatible requirements:
 
 - protein FASTA without KO evidence always routes first to discovered local `deepkoala-mcp`; an
   absent or unready local runtime requires explicit installation or repair permission, and the
-  GenomeNet DeepKOALA web form is never an automation fallback;
+  GenomeNet DeepKOALA web form is never an automation fallback; a ready deployment automatically
+  prepares, submits, and polls the local job without a per-job confirmation field;
 - `analyze_ko_annotations` accepts optional server-side `pathway_selection`, ranks canonical
   pathways by unique K numbers selected under the requested evidence mode, uses pathway ID as the
   stable tie-breaker, and loads denominator/metadata references only for the selected Top-N;
@@ -87,8 +88,9 @@ The assigned post-MVP workflow optimization adds these compatible requirements:
   and relationship evidence remains in retained and output-bundle artifacts;
 - direct Top-N results contain bounded summaries, bundle metadata, and sanitized six-stage
   execution/cache metrics rather than full relationship or detected-KO tables; and
-- LINK request preparation uses canonical greedy packing under identifier and URL bounds with a
-  versioned cache key, while the existing no-burst rate and response-size limits remain enforced.
+- LINK request preparation uses canonical greedy packing under identifier and URL bounds with an
+  unprefixed canonical request key, while the existing no-burst rate and response-size limits
+  remain enforced.
 
 ## Table of contents
 
@@ -127,7 +129,7 @@ This document resolves those gaps and is the implementation baseline. It intenti
 
 | Area | Original risk | Required correction |
 | --- | --- | --- |
-| KEGG access | Caching and concurrency were described without making KEGG usage restrictions enforceable. | Treat academic-use eligibility, licensed endpoints, a process-wide maximum of three requests per second, and local-only cache storage as release gates. |
+| KEGG access | Caching and concurrency were described without making KEGG usage restrictions enforceable. | Treat academic-use eligibility, licensed endpoints, a deployment-wide maximum of three requests per second, and local-only cache storage as release gates. |
 | KEGG batching | Generic batch retrieval did not state endpoint limits. | Split `get` operations into batches of at most ten entries and apply endpoint-specific limits elsewhere. |
 | Annotation model | One record implied one KO per sequence and omitted sample, rank, domain, and score semantics. | Allow multiple records per sequence and preserve sample ID, rank, domain coordinates, raw decision, score type, threshold rule, and source/model versions. |
 | Decision normalization | `accepted`, `uncertain`, and `rejected` appeared universal. | Preserve the source decision and apply a named versioned normalization policy. Never invent `uncertain` merely because a score is below a threshold. |
@@ -477,13 +479,13 @@ This is not legal advice and the project must not claim to validate an organizat
 ### 8.2 Client requirements
 
 - HTTPS endpoint configuration.
-- Process-wide rate limiter with a safe default below the documented maximum of three requests per second and no burst above that maximum.
+- Deployment-wide rate limiter with a safe default below the documented maximum of three requests per second and no burst above that maximum.
 - Timeout, bounded retries, exponential backoff, and jitter for transient failures.
 - No retry for deterministic 400 or 404 responses.
 - Typed endpoint allowlist; do not expose an arbitrary URL fetcher.
 - At most ten entries per KEGG `get` request.
 - Bounded identifier count for `link`, `conv`, and service-level operations.
-- Stable User-Agent containing project version and a documentation URL, not personal information.
+- Stable User-Agent containing only the package name and version, not a URL or personal information.
 - Structured parsing of tab-delimited, flat-file, and `info` responses.
 - Explicit cache-only reads that never attempt a network connection.
 - Response-size limits and bounded cache metadata.
@@ -496,8 +498,8 @@ This is not legal advice and the project must not claim to validate an organizat
 | `get` | Retrieve selected KO, module, pathway, reaction, enzyme, compound, and BRITE entries under explicit size limits. |
 | `link` | Resolve approved KO-to-pathway/module/reaction/EC/BRITE relationships and pathway-to-KO denominators. |
 | `conv` | Convert supported external gene identifiers only in an explicitly scoped lookup; broad gene discovery remains out of MVP. |
-| `list` | Use only where required for bounded metadata, never to mirror a database. |
-| `find` | Optional for exact user-driven search; do not use names to guess a KO assignment. |
+| `list` | Not exposed by the current client. |
+| `find` | Not exposed by the current client. |
 
 Unrestricted `link/genes/<KO>` expansion is out of MVP because it can return a very large cross-organism result.
 
@@ -515,7 +517,7 @@ Minimum cache metadata:
 operation
 normalized_request_key
 endpoint_class
-endpoint_label
+endpoint_fingerprint
 response_body
 retrieved_at
 expires_at
@@ -527,6 +529,11 @@ http_metadata_allowlist
 Requirements:
 
 - Cache content is user-local and ignored by Git.
+- Canonical endpoint fingerprints isolate cache rows; readable endpoint labels remain provenance
+  only and licensed URLs are never stored in cache keys.
+- Default limits are 10,000 rows, 512 MiB of payloads, and a 640 MiB main database. Expired rows
+  are removed before writes and through the explicit cache cleanup command; fresh rows are not
+  silently quota-evicted.
 - Reports record retrieval metadata but must not embed large raw KEGG payloads.
 - Offline mode may use expired data only when explicitly allowed and must mark it stale.
 - `refresh=true` bypasses a fresh cache entry but still obeys rate limits.
@@ -845,11 +852,12 @@ separately installed stdio server and runner process with its own entry point, e
 lifecycle, tests, lock file, and release review.
 
 The companion never becomes a core dependency. It accepts an existing operator-configured
-DeepKOALA checkout and PyTorch interpreter, forces CPU execution with a small thread limit and zero
-data-loader workers, runs one job at a time with fixed arguments and bounded files, and never
-downloads or replaces code, weights, or databases. A prepare step returns a readable execution
-notice; explicit acknowledgement of the server-held opaque job identifier is required before
-submission. Workflow and artifact hashes are not part of this contract.
+DeepKOALA checkout and PyTorch interpreter, fixes `--device auto`, inherits the server's existing
+accelerator visibility, uses a small CPU thread-pool limit and zero data-loader workers, runs one
+job at a time with fixed arguments and bounded files, and never downloads or replaces code,
+weights, or databases. A prepare step returns a readable non-blocking execution notice; submission
+accepts only the server-held opaque job identifier. Workflow and artifact hashes are not part of
+this contract.
 
 ### 14.1 Documentation-derived baseline
 
@@ -905,7 +913,7 @@ The importer must not infer a model version, database release, threshold policy,
 
 Importer tests use small, static, documentation-derived fixtures. Companion tests use fake local
 checkouts and subprocesses by default. End-to-end execution against an installed DeepKOALA remains
-a separately authorized CPU-only compatibility check and is never required by the core suite.
+a separately authorized compatibility check and is never required by the core suite.
 
 ### 14.3 Detailed-output mapping
 
@@ -1046,7 +1054,7 @@ Errors must distinguish absence of an entry, unavailable network data, stale cac
 - Multiple KO rows per sequence and domain coordinates.
 - Duplicate and conflict handling.
 - KEGG flat-file, tabular, and `info` parsing.
-- Request batching and process-wide rate limiting.
+- Request batching and deployment-wide rate limiting.
 - Cache freshness, explicitly allowed stale cache-only use, and corruption.
 - Module tokenizer, precedence, nesting, alternatives, complexes, optional nodes, references, cycles, and unsupported tokens.
 - Exact module completion and block coverage.
@@ -1153,7 +1161,7 @@ Acceptance:
 
 ### Milestone 2: KEGG client and cache
 
-Status as of 2026-07-14: the eligibility gate, typed and bounded KEGG operations, process-wide
+Status as of 2026-07-14: the eligibility gate, typed and bounded KEGG operations, deployment-wide
 rate limiting, safe transport and retries, strict response parsing, endpoint-scoped local cache,
 cache-only behavior, and retrieval provenance are implemented and verified. Milestone 2 is
 complete.

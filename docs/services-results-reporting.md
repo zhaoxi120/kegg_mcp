@@ -74,7 +74,7 @@ metadata validation to the Milestone 4 pathway reference builder. Aggregate rela
 reference K numbers, exclusions, response bytes, and request count are bounded; a limit failure
 stops before the next request whenever the required metric is already known.
 
-The injected client preserves the Milestone 2 access gate, process-wide request rate, batching,
+The injected client preserves the Milestone 2 access gate, deployment-wide request rate, batching,
 cache-only behavior, and retrieval provenance. Milestone 5 tests use synthetic in-process clients;
 the opt-in live suite is enabled by pull-request CI for the bounded compatibility campaign.
 
@@ -91,6 +91,13 @@ Ranking occurs before `load_pathway_references`. `top_n` is bounded from 1 throu
 exceed the deployment-owned `max_pathway_specs`; a large candidate set therefore does not trigger
 the pathway-reference target limit when only Top-N references are requested. Explicit pathways
 retain their previous behavior when no selection is supplied.
+
+When the request supplies neither pathway targets nor `PathwaySelection`, automatic pathway
+discovery uses accepted K numbers only and records
+`pathway_discovery_policy="accepted_only"` with
+`pathway_discovery_evidence_mode="strict"`. The subsequent coverage calculation still uses the
+requested strict or lenient evidence mode. This distinction is serialized in execution
+provenance, the Markdown report, the renderer handoff, and the output-bundle manifest.
 
 The complete ranking and normalized KO-to-pathway relationships are retained in scoped JSON
 artifacts and, when an output directory is supplied, in `pathway_ranking.tsv` and
@@ -229,9 +236,9 @@ The default local validation suite skips live KEGG calls. Pull-request CI explic
 bounded 120-request compatibility campaign.
 
 Live behavior is controlled by the injected Milestone 2 client. Public `rest.kegg.jp` access
-remains restricted to academic use by academic users, must use
-the configured process-wide request rate of no more than three requests per second, and must keep
-cached KEGG payloads local and out of version control and releases.
+remains restricted to academic use by academic users, must use the configured deployment-wide
+request rate of no more than three requests per second, and must keep cached KEGG payloads local
+and out of version control and releases.
 
 ## Layer boundary
 

@@ -42,6 +42,7 @@ class ExitRunner:
 class EmptyRunner:
     async def run(self, plan: RunnerPlan) -> ProcessOutcome:
         plan.output_path.write_bytes(b"")
+        plan.output_path.chmod(0o644)
         return ProcessOutcome(return_code=0)
 
 
@@ -54,6 +55,11 @@ class OversizedRunner:
 class TimeoutRunner:
     async def run(self, plan: RunnerPlan) -> ProcessOutcome:
         raise RunnerTimedOutError
+
+
+class UnexpectedRunner:
+    async def run(self, plan: RunnerPlan) -> ProcessOutcome:
+        raise ValueError(f"private runner failure at {plan.checkout}")
 
 
 class BlockingRunner:
@@ -137,7 +143,8 @@ async def test_prepare_stages_without_running_or_retaining_raw_request(
     async with _manager(runtime_config, runner) as manager:
         prepared = await manager.prepare(PrepareDeepKoalaInput(fasta_text=f">{secret}\nMPEPTIDE\n"))
         assert prepared.state == "prepared"
-        assert prepared.notice.plan.device == "cpu"
+        assert prepared.notice.plan.device == "auto"
+        assert prepared.notice.gpu_visibility_inherited is True
         assert prepared.notice.plan.num_workers == 0
         assert prepared.notice.plan.resolved_model_date == "202502"
         assert prepared.notice.downloads_enabled is False
@@ -194,6 +201,9 @@ async def test_success_returns_current_core_file_handoff_without_csv_interpretat
         assert all(
             set(item.model_dump()) == {"name", "value"} for item in handoff.source.source_metadata
         )
+        assert {item.name: item.value for item in handoff.source.source_metadata}[
+            "device_requested"
+        ] == "auto"
 
 
 @pytest.mark.asyncio
@@ -230,6 +240,8 @@ async def test_status_is_redacted_and_reports_structural_resources(
         assert status.max_concurrent_jobs == 1
         assert status.max_input_bytes == 5_000_000
         assert status.max_output_bytes == 5_000_000
+        assert status.device_policy == "auto"
+        assert status.gpu_visibility_inherited is True
         serialized = status.model_dump_json()
         assert str(runtime_config.checkout) not in serialized
         assert str(runtime_config.state_root) not in serialized
@@ -321,6 +333,27 @@ async def test_process_and_output_failures_are_terminal_and_cleaned(
         result = await manager.get_job(prepared.job_id)
         assert result.handoff is None
         assert result.job.failure_reason is not None
+
+
+@pytest.mark.asyncio
+async def test_unexpected_background_failure_has_safe_correlation(
+    runtime_config: DeepKoalaRuntimeConfig,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async with _manager(runtime_config, UnexpectedRunner()) as manager:
+        prepared = await manager.prepare(PrepareDeepKoalaInput(fasta_text=">p\nM\n"))
+        await manager.submit(prepared.job_id)
+        assert await _wait_terminal(manager, prepared.job_id) is JobState.FAILED
+        result = await manager.get_job(prepared.job_id)
+        assert result.job.correlation_id is not None
+        assert result.job.failure_reason == (
+            "The DeepKOALA process could not be started or completed safely."
+        )
+    diagnostic = capsys.readouterr().err
+    assert result.job.correlation_id in diagnostic
+    assert "stage=runner_execution" in diagnostic
+    assert "type=ValueError" in diagnostic
+    assert str(runtime_config.checkout) not in diagnostic
 
 
 @pytest.mark.asyncio
@@ -467,6 +500,66 @@ async def test_submit_is_idempotent_for_one_retained_job(
 
 
 @pytest.mark.asyncio
+async def test_state_root_is_exclusive_and_recovers_after_close(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    first = DeepKoalaJobManager(runtime_config, runner=SuccessfulRunner())
+    second = DeepKoalaJobManager(runtime_config, runner=SuccessfulRunner())
+    await first.open()
+    try:
+        with pytest.raises(ValueError, match="already active"):
+            await second.open()
+    finally:
+        await first.close()
+    await second.open()
+    await second.close()
+
+
+@pytest.mark.asyncio
+async def test_open_cleans_only_strict_abandoned_sessions(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    runtime_config.state_root.mkdir(mode=0o700)
+    abandoned = runtime_config.state_root / ("session_" + "a" * 32)
+    abandoned.mkdir(mode=0o700)
+    job = abandoned / ("job_" + "b" * 32)
+    job.mkdir(mode=0o700)
+    staged = job / "input.fasta"
+    staged.write_text(">p\nM\n", encoding="ascii")
+    staged.chmod(0o600)
+    unrelated = runtime_config.state_root / "operator-note"
+    unrelated.write_text("keep", encoding="utf-8")
+
+    manager = DeepKoalaJobManager(runtime_config, runner=SuccessfulRunner())
+    await manager.open()
+    try:
+        assert not abandoned.exists()
+        assert unrelated.read_text(encoding="utf-8") == "keep"
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_open_rejects_symlinked_abandoned_session_without_touching_target(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    runtime_config.state_root.mkdir(mode=0o700)
+    target = tmp_path / "outside"
+    target.mkdir()
+    marker = target / "keep"
+    marker.write_text("private", encoding="utf-8")
+    (runtime_config.state_root / ("session_" + "a" * 32)).symlink_to(
+        target, target_is_directory=True
+    )
+
+    manager = DeepKoalaJobManager(runtime_config, runner=SuccessfulRunner())
+    with pytest.raises(ValueError, match="abandoned session"):
+        await manager.open()
+    assert marker.read_text(encoding="utf-8") == "private"
+
+
+@pytest.mark.asyncio
 async def test_close_cancels_runner_and_removes_complete_session(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
@@ -479,7 +572,7 @@ async def test_close_cancels_runner_and_removes_complete_session(
     assert any(runtime_config.state_root.iterdir())
     await manager.close()
     assert runner.cancelled.is_set()
-    assert list(runtime_config.state_root.iterdir()) == []
+    assert {path.name for path in runtime_config.state_root.iterdir()} == {".deepkoala.lock"}
 
 
 @pytest.mark.asyncio
@@ -501,4 +594,4 @@ async def test_close_reports_cleanup_failure_and_retains_state_for_retry(
 
     monkeypatch.undo()
     await manager.close()
-    assert list(runtime_config.state_root.iterdir()) == []
+    assert {path.name for path in runtime_config.state_root.iterdir()} == {".deepkoala.lock"}

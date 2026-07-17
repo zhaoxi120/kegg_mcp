@@ -332,9 +332,9 @@ class KoMappingServiceResult(FrozenModel):
     source_identifier_count: int = Field(strict=True, ge=1, le=100)
     row_count: int = Field(strict=True, ge=0)
     raw_relationship_row_count: int = Field(strict=True, ge=0)
-    unique_ko_pathway_count: int = Field(default=0, strict=True, ge=0)
-    unique_map_pathway_count: int = Field(default=0, strict=True, ge=0)
-    unique_pathway_number_count: int = Field(default=0, strict=True, ge=0)
+    unique_reference_pathway_number_count: int = Field(default=0, strict=True, ge=0)
+    available_ko_reference_view_count: int = Field(default=0, strict=True, ge=0)
+    available_map_reference_view_count: int = Field(default=0, strict=True, ge=0)
     row_preview: Annotated[
         tuple[KeggPairRow | PathwayMappingRow, ...], Field(max_length=MAX_MAPPING_PREVIEW_ROWS)
     ]

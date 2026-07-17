@@ -83,7 +83,10 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert probe_annotations.openWorldHint is True
         assert _tool(tools, "render_pathway").annotations.openWorldHint is True  # type: ignore[union-attr]
         assert _tool(tools, "render_module").annotations.openWorldHint is False  # type: ignore[union-attr]
-        assert _tool(tools, "delete_render_result").annotations.destructiveHint is True  # type: ignore[union-attr]
+        delete_annotations = _tool(tools, "delete_render_result").annotations
+        assert delete_annotations is not None
+        assert delete_annotations.destructiveHint is True
+        assert delete_annotations.idempotentHint is True
         assert len((await session.list_resources()).resources) == 1
         assert len((await session.list_resource_templates()).resourceTemplates) == 2
 
@@ -158,6 +161,38 @@ async def test_invalid_request_and_unconfigured_probe_return_schema_errors(
         assert probe.isError is True
         _validate(_tool(tools, "probe_renderer_kegg_connectivity"), probe)
         assert probe.structuredContent["error"]["code"] == "ASSET_UNAVAILABLE"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_internal_error_returns_correlation_id_without_exception_details(
+    runtime_config: RendererRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime = RendererRuntime(runtime_config, RendererService(runtime_config, SyntheticProvider()))
+
+    def fail_delete(render_id: str) -> object:
+        del render_id
+        raise RuntimeError("private-renderer-exception-detail")
+
+    monkeypatch.setattr(runtime.service.store, "delete", fail_delete)
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "delete_render_result",
+            {"render_id": "render_" + "a" * 32},
+        )
+
+    assert result.isError is True
+    error = cast(dict[str, object], result.structuredContent["error"])  # type: ignore[index]
+    assert error["code"] == "INTERNAL_ERROR"
+    details = cast(list[dict[str, str]], error["safe_details"])
+    detail_map = {item["name"]: item["value"] for item in details}
+    assert detail_map["correlation_id"].startswith("err_")
+    assert detail_map["stage"] == "tool:delete_render_result"
+    diagnostic = capsys.readouterr().err
+    assert detail_map["correlation_id"] in diagnostic
+    assert "type=RuntimeError" in diagnostic
+    assert "private-renderer-exception-detail" not in diagnostic
 
 
 @pytest.mark.asyncio
