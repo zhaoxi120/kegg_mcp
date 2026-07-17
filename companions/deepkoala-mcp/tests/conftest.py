@@ -21,6 +21,17 @@ def build_checkout(root: Path, *, cli_source: str = "# test CLI\n") -> Path:
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "utils.py").write_text("def resolve_device(value): return value\n", encoding="utf-8")
     (package / "cli.py").write_text(cli_source, encoding="utf-8")
+    torch_package = checkout / "torch"
+    torch_package.mkdir()
+    (torch_package / "__init__.py").write_text(
+        "class _Cuda:\n"
+        "    @staticmethod\n"
+        "    def is_available():\n"
+        "        return False\n"
+        "\n"
+        "cuda = _Cuda()\n",
+        encoding="utf-8",
+    )
     (checkout / "pyproject.toml").write_text(
         '[project]\nname = "deepkoala"\nversion = "0.1-test"\n',
         encoding="utf-8",

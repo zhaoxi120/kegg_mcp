@@ -18,6 +18,7 @@ from deepkoala_mcp.job_storage import (
     create_output_directory,
     publish_artifacts,
     read_artifact_slice,
+    remove_job_directory,
     validate_delivered_artifacts,
 )
 
@@ -37,6 +38,24 @@ def _raw_output(tmp_path: Path) -> Path:
     raw = tmp_path / "raw.csv"
     raw.write_bytes(DETAILED_CSV)
     return raw
+
+
+def test_private_job_cleanup_accepts_regular_files_created_under_public_umask(
+    tmp_path: Path,
+) -> None:
+    session = tmp_path / f"session_{'a' * 32}"
+    job = session / f"job_{'b' * 32}"
+    session.mkdir(mode=0o700)
+    job.mkdir(mode=0o700)
+    session.chmod(0o700)
+    job.chmod(0o700)
+    output = job / "output.csv"
+    output.write_bytes(DETAILED_CSV)
+    output.chmod(0o644)
+
+    remove_job_directory(job, session)
+
+    assert not job.exists()
 
 
 def test_publish_rejects_ancestor_symlink_substitution(tmp_path: Path) -> None:

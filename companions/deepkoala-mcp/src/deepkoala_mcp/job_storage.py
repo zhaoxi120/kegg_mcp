@@ -549,11 +549,7 @@ def _remove_job_name(session_fd: int, job_name: str, *, reject_file_symlinks: bo
             if stat.S_ISLNK(metadata.st_mode) and not reject_file_symlinks:
                 os.unlink(name, dir_fd=job_fd)
                 continue
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) & 0o077
-            ):
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
                 raise ValueError("controlled job directory contains an unsafe entry")
             os.unlink(name, dir_fd=job_fd)
     finally:
