@@ -7,7 +7,7 @@ from typing import NoReturn
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.importers import SourceProvenanceInput
-from kegg_mcp.services import NormalizeAnnotationsRequest
+from kegg_mcp.services.models import NormalizeAnnotationsRequest
 
 
 def materialize_annotation_file(

@@ -11,7 +11,7 @@ from typing import TextIO, TypedDict
 from kegg_mcp import __version__
 from kegg_mcp.mcp.config import load_runtime_config
 from kegg_mcp.mcp.server import main as run_stdio
-from kegg_mcp.services import ResultStoreError, SQLiteResultStore
+from kegg_mcp.services.result_store import ResultStoreError, SQLiteResultStore
 
 
 class _DoctorDocument(TypedDict):
@@ -187,7 +187,7 @@ def main(
     environment: Mapping[str, str] | None = None,
     stdout: TextIO | None = None,
 ) -> int:
-    """Dispatch the backward-compatible stdio command or a diagnostic subcommand."""
+    """Dispatch the stdio command or a diagnostic subcommand."""
     arguments = _parser().parse_args(argv)
     if arguments.command in {None, "serve"}:
         run_stdio()

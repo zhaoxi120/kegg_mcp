@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from kegg_mcp.mcp import cli
-from kegg_mcp.services import ResultArtifactInput, ResultStoreLimits, SQLiteResultStore
+from kegg_mcp.services.result_store import (
+    ResultArtifactInput,
+    ResultStoreLimits,
+    SQLiteResultStore,
+)
 
 
 def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None:

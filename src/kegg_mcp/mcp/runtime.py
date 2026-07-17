@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 from kegg_mcp.kegg import KeggClient
 from kegg_mcp.mcp.config import McpRuntimeConfig, load_runtime_config
-from kegg_mcp.services import KeggPrimitiveClient, SQLiteResultStore
+from kegg_mcp.services.reference_budget import KeggPrimitiveClient
+from kegg_mcp.services.result_store import SQLiteResultStore
 
 
 @dataclass(frozen=True, slots=True)

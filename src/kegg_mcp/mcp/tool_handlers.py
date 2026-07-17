@@ -25,20 +25,19 @@ from kegg_mcp.mcp.contracts import (
 )
 from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
 from kegg_mcp.mcp.runtime import McpRuntime
-from kegg_mcp.services import (
-    KeggConnectivityClient,
-    NormalizeAnnotationsRequest,
-    analyze_annotation_targets,
-    analyze_module_targets,
-    analyze_pathway_targets,
-    compare_annotation_sets,
+from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
+from kegg_mcp.services.comparison import compare_annotation_sets
+from kegg_mcp.services.kegg_mapping import map_ko_identifiers, retrieve_kegg_entries
+from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.module_analysis import analyze_module_targets
+from kegg_mcp.services.normalization import normalize_annotations
+from kegg_mcp.services.operational import (
     delete_analysis_result,
     get_server_status_service,
-    map_ko_identifiers,
-    normalize_annotations,
     probe_kegg_connectivity_service,
-    retrieve_kegg_entries,
 )
+from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
+from kegg_mcp.services.reference_budget import KeggConnectivityClient
 
 
 @dataclass(frozen=True, slots=True)

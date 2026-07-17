@@ -5,21 +5,22 @@ annotation-evidence graphics. It accepts the complete `render_input.json` versio
 written by `kegg-mcp`; it never imports annotation tables, assigns K numbers, evaluates MODULE
 completion, or recomputes pathway coverage.
 
-The first release renders:
+The renderer handles:
 
 - regular reference-pathway overlays from one matching KEGG PNG and KGML document; and
 - project-owned MODULE logic diagrams from the authoritative core AST and complete render state.
 
 SVG is canonical. PNG is an optional bounded derivative. Global and overview pathways are rejected
 because their line-oriented graphics require a separately reviewed policy. `map` and
-organism-specific pathway targets remain explicit summary-only core results; the first renderer
-release accepts only regular `koNNNNN` reference targets. Graphics represent annotation evidence
+organism-specific pathway targets remain explicit summary-only core results; the renderer accepts
+only regular `koNNNNN` reference targets. Graphics represent annotation evidence
 and do not establish pathway presence, activity, flux, phenotype, or experimental validation.
 
 ## Installation
 
-Install this directory independently with Python 3.11. The companion depends on a compatible
-`kegg-mcp` 0.3.x release for the renderer contract and typed pathway-asset client.
+Install this directory independently with Python 3.11. The companion depends on the compatible
+`kegg-mcp` range declared in its package metadata for the renderer contract and typed
+pathway-asset client.
 
 ```bash
 uv sync --frozen --all-groups
@@ -124,10 +125,9 @@ accepting work, so abandoned artifacts cannot evade the configured disk quota.
 
 ## Security boundary
 
-- Only schema version 2 is accepted. Version 1 is not losslessly upgradeable and requires a new
-  core analysis bundle.
-- The first release intentionally accepts a direct allowed-root `render_input.json` path only;
-  inline renderer JSON is not part of the MCP request surface.
+- Only schema version 2 is accepted; incompatible handoffs require a new core analysis bundle.
+- Input uses a direct allowed-root `render_input.json` path; inline renderer JSON is not part of
+  the MCP request surface.
 - Input JSON, target counts, assets, XML structure, coordinates, pixels, SVG nodes, artifact bytes,
   retained bytes, and disk use are bounded.
 - KGML DTDs, entities, external resolution, excessive depth, and mismatched identities are

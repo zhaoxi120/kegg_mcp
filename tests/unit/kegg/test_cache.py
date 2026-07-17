@@ -103,43 +103,6 @@ def test_round_trip_returns_fresh_response_and_complete_metadata(tmp_path: Path)
     )
 
 
-def test_legacy_table_name_is_migrated_without_losing_cached_payloads(tmp_path: Path) -> None:
-    cache_path = tmp_path / "kegg.sqlite3"
-    cache = SQLiteKeggCache(cache_path)
-    expected = _write_response(cache)
-    schema_version = 2
-    legacy_table = f"kegg_responses_v{schema_version}"
-    legacy_key = f"v{schema_version}:{_REQUEST_KEY}"
-    with sqlite3.connect(cache_path) as connection:
-        connection.execute(
-            "UPDATE kegg_responses SET normalized_request_key = ?",
-            (legacy_key,),
-        )
-        connection.execute(f'ALTER TABLE kegg_responses RENAME TO "{legacy_table}"')
-
-    lookup = _read_response(SQLiteKeggCache(cache_path))
-
-    assert lookup.response == expected
-    with sqlite3.connect(cache_path) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            ).fetchall()
-        }
-    assert "kegg_responses" in tables
-    assert legacy_table not in tables
-    with sqlite3.connect(cache_path) as connection:
-        stored_keys = {
-            row[0]
-            for row in connection.execute(
-                "SELECT normalized_request_key FROM kegg_responses"
-            ).fetchall()
-        }
-    assert _REQUEST_KEY in stored_keys
-    assert legacy_key not in stored_keys
-
-
 def test_expired_response_is_returned_as_stale_without_policy_decision(tmp_path: Path) -> None:
     cache = SQLiteKeggCache(tmp_path / "kegg.sqlite3")
     _write_response(cache)

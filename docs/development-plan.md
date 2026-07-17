@@ -1,18 +1,16 @@
-# KEGG MCP: Reviewed Development Plan
+# KEGG MCP Development Plan
 
-Status: approved as a development baseline after the corrections recorded below.
-Implementation status: Milestones 0 through 8 and the version 0.2.0 workflow remediation are
-implemented and verified. The assigned post-MVP visualization extension is implemented as an
-independent renderer companion and typed core handoff for the unreleased 0.3 series. Core 0.2.0
-was an unpublished intermediate candidate; the only published GitHub release is core v0.1.0. The
-current candidates support Linux with Python 3.11.x only.
+Status: approved development baseline.
+Implementation status: Milestones 0 through 8, the local companion workflow, and the assigned
+visualization extension are implemented and verified. The three distributions support Linux with
+Python 3.11.x only.
 Last reviewed: 2026-07-16.
 
-## Version 0.2 workflow-remediation amendment
+## Workflow contracts
 
-This amendment supersedes earlier milestone text wherever it describes workflow digests, public
-cache/limit tuning, unrestricted inline-only handoff, explicit duplicate `ko`/`map` namespaces, or
-the former umbrella Skill. Biological evidence and KEGG access safeguards remain unchanged.
+The following requirements govern workflow digests, cache and limit ownership, controlled file
+handoff, pathway namespaces, and Skill boundaries. Biological evidence and KEGG access safeguards
+remain unchanged.
 
 - Biological workflow contracts retain readable paths, versions, parameters, timestamps, parser
   versions, request keys, endpoint class/label, and exact structured evidence; they do not require
@@ -33,7 +31,7 @@ the former umbrella Skill. Biological evidence and KEGG access safeguards remain
 - Local tests skip live KEGG access by default. Pull-request CI runs one serialized 120-request live
   campaign and must not upload KEGG payloads; merging to `main` does not repeat that workflow.
 
-## Visualization extension amendment
+## Visualization extension
 
 The post-MVP visualization implementation is governed by
 [`visualization-extension-plan.md`](visualization-extension-plan.md). It does not change the core
@@ -41,8 +39,8 @@ MCP process boundary:
 
 - `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently installed local stdio
   processes;
-- the renderer requires `kegg-mcp>=0.3,<0.4`; core 0.1 and the unpublished 0.2 candidate must not
-  be treated as compatible;
+- the renderer requires `kegg-mcp>=0.3,<0.4`, and incompatible core packages must fail dependency
+  resolution;
 - the core produces the immutable, complete-within-limit `render_input.json` version 2 handoff and
   never parses KGML or renders an image;
 - `AnalysisExecutionProvenance` version 2 serializes the MODULE analysis limits, pathway
@@ -56,11 +54,10 @@ MCP process boundary:
 - renderer CI, fixtures, and distribution audits are synthetic and offline. Real KEGG source
   assets remain local, and distributing rendered derivatives requires a separate rights review.
 
-## Repository-review hardening amendment
+## Repository hardening
 
-The 2026-07-16 repository review is accepted with the scoped decisions recorded in
-[`repository-review-decisions.md`](repository-review-decisions.md). This amendment changes public
-contracts as follows without broadening the biological or three-process boundaries:
+These requirements harden public contracts without broadening the biological or three-process
+boundaries:
 
 - every tool annotation describes local cache, retained-result, output-bundle, deletion, and
   open-world effects under the MCP annotation semantics reviewed on 2026-07-16;
@@ -73,10 +70,10 @@ contracts as follows without broadening the biological or three-process boundari
   for active results and the cleanup threshold for orphan rows after abnormal termination;
 - `kegg-mcp cleanup --expired` removes only TTL-expired result rows and does not clean the KEGG
   response cache or evict unexpired results; and
-- release metadata tests enforce the current candidate matrix, renderer dependency, published
-  release statement, platform range, and tracked-document status.
+- release metadata tests enforce package versions, renderer compatibility, platform range, and
+  tracked-document status.
 
-## Local annotation and Top-N pathway optimization amendment
+## Local annotation and Top-N pathway optimization
 
 The assigned post-MVP workflow optimization adds these compatible requirements:
 
@@ -1307,12 +1304,10 @@ Acceptance:
 
 ### Milestone 8: release readiness
 
-Status as of 2026-07-15: installation and MCP configuration guidance, redistributable synthetic KO
-examples, data-rights and security review checklists, an English changelog and release notes, and
-local wheel/source-distribution audit tests are implemented. The published 0.1.0 release and
-unpublished 0.2.0 candidate were scoped to Python 3.11.x only. Release preparation and Milestone 8
-are complete. The repository is private; before any future public supported release, GitHub
-private vulnerability reporting must be enabled and verified.
+Installation and MCP configuration guidance, redistributable synthetic KO examples, data-rights
+and security review checklists, release notes, and local wheel/source-distribution audit tests are
+implemented. Release preparation and Milestone 8 are complete. The repository is private; before
+any public supported release, GitHub private vulnerability reporting must be enabled and verified.
 
 Tasks:
 
@@ -1320,7 +1315,7 @@ Tasks:
 - add redistributable synthetic examples;
 - complete security and data-rights review;
 - build the Python package; and
-- prepare changelog and release notes.
+- prepare release notes.
 
 Acceptance:
 
@@ -1328,14 +1323,13 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 
 ### Post-MVP visualization extension
 
-Status as of 2026-07-16: the assigned visualization extension implements the core version 2
-renderer handoff, typed single-pathway PNG/KGML retrieval, corrected DeepKOALA source provenance,
-the independently locked `kegg-render-mcp` stdio distribution, and instruction-only visualization
-orchestration. The detailed contract and acceptance criteria remain in
+The assigned visualization extension implements the core version 2 renderer handoff, typed
+single-pathway PNG/KGML retrieval, explicit DeepKOALA source provenance, the independently locked
+`kegg-render-mcp` stdio distribution, and instruction-only visualization orchestration. The
+detailed contract and acceptance criteria remain in
 `visualization-extension-plan.md`; this section does not replace them.
 
-The corrected original-FASTA/generated-CSV provenance is the breaking `deepkoala-mcp` 0.2.0
-contract; its earlier 0.1.0 handoff must not be treated as equivalent.
+The original-FASTA/generated-CSV provenance fields are distinct and must not be conflated.
 
 The supported release path is one bounded local workflow across three independent processes. The
 core remains the sole authority for evidence normalization, MODULE evaluation, and pathway
@@ -1399,7 +1393,7 @@ Each issue should normally touch one layer or one contract. Cross-layer changes 
 
 ## 20. Release gates
 
-The first release is blocked until all of the following are true:
+A release is blocked until all of the following are true:
 
 - The public KEGG usage restriction and licensed-use path are visible during setup.
 - The live client cannot exceed documented rate and batch limits.
@@ -1423,7 +1417,7 @@ The first release is blocked until all of the following are true:
 - A separate frozen renderer CI job runs synthetic offline tests and an independent distribution
   build audit without issuing another KEGG request.
 - All tracked repository content is in English.
-- Version 0.1.x package metadata accepts Python 3.11.x only; wider Python support requires separate
+- Package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.
 - The private-release security policy documents a collaborator-only reporting boundary; GitHub
   private vulnerability reporting is enabled and verified before any public supported release.

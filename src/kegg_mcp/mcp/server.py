@@ -21,7 +21,7 @@ from kegg_mcp.mcp.resources import (
 )
 from kegg_mcp.mcp.runtime import McpRuntime, build_runtime
 from kegg_mcp.mcp.tool_registry import TOOL_NAMES, dispatch_tool, tool_definitions
-from kegg_mcp.services import ResultStoreError
+from kegg_mcp.services.result_store import ResultStoreError
 
 SERVER_NAME = "kegg-mcp"
 SERVER_INSTRUCTIONS = (

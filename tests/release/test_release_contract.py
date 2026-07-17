@@ -16,14 +16,12 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "README.md",
-    PROJECT_ROOT / "CHANGELOG.md",
     PROJECT_ROOT / "SECURITY.md",
     PROJECT_ROOT / "docs" / "development-plan.md",
     PROJECT_ROOT / "docs" / "mcp-benchmark-review.md",
     PROJECT_ROOT / "docs" / "installation.md",
     PROJECT_ROOT / "docs" / "mcp-server.md",
     PROJECT_ROOT / "docs" / "release-readiness.md",
-    PROJECT_ROOT / "docs" / "repository-review-decisions.md",
     PROJECT_ROOT / "docs" / "services-results-reporting.md",
     PROJECT_ROOT / "docs" / "skill-evaluation.md",
     PROJECT_ROOT / "docs" / "troubleshooting.md",
@@ -85,7 +83,7 @@ def _project_table() -> dict[str, object]:
     return cast(dict[str, object], document["project"])
 
 
-def _candidate_files() -> tuple[Path, ...]:
+def _release_files() -> tuple[Path, ...]:
     completed = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=PROJECT_ROOT,
@@ -129,7 +127,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     assert locked_project["version"] == project["version"]
 
 
-def test_candidate_version_and_release_matrix_is_consistent() -> None:
+def test_distribution_versions_and_compatibility_are_consistent() -> None:
     core_version = str(_project_table()["version"])
     deepkoala_project = tomllib.loads(
         (PROJECT_ROOT / "companions/deepkoala-mcp/pyproject.toml").read_text(encoding="utf-8")
@@ -141,30 +139,21 @@ def test_candidate_version_and_release_matrix_is_consistent() -> None:
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
     security = (PROJECT_ROOT / "SECURITY.md").read_text(encoding="utf-8")
-    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-
     matrix_rows = (
-        f"| `kegg-mcp` | `{core_version}` | Unreleased candidate |",
-        f"| `deepkoala-mcp` | `{deepkoala_project['version']}` | Unreleased candidate |",
-        f"| `kegg-render-mcp` | `{renderer_project['version']}` | Unreleased candidate |",
+        f"| `kegg-mcp` | `{core_version}` |",
+        f"| `deepkoala-mcp` | `{deepkoala_project['version']}` |",
+        f"| `kegg-render-mcp` | `{renderer_project['version']}` |",
     )
-    for document in (readme, readiness):
-        assert all(row in document for row in matrix_rows)
-        normalized = re.sub(r"\s+", " ", document.lower())
-        assert "only published github release is core `v0.1.0`" in normalized
+    assert all(row in readiness for row in matrix_rows)
 
-    assert "Current candidate versions and publication status" in installation
     assert "release-readiness checklist" in installation
     for document in (readme, installation, readiness):
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
     assert "kegg-mcp>=0.3,<0.4" in renderer_project["dependencies"]
-    assert "| 0.3.x | Current unreleased candidate" in security
-    assert "| 0.2.x | Never published" in security
-    assert "| 0.1.x | Supported GitHub release |" in security
-    assert "## [0.2.0] - Unpublished candidate (2026-07-15)" in changelog
-    assert "## [0.2.0] - 2026-07-15" not in changelog
+    assert "latest GitHub release and the current `main` branch" in security
+    assert "Distribution boundary" in readiness
 
 
 def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> None:
@@ -210,11 +199,11 @@ def test_ko_examples_are_inputs_without_kegg_payloads_or_biological_claims() -> 
     ).splitlines() == ["K00001", "K00002", "K00003"]
 
 
-def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
-    candidate_files = _candidate_files()
-    assert candidate_files
+def test_release_tree_contains_no_tracked_release_blocking_binary() -> None:
+    release_files = _release_files()
+    assert release_files
 
-    for path in candidate_files:
+    for path in release_files:
         assert path.suffix.lower() not in FORBIDDEN_DISTRIBUTION_SUFFIXES, path
         assert path.name not in {"render_input.json", "render_manifest.json"}, path
         assert path.stat().st_size <= 5 * 1024 * 1024, path
@@ -231,13 +220,13 @@ def test_candidate_tree_contains_no_tracked_release_blocking_binary() -> None:
     assert "*.png" in ignore
     assert "render_input.json" in ignore
     assert "render_manifest.json" in ignore
-    assert all(not path.name.endswith(".zh-CN.md") for path in candidate_files)
+    assert all(not path.name.endswith(".zh-CN.md") for path in release_files)
 
 
-def test_refactored_orchestration_hotspots_remain_bounded() -> None:
+def test_orchestration_hotspots_remain_bounded() -> None:
     limits = {
         "src/kegg_mcp/mcp/server.py": 250,
-        "src/kegg_mcp/services/primitives.py": 150,
+        "src/kegg_mcp/services/__init__.py": 20,
         "src/kegg_mcp/kegg/client.py": 500,
         "companions/kegg-render-mcp/src/kegg_render_mcp/artifacts.py": 650,
         "companions/kegg-render-mcp/src/kegg_render_mcp/render_service.py": 400,
@@ -250,7 +239,7 @@ def test_refactored_orchestration_hotspots_remain_bounded() -> None:
 
 
 def test_python_identifiers_do_not_embed_contract_versions() -> None:
-    for path in _candidate_files():
+    for path in _release_files():
         if path.suffix != ".py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -329,7 +318,6 @@ def test_rights_and_release_status_are_prominent() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
-    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     for required in ("public_academic", "licensed"):
@@ -348,10 +336,7 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "probe connectivity once" in installation
     assert "Retrieve only KO entry `K00844`" in installation
     assert "Current status:" in readiness
-    assert "exact commit" in readiness
-    normalized_changelog = re.sub(r"\s+", " ", changelog.lower())
-    assert "## [0.2.0] - Unpublished candidate (2026-07-15)" in changelog
-    assert "## [unreleased]" in normalized_changelog
+    assert "exact merged commit" in readiness
 
 
 def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review() -> None:
@@ -360,8 +345,8 @@ def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review(
     assert "not a runtime LLM evaluation" in record
     assert "independent forward/manual review" in record
     assert record.count("Observed route: passed.") == 6
-    assert "exact v0.2.0 candidate" in re.sub(r"\s+", " ", record)
-    assert "separate nine-route forward review" in re.sub(r"\s+", " ", record)
+    assert "current core, companion, and visualization contracts" in re.sub(r"\s+", " ", record)
+    assert "separate nine-route review" in re.sub(r"\s+", " ", record)
 
 
 def test_distribution_boundary_is_explicit() -> None:
@@ -378,7 +363,9 @@ def test_distribution_boundary_is_explicit() -> None:
     normalized_readiness = re.sub(r"\s+", " ", readiness)
     assert "installing the wheel alone does not make either Skill available" in normalized_readme
     assert "does not install either repository-scoped Skill" in normalized_installation
-    assert "do not install either Skill" in normalized_readiness
+    assert "does not install either companion or either repository-scoped Skill" in (
+        normalized_readiness
+    )
 
 
 def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:

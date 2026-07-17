@@ -2,15 +2,8 @@
 
 ## Supported versions
 
-| Version | Status |
-| --- | --- |
-| 0.3.x | Current unreleased candidate; security fixes are made on the active branch |
-| 0.2.x | Never published from this repository |
-| 0.1.x | Supported GitHub release |
-| Earlier versions | Unsupported |
-
-The only published GitHub release is `v0.1.0`. Candidate source versions are not presented as
-supported releases until their exact distributions and release gates are published.
+Security fixes target the latest GitHub release and the current `main` branch. Other tags are
+unsupported unless the maintainer explicitly announces otherwise.
 
 ## Reporting a vulnerability
 

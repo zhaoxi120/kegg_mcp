@@ -48,10 +48,12 @@ from kegg_mcp.mcp.server import (
     McpRuntime,
     create_server,
 )
-from kegg_mcp.services import (
+from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
     RenderInput,
+)
+from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     ResultStoreLimits,
     SQLiteResultStore,

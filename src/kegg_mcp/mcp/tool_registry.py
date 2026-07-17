@@ -48,7 +48,7 @@ from kegg_mcp.mcp.tool_handlers import (
     normalize,
     probe_connectivity,
 )
-from kegg_mcp.services import ResultStoreError
+from kegg_mcp.services.result_store import ResultStoreError
 
 
 @dataclass(frozen=True, slots=True)

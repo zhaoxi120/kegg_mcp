@@ -22,7 +22,9 @@ from kegg_mcp.mcp.contracts import (
 from kegg_mcp.mcp.responses import internal_error
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import TOOL_NAMES
-from kegg_mcp.services import ResultStoreError, get_server_status_service, read_cached_kegg_entry
+from kegg_mcp.services.kegg_mapping import read_cached_kegg_entry
+from kegg_mcp.services.operational import get_server_status_service
+from kegg_mcp.services.result_store import ResultStoreError
 
 MAX_INLINE_RESOURCE_BYTES = 64 * 1024
 

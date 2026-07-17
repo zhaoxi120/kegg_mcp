@@ -41,7 +41,7 @@ responsibility is to produce a complete, typed renderer handoff after analysis.
 This design gives users an end-to-end FASTA-to-image experience without placing model execution,
 binary image processing, or KGML parsing inside the core server.
 
-## 3. Supported first release
+## 3. Supported scope
 
 The first visualization release supports:
 
@@ -54,7 +54,7 @@ The first visualization release supports:
 - local output bundles and scoped MCP resources; and
 - concise legends, provenance, warnings, and evidence-calibrated captions.
 
-The first release does not support:
+The renderer does not support:
 
 - global or overview pathway overlays unless their line-based graphics receive a separately
   reviewed implementation;

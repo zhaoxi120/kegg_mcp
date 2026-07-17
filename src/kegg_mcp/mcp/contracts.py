@@ -17,33 +17,33 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayCoverageLimits,
     PathwayReferenceNamespace,
 )
+from kegg_mcp.analysis.pathway_ranking import PathwaySelection, PathwaySelectionMode
 from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
 from kegg_mcp.kegg import KeggEntryRef
-from kegg_mcp.services import (
+from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
     AnnotationInputFormat,
     CompareDatasetSource,
     CompareKoSetsResult,
     ConnectivityProbeResult,
     DatasetSource,
-    DeletedResult,
     GenericDecisionPolicy,
     KeggEntriesServiceResult,
     KoMappingServiceResult,
-    ManifestPathMode,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
-    PathwaySelection,
-    PathwaySelectionMode,
-    PathwaySpec,
     PrimitiveAnalysisResult,
-    ReferenceLoadingLimits,
+    ServerStatusResult,
+)
+from kegg_mcp.services.output_bundle import ManifestPathMode
+from kegg_mcp.services.reference_loading import PathwaySpec, ReferenceLoadingLimits
+from kegg_mcp.services.result_store import (
+    DeletedResult,
     ResultArtifactMetadata,
     ResultMetadata,
-    ServerStatusResult,
 )
 
 T = TypeVar("T")
