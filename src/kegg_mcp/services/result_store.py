@@ -1142,6 +1142,19 @@ class SQLiteResultStore:
         return path
 
 
+def compensate_created_result(
+    result_store: SQLiteResultStore,
+    scope_id: str,
+    result_id: str,
+    created_at: datetime,
+) -> None:
+    """Compensate a just-created result when a later durable write fails."""
+    try:
+        result_store.delete(scope_id, result_id, now=created_at)
+    except Exception as error:
+        raise RuntimeError("retained-result compensation failed") from error
+
+
 def _validate_scope_id(value: object) -> str:
     if not isinstance(value, str) or not _SCOPE_PATTERN.fullmatch(value):
         raise ValueError("invalid result scope identifier")
@@ -1400,4 +1413,5 @@ __all__ = [
     "ResultStoreLimits",
     "SQLiteResultStore",
     "ScopeDeletionSummary",
+    "compensate_created_result",
 ]

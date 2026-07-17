@@ -722,6 +722,17 @@ def _append_warnings_and_provenance(
             "and retrieval provenance is retained in the structured JSON artifact."
         )
     else:
+        discovery = report.execution.pathway_parameters
+        if (
+            discovery.pathway_discovery_policy is not None
+            and discovery.pathway_discovery_evidence_mode is not None
+        ):
+            lines.append(
+                "Automatic pathway discovery policy: "
+                f"`{discovery.pathway_discovery_policy}` using "
+                f"`{discovery.pathway_discovery_evidence_mode.value}` evidence. "
+                "Coverage still uses the separately recorded requested evidence mode."
+            )
         lines.append(
             "\nComplete one-call execution parameters plus serialized source, KEGG retrieval, "
             "algorithm, denominator, and retrieval provenance are retained in the "

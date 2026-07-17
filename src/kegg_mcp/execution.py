@@ -143,7 +143,7 @@ class AnalysisServiceLimits(FrozenModel):
 
 
 class PathwayExecutionParameters(FrozenModel):
-    """Caller-controlled pathway semantics shared by one analysis run."""
+    """Pathway semantics and any conservative automatic-discovery policy."""
 
     evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
@@ -151,6 +151,27 @@ class PathwayExecutionParameters(FrozenModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    pathway_discovery_policy: Literal["accepted_only"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    pathway_discovery_evidence_mode: EvidenceMode | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def validate_discovery_policy(self) -> Self:
+        if (self.pathway_discovery_policy is None) != (
+            self.pathway_discovery_evidence_mode is None
+        ):
+            raise ValueError("pathway discovery policy and evidence mode must be recorded together")
+        if (
+            self.pathway_discovery_evidence_mode is not None
+            and self.pathway_discovery_evidence_mode is not EvidenceMode.STRICT
+        ):
+            raise ValueError("accepted-only pathway discovery uses strict evidence semantics")
+        return self
 
 
 class AnalysisExecutionProvenance(FrozenModel):
