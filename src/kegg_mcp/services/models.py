@@ -16,6 +16,7 @@ from kegg_mcp.analysis import (
     ComparisonWarningCode,
     KoClassComparisonSummary,
     PathwaySelection,
+    PathwaySelectionMode,
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
@@ -27,7 +28,6 @@ from kegg_mcp.domain.annotations import (
     ThresholdRule,
 )
 from kegg_mcp.domain.errors import ErrorCode
-from kegg_mcp.execution import AnalysisExecutionProvenance, ExecutionStage, StageMetric
 from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvenanceInput
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase, KeggLinkRelationship
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggPairRow, RetrievalEndpointClass
@@ -50,7 +50,7 @@ MAX_GET_ENTRY_PREVIEWS = 50
 MAX_GET_PROVENANCE_BATCHES = 5
 MAX_MAPPING_PREVIEW_ROWS = 200
 MAX_MAPPING_PROVENANCE_BATCHES = 10
-MAX_DIRECT_WARNINGS = 100
+MAX_DIRECT_WARNINGS = 25
 MAX_DIRECT_WARNING_CHARACTERS = 1_000
 MAX_DIRECT_ANALYSIS_TARGETS = 25
 MAX_DIRECT_CAVEATS = 3
@@ -211,24 +211,58 @@ class DatasetSource(FrozenModel):
         return self
 
 
-class PrimitiveAnalysisResult(FrozenModel):
-    result: ResultMetadata
-    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=5)]
+class AnalysisResultSummary(FrozenModel):
+    """Small shared counts and messages returned by every analysis tool."""
+
     input_records: int = Field(strict=True, ge=0)
     accepted_records: int = Field(strict=True, ge=0)
     uncertain_records: int = Field(strict=True, ge=0)
     rejected_records: int = Field(strict=True, ge=0)
     selected_unique_ko_count: int = Field(strict=True, ge=0)
-    pathway_selection: PathwaySelection | None = None
-    candidate_pathway_count: int | None = Field(default=None, strict=True, ge=0)
-    selected_pathways: Annotated[
-        tuple[SelectedPathwaySummary, ...], Field(max_length=MAX_SELECTED_PATHWAY_SUMMARIES)
-    ] = ()
     kegg_request_count: int = Field(default=0, strict=True, ge=0)
     network_request_count: int = Field(default=0, strict=True, ge=0)
     cache_hit_count: int = Field(default=0, strict=True, ge=0)
     kegg_response_bytes: int = Field(default=0, strict=True, ge=0)
-    execution_metrics: Annotated[tuple[StageMetric, ...], Field(min_length=6, max_length=6)]
+    caveats: Annotated[tuple[BoundedDirectText, ...], Field(max_length=MAX_DIRECT_CAVEATS)]
+    warning_count: int = Field(default=0, strict=True, ge=0)
+    warnings: Annotated[tuple[BoundedDirectText, ...], Field(max_length=MAX_DIRECT_WARNINGS)] = ()
+    warnings_truncated: bool = False
+
+    @model_validator(mode="after")
+    def validate_warning_summary(self) -> Self:
+        if self.warning_count < len(self.warnings):
+            raise ValueError("warning_count cannot be smaller than the direct warning preview")
+        if self.warnings_truncated != (self.warning_count > len(self.warnings)):
+            raise ValueError("warnings_truncated must match the warning preview count")
+        return self
+
+
+class AutomaticPathwaySelectionSummary(FrozenModel):
+    """Bounded direct summary of server-side Top-N pathway selection."""
+
+    parameters: PathwaySelection
+    candidate_pathway_count: int = Field(strict=True, ge=0)
+    selected_pathways: Annotated[
+        tuple[SelectedPathwaySummary, ...], Field(max_length=MAX_SELECTED_PATHWAY_SUMMARIES)
+    ]
+
+    @model_validator(mode="after")
+    def validate_selection_summary(self) -> Self:
+        if self.parameters.mode is not PathwaySelectionMode.TOP_DETECTED:
+            raise ValueError("automatic pathway selection requires top_detected mode")
+        if len(self.selected_pathways) > self.parameters.top_n:
+            raise ValueError("selected pathway summaries exceed top_n")
+        if self.candidate_pathway_count < len(self.selected_pathways):
+            raise ValueError("candidate pathway count is smaller than selected summaries")
+        return self
+
+
+class AnalyzeKoAnnotationsResult(FrozenModel):
+    """Concise one-call result with both relevant target preview types."""
+
+    result: ResultMetadata
+    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=5)]
+    summary: AnalysisResultSummary
     module_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
     module_previews: Annotated[
         tuple[ModuleAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
@@ -237,45 +271,57 @@ class PrimitiveAnalysisResult(FrozenModel):
     pathway_previews: Annotated[
         tuple[PathwayAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
-    caveats: Annotated[tuple[BoundedDirectText, ...], Field(max_length=MAX_DIRECT_CAVEATS)]
-    import_summary: ImportSummary | None = None
-    annotation_provenance: AnnotationProvenanceSummary
-    warning_count: int = Field(default=0, strict=True, ge=0)
-    warnings: Annotated[tuple[BoundedDirectText, ...], Field(max_length=MAX_DIRECT_WARNINGS)] = ()
-    warnings_truncated: bool = False
-    reference_provenance: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_DIRECT_REFERENCE_BATCHES)
-    ] = ()
-    execution: AnalysisExecutionProvenance | None = None
+    automatic_pathway_selection: AutomaticPathwaySelectionSummary | None = None
     output_bundle: OutputBundle | None = None
 
     @model_validator(mode="after")
-    def validate_compact_result(self) -> Self:
+    def validate_direct_metadata(self) -> Self:
         if self.result.artifact_count != len(self.artifacts):
             raise ValueError("result artifact_count must match direct artifact metadata")
-        expected_stages = tuple(ExecutionStage)
-        if tuple(item.stage for item in self.execution_metrics) != expected_stages:
-            raise ValueError("execution_metrics must contain every stage in canonical order")
-        if self.kegg_request_count != sum(item.request_count for item in self.execution_metrics):
-            raise ValueError("kegg_request_count must match stage metrics")
-        if self.network_request_count != sum(
-            item.network_request_count for item in self.execution_metrics
-        ):
-            raise ValueError("network_request_count must match stage metrics")
-        if self.cache_hit_count != sum(item.cache_hit_count for item in self.execution_metrics):
-            raise ValueError("cache_hit_count must match stage metrics")
-        if self.kegg_response_bytes != sum(item.response_bytes for item in self.execution_metrics):
-            raise ValueError("kegg_response_bytes must match stage metrics")
-        if self.pathway_selection is None:
-            if self.candidate_pathway_count is not None or self.selected_pathways:
-                raise ValueError("automatic pathway summaries require pathway_selection")
-        else:
-            if self.candidate_pathway_count is None:
-                raise ValueError("pathway selection requires a candidate count")
-            if len(self.selected_pathways) > self.pathway_selection.top_n:
-                raise ValueError("selected pathway summaries exceed top_n")
-            if self.candidate_pathway_count < len(self.selected_pathways):
-                raise ValueError("candidate pathway count is smaller than selected summaries")
+        if self.module_target_count != len(self.module_previews):
+            raise ValueError("module_target_count must match module_previews")
+        if self.pathway_target_count != len(self.pathway_previews):
+            raise ValueError("pathway_target_count must match pathway_previews")
+        return self
+
+
+class AnalyzeModulesResult(FrozenModel):
+    """Concise MODULE-only result."""
+
+    result: ResultMetadata
+    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=5)]
+    summary: AnalysisResultSummary
+    module_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
+    module_previews: Annotated[
+        tuple[ModuleAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
+    ]
+
+    @model_validator(mode="after")
+    def validate_direct_metadata(self) -> Self:
+        if self.result.artifact_count != len(self.artifacts):
+            raise ValueError("result artifact_count must match direct artifact metadata")
+        if self.module_target_count != len(self.module_previews):
+            raise ValueError("module_target_count must match module_previews")
+        return self
+
+
+class AnalyzePathwaysResult(FrozenModel):
+    """Concise pathway-only result."""
+
+    result: ResultMetadata
+    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=5)]
+    summary: AnalysisResultSummary
+    pathway_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
+    pathway_previews: Annotated[
+        tuple[PathwayAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
+    ]
+
+    @model_validator(mode="after")
+    def validate_direct_metadata(self) -> Self:
+        if self.result.artifact_count != len(self.artifacts):
+            raise ValueError("result artifact_count must match direct artifact metadata")
+        if self.pathway_target_count != len(self.pathway_previews):
+            raise ValueError("pathway_target_count must match pathway_previews")
         return self
 
 
@@ -300,9 +346,21 @@ class KeggEntriesServiceResult(FrozenModel):
         tuple[EntryIdentifier, ...], Field(max_length=MAX_GET_ENTRY_PREVIEWS)
     ]
     previews: Annotated[tuple[KeggEntryPreview, ...], Field(max_length=MAX_GET_ENTRY_PREVIEWS)]
+    provenance_batch_count: int = Field(strict=True, ge=0, le=MAX_GET_ENTRY_PREVIEWS)
     provenance: Annotated[
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_GET_PROVENANCE_BATCHES)
     ]
+    provenance_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_direct_previews(self) -> Self:
+        if self.returned_count != len(self.previews):
+            raise ValueError("returned_count must match the entry preview count")
+        if self.provenance_batch_count < len(self.provenance):
+            raise ValueError("provenance_batch_count cannot be smaller than its preview")
+        if self.provenance_truncated != (self.provenance_batch_count > len(self.provenance)):
+            raise ValueError("provenance_truncated must match the provenance preview count")
+        return self
 
 
 class CachedKeggEntryServiceResult(FrozenModel):
@@ -430,6 +488,7 @@ class ServerStatusResult(FrozenModel):
 
 class ConnectivityState(StrEnum):
     REACHABLE = "reachable"
+    NETWORK_DISABLED = "network_disabled"
     DNS_FAILURE = "dns_failure"
     CONNECTION_FAILURE = "connection_failure"
     AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
@@ -462,10 +521,15 @@ __all__ = [
     "MAX_MAPPING_PROVENANCE_BATCHES",
     "MAX_NORMALIZATION_PREVIEW",
     "MAX_SELECTED_PATHWAY_SUMMARIES",
+    "AnalysisResultSummary",
+    "AnalyzeKoAnnotationsResult",
+    "AnalyzeModulesResult",
+    "AnalyzePathwaysResult",
     "AnnotationInputFormat",
     "AnnotationProvenanceSummary",
     "AnnotationRecordPreview",
     "AnnotationSourceSummary",
+    "AutomaticPathwaySelectionSummary",
     "CachedKeggEntryServiceResult",
     "CompareDatasetSource",
     "CompareKoSetsResult",
@@ -482,7 +546,6 @@ __all__ = [
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",
     "PathwayMappingRow",
-    "PrimitiveAnalysisResult",
     "SelectedPathwaySummary",
     "ServerStatusResult",
 ]

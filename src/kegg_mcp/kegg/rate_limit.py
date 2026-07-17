@@ -15,7 +15,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import ClassVar, Final, cast
 
-from kegg_mcp.kegg.contracts import default_rate_limit_root
+from kegg_mcp.kegg.contracts import MIN_REQUESTS_PER_SECOND, default_rate_limit_root
 
 MAX_REQUESTS_PER_SECOND = 3.0
 _STATE_BYTES: Final = 1_024
@@ -50,9 +50,9 @@ class DeploymentRateLimiter:
             isinstance(raw_rate, bool)
             or not isinstance(raw_rate, int | float)
             or not math.isfinite(raw_rate)
-            or not 0.0 < raw_rate <= MAX_REQUESTS_PER_SECOND
+            or not MIN_REQUESTS_PER_SECOND <= raw_rate <= MAX_REQUESTS_PER_SECOND
         ):
-            raise ValueError("requests_per_second must be finite and no greater than 3")
+            raise ValueError("requests_per_second must be finite and between 1/60 and 3")
         configured_root = Path(state_root or default_rate_limit_root()).expanduser()
         if (
             not configured_root.is_absolute()
@@ -80,37 +80,40 @@ class DeploymentRateLimiter:
 
     def acquire(self) -> None:
         """Reserve one globally spaced request start without future burst capacity."""
-        root = _prepare_state_root(self._state_root)
-        descriptor = _open_state_file(root, self._scope)
+        root_descriptor = _open_state_root(self._state_root)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            interval = self._configured_interval()
-            now = self._read_clock()
-            state, malformed = _read_state(descriptor)
-            target: float | None = None
-            if state is not None and state[0] == self._boot_id:
-                stored_interval, stored_target = state[1], state[2]
-                interval = max(interval, stored_interval)
-                if stored_target <= now + interval * 2.0:
-                    target = stored_target
-                else:
-                    malformed = True
-            if malformed:
-                target = now + interval
-            if target is not None and now < target:
-                self._sleeper(target - now)
-                now = max(target, self._read_clock())
-            _write_state(
-                descriptor,
-                boot_id=self._boot_id,
-                interval=interval,
-                next_allowed_at=now + interval,
-            )
-        finally:
+            descriptor = _open_state_file(root_descriptor, self._scope)
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                interval = self._configured_interval()
+                now = self._read_clock()
+                state, malformed = _read_state(descriptor)
+                target: float | None = None
+                if state is not None and state[0] == self._boot_id:
+                    stored_interval, stored_target = state[1], state[2]
+                    interval = max(interval, stored_interval)
+                    if stored_target <= now + interval * 2.0:
+                        target = stored_target
+                    else:
+                        malformed = True
+                if malformed:
+                    target = now + interval
+                if target is not None and now < target:
+                    self._sleeper(target - now)
+                    now = max(target, self._read_clock())
+                _write_state(
+                    descriptor,
+                    boot_id=self._boot_id,
+                    interval=interval,
+                    next_allowed_at=now + interval,
+                )
             finally:
-                os.close(descriptor)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            os.close(root_descriptor)
 
     def _configured_interval(self) -> float:
         with self._intervals_lock:
@@ -123,7 +126,7 @@ class DeploymentRateLimiter:
         return float(value)
 
 
-def _prepare_state_root(path: Path) -> Path:
+def _open_state_root(path: Path) -> int:
     missing: list[Path] = []
     candidate = path
     while not candidate.exists() and candidate != candidate.parent:
@@ -135,24 +138,32 @@ def _prepare_state_root(path: Path) -> Path:
         with suppress(OSError):
             directory.chmod(0o700)
     _reject_symlink_components(path)
-    metadata = path.lstat()
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or stat.S_ISLNK(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o077
-    ):
-        raise OSError("rate-limit state root must be an owner-only directory")
-    return path
-
-
-def _open_state_file(root: Path, scope: str) -> int:
-    path = root / f"{scope}.state"
-    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags, 0o600)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
     try:
         opened = os.fstat(descriptor)
         named = path.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(named.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) & 0o077
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise OSError("rate-limit state root must be an owner-only directory")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_state_file(root_descriptor: int, scope: str) -> int:
+    name = f"{scope}.state"
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=root_descriptor)
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
         if (
             not stat.S_ISREG(opened.st_mode)
             or stat.S_ISLNK(named.st_mode)
@@ -195,7 +206,7 @@ def _read_state(descriptor: int) -> tuple[tuple[str, float, float] | None, bool]
         or not isinstance(next_allowed_at, int | float)
         or not math.isfinite(interval)
         or not math.isfinite(next_allowed_at)
-        or not 1.0 / MAX_REQUESTS_PER_SECOND <= interval <= 60.0
+        or not 1.0 / MAX_REQUESTS_PER_SECOND <= interval <= 1.0 / MIN_REQUESTS_PER_SECOND
         or next_allowed_at < 0.0
     ):
         return None, True

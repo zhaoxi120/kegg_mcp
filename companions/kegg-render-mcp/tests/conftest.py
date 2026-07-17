@@ -49,6 +49,7 @@ from kegg_mcp.services.render_contracts import (
 from PIL import Image, ImageDraw
 
 from kegg_render_mcp.config import RendererLimits, RendererRuntimeConfig
+from kegg_render_mcp.contracts import ConnectivityStatus
 from kegg_render_mcp.pathway_scene import RetrievedAsset
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
@@ -122,8 +123,12 @@ class SyntheticProvider:
             },
         )
 
-    async def probe(self) -> bool:
-        return self.reachable
+    async def probe(self) -> ConnectivityStatus:
+        return (
+            ConnectivityStatus.REACHABLE
+            if self.reachable
+            else ConnectivityStatus.CONNECTION_FAILURE
+        )
 
 
 def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
@@ -226,7 +231,7 @@ def runtime_config(tmp_path: Path, allowed_root: Path) -> RendererRuntimeConfig:
         limits=RendererLimits(
             max_input_bytes=4_000_000,
             max_asset_bytes=2_000_000,
-            max_pixels=4_000_000,
+            max_pixels=20_000_000,
             max_svg_bytes=4_000_000,
             max_result_bytes=16_000_000,
             max_disk_bytes=32_000_000,

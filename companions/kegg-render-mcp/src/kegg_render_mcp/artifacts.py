@@ -17,6 +17,7 @@ from typing import Final
 from kegg_render_mcp import __version__
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
+    MAX_ARTIFACTS,
     ArtifactKind,
     ArtifactMetadata,
     DeleteRenderResult,
@@ -34,6 +35,10 @@ _MIME_TYPES: Final = {
     ".png": "image/png",
     ".json": "application/json",
 }
+_ALLOCATION_UNIT_BYTES: Final = 4_096
+_ARTIFACT_METADATA_RESERVE_BYTES: Final = 1_024
+_RESULT_METADATA_RESERVE_BYTES: Final = 4_096
+_MAX_STATE_ROOT_ENTRIES: Final = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,7 @@ class ArtifactBlob:
 class _StoredResult:
     result: RenderResult
     total_bytes: int
+    storage_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +64,7 @@ class ArtifactStoreSnapshot:
     active_result_count: int
     cleanup_pending_result_count: int
     retained_bytes: int
+    retained_storage_bytes: int
 
 
 class RenderArtifactStore:
@@ -71,10 +78,6 @@ class RenderArtifactStore:
         self._lock_fd: int | None = None
         self._results: dict[str, _StoredResult] = {}
 
-    @property
-    def result_count(self) -> int:
-        return self.snapshot().active_result_count
-
     def snapshot(self) -> ArtifactStoreSnapshot:
         """Inspect current records without changing memory or the filesystem."""
         now = datetime.now(UTC)
@@ -83,6 +86,7 @@ class RenderArtifactStore:
             active_result_count=active,
             cleanup_pending_result_count=len(self._results) - active,
             retained_bytes=sum(stored.total_bytes for stored in self._results.values()),
+            retained_storage_bytes=sum(stored.storage_bytes for stored in self._results.values()),
         )
 
     def open(self) -> None:
@@ -159,6 +163,10 @@ class RenderArtifactStore:
         self._purge_expired()
         if not artifacts:
             raise ValueError("a render result requires at least one image artifact")
+        if len(self._results) >= self._config.limits.max_results:
+            raise _output_limit("The process-scoped renderer result-count quota is exhausted.")
+        for item in artifacts:
+            _validate_blob(item)
         render_id = self._new_id()
         created_at = datetime.now(UTC)
         expires_at = created_at + timedelta(seconds=self._config.retention_seconds)
@@ -195,11 +203,16 @@ class RenderArtifactStore:
             *artifacts,
             ArtifactBlob(manifest_name, "application/json", manifest_bytes),
         )
+        if len(all_artifacts) > MAX_ARTIFACTS:
+            raise _output_limit("The retained result exceeds the artifact-count limit.")
+        for item in all_artifacts:
+            _validate_blob(item)
         total_bytes = sum(len(item.content) for item in all_artifacts)
+        storage_bytes = _estimated_storage_bytes(all_artifacts)
         if total_bytes > self._config.limits.max_result_bytes:
             raise _output_limit("The retained result exceeds the configured byte limit.")
-        current_bytes = sum(item.total_bytes for item in self._results.values())
-        if current_bytes + total_bytes > self._config.limits.max_disk_bytes:
+        current_storage = sum(item.storage_bytes for item in self._results.values())
+        if current_storage + storage_bytes > self._config.limits.max_disk_bytes:
             raise _output_limit("The process-scoped renderer quota is exhausted.")
         assert self._scope_fd is not None
         os.mkdir(render_id, mode=0o700, dir_fd=self._scope_fd)
@@ -211,7 +224,6 @@ class RenderArtifactStore:
         _validate_owner_only_directory(result_fd)
         try:
             for item in all_artifacts:
-                _validate_blob(item)
                 _atomic_write_fd(result_fd, item.name, item.content)
             if output_directory is not None:
                 export_bundle(
@@ -243,7 +255,7 @@ class RenderArtifactStore:
                 warnings=warnings,
                 result_uri=f"kegg-render://results/{render_id}",
             )
-            self._results[render_id] = _StoredResult(result, total_bytes)
+            self._results[render_id] = _StoredResult(result, total_bytes, storage_bytes)
             return result
         except Exception:
             self._remove_result_directory(render_id, ignore_errors=True)
@@ -352,7 +364,11 @@ class RenderArtifactStore:
                 dir_fd=self._scope_fd,
             )
             try:
-                for name in os.listdir(result_fd):
+                for name in _bounded_directory_names(
+                    result_fd,
+                    MAX_ARTIFACTS + 1,
+                    "renderer result directory",
+                ):
                     os.unlink(name, dir_fd=result_fd)
             finally:
                 os.close(result_fd)
@@ -363,7 +379,12 @@ class RenderArtifactStore:
 
     def _cleanup_abandoned_scopes(self) -> None:
         assert self._state_fd is not None
-        for scope_name in os.listdir(self._state_fd):
+        state_names = _bounded_directory_names(
+            self._state_fd,
+            _MAX_STATE_ROOT_ENTRIES,
+            "renderer state root",
+        )
+        for scope_name in state_names:
             if not scope_name.startswith("scope_"):
                 continue
             scope_fd = os.open(
@@ -373,14 +394,24 @@ class RenderArtifactStore:
             )
             try:
                 _validate_owner_only_directory(scope_fd)
-                for result_name in os.listdir(scope_fd):
+                for result_name in _bounded_directory_names(
+                    scope_fd,
+                    self._config.limits.max_results,
+                    "abandoned renderer scope",
+                ):
+                    if _RESULT_ID.fullmatch(result_name) is None:
+                        raise ValueError("an abandoned renderer scope contains an unsafe entry")
                     result_fd = os.open(
                         result_name,
                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                         dir_fd=scope_fd,
                     )
                     try:
-                        for artifact_name in os.listdir(result_fd):
+                        for artifact_name in _bounded_directory_names(
+                            result_fd,
+                            MAX_ARTIFACTS + 1,
+                            "abandoned renderer result",
+                        ):
                             os.unlink(artifact_name, dir_fd=result_fd)
                     finally:
                         os.close(result_fd)
@@ -388,6 +419,26 @@ class RenderArtifactStore:
             finally:
                 os.close(scope_fd)
             os.rmdir(scope_name, dir_fd=self._state_fd)
+
+
+def _estimated_storage_bytes(artifacts: tuple[ArtifactBlob, ...]) -> int:
+    total = _RESULT_METADATA_RESERVE_BYTES
+    for item in artifacts:
+        allocated_payload = (
+            (len(item.content) + _ALLOCATION_UNIT_BYTES - 1) // _ALLOCATION_UNIT_BYTES
+        ) * _ALLOCATION_UNIT_BYTES
+        total += allocated_payload + _ARTIFACT_METADATA_RESERVE_BYTES
+    return total
+
+
+def _bounded_directory_names(descriptor: int, limit: int, label: str) -> tuple[str, ...]:
+    names: list[str] = []
+    with os.scandir(descriptor) as entries:
+        for entry in entries:
+            if len(names) >= limit:
+                raise ValueError(f"{label} exceeds its entry-count limit")
+            names.append(entry.name)
+    return tuple(names)
 
 
 def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> None:

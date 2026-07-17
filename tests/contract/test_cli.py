@@ -88,6 +88,22 @@ def test_doctor_accepts_explicit_academic_user_test_profile() -> None:
     ]
 
 
+def test_doctor_reports_explicit_offline_profile_as_network_disabled() -> None:
+    output = StringIO()
+
+    exit_code = cli.main(
+        ["doctor", "--json"],
+        environment={"KEGG_MCP_ACCESS_MODE": "offline_cache"},
+        stdout=output,
+    )
+
+    document = json.loads(output.getvalue())
+    assert exit_code == 0
+    assert document["access_mode"] == "offline_cache"
+    assert document["network_enabled"] is False
+    assert "never contacts KEGG" in document["next_actions"][0]
+
+
 def test_doctor_rejects_invalid_configuration_without_echoing_values() -> None:
     private_endpoint = "https://private.example.test/operator-secret"
     output = StringIO()
@@ -200,3 +216,31 @@ def test_cache_status_and_cleanup_are_explicit_and_redacted(tmp_path: Path) -> N
     assert cleanup["expired_entries"] == 1
     assert cleanup["remaining_entries"] == 0
     assert str(cache_path) not in cleanup_output.getvalue()
+
+
+def test_cache_status_and_cleanup_do_not_create_a_missing_database(tmp_path: Path) -> None:
+    cache_path = tmp_path / "missing-parent" / "kegg.sqlite3"
+    environment = {"KEGG_MCP_CACHE_PATH": str(cache_path)}
+    status_output = StringIO()
+    cleanup_output = StringIO()
+
+    assert (
+        cli.main(
+            ["cache", "status", "--json"],
+            environment=environment,
+            stdout=status_output,
+        )
+        == 0
+    )
+    assert (
+        cli.main(
+            ["cache", "cleanup", "--expired", "--json"],
+            environment=environment,
+            stdout=cleanup_output,
+        )
+        == 0
+    )
+
+    assert json.loads(status_output.getvalue())["database_bytes"] == 0
+    assert json.loads(cleanup_output.getvalue())["database_bytes"] == 0
+    assert not cache_path.parent.exists()

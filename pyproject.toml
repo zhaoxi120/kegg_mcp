@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kegg-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local-first MCP server for KEGG-aware analysis of KO annotations"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -52,6 +52,7 @@ docstring-code-format = true
 
 [tool.pyright]
 include = ["src", "tests"]
+extraPaths = ["src", "companions/deepkoala-mcp/src"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 venv = ".venv"
@@ -59,6 +60,7 @@ venvPath = "."
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra", "-x"]
+pythonpath = ["companions/deepkoala-mcp/src"]
 markers = [
     "live_kegg: opt-in compatibility campaign against a live KEGG endpoint",
 ]

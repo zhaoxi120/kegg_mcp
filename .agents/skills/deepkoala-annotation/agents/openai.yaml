@@ -1,0 +1,14 @@
+interface:
+  display_name: "DeepKOALA Annotation"
+  short_description: "Run controlled local DeepKOALA protein annotation"
+  default_prompt: "Use $deepkoala-annotation to annotate this protein FASTA with the configured local DeepKOALA companion."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "deepkoala-mcp"
+      description: "Controlled local DeepKOALA annotation companion"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

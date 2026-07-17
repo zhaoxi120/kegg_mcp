@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import ClassVar, NoReturn
 import pytest
 
 import kegg_mcp.kegg.client as client_module
+import kegg_mcp.services.kegg_mapping as kegg_mapping_module
 from kegg_mcp.analysis import PathwaySelection, PathwaySelectionMode
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
 from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
@@ -38,6 +40,7 @@ from kegg_mcp.kegg.contracts import (
     KeggRequestOptions,
     LicensedAccess,
     LinkRequest,
+    OfflineCacheAccess,
     PublicAcademicAccess,
     ResponseOrigin,
     RetrievalEndpointClass,
@@ -56,7 +59,8 @@ from kegg_mcp.kegg.transport import (
     TransportResponse,
 )
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
-from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.kegg_mapping import retrieve_kegg_entries
+from kegg_mcp.services.models import MAX_GET_PROVENANCE_BATCHES, NormalizeAnnotationsRequest
 from kegg_mcp.services.result_store import SQLiteResultStore
 
 _NOW = datetime(2026, 7, 14, 3, 0, tzinfo=UTC)
@@ -209,6 +213,13 @@ def _licensed_config(
     )
 
 
+def _offline_config(cache_path: Path, *, ttl_seconds: int = 60) -> KeggClientConfig:
+    return KeggClientConfig(
+        access=OfflineCacheAccess(),
+        cache=CachePolicy(path=str(cache_path), ttl_seconds=ttl_seconds),
+    )
+
+
 def _clock(value: datetime) -> Callable[[], datetime]:
     return lambda: value
 
@@ -278,6 +289,41 @@ def test_network_result_is_cached_and_reused_without_network(tmp_path: Path) -> 
     assert limiter.acquire_count == 1
     assert sum(instance.acquire_count for instance in _NoWaitMandatoryLimiter.instances) == 1
     assert len(transport.urls) == 1
+
+
+def test_offline_profile_reuses_public_cache_and_never_calls_injected_transport(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "offline.sqlite3"
+    request = InfoRequest(database=KeggInfoDatabase.KO)
+    KeggClient(
+        _public_config(cache_path),
+        transport=QueueTransport([TransportResponse(status_code=200, body=_INFO_BODY)]),
+        clock=_clock(_NOW),
+    ).info(request)
+
+    offline = KeggClient(
+        _offline_config(cache_path),
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).info(request)
+
+    assert offline.batch.origin is ResponseOrigin.CACHE
+    assert offline.batch.access_mode is AccessMode.OFFLINE_CACHE
+    assert offline.batch.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
+    assert _NoWaitMandatoryLimiter.instances[-1].acquire_count == 0
+
+
+def test_offline_profile_cache_miss_never_calls_injected_transport(tmp_path: Path) -> None:
+    with pytest.raises(KeggMcpError) as caught:
+        KeggClient(
+            _offline_config(tmp_path / "missing.sqlite3"),
+            transport=BombTransport(),
+            clock=_clock(_NOW),
+        ).info(InfoRequest(database=KeggInfoDatabase.KO))
+
+    assert caught.value.detail.code is ErrorCode.CACHE_ENTRY_NOT_FOUND
+    assert _NoWaitMandatoryLimiter.instances[-1].acquire_count == 0
 
 
 def test_same_licensed_endpoint_uses_one_cache_and_rate_scope_across_labels(
@@ -380,6 +426,207 @@ def test_multi_entry_get_populates_single_entry_and_arbitrary_subset_cache(tmp_p
     ]
     assert all(batch.origin is ResponseOrigin.CACHE for batch in subset.batches)
     assert len(transport.urls) == 1
+
+
+def test_offline_multi_entry_service_bounds_direct_provenance_and_retains_every_batch(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "offline-entry-level.sqlite3"
+    entries = tuple(
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier=f"K{index:05d}")
+        for index in range(1, MAX_GET_PROVENANCE_BATCHES + 2)
+    )
+    request = GetRequest(entries=entries)
+    KeggClient(
+        _public_config(cache_path),
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=b"".join(_flat_entry(entry.identifier) for entry in entries),
+                )
+            ]
+        ),
+        clock=_clock(_NOW),
+    ).get(request)
+    store = SQLiteResultStore(tmp_path / "offline-entry-results.sqlite3")
+
+    result = retrieve_kegg_entries(
+        request,
+        client=KeggClient(
+            _offline_config(cache_path),
+            transport=BombTransport(),
+            clock=_clock(_NOW + timedelta(seconds=1)),
+        ),
+        result_store=store,
+        scope_id="offline-entry-service",
+    )
+
+    assert result.provenance_batch_count == len(entries)
+    assert len(result.provenance) == MAX_GET_PROVENANCE_BATCHES
+    assert result.provenance_truncated is True
+    assert all(batch.origin is ResponseOrigin.CACHE for batch in result.provenance)
+    retained = json.loads(
+        store.read_artifact(
+            "offline-entry-service",
+            result.result.result_id,
+            "detail",
+            limit=1_000_000,
+        ).content
+    )
+    assert len(retained["batches"]) == len(entries)
+    assert all(batch["origin"] == "cache" for batch in retained["batches"])
+
+
+def test_partial_entry_cache_service_bounds_preview_without_losing_mixed_provenance(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "partial-entry-service.sqlite3"
+    entries = tuple(
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier=f"K{index:05d}")
+        for index in range(1, 8)
+    )
+    cached_entries = entries[::2]
+    KeggClient(
+        _public_config(cache_path),
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=b"".join(_flat_entry(entry.identifier) for entry in cached_entries),
+                )
+            ]
+        ),
+        clock=_clock(_NOW),
+    ).get(GetRequest(entries=cached_entries))
+    transport = QueueTransport(
+        [
+            TransportResponse(status_code=200, body=_flat_entry(entry.identifier))
+            for entry in entries[1::2]
+        ]
+    )
+    store = SQLiteResultStore(tmp_path / "partial-entry-service-results.sqlite3")
+
+    result = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=KeggClient(
+            _public_config(cache_path),
+            transport=transport,
+            clock=_clock(_NOW + timedelta(seconds=1)),
+        ),
+        result_store=store,
+        scope_id="partial-entry-service",
+        options=KeggRequestOptions(refresh=False),
+    )
+
+    assert result.provenance_batch_count == len(entries)
+    assert len(result.provenance) == MAX_GET_PROVENANCE_BATCHES
+    assert result.provenance_truncated is True
+    retained = json.loads(
+        store.read_artifact(
+            "partial-entry-service",
+            result.result.result_id,
+            "detail",
+            limit=1_000_000,
+        ).content
+    )
+    assert [batch["origin"] for batch in retained["batches"]] == [
+        "cache",
+        "network",
+        "cache",
+        "network",
+        "cache",
+        "network",
+        "cache",
+    ]
+    assert transport.urls == [
+        "https://rest.kegg.jp/get/K00002",
+        "https://rest.kegg.jp/get/K00004",
+        "https://rest.kegg.jp/get/K00006",
+    ]
+
+
+def test_entry_result_model_failure_compensates_the_created_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001")
+    store = SQLiteResultStore(tmp_path / "compensated-entry-results.sqlite3")
+
+    def reject_result_model(**values: object) -> NoReturn:
+        del values
+        raise ValueError("synthetic result-model failure")
+
+    monkeypatch.setattr(kegg_mapping_module, "KeggEntriesServiceResult", reject_result_model)
+
+    with pytest.raises(ValueError, match="synthetic result-model failure"):
+        retrieve_kegg_entries(
+            GetRequest(entries=(entry,)),
+            client=KeggClient(
+                _public_config(tmp_path / "compensated-entry-cache.sqlite3"),
+                transport=QueueTransport(
+                    [TransportResponse(status_code=200, body=_flat_entry(entry.identifier))]
+                ),
+                clock=_clock(_NOW),
+            ),
+            result_store=store,
+            scope_id="compensated-entry-service",
+        )
+
+    assert store.list_results("compensated-entry-service").total_items == 0
+
+
+def test_partial_entry_cache_requests_only_contiguous_misses_and_preserves_order(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "partial-entry-cache.sqlite3"
+    first = KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001")
+    second = KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00002")
+    third = KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00003")
+    fourth = KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00004")
+    KeggClient(
+        _public_config(cache_path),
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=_flat_entry(first.identifier) + _flat_entry(third.identifier),
+                )
+            ]
+        ),
+        clock=_clock(_NOW),
+    ).get(GetRequest(entries=(first, third)))
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=_flat_entry(fourth.identifier) + _flat_entry(second.identifier),
+            )
+        ]
+    )
+
+    result = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).get(
+        GetRequest(entries=(first, second, fourth, third)),
+        options=KeggRequestOptions(refresh=False),
+    )
+
+    ordered_identifiers = [
+        entry.identifier
+        for document in result.documents
+        if isinstance(document, KeggFlatFileDocument)
+        for entry in document.entries
+    ]
+    assert ordered_identifiers == ["K00001", "K00002", "K00004", "K00003"]
+    assert [batch.origin for batch in result.batches] == [
+        ResponseOrigin.CACHE,
+        ResponseOrigin.NETWORK,
+        ResponseOrigin.CACHE,
+    ]
+    assert transport.urls == ["https://rest.kegg.jp/get/K00002+K00004"]
 
 
 def test_relationship_cache_key_is_independent_of_identifier_order(tmp_path: Path) -> None:
@@ -517,14 +764,22 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
     )
 
     assert len(transport.urls) == 3
-    assert first.kegg_request_count == 3
-    assert first.network_request_count == 3
-    assert first.cache_hit_count == 0
-    assert second.kegg_request_count == 3
-    assert second.network_request_count == 0
-    assert second.cache_hit_count == 3
-    assert second.execution_metrics[1].cache_hit_count == 1
-    assert second.execution_metrics[3].cache_hit_count == 2
+    assert first.summary.kegg_request_count == 3
+    assert first.summary.network_request_count == 3
+    assert first.summary.cache_hit_count == 0
+    assert second.summary.kegg_request_count == 3
+    assert second.summary.network_request_count == 0
+    assert second.summary.cache_hit_count == 3
+    retained = json.loads(
+        store.read_artifact(
+            "cache-summary",
+            second.result.result_id,
+            "structured",
+            limit=1_000_000,
+        ).content
+    )["report"]
+    assert retained["execution_metrics"][1]["cache_hit_count"] == 1
+    assert retained["execution_metrics"][3]["cache_hit_count"] == 2
 
 
 def test_cache_only_miss_never_calls_injected_transport(tmp_path: Path) -> None:

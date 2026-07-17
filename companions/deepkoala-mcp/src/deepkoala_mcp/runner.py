@@ -183,8 +183,13 @@ def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
 
 def build_child_environment(plan: RunnerPlan) -> dict[str, str]:
     """Build a small environment that preserves deployment GPU visibility and bounds threads."""
+    return build_runtime_environment(plan.checkout, plan.cpu_threads)
+
+
+def build_runtime_environment(checkout: Path, cpu_threads: int) -> dict[str, str]:
+    """Build the shared fixed environment for probes and inference children."""
     environment = {name: os.environ[name] for name in _INHERITED_ENVIRONMENT if name in os.environ}
-    threads = str(plan.cpu_threads)
+    threads = str(cpu_threads)
     environment.update(
         {
             "OMP_NUM_THREADS": threads,
@@ -195,7 +200,7 @@ def build_child_environment(plan: RunnerPlan) -> dict[str, str]:
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONNOUSERSITE": "1",
-            "PYTHONPATH": str(plan.checkout),
+            "PYTHONPATH": str(checkout),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -290,4 +295,5 @@ __all__ = [
     "RunnerTimedOutError",
     "build_argv",
     "build_child_environment",
+    "build_runtime_environment",
 ]

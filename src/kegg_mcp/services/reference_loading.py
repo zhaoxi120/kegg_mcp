@@ -269,6 +269,7 @@ def load_pathway_references(
     """Load ordered PATHWAY_TO_KO and metadata pairs through typed operations."""
     bounds = limits or ReferenceLoadingLimits()
     reference_bounds = pathway_limits or PathwayCoverageLimits()
+    specs = canonicalize_pathway_specs(specs)
     _validate_pathway_specs(specs, bounds)
 
     references: list[PathwayKoReference] = []
@@ -407,12 +408,32 @@ def _validate_pathway_specs(
             "max_pathway_specs",
             limits.max_pathway_specs,
         )
-    pathway_numbers = tuple(spec.pathway_number for spec in specs)
-    if len(pathway_numbers) != len(set(pathway_numbers)):
-        _fail_configuration(
-            "Pathway reference specifications must use unique pathway numbers.",
-            "Remove duplicate ko/map views while preserving caller order.",
-        )
+
+
+def canonicalize_pathway_specs(specs: tuple[PathwaySpec, ...]) -> tuple[PathwaySpec, ...]:
+    """Stable-deduplicate paired pathway views, preferring the KO reference view."""
+    canonical: list[PathwaySpec] = []
+    positions: dict[str, int] = {}
+    for spec in specs:
+        if spec.reference_namespace in {
+            PathwayReferenceNamespace.KO,
+            PathwayReferenceNamespace.MAP,
+        }:
+            key = f"reference:{spec.pathway_number}"
+        else:
+            key = f"organism:{spec.pathway_id}"
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(canonical)
+            canonical.append(spec)
+            continue
+        existing = canonical[position]
+        if (
+            existing.reference_namespace is not PathwayReferenceNamespace.KO
+            and spec.reference_namespace is PathwayReferenceNamespace.KO
+        ):
+            canonical[position] = spec
+    return tuple(canonical)
 
 
 def _module_definitions_from_result(
@@ -588,6 +609,7 @@ __all__ = [
     "KeggReferenceClient",
     "PathwaySpec",
     "ReferenceLoadingLimits",
+    "canonicalize_pathway_specs",
     "load_module_graphs",
     "load_pathway_references",
 ]

@@ -40,6 +40,7 @@ from kegg_mcp.kegg.parsers import parse_flat_file_response
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
     ReferenceLoadingLimits,
+    canonicalize_pathway_specs,
     load_module_graphs,
     load_pathway_references,
 )
@@ -773,22 +774,74 @@ def test_pathway_spec_infers_canonical_ko_reference(pathway_id: str) -> None:
     assert spec.paired_reference_id == "map00010"
 
 
-def test_duplicate_and_excess_pathway_specs_fail_before_io() -> None:
+def test_duplicate_pathway_specs_are_stably_deduplicated_before_io() -> None:
     spec = PathwaySpec(
         pathway_id="ko00010",
         reference_namespace=PathwayReferenceNamespace.KO,
     )
-    duplicate_client = _FakeClient()
-    with pytest.raises(KeggMcpError) as duplicate:
-        load_pathway_references(
-            duplicate_client,
-            (spec, spec),
-            options=KeggRequestOptions(),
-            limits=ReferenceLoadingLimits(),
-        )
-    _assert_error(duplicate, ErrorCode.ANALYSIS_CONFIGURATION_INVALID)
-    assert not duplicate_client.get_requests
-    assert not duplicate_client.link_requests
+    duplicate_client = _FakeClient(
+        pathways={
+            "ko00010": (
+                "ko:K00001",
+                "Glycolysis / Gluconeogenesis",
+                "Metabolism; Carbohydrate metabolism",
+            )
+        }
+    )
+    references = load_pathway_references(
+        duplicate_client,
+        (spec, spec),
+        options=KeggRequestOptions(),
+        limits=ReferenceLoadingLimits(),
+    )
+
+    assert len(references) == 1
+    assert len(duplicate_client.get_requests) == 1
+    assert len(duplicate_client.link_requests) == 1
+
+
+def test_paired_map_and_ko_specs_load_once_and_prefer_the_ko_reference() -> None:
+    map_spec = PathwaySpec(
+        pathway_id="map00010",
+        reference_namespace=PathwayReferenceNamespace.MAP,
+    )
+    ko_spec = PathwaySpec(
+        pathway_id="ko00010",
+        reference_namespace=PathwayReferenceNamespace.KO,
+    )
+    client = _FakeClient(
+        pathways={
+            "ko00010": (
+                "ko:K00001",
+                "Glycolysis / Gluconeogenesis",
+                "Metabolism; Carbohydrate metabolism",
+            )
+        }
+    )
+
+    references = load_pathway_references(
+        client,
+        (map_spec, ko_spec),
+        options=KeggRequestOptions(),
+        limits=ReferenceLoadingLimits(),
+    )
+
+    assert tuple(reference.pathway_id for reference in references) == ("ko00010",)
+    assert [request.entries[0].identifier for request in client.get_requests] == ["ko00010"]
+    assert [request.source_identifiers[0] for request in client.link_requests] == ["ko00010"]
+
+
+def test_pathway_canonicalization_never_folds_organism_and_ko_namespaces() -> None:
+    ko_spec = PathwaySpec(pathway_id="ko00010")
+    organism_spec = PathwaySpec(pathway_id="hsa00010")
+
+    canonical = canonicalize_pathway_specs((organism_spec, ko_spec))
+
+    assert canonical == (organism_spec, ko_spec)
+
+
+def test_excess_canonical_pathway_specs_fail_before_io() -> None:
+    spec = PathwaySpec(pathway_id="ko00010")
 
     second = PathwaySpec(
         pathway_id="ko00020",

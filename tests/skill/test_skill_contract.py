@@ -10,14 +10,12 @@ EXPECTED_FILES = {
     "SKILL.md",
     "agents/openai.yaml",
     "references/confidence-policy.md",
-    "references/deepkoala-companion.md",
     "references/module-interpretation.md",
     "references/reporting-policy.md",
-    "references/visualization-handoff.md",
     "references/workflow-selection.md",
 }
 
-PUBLIC_TOOLS = {
+CORE_TOOLS = {
     "analyze_ko_annotations",
     "normalize_ko_annotations",
     "get_kegg_entries",
@@ -27,9 +25,11 @@ PUBLIC_TOOLS = {
     "compare_ko_sets",
     "probe_kegg_connectivity",
     "get_server_status",
+    "list_analysis_results",
+    "delete_analysis_result",
 }
 
-PUBLIC_RESOURCES = {
+CORE_RESOURCES = {
     "ko-analysis://status",
     "ko-analysis://cache/info",
     "ko-analysis://results/{result_id}",
@@ -39,7 +39,7 @@ PUBLIC_RESOURCES = {
 }
 
 
-def _skill_files() -> set[str]:
+def _files() -> set[str]:
     return {
         path.relative_to(SKILL_ROOT).as_posix() for path in SKILL_ROOT.rglob("*") if path.is_file()
     }
@@ -51,60 +51,69 @@ def _corpus() -> str:
     )
 
 
-def test_skill_contains_only_the_approved_instruction_files() -> None:
-    assert _skill_files() == EXPECTED_FILES
+def test_repository_contains_exactly_the_three_independent_skills() -> None:
+    skill_directories = {
+        path.name for path in (ROOT / ".agents" / "skills").iterdir() if path.is_dir()
+    }
+    assert skill_directories == {
+        "deepkoala-annotation",
+        "kegg-ko-analysis",
+        "kegg-pathway-rendering",
+    }
+
+
+def test_ko_analysis_skill_is_complete_and_instruction_only() -> None:
+    assert _files() == EXPECTED_FILES
     assert not (SKILL_ROOT / "scripts").exists()
     corpus = _corpus()
     assert "TODO" not in corpus
     assert "Structuring This Skill" not in corpus
 
 
-def test_frontmatter_has_only_name_and_trigger_description() -> None:
+def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None:
     skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     _, frontmatter, _ = skill.split("---", maxsplit=2)
     keys = [line.split(":", maxsplit=1)[0] for line in frontmatter.splitlines() if line]
     assert keys == ["name", "description"]
     assert "name: kegg-ko-analysis" in frontmatter
-
-    positive_triggers = (
-        "K numbers",
+    for fragment in (
+        "existing K numbers",
         "KO annotation tables",
-        "KEGG module or pathway",
-        "metabolic reconstruction",
-        "multiple KO sets",
-    )
-    negative_boundaries = (
-        "general gene-expression analysis",
-        "nucleotide assembly",
-        "sequence alignment",
+        "MODULE logic",
+        "pathway KO coverage",
+        "Do not use for protein-sequence annotation",
+        "rendering",
         "statistical enrichment",
-        "non-KEGG ontology analysis",
-        "pathway rendering",
-        "MODULE rendering",
-    )
-    assert all(trigger in frontmatter for trigger in positive_triggers)
-    assert all(boundary in frontmatter for boundary in negative_boundaries)
-    assert "has KO evidence" in frontmatter
-    assert "optional local DeepKOALA companion" in frontmatter
+    ):
+        assert fragment in frontmatter
 
 
-def test_openai_metadata_declares_real_stdio_dependency() -> None:
+def test_ko_analysis_metadata_declares_only_core_stdio_dependency() -> None:
     metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
     for key in ("display_name", "short_description", "default_prompt"):
         assert re.search(rf'^  {key}: "[^"\n]+"$', metadata, flags=re.MULTILINE)
     assert "$kegg-ko-analysis" in metadata
-    assert metadata.count('type: "mcp"') == 2
-    assert metadata.count('transport: "stdio"') == 2
+    assert metadata.count('type: "mcp"') == 1
+    assert metadata.count('transport: "stdio"') == 1
     assert 'value: "kegg-mcp"' in metadata
-    assert 'value: "deepkoala-mcp"' in metadata
-    assert "check deepkoala-mcp status first" in metadata
-    assert "automatically prepare, submit, and poll" in metadata
+    assert 'value: "deepkoala-mcp"' not in metadata
+    assert 'value: "kegg-render-mcp"' not in metadata
     assert "allow_implicit_invocation: true" in metadata
 
 
-def test_skill_references_every_approved_tool_and_resource_file() -> None:
+def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
     corpus = _corpus()
-    assert all(tool in corpus for tool in PUBLIC_TOOLS)
-    assert all(resource in corpus for resource in PUBLIC_RESOURCES)
+    assert all(tool in corpus for tool in CORE_TOOLS)
+    assert all(resource in corpus for resource in CORE_RESOURCES)
+    for forbidden in (
+        "run_deepkoala_job",
+        "prepare_deepkoala_job",
+        "submit_deepkoala_job",
+        "render_analysis_bundle",
+        "render_pathway",
+        "render_module",
+    ):
+        assert forbidden not in corpus
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     for reference in EXPECTED_FILES - {"SKILL.md", "agents/openai.yaml"}:
-        assert f"({reference})" in (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        assert f"({reference})" in skill

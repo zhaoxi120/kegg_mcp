@@ -25,6 +25,7 @@ from kegg_mcp.kegg import (
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
+    OfflineCacheAccess,
     RateLimitPolicy,
     ResponseOrigin,
     RetrievalEndpointClass,
@@ -251,6 +252,21 @@ def _fake_runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRun
     )
 
 
+def _offline_runtime(tmp_path: Path) -> McpRuntime:
+    return McpRuntime(
+        client=KeggClient(
+            KeggClientConfig(
+                access=OfflineCacheAccess(),
+                cache=CachePolicy(path=str(tmp_path / "offline-kegg.sqlite3")),
+                rate_limit=RateLimitPolicy(state_root=str(tmp_path / "offline-rate-limit")),
+            ),
+            transport=_UnavailableTransport(),
+        ),
+        result_store=SQLiteResultStore(tmp_path / "offline-results.sqlite3"),
+        scope_id="offline-contract-scope",
+    )
+
+
 def _tool_by_name(tools: list[types.Tool], name: str) -> types.Tool:
     return next(tool for tool in tools if tool.name == name)
 
@@ -281,6 +297,11 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert status.annotations.readOnlyHint is True
         assert status.annotations.idempotentHint is True
         assert status.annotations.openWorldHint is False
+        list_annotations = _tool_by_name(tools, "list_analysis_results").annotations
+        assert list_annotations is not None
+        assert list_annotations.readOnlyHint is True
+        assert list_annotations.idempotentHint is True
+        assert list_annotations.openWorldHint is False
         for name in (
             "analyze_ko_annotations",
             "get_kegg_entries",
@@ -326,6 +347,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert selection_schema["top_n"]["maximum"] == 25
         delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
         assert set(delete_schema["properties"]) == {"result_id"}
+        list_schema = _tool_by_name(tools, "list_analysis_results").inputSchema
+        assert set(list_schema["properties"]) == {"offset", "limit"}
+        assert list_schema["properties"]["limit"]["maximum"] == 100
+        list_output = _tool_by_name(tools, "list_analysis_results").outputSchema
+        assert list_output is not None
+        page_properties = list_output["$defs"]["ResultMetadataPage"]["properties"]
+        assert page_properties["items"]["maxItems"] == 100
+        assert page_properties["limit"]["maximum"] == 100
         entries_output_schema = _tool_by_name(tools, "get_kegg_entries").outputSchema
         assert entries_output_schema is not None
         assert (
@@ -353,6 +382,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         entries_result_properties = entries_output_defs["KeggEntriesServiceResult"]["properties"]
         assert entries_result_properties["missing_identifiers"]["maxItems"] == 50
         assert entries_result_properties["previews"]["maxItems"] == 50
+        assert entries_result_properties["provenance_batch_count"]["maximum"] == 50
         assert entries_result_properties["provenance"]["maxItems"] == 5
 
         normalize_output = _tool_by_name(tools, "normalize_ko_annotations").outputSchema
@@ -364,16 +394,53 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         error_properties = normalize_output_defs["ErrorDetail"]["properties"]
         assert error_properties["safe_details"]["maxItems"] == 32
 
+        analysis_schema_limits = {
+            "analyze_ko_annotations": (15_000, 22),
+            "analyze_modules": (8_000, 11),
+            "analyze_pathways": (8_500, 14),
+        }
+        for name, (maximum_bytes, maximum_definitions) in analysis_schema_limits.items():
+            output_schema = _tool_by_name(tools, name).outputSchema
+            assert output_schema is not None
+            serialized_schema = json.dumps(
+                output_schema,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            assert len(serialized_schema) <= maximum_bytes
+            assert len(output_schema["$defs"]) <= maximum_definitions
+            assert "PrimitiveAnalysisResult" not in output_schema["$defs"]
+            assert "AnalysisExecutionProvenance" not in output_schema["$defs"]
+            assert "KeggBatchProvenance" not in output_schema["$defs"]
+            assert "StageMetric" not in output_schema["$defs"]
+
+        high_level_output = _tool_by_name(tools, "analyze_ko_annotations").outputSchema
+        assert high_level_output is not None
+        high_level_properties = high_level_output["$defs"]["AnalyzeKoAnnotationsResult"][
+            "properties"
+        ]
+        assert high_level_properties["module_previews"]["maxItems"] == 25
+        assert high_level_properties["pathway_previews"]["maxItems"] == 25
+        selection_properties = high_level_output["$defs"]["AutomaticPathwaySelectionSummary"][
+            "properties"
+        ]
+        assert selection_properties["selected_pathways"]["maxItems"] == 25
+
+        summary_properties = high_level_output["$defs"]["AnalysisResultSummary"]["properties"]
+        assert summary_properties["caveats"]["maxItems"] == 3
+        assert summary_properties["warnings"]["maxItems"] == 25
+
         module_output = _tool_by_name(tools, "analyze_modules").outputSchema
         assert module_output is not None
-        primitive_properties = module_output["$defs"]["PrimitiveAnalysisResult"]["properties"]
-        assert primitive_properties["module_previews"]["maxItems"] == 25
-        assert primitive_properties["pathway_previews"]["maxItems"] == 25
-        assert primitive_properties["caveats"]["maxItems"] == 3
-        assert primitive_properties["reference_provenance"]["maxItems"] == 100
-        assert primitive_properties["selected_pathways"]["maxItems"] == 25
-        assert primitive_properties["execution_metrics"]["minItems"] == 6
-        assert primitive_properties["execution_metrics"]["maxItems"] == 6
+        module_properties = module_output["$defs"]["AnalyzeModulesResult"]["properties"]
+        assert module_properties["module_previews"]["maxItems"] == 25
+        assert "pathway_previews" not in module_properties
+
+        pathway_output = _tool_by_name(tools, "analyze_pathways").outputSchema
+        assert pathway_output is not None
+        pathway_properties = pathway_output["$defs"]["AnalyzePathwaysResult"]["properties"]
+        assert pathway_properties["pathway_previews"]["maxItems"] == 25
+        assert "module_previews" not in pathway_properties
 
         mapping_output = _tool_by_name(tools, "map_ko_ids").outputSchema
         assert mapping_output is not None
@@ -463,7 +530,6 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert data["result"]["result_id"].startswith("res_")
         uri = normalized.structuredContent["result"]["resource_uri"]
         assert uri == f"ko-analysis://results/{data['result']['result_id']}"
-
         index = await session.read_resource(AnyUrl(uri))
         index_content = index.contents[0]
         assert isinstance(index_content, types.TextResourceContents)
@@ -475,6 +541,14 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert (
             json.loads(dataset_content.text)["dataset_id"] == data["import_summary"]["dataset_id"]
         )
+
+        listed = await session.call_tool("list_analysis_results", {"limit": 1})
+        _validate_result(_tool_by_name(tools, "list_analysis_results"), listed)
+        assert listed.isError is False
+        assert listed.structuredContent is not None
+        listed_data = listed.structuredContent["result"]["data"]
+        assert listed_data["total_items"] == 1
+        assert listed_data["items"][0]["result_id"] == data["result"]["result_id"]
 
         deleted = await session.call_tool(
             "delete_analysis_result",
@@ -489,6 +563,10 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
             await session.read_resource(AnyUrl(uri))
 
+        empty_page = await session.call_tool("list_analysis_results", {})
+        assert empty_page.structuredContent is not None
+        assert empty_page.structuredContent["result"]["data"]["total_items"] == 0
+
         repeated = await session.call_tool(
             "delete_analysis_result",
             {"result_id": data["result"]["result_id"]},
@@ -496,6 +574,27 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert repeated.isError is True
         assert repeated.structuredContent is not None
         assert repeated.structuredContent["error"]["code"] == "RESULT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_offline_status_and_probe_are_network_disabled_without_transport_use(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_offline_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        status = await session.call_tool("get_server_status", {})
+        assert status.isError is False
+        assert status.structuredContent is not None
+        status_data = status.structuredContent["result"]["data"]
+        assert status_data["access_mode"] == "offline_cache"
+        assert status_data["network_enabled"] is False
+
+        probe = await session.call_tool("probe_kegg_connectivity", {})
+        assert probe.isError is False
+        assert probe.structuredContent is not None
+        probe_data = probe.structuredContent["result"]["data"]
+        assert probe_data["state"] == "network_disabled"
+        assert probe_data["access_mode"] == "offline_cache"
 
 
 @pytest.mark.asyncio
@@ -710,6 +809,23 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
         assert organism.isError is True
         assert organism.structuredContent is not None
         assert organism.structuredContent["error"]["code"] == ("ANALYSIS_CONFIGURATION_INVALID")
+
+        mixed_namespace = await session.call_tool(
+            "analyze_pathways",
+            {
+                "source": {"ko_text": "K00844"},
+                "pathways": [
+                    {"pathway_id": "hsa00010", "reference_namespace": "organism"},
+                    {"pathway_id": "ko00010", "reference_namespace": "ko"},
+                ],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_pathways"), mixed_namespace)
+        assert mixed_namespace.isError is True
+        assert mixed_namespace.structuredContent is not None
+        assert mixed_namespace.structuredContent["error"]["code"] == (
+            "ANALYSIS_CONFIGURATION_INVALID"
+        )
 
         mixed_selection = await session.call_tool(
             "analyze_ko_annotations",
@@ -984,11 +1100,13 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         assert result.isError is False
         assert result.structuredContent is not None
         data = result.structuredContent["result"]["data"]
-        assert data["input_records"] == 73
-        assert data["accepted_records"] == 73
-        assert data["selected_unique_ko_count"] == 73
-        assert data["candidate_pathway_count"] == 115
-        assert data["selected_pathways"] == [
+        summary = data["summary"]
+        assert summary["input_records"] == 73
+        assert summary["accepted_records"] == 73
+        assert summary["selected_unique_ko_count"] == 73
+        selection = data["automatic_pathway_selection"]
+        assert selection["candidate_pathway_count"] == 115
+        assert selection["selected_pathways"] == [
             {
                 "rank": 1,
                 "pathway_id": "ko00001",
@@ -998,20 +1116,9 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             }
         ]
         assert data["pathway_target_count"] == 1
-        assert data["reference_provenance"] == []
-        assert data["kegg_request_count"] == 3
-        assert data["network_request_count"] == 3
-        assert data["cache_hit_count"] == 0
-        assert [item["stage"] for item in data["execution_metrics"]] == [
-            "annotation_import",
-            "ko_pathway_mapping",
-            "pathway_ranking",
-            "reference_loading",
-            "analysis",
-            "bundle_write",
-        ]
-        assert data["execution_metrics"][1]["request_count"] == 1
-        assert data["execution_metrics"][3]["request_count"] == 2
+        assert summary["kegg_request_count"] == 3
+        assert summary["network_request_count"] == 3
+        assert summary["cache_hit_count"] == 0
         assert client.call_log == [
             ("link", "ko_to_pathway"),
             ("link", "pathway_to_ko"),
@@ -1022,6 +1129,10 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         assert len(serialized_direct.encode("utf-8")) < 64 * 1024
         assert '"source_ko_id"' not in serialized_direct
         assert '"detected_ko_ids"' not in serialized_direct
+        assert '"execution_metrics"' not in serialized_direct
+        assert '"reference_provenance"' not in serialized_direct
+        assert '"annotation_provenance"' not in serialized_direct
+        assert '"import_summary"' not in serialized_direct
 
         assert tuple(item["section"] for item in data["artifacts"]) == (
             "structured",
@@ -1047,6 +1158,26 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
                 limit=1_000_000,
             ).content
         )
+        retained_structured = json.loads(
+            runtime.result_store.read_artifact(
+                "top-one-contract",
+                retained_id,
+                "structured",
+                limit=1_000_000,
+            ).content
+        )
+        retained_report = retained_structured["report"]
+        assert [item["stage"] for item in retained_report["execution_metrics"]] == [
+            "annotation_import",
+            "ko_pathway_mapping",
+            "pathway_ranking",
+            "reference_loading",
+            "analysis",
+            "bundle_write",
+        ]
+        assert retained_report["execution_metrics"][1]["request_count"] == 1
+        assert retained_report["execution_metrics"][3]["request_count"] == 2
+        assert len(retained_report["mapping_provenance"]) == 1
         assert len(retained_ranking["ranking"]["rows"]) == 115
         assert "relationships" not in retained_ranking["ranking"]
         assert len(retained_relationships["relationships"]) == 562
@@ -1103,7 +1234,8 @@ async def test_file_handoff_rejects_incomplete_csv_and_symlink_escape(tmp_path: 
 async def test_fake_reference_client_exercises_all_live_dependent_success_outputs(
     tmp_path: Path,
 ) -> None:
-    server = create_server(_fake_runtime(tmp_path))
+    runtime = _fake_runtime(tmp_path)
+    server = create_server(runtime)
     async with create_connected_server_and_client_session(server) as session:
         tools = (await session.list_tools()).tools
         high_level = await session.call_tool(
@@ -1128,9 +1260,27 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
             "summary",
             "annotations",
         )
-        assert high_data["import_summary"]["input_rows"] == 2
-        assert high_data["execution"]["service_name"] == "kegg_mcp_annotation_analysis"
-        assert len(high_data["reference_provenance"]) == 3
+        assert high_data["summary"]["input_records"] == 2
+        assert "import_summary" not in high_data
+        assert "execution" not in high_data
+        assert "reference_provenance" not in high_data
+        retained_high = json.loads(
+            runtime.result_store.read_artifact(
+                runtime.scope_id,
+                high_data["result"]["result_id"],
+                "structured",
+                limit=1_000_000,
+            ).content
+        )["report"]
+        assert retained_high["dataset"]["import_report"]["input_rows"] == 2
+        assert retained_high["execution"]["service_name"] == "kegg_mcp_annotation_analysis"
+        assert len(retained_high["execution_metrics"]) == 6
+        assert (
+            len(retained_high["module_evaluations"][0]["strict"]["reference_retrieval_provenance"])
+            == 1
+        )
+        assert len(retained_high["pathway_coverages"][0]["reference_link_provenance"]) == 1
+        assert len(retained_high["pathway_coverages"][0]["reference_metadata_provenance"]) == 1
 
         entries = await session.call_tool(
             "get_kegg_entries",
@@ -1141,6 +1291,8 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert entries.structuredContent is not None
         entries_data = entries.structuredContent["result"]["data"]
         assert entries_data["returned_count"] == 1
+        assert entries_data["provenance_batch_count"] == 1
+        assert entries_data["provenance_truncated"] is False
         assert len(entries_data["previews"][0]["field_names"]) == 64
         assert entries_data["previews"][0]["field_names_truncated"] is True
 
@@ -1171,10 +1323,21 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         _validate_result(_tool_by_name(tools, "analyze_modules"), modules)
         assert modules.isError is False
         assert modules.structuredContent is not None
-        assert (
-            modules.structuredContent["result"]["data"]["module_previews"][0]["strict_is_complete"]
-            is True
+        module_data = modules.structuredContent["result"]["data"]
+        assert module_data["module_previews"][0]["strict_is_complete"] is True
+        assert "pathway_previews" not in module_data
+        module_detail = json.loads(
+            runtime.result_store.read_artifact(
+                runtime.scope_id,
+                module_data["result"]["result_id"],
+                "detail",
+                limit=1_000_000,
+            ).content
         )
+        assert module_detail["analysis_kind"] == "modules"
+        assert module_detail["dataset_provenance"]["import_report"]["input_rows"] == 2
+        assert len(module_detail["execution"]["metrics"]) == 6
+        assert len(module_detail["reference_provenance"]) == 1
 
         pathways = await session.call_tool(
             "analyze_pathways",
@@ -1186,10 +1349,21 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         _validate_result(_tool_by_name(tools, "analyze_pathways"), pathways)
         assert pathways.isError is False
         assert pathways.structuredContent is not None
-        assert (
-            pathways.structuredContent["result"]["data"]["pathway_previews"][0]["coverage_ratio"]
-            == 0.5
+        pathway_data = pathways.structuredContent["result"]["data"]
+        assert pathway_data["pathway_previews"][0]["coverage_ratio"] == 0.5
+        assert "module_previews" not in pathway_data
+        pathway_detail = json.loads(
+            runtime.result_store.read_artifact(
+                runtime.scope_id,
+                pathway_data["result"]["result_id"],
+                "detail",
+                limit=1_000_000,
+            ).content
         )
+        assert pathway_detail["analysis_kind"] == "pathways"
+        assert pathway_detail["dataset_provenance"]["import_report"]["input_rows"] == 1
+        assert len(pathway_detail["execution"]["metrics"]) == 6
+        assert len(pathway_detail["reference_provenance"]) == 2
 
 
 @pytest.mark.asyncio
@@ -1365,6 +1539,10 @@ async def test_resource_validation_scoping_and_protocol_errors(tmp_path: Path) -
     )
     server = create_server(runtime)
     async with create_connected_server_and_client_session(server) as session:
+        cross_scope_list = await session.call_tool("list_analysis_results", {})
+        assert cross_scope_list.isError is False
+        assert cross_scope_list.structuredContent is not None
+        assert cross_scope_list.structuredContent["result"]["data"]["total_items"] == 0
         cross_scope_delete = await session.call_tool(
             "delete_analysis_result",
             {"result_id": metadata.result_id},

@@ -23,6 +23,7 @@ MAX_CONFIGURED_IDENTIFIERS = 1_000
 DEFAULT_CACHE_MAX_ENTRIES = 10_000
 DEFAULT_CACHE_MAX_PAYLOAD_BYTES = 512 * 1024 * 1024
 DEFAULT_CACHE_MAX_DATABASE_BYTES = 640 * 1024 * 1024
+MIN_REQUESTS_PER_SECOND = 1.0 / 60.0
 
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
@@ -61,6 +62,7 @@ class AccessMode(StrEnum):
 
     PUBLIC_ACADEMIC = "public_academic"
     LICENSED = "licensed"
+    OFFLINE_CACHE = "offline_cache"
 
 
 class RetrievalEndpointClass(StrEnum):
@@ -149,8 +151,51 @@ class LicensedAccess(FrozenModel):
         return value
 
 
+class OfflineCacheAccess(FrozenModel):
+    """Network-disabled access to one explicit endpoint-scoped cache namespace."""
+
+    mode: Literal[AccessMode.OFFLINE_CACHE] = AccessMode.OFFLINE_CACHE
+    retrieval_endpoint_class: RetrievalEndpointClass = RetrievalEndpointClass.PUBLIC_ACADEMIC
+    endpoint: str = Field(default=PUBLIC_KEGG_ENDPOINT, min_length=1, max_length=2_048)
+    endpoint_fingerprint: str = Field(
+        default=PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    endpoint_label: str = Field(
+        default=PUBLIC_KEGG_ENDPOINT_LABEL,
+        pattern=ENDPOINT_LABEL_PATTERN,
+        min_length=1,
+        max_length=100,
+    )
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_cache_endpoint(cls, value: str) -> str:
+        if value == PUBLIC_KEGG_ENDPOINT:
+            return value
+        return LicensedAccess.validate_endpoint(value)
+
+    @model_validator(mode="after")
+    def require_consistent_cache_namespace(self) -> Self:
+        if self.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC:
+            if (
+                self.endpoint != PUBLIC_KEGG_ENDPOINT
+                or self.endpoint_fingerprint != PUBLIC_KEGG_ENDPOINT_FINGERPRINT
+                or self.endpoint_label != PUBLIC_KEGG_ENDPOINT_LABEL
+            ):
+                raise ValueError(
+                    "public offline cache access requires the public endpoint namespace"
+                )
+        elif (
+            self.endpoint == PUBLIC_KEGG_ENDPOINT
+            or self.endpoint_fingerprint != endpoint_fingerprint(self.endpoint)
+        ):
+            raise ValueError("licensed offline cache access requires a licensed endpoint namespace")
+        return self
+
+
 KeggAccess = Annotated[
-    PublicAcademicAccess | LicensedAccess,
+    PublicAcademicAccess | LicensedAccess | OfflineCacheAccess,
     Field(discriminator="mode"),
 ]
 
@@ -158,7 +203,12 @@ KeggAccess = Annotated[
 class KeggClientLimits(FrozenModel):
     """Hard client bounds and a safe no-burst request rate."""
 
-    requests_per_second: float = Field(default=2.0, strict=True, gt=0.0, le=3.0)
+    requests_per_second: float = Field(
+        default=2.0,
+        strict=True,
+        ge=MIN_REQUESTS_PER_SECOND,
+        le=3.0,
+    )
     timeout_seconds: float = Field(default=15.0, strict=True, gt=0.0, le=120.0)
     max_response_bytes: int = Field(default=5_000_000, strict=True, gt=0, le=50_000_000)
     max_identifiers: int = Field(
@@ -663,6 +713,8 @@ class KeggBatchProvenance(FrozenModel):
             and self.retrieval_endpoint_class is not RetrievalEndpointClass.LICENSED
         ):
             raise ValueError("licensed access requires licensed endpoint provenance")
+        if self.access_mode is AccessMode.OFFLINE_CACHE and self.origin is not ResponseOrigin.CACHE:
+            raise ValueError("offline cache access cannot report network provenance")
         return self
 
 

@@ -1,4 +1,4 @@
-"""Typed public contracts for the local DeepKOALA companion."""
+"""Typed public contracts for bounded local DeepKOALA execution."""
 
 from __future__ import annotations
 
@@ -14,7 +14,11 @@ MAX_OUTPUT_BYTES = 5_000_000
 MAX_SEQUENCE_COUNT = 100_000
 MAX_SEQUENCE_LENGTH = 100_000
 MAX_HEADER_BYTES = 1_024
-MAX_QUEUE_SIZE = 8
+MAX_RETAINED_JOBS = 32
+MAX_RESOURCE_PAGE_BYTES = 65_536
+HANDOFF_SCHEMA_VERSION = "1"
+ANNOTATIONS_FILENAME = "deepkoala_annotations.csv"
+RUN_REPORT_FILENAME = "deepkoala_run_report.md"
 
 JobId = Annotated[str, Field(pattern=r"^job_[a-f0-9]{32}$", max_length=36)]
 ModelName = Literal["full", "frag"]
@@ -42,18 +46,24 @@ class FrozenModel(BaseModel):
 
 
 class ErrorCode(StrEnum):
-    """Stable companion-owned error codes."""
+    """Stable companion-owned technical error codes."""
 
     INVALID_REQUEST = "INVALID_REQUEST"
     INVALID_FASTA = "INVALID_FASTA"
+    INVALID_OUTPUT = "INVALID_OUTPUT"
     INPUT_LIMIT_EXCEEDED = "INPUT_LIMIT_EXCEEDED"
     PATH_NOT_ALLOWED = "PATH_NOT_ALLOWED"
+    OUTPUT_NOT_ALLOWED = "OUTPUT_NOT_ALLOWED"
+    OUTPUT_ALREADY_EXISTS = "OUTPUT_ALREADY_EXISTS"
+    POLICY_DENIED = "POLICY_DENIED"
     DEEPKOALA_UNAVAILABLE = "DEEPKOALA_UNAVAILABLE"
+    RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
     WEIGHTS_NOT_FOUND = "WEIGHTS_NOT_FOUND"
-    QUEUE_FULL = "QUEUE_FULL"
+    RUNNER_BUSY = "RUNNER_BUSY"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     JOB_NOT_CANCELLABLE = "JOB_NOT_CANCELLABLE"
     NOT_TERMINAL = "NOT_TERMINAL"
+    ARTIFACT_NOT_FOUND = "ARTIFACT_NOT_FOUND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -126,10 +136,8 @@ class ToolEnvelope(FrozenModel, Generic[T]):
 
 
 class JobState(StrEnum):
-    """Complete lifecycle of one opaque job identifier."""
+    """Observable states after an atomic run request."""
 
-    PREPARED = "prepared"
-    QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -137,55 +145,27 @@ class JobState(StrEnum):
     TIMED_OUT = "timed_out"
 
 
-class PrepareDeepKoalaInput(FrozenModel):
-    """Bounded input used to prepare, but not launch, one local job."""
+class RunDeepKoalaInput(FrozenModel):
+    """One policy-bounded local run using explicit shared filesystem paths."""
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "oneOf": [
-                {
-                    "required": ["fasta_text"],
-                    "properties": {"fasta_path": {"type": "null"}},
-                },
-                {
-                    "required": ["fasta_path"],
-                    "properties": {"fasta_text": {"type": "null"}},
-                },
-            ]
-        }
-    )
-
-    fasta_text: str | None = Field(default=None, min_length=1, max_length=MAX_FASTA_BYTES)
-    fasta_path: str | None = Field(default=None, min_length=1, max_length=4_096)
+    fasta_path: str = Field(min_length=1, max_length=4_096)
+    output_directory: str = Field(min_length=1, max_length=4_096)
     model: ModelName = "full"
     model_date: ModelDate = "latest"
+    device: Literal["auto"] = "auto"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)
     timeout_seconds: int | None = Field(default=None, strict=True, ge=1, le=86_400)
 
-    @field_validator("fasta_path")
+    @field_validator("fasta_path", "output_directory")
     @classmethod
-    def validate_path(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if "\x00" in value:
-            raise ValueError("fasta_path must not contain NUL")
+    def validate_path(cls, value: str) -> str:
+        if "\x00" in value or any(ord(character) < 32 for character in value):
+            raise ValueError("filesystem paths must not contain control characters")
         path = Path(value)
         if not path.is_absolute() or ".." in path.parts:
-            raise ValueError("fasta_path must be absolute and traversal-free")
+            raise ValueError("filesystem paths must be absolute and traversal-free")
         return value
-
-    @model_validator(mode="after")
-    def require_one_source(self) -> Self:
-        if (self.fasta_text is None) == (self.fasta_path is None):
-            raise ValueError("provide exactly one of fasta_text or fasta_path")
-        return self
-
-
-class SubmitDeepKoalaInput(FrozenModel):
-    """Identify one server-retained prepared job for idempotent submission."""
-
-    job_id: JobId
 
 
 class GetDeepKoalaJobInput(FrozenModel):
@@ -195,11 +175,11 @@ class GetDeepKoalaJobInput(FrozenModel):
 
 
 class CancelDeepKoalaJobInput(GetDeepKoalaJobInput):
-    """Identify one prepared, queued, or running job to cancel."""
+    """Identify one running job to cancel."""
 
 
 class DeleteDeepKoalaJobInput(GetDeepKoalaJobInput):
-    """Identify one terminal job to delete."""
+    """Identify one terminal job record to forget without deleting delivered files."""
 
 
 class GetDeepKoalaStatusInput(FrozenModel):
@@ -216,7 +196,7 @@ class FastaSummary(FrozenModel):
 
 
 class ExecutionPlan(FrozenModel):
-    """Effective service-owned execution settings retained by the server."""
+    """Effective deployment-approved execution settings."""
 
     model: ModelName
     requested_model_date: ModelDate
@@ -231,48 +211,12 @@ class ExecutionPlan(FrozenModel):
     timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
 
 
-class ExecutionNotice(FrozenModel):
-    """Non-blocking provenance facts retained before DeepKOALA starts."""
-
-    plan: ExecutionPlan
-    fasta: FastaSummary
-    deepkoala_version: str | None = Field(default=None, max_length=128)
-    queued_jobs_ahead: int = Field(strict=True, ge=0, le=MAX_QUEUE_SIZE)
-    gpu_visibility_inherited: Literal[True] = True
-    downloads_enabled: Literal[False] = False
-    companion_network_requests: Literal[False] = False
-    warning: BoundedText = (
-        "DeepKOALA will select an available accelerator or CPU through its local auto policy and "
-        "existing installed resources; the companion does not download or update weights."
-    )
-
-
-class PrepareDeepKoalaResult(FrozenModel):
-    """One retained plan ready for idempotent submission."""
-
-    job_id: JobId
-    state: Literal["prepared"] = "prepared"
-    prepared_at: datetime
-    expires_at: datetime
-    notice: ExecutionNotice
-
-    @model_validator(mode="after")
-    def validate_times(self) -> Self:
-        if self.prepared_at.utcoffset() is None or self.expires_at.utcoffset() is None:
-            raise ValueError("timestamps must be timezone-aware")
-        if self.expires_at <= self.prepared_at:
-            raise ValueError("expires_at must follow prepared_at")
-        return self
-
-
 class JobSummary(FrozenModel):
     """Bounded lifecycle facts for one process-scoped job."""
 
     job_id: JobId
     state: JobState
-    prepared_at: datetime
-    submitted_at: datetime | None = None
-    started_at: datetime | None = None
+    started_at: datetime
     completed_at: datetime | None = None
     exit_code: int | None = Field(default=None, strict=True, ge=-255, le=255)
     failure_reason: BoundedText | None = None
@@ -291,14 +235,8 @@ class JobSummary(FrozenModel):
             JobState.CANCELLED,
             JobState.TIMED_OUT,
         }
-        if any(
-            value is not None and value.utcoffset() is None
-            for value in (
-                self.prepared_at,
-                self.submitted_at,
-                self.started_at,
-                self.completed_at,
-            )
+        if self.started_at.utcoffset() is None or (
+            self.completed_at is not None and self.completed_at.utcoffset() is None
         ):
             raise ValueError("timestamps must be timezone-aware")
         if (self.state in terminal) != (self.completed_at is not None):
@@ -314,6 +252,14 @@ class JobSummary(FrozenModel):
         return self
 
 
+class RunDeepKoalaResult(FrozenModel):
+    """Immediate result for one validated local run."""
+
+    job: JobSummary
+    plan: ExecutionPlan
+    fasta: FastaSummary
+
+
 MetadataValue = str | int | float | bool | None
 
 
@@ -325,46 +271,69 @@ class SourceMetadataField(FrozenModel):
 
 
 class SourceProvenance(FrozenModel):
-    """Readable fields aligned with the core SourceProvenanceInput contract."""
+    """Readable DeepKOALA source facts without digest or private job identifiers."""
 
     source_name: Literal["deepkoala"] = "deepkoala"
     source_version: str | None = Field(default=None, max_length=256)
     model_name: ModelName
     model_version: ResolvedModelDate
     annotation_date: datetime
-    input_uri: str = Field(pattern=r"^mcp://deepkoala-mcp/jobs/job_[a-f0-9]{32}/output$")
-    input_path: str | None = Field(default=None, min_length=1, max_length=4_096)
+    input_path: str = Field(min_length=1, max_length=4_096)
     source_metadata: Annotated[tuple[SourceMetadataField, ...], Field(max_length=16)] = ()
 
     @field_validator("input_path")
     @classmethod
-    def validate_original_input_path(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def validate_original_input_path(cls, value: str) -> str:
         path = Path(value)
         if not path.is_absolute() or ".." in path.parts or "\x00" in value:
             raise ValueError("input_path must be a safe absolute path")
         return value
 
+    @model_validator(mode="after")
+    def validate_annotation_time(self) -> Self:
+        if self.annotation_date.utcoffset() is None:
+            raise ValueError("annotation_date must include a timezone")
+        return self
+
 
 class ImportHandoff(FrozenModel):
-    """File handoff consumed by the current core normalization tool."""
+    """Versioned stable file handoff consumed by core normalization."""
 
-    output_path: str = Field(min_length=1, max_length=4_096)
-    input_format: Literal["deepkoala_detailed"] = "deepkoala_detailed"
+    schema_version: Literal["1"]
+    tool_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$", max_length=32)
+    input_path: str = Field(min_length=1, max_length=4_096)
+    annotations_path: str = Field(min_length=1, max_length=4_096)
+    report_path: str = Field(min_length=1, max_length=4_096)
+    input_format: Literal["deepkoala_detailed"]
+    annotations_resource_uri: str = Field(
+        pattern=r"^deepkoala://jobs/job_[a-f0-9]{32}/annotations$",
+        max_length=80,
+    )
+    report_resource_uri: str = Field(
+        pattern=r"^deepkoala://jobs/job_[a-f0-9]{32}/report$",
+        max_length=80,
+    )
     source: SourceProvenance
 
-    @field_validator("output_path")
+    @field_validator("input_path", "annotations_path", "report_path")
     @classmethod
-    def validate_output_path(cls, value: str) -> str:
+    def validate_absolute_path(cls, value: str) -> str:
         path = Path(value)
         if not path.is_absolute() or ".." in path.parts or "\x00" in value:
-            raise ValueError("output_path must be a safe absolute path")
+            raise ValueError("handoff paths must be safe absolute paths")
         return value
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> Self:
+        if self.input_path != self.source.input_path:
+            raise ValueError("handoff and source input paths must match")
+        if self.annotations_path == self.report_path:
+            raise ValueError("annotation and report paths must be distinct")
+        return self
 
 
 class GetDeepKoalaJobResult(FrozenModel):
-    """Current state and a core-import handoff after successful execution."""
+    """Current state and a stable core-import handoff after successful execution."""
 
     job: JobSummary
     handoff: ImportHandoff | None = None
@@ -377,10 +346,11 @@ class GetDeepKoalaJobResult(FrozenModel):
 
 
 class DeleteDeepKoalaJobResult(FrozenModel):
-    """Confirmation that a terminal job was removed."""
+    """Confirmation that a terminal process record was removed."""
 
     job_id: JobId
     deleted: Literal[True] = True
+    delivered_files_retained: Literal[True] = True
 
 
 class InstalledResource(FrozenModel):
@@ -391,40 +361,52 @@ class InstalledResource(FrozenModel):
 
 
 class CompanionStatus(FrozenModel):
-    """Redacted local readiness, device policy, and scheduler state."""
+    """Redacted deployment policy, runtime readiness, and active state."""
 
     server_name: Literal["deepkoala-mcp"] = "deepkoala-mcp"
     server_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$", max_length=32)
     ready: bool
+    runtime_ready: bool
+    cuda_available: bool
     deepkoala_version: str | None = Field(default=None, max_length=128)
     installed_resources: Annotated[tuple[InstalledResource, ...], Field(max_length=256)]
+    allowed_models: Annotated[tuple[ModelName, ...], Field(min_length=1, max_length=2)]
     device_policy: Literal["auto"] = "auto"
     gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
     companion_network_requests: Literal[False] = False
+    allow_multi: Literal[False] = False
     cpu_threads: int = Field(strict=True, ge=1, le=4)
     max_concurrent_jobs: Literal[1] = 1
-    max_queue_size: int = Field(strict=True, ge=1, le=MAX_QUEUE_SIZE)
-    prepared_jobs: int = Field(strict=True, ge=0, le=MAX_QUEUE_SIZE + 1)
-    queued_jobs: int = Field(strict=True, ge=0, le=MAX_QUEUE_SIZE)
     running_jobs: int = Field(strict=True, ge=0, le=1)
-    max_input_bytes: Literal[5_000_000] = MAX_FASTA_BYTES
-    max_output_bytes: Literal[5_000_000] = MAX_OUTPUT_BYTES
+    terminal_jobs: int = Field(strict=True, ge=0, le=MAX_RETAINED_JOBS)
+    max_input_bytes: int = Field(strict=True, ge=1, le=MAX_FASTA_BYTES)
+    max_sequences: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
+    max_output_bytes: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
+    max_timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
+    input_root_count: int = Field(strict=True, ge=1)
+    output_root_count: int = Field(strict=True, ge=1)
+    file_handoff_enabled: Literal[True] = True
+    resource_fallback_enabled: Literal[True] = True
 
     @model_validator(mode="after")
     def validate_readiness(self) -> Self:
-        if self.ready != bool(self.installed_resources):
-            raise ValueError("ready must match installed resource availability")
+        if self.ready != (self.runtime_ready and bool(self.installed_resources)):
+            raise ValueError("ready must match runtime and resource availability")
         return self
 
 
 __all__ = [
+    "ANNOTATIONS_FILENAME",
+    "HANDOFF_SCHEMA_VERSION",
     "MAX_FASTA_BYTES",
     "MAX_HEADER_BYTES",
     "MAX_OUTPUT_BYTES",
-    "MAX_QUEUE_SIZE",
+    "MAX_RESOURCE_PAGE_BYTES",
+    "MAX_RETAINED_JOBS",
     "MAX_SEQUENCE_COUNT",
     "MAX_SEQUENCE_LENGTH",
+    "RUN_REPORT_FILENAME",
     "CancelDeepKoalaJobInput",
     "CompanionStatus",
     "DeepKoalaMcpError",
@@ -432,7 +414,6 @@ __all__ = [
     "DeleteDeepKoalaJobResult",
     "ErrorCode",
     "ErrorDetail",
-    "ExecutionNotice",
     "ExecutionPlan",
     "FastaSummary",
     "GetDeepKoalaJobInput",
@@ -443,12 +424,11 @@ __all__ = [
     "JobState",
     "JobSummary",
     "ModelName",
-    "PrepareDeepKoalaInput",
-    "PrepareDeepKoalaResult",
+    "RunDeepKoalaInput",
+    "RunDeepKoalaResult",
     "SafeDetail",
     "SourceMetadataField",
     "SourceProvenance",
-    "SubmitDeepKoalaInput",
     "ToolEnvelope",
     "ToolPayload",
     "fail",

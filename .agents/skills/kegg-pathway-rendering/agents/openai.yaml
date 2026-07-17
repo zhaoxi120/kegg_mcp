@@ -1,0 +1,14 @@
+interface:
+  display_name: "KEGG Pathway Rendering"
+  short_description: "Render static KEGG pathway and MODULE evidence graphics"
+  default_prompt: "Use $kegg-pathway-rendering to render this validated KEGG analysis bundle as conservative static graphics."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "kegg-render-mcp"
+      description: "Local bounded static KEGG evidence renderer"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

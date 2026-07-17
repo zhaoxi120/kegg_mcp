@@ -21,7 +21,12 @@ from kegg_mcp.domain.annotations import (
     FrozenModel,
     validate_utf8_text,
 )
-from kegg_mcp.execution import AnalysisExecutionProvenance
+from kegg_mcp.execution import (
+    AnalysisExecutionProvenance,
+    ExecutionStage,
+    StageMetric,
+)
+from kegg_mcp.kegg.contracts import KeggBatchProvenance
 from kegg_mcp.report_limits import ReportLimits
 
 REPORT_FORMAT_NAME = "kegg_mcp_analysis_report"
@@ -52,6 +57,8 @@ class ReportInput(FrozenModel):
 
     dataset: AnnotationDataset
     execution: AnalysisExecutionProvenance | None = None
+    execution_metrics: Annotated[tuple[StageMetric, ...], Field(max_length=6)] = ()
+    mapping_provenance: Annotated[tuple[KeggBatchProvenance, ...], Field(max_length=100)] = ()
     module_evaluations: tuple[PairedModuleEvaluation, ...] = ()
     pathway_coverages: tuple[PathwayCoverageResult, ...] = ()
     pathway_selection: PathwaySelection | None = None
@@ -62,6 +69,10 @@ class ReportInput(FrozenModel):
 
     @model_validator(mode="after")
     def validate_primary_dataset_analyses(self) -> Self:
+        if self.execution_metrics and tuple(item.stage for item in self.execution_metrics) != tuple(
+            ExecutionStage
+        ):
+            raise ValueError("execution_metrics must use the canonical six-stage order")
         module_ids = tuple(item.strict.module_id for item in self.module_evaluations)
         if len(module_ids) != len(set(module_ids)):
             raise ValueError("module_evaluations must contain unique MODULE targets")

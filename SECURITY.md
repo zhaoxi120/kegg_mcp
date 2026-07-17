@@ -26,8 +26,10 @@ details, and biological data.
 
 ## Security boundaries
 
-- The MVP is a local stdio MCP server, not a multi-user or remote HTTP service.
-- Filesystem inputs must be limited to explicitly allowed roots and must reject traversal and symlink escapes.
+- All three servers use local stdio. None is a multi-user or remote HTTP service.
+- Filesystem inputs and output directories are limited to explicit roots and use bounded,
+  no-follow descriptor walks that reject traversal, replacement races, unsafe ownership, and
+  symlink escapes.
 - Output bundles must be created only in new or empty allowed-root directories, must never replace
   existing entries, and must redact absolute source paths in the manifest unless explicitly
   requested.
@@ -36,11 +38,19 @@ details, and biological data.
   limit and an abnormal-exit orphan cleanup threshold.
 - KEGG credentials, licensed endpoints, cached responses, and user inputs must remain local and out of logs, fixtures, packages, and releases.
 - External annotation tools, model code, model weights, and databases are outside the core
-  package runtime boundary. The optional companion is a separate local process that accepts only
-  an explicitly configured checkout, interpreter, private state root, and allowed input/handoff
-  roots. It uses fixed automatic-device arguments, inherits existing accelerator visibility,
-  enforces bounded files and one process per state root, terminates its process group and Linux
-  child on parent death, and never downloads or updates dependencies or weights.
+  package runtime boundary. `deepkoala-mcp` is a separate process with deployment allowlists for
+  the checkout, interpreter, models, device policy, input roots, output roots, and time/resource
+  limits. It uses fixed automatic-device arguments, inherits existing accelerator visibility,
+  enforces one running job per state root, terminates its process group and Linux child on parent
+  death, writes versioned stable artifacts atomically, and never downloads or updates dependencies
+  or weights.
+- `kegg-render-mcp` accepts exactly one bounded typed handoff by allowed path or inline JSON. It
+  owns KGML parsing, image generation, retained-result quotas, and static SVG/PNG validation. It
+  rejects active or external SVG content, unsafe output paths, excessive canvas/node/pixel counts,
+  and unbounded cleanup. It never normalizes KO evidence or recomputes biological analysis.
+- Cross-server workflows use stable versioned files in configured output directories. Private job
+  and result identifiers are process-scoped optimizations, not authorization or cross-process
+  handoff tokens. Bounded MCP resources are a fallback when clients do not share a filesystem.
 - Default local tests must not access live KEGG services. Pull-request CI runs one serialized,
   request-bounded 120-request live campaign and must never upload KEGG payloads; merging to `main`
   does not repeat that workflow.

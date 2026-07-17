@@ -19,16 +19,16 @@ from kegg_mcp.importers import import_plain_ko
 from kegg_mcp.kegg import ResponseOrigin
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
 from kegg_mcp.reporting import ReportLimits
-from kegg_mcp.services.contracts import ModuleAnalysisPreview, PathwayAnalysisPreview
 from kegg_mcp.services.models import (
     DATASET_SECTION,
     DEFAULT_IMPORT_LIMITS,
     DETAIL_SECTION,
     MAX_DIRECT_REFERENCE_BATCHES,
+    MAX_DIRECT_WARNING_CHARACTERS,
+    MAX_DIRECT_WARNINGS,
+    AnalysisResultSummary,
     DatasetSource,
-    PrimitiveAnalysisResult,
 )
-from kegg_mcp.services.previews import _annotation_provenance
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     ResultArtifactMetadata,
@@ -201,24 +201,21 @@ def _retain_json_detail(
     return result, (_artifact_metadata(DETAIL_SECTION, "application/json", content),)
 
 
-def _build_primitive_analysis_result(
+def _build_analysis_summary(
     dataset: AnnotationDataset,
     *,
     evidence_mode: EvidenceMode,
-    result: ResultMetadata,
-    artifacts: tuple[ResultArtifactMetadata, ...],
     metrics: tuple[StageMetric, ...],
-    module_previews: tuple[ModuleAnalysisPreview, ...] = (),
-    pathway_previews: tuple[PathwayAnalysisPreview, ...] = (),
     caveats: tuple[str, ...],
-    reference_provenance: tuple[KeggBatchProvenance, ...],
-) -> PrimitiveAnalysisResult:
-    """Assemble the shared direct-analysis envelope without merging domain semantics."""
+    warnings: tuple[str, ...] = (),
+) -> AnalysisResultSummary:
+    """Build the small count and message summary shared by analysis tools."""
     status_counts = _status_record_counts(dataset)
     selected_ko_ids = select_ko_ids(build_ko_evidence_view(dataset), evidence_mode)
-    return PrimitiveAnalysisResult(
-        result=result,
-        artifacts=artifacts,
+    warning_preview = tuple(
+        warning[:MAX_DIRECT_WARNING_CHARACTERS] for warning in warnings[:MAX_DIRECT_WARNINGS]
+    )
+    return AnalysisResultSummary(
         input_records=dataset.import_report.input_rows,
         accepted_records=status_counts[NormalizedStatus.ACCEPTED],
         uncertain_records=status_counts[NormalizedStatus.UNCERTAIN],
@@ -228,15 +225,24 @@ def _build_primitive_analysis_result(
         network_request_count=sum(item.network_request_count for item in metrics),
         cache_hit_count=sum(item.cache_hit_count for item in metrics),
         kegg_response_bytes=sum(item.response_bytes for item in metrics),
-        execution_metrics=metrics,
-        module_target_count=len(module_previews),
-        module_previews=module_previews,
-        pathway_target_count=len(pathway_previews),
-        pathway_previews=pathway_previews,
         caveats=caveats,
-        annotation_provenance=_annotation_provenance(dataset),
-        reference_provenance=reference_provenance,
+        warning_count=len(warnings),
+        warnings=warning_preview,
+        warnings_truncated=len(warning_preview) < len(warnings),
     )
+
+
+def _dataset_provenance_payload(dataset: AnnotationDataset) -> dict[str, object]:
+    """Serialize complete dataset-level provenance without duplicating annotation records."""
+    return {
+        "dataset_id": dataset.dataset_id,
+        "analysis_unit": dataset.analysis_unit.value,
+        "taxon_id": dataset.taxon_id,
+        "kegg_organism_code": dataset.kegg_organism_code,
+        "metadata": [item.model_dump(mode="json") for item in dataset.metadata],
+        "sources": [item.model_dump(mode="json") for item in dataset.sources],
+        "import_report": dataset.import_report.model_dump(mode="json"),
+    }
 
 
 def _validate_report_capacity(limits: ReportLimits, store: SQLiteResultStore) -> None:
@@ -262,7 +268,8 @@ def _validate_report_capacity(limits: ReportLimits, store: SQLiteResultStore) ->
 __all__ = [
     "_analysis_warnings",
     "_artifact_metadata",
-    "_build_primitive_analysis_result",
+    "_build_analysis_summary",
+    "_dataset_provenance_payload",
     "_elapsed_ms",
     "_execution_metrics",
     "_json_bytes",

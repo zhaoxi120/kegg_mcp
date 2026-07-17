@@ -14,6 +14,7 @@ from kegg_render_mcp.config import (
     ALLOWED_ROOTS_ENV,
     LICENSED_CONFIRMATION_ENV,
     LICENSED_ENDPOINT_ENV,
+    MAX_RESULTS_ENV,
     STATE_ROOT_ENV,
     RendererLimits,
     RendererRuntimeConfig,
@@ -31,10 +32,12 @@ def test_config_requires_private_state_and_nonempty_allowed_roots(tmp_path: Path
             STATE_ROOT_ENV: str(tmp_path / "state"),
             ALLOWED_ROOTS_ENV: str(allowed),
             ACCESS_MODE_ENV: "unconfigured",
+            MAX_RESULTS_ENV: "7",
         }
     )
     assert config.access_mode == "unconfigured"
     assert config.allowed_roots == (allowed.resolve(),)
+    assert config.limits.max_results == 7
     with pytest.raises(ValueError, match=ALLOWED_ROOTS_ENV):
         load_runtime_config({STATE_ROOT_ENV: str(tmp_path / "state")})
 
@@ -81,6 +84,42 @@ def test_render_input_strictly_validates_schema(
     assert loaded.accepted_ko_ids == {"K00001"}
     assert loaded.uncertain_ko_ids == {"K00002"}
     assert loaded.target_ids == ("ko00010", "M00001")
+
+
+def test_inline_render_input_uses_the_same_bounded_strict_parser(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    payload = render_input_file.read_text(encoding="utf-8")
+    loaded = load_render_input(None, runtime_config, render_input_json=payload)
+
+    assert loaded.document.schema_version == "2"
+    assert loaded.target_ids == ("ko00010", "M00001")
+    with pytest.raises(RenderMcpError) as ambiguous:
+        load_render_input(
+            str(render_input_file),
+            runtime_config,
+            render_input_json=payload,
+        )
+    assert ambiguous.value.detail.code is ErrorCode.INVALID_REQUEST
+
+
+def test_handoff_schema_error_reports_only_bounded_field_path_and_stage(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    payload = json.loads(render_input_file.read_text(encoding="utf-8"))
+    payload["dataset"]["analysis_unit"] = 42
+
+    with pytest.raises(RenderMcpError) as raised:
+        load_render_input(None, runtime_config, render_input_json=json.dumps(payload))
+
+    details = {item.name: item.value for item in raised.value.detail.safe_details}
+    assert details == {
+        "field_path": "dataset.analysis_unit",
+        "validation_issue_count": "1",
+        "stage": "render_input_schema",
+    }
 
 
 def test_version_one_requests_new_core_analysis(

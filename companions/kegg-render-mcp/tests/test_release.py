@@ -22,7 +22,7 @@ def test_distribution_declares_compatible_core_without_annotation_or_browser_sta
     assert project["name"] == "kegg-render-mcp"
     assert project["version"] == kegg_render_mcp.__version__
     dependencies = " ".join(project["dependencies"]).lower()
-    assert "kegg-mcp>=0.3,<0.4" in dependencies
+    assert "kegg-mcp>=0.4,<0.5" in dependencies
     for forbidden in ("deepkoala", "torch", "selenium", "playwright", "cairosvg"):
         assert forbidden not in dependencies
 
@@ -68,6 +68,13 @@ def test_wheel_and_sdist_audit_excludes_payloads_and_other_implementations(tmp_p
         wheel_names = archive.namelist()
     with tarfile.open(sdist) as archive:
         sdist_names = archive.getnames()
+    expected_sdist_tests = {
+        path.relative_to(PROJECT).as_posix() for path in (PROJECT / "tests").glob("*.py")
+    }
+    assert all(
+        any(name.endswith(f"/{relative}") for name in sdist_names)
+        for relative in expected_sdist_tests
+    )
     for names in (wheel_names, sdist_names):
         lowered = "\n".join(names).lower()
         assert "deepkoala_mcp" not in lowered

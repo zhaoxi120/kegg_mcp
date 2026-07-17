@@ -66,11 +66,11 @@ failures from biological conclusions and gives safe support-report guidance.
 | --- | --- |
 | Remote HTTP transport | Not adopted. The reviewed project scope is local stdio, and remote hosting would add authentication, tenancy, and data-governance requirements. |
 | Telemetry or automatic update checks | Not adopted. Local KO evidence, KEGG access configuration, and paths should not create unrequested outbound traffic. |
-| Large selectable toolsets or a slim mode | Not adopted. The server has nine bounded tools; another selection layer would add configuration without solving a current context problem. |
+| Large selectable toolsets or a slim mode | Not adopted. The server has eleven bounded tools; another selection layer would add configuration without solving a current context problem. |
 | Dynamic MCP Roots negotiation | Deferred. Deployment-owned `KEGG_MCP_ALLOWED_ROOTS` is already explicit, testable, and fail-closed. A protocol-driven root contract needs a separate threat-model review. |
 | Interactive authentication | Not adopted. Public-academic eligibility and licensed KEGG endpoints are deployment decisions, not MCP login flows. |
-| Browser-oriented screenshots, rendering, or automation | Out of scope. KEGG MCP analyzes existing KO evidence and does not render pathway images or run external annotators. |
-| Tool discovery as a meta-tool | Not adopted. Nine explicit tools remain easier to inspect and validate than a dynamic tool-search surface. |
+| Browser-oriented screenshots or automation | Out of scope. Core `kegg-mcp` analyzes existing KO evidence and does not render pathway images or run external annotators; static rendering belongs only to the separate `kegg-render-mcp` companion. |
+| Tool discovery as a meta-tool | Not adopted. Eleven explicit tools remain easier to inspect and validate than a dynamic tool-search surface. |
 
 ## Resulting local contract
 
@@ -81,9 +81,9 @@ The benchmark produced the following bounded changes:
 - `kegg-mcp doctor [--json]` validates deployment configuration without network or database probes;
 - status includes `file_handoff_enabled` and `allowed_root_count` but never root paths;
 - initialization instructions explain the supported workflow and interpretation boundaries;
-- installation starts with a Codex CLI command and a bounded academic live check used by the
-  default test profile; and
+- installation starts with a Codex CLI command and documents a bounded academic live acceptance
+  check; the default local test profile remains offline; and
 - troubleshooting has a stable, privacy-preserving support checklist.
 
-These changes do not alter the nine-tool biological analysis surface, KEGG rate limits, access
+These changes do not alter the explicit biological analysis surface, KEGG rate limits, access
 rights, cache boundaries, result isolation, or the prohibition on external annotation execution.

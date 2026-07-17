@@ -23,6 +23,7 @@ from kegg_render_mcp import SERVER_NAME, __version__
 from kegg_render_mcp.config import RendererRuntimeConfig, load_runtime_config
 from kegg_render_mcp.contracts import (
     ConnectivityResult,
+    ConnectivityStatus,
     DeleteRenderResult,
     DeleteRenderResultInput,
     EmptyInput,
@@ -45,6 +46,7 @@ from kegg_render_mcp.pathway_scene import (
     UnconfiguredAssetProvider,
 )
 from kegg_render_mcp.render_service import RendererService
+from kegg_render_mcp.validation_errors import ValidationIssueSummary, summarize_validation_error
 
 TOOL_NAMES = (
     "get_renderer_status",
@@ -70,9 +72,9 @@ class RendererRuntime:
 
 
 class _RequestValidationError(Exception):
-    def __init__(self, count: int) -> None:
+    def __init__(self, summary: ValidationIssueSummary) -> None:
         super().__init__("invalid request")
-        self.count = count
+        self.summary = summary
 
 
 def build_runtime(config: RendererRuntimeConfig | None = None) -> RendererRuntime:
@@ -150,22 +152,21 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                 return _success(_status(state), "Returned redacted renderer capabilities.")
             if name == "probe_renderer_kegg_connectivity":
                 _parse(EmptyInput, arguments)
-                reachable = await state.service.provider.probe()
+                classification = await state.service.provider.probe()
                 return _success(
                     ConnectivityResult(
-                        reachable=reachable,
-                        message=(
-                            "The configured KEGG endpoint answered one INFO request."
-                            if reachable
-                            else "The configured KEGG endpoint did not answer the bounded probe."
-                        ),
+                        reachable=classification is ConnectivityStatus.REACHABLE,
+                        classification=classification,
+                        request_count=1 if state.service.provider.configured else 0,
+                        message=_connectivity_message(classification),
                     ),
-                    "Completed exactly one explicit KEGG INFO connectivity request.",
+                    "Completed the bounded renderer KEGG connectivity preflight.",
                 )
             if name == "render_analysis_bundle":
                 request = _parse(RenderAnalysisBundleInput, arguments)
                 result = await state.service.render(
                     render_input_path=request.render_input_path,
+                    render_input_json=request.render_input_json,
                     target_ids=request.target_ids,
                     formats=request.formats,
                     output_directory=request.output_directory,
@@ -175,6 +176,7 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                 request = _parse(RenderPathwayInput, arguments)
                 result = await state.service.render(
                     render_input_path=request.render_input_path,
+                    render_input_json=request.render_input_json,
                     target_ids=(request.target_id,),
                     formats=request.formats,
                     output_directory=request.output_directory,
@@ -184,6 +186,7 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                 request = _parse(RenderModuleInput, arguments)
                 result = await state.service.render(
                     render_input_path=request.render_input_path,
+                    render_input_json=request.render_input_json,
                     target_ids=(request.target_id,),
                     formats=request.formats,
                     output_directory=request.output_directory,
@@ -202,12 +205,20 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                     suggested_action="Use a tool name returned by tools/list.",
                 )
             )
-        except _RequestValidationError:
+        except _RequestValidationError as error:
             return _error(
                 ErrorDetail(
                     code=ErrorCode.INVALID_REQUEST,
                     message="The tool input did not satisfy its explicit schema.",
                     suggested_action="Correct the fields using the tool input schema.",
+                    safe_details=(
+                        SafeDetail(name="field_path", value=error.summary.field_path),
+                        SafeDetail(
+                            name="validation_issue_count",
+                            value=str(error.summary.issue_count),
+                        ),
+                        SafeDetail(name="stage", value="tool_input"),
+                    ),
                 )
             )
         except RenderMcpError as error:
@@ -374,9 +385,11 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
         retained_result_count=snapshot.active_result_count,
         cleanup_pending_result_count=snapshot.cleanup_pending_result_count,
         retained_bytes=snapshot.retained_bytes,
+        retained_storage_bytes=snapshot.retained_storage_bytes,
         bounds=RendererBounds(
             max_input_bytes=limits.max_input_bytes,
             max_targets=32,
+            max_results=limits.max_results,
             max_asset_bytes=limits.max_asset_bytes,
             max_pixels=limits.max_pixels,
             max_svg_bytes=limits.max_svg_bytes,
@@ -390,7 +403,26 @@ def _parse(model: type[_M], arguments: dict[str, Any]) -> _M:
     try:
         return validate_tool_input(model, arguments)
     except ValidationError as error:
-        raise _RequestValidationError(error.error_count()) from None
+        raise _RequestValidationError(summarize_validation_error(error)) from None
+
+
+def _connectivity_message(classification: ConnectivityStatus) -> str:
+    return {
+        ConnectivityStatus.REACHABLE: "The configured KEGG endpoint answered one INFO request.",
+        ConnectivityStatus.NOT_CONFIGURED: "KEGG access is not configured for this renderer.",
+        ConnectivityStatus.DNS_FAILURE: "The configured KEGG endpoint name could not be resolved.",
+        ConnectivityStatus.CONNECTION_FAILURE: "The configured KEGG endpoint could not be reached.",
+        ConnectivityStatus.TIMEOUT: "The bounded KEGG INFO request timed out.",
+        ConnectivityStatus.TLS_FAILURE: "TLS validation failed for the configured KEGG endpoint.",
+        ConnectivityStatus.PERMISSION_DENIED: "The KEGG endpoint or environment denied access.",
+        ConnectivityStatus.RATE_LIMITED: "The configured KEGG endpoint rate-limited the probe.",
+        ConnectivityStatus.ENDPOINT_REJECTED: (
+            "The configured endpoint returned an unsafe response."
+        ),
+        ConnectivityStatus.UNKNOWN_FAILURE: (
+            "The bounded KEGG preflight failed for an unknown reason."
+        ),
+    }[classification]
 
 
 def _success(model: BaseModel, narrative: str) -> types.CallToolResult:

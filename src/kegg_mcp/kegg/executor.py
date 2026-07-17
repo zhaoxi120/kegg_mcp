@@ -11,6 +11,7 @@ from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.kegg.cache import CachedResponse, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
+    AccessMode,
     CacheLookupState,
     InfoRequest,
     KeggBatchProvenance,
@@ -85,6 +86,7 @@ class KeggRequestExecutor:
         self._clock = clock
         self._sleeper = sleeper
         self._random_uniform = random_uniform
+        self._network_enabled = config.access.mode is not AccessMode.OFFLINE_CACHE
 
     @property
     def retrieval_endpoint_class(self) -> RetrievalEndpointClass:
@@ -106,6 +108,8 @@ class KeggRequestExecutor:
         *,
         info_request: InfoRequest | None = None,
     ) -> ExecutedBatch:
+        if not self._network_enabled:
+            options = options.model_copy(update={"refresh": False, "cache_only": True})
         now = self.read_clock()
         if options.refresh:
             cache_state = CacheLookupState.REFRESH_BYPASS
@@ -221,6 +225,16 @@ class KeggRequestExecutor:
         )
 
     def request_with_retries(self, prepared: PreparedRequest) -> tuple[TransportResponse, int]:
+        if not self._network_enabled:
+            fail(
+                ErrorCode.CACHE_ENTRY_NOT_FOUND,
+                "Network access is disabled by the offline cache profile.",
+                suggested_action=(
+                    "Populate the selected cache namespace through authorized live access or "
+                    "switch to a live access profile."
+                ),
+                safe_details=(SafeDetail(name="operation", value=prepared.operation.value),),
+            )
         url = f"{self._endpoint}{prepared.path}"
         if len(url.encode("ascii")) > self._config.limits.max_url_bytes:
             fail(

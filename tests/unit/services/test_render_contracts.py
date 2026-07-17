@@ -58,6 +58,7 @@ from kegg_mcp.services.output_bundle import write_analysis_bundle
 from kegg_mcp.services.reference_loading import ReferenceLoadingLimits
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
+    ModuleRenderTarget,
     RenderabilityStatus,
     RenderInput,
     RenderInputLimits,
@@ -171,6 +172,16 @@ def _execution() -> AnalysisExecutionProvenance:
     )
 
 
+def test_execution_provenance_rejects_the_removed_plain_ko_service_name() -> None:
+    execution = _execution()
+    payload = execution.model_dump(mode="json")
+    payload["service_name"] = "kegg_mcp_plain_ko_analysis"
+
+    assert execution.service_name == "kegg_mcp_annotation_analysis"
+    with pytest.raises(ValidationError):
+        AnalysisExecutionProvenance.model_validate(payload)
+
+
 def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInput:
     dataset = _dataset()
     graph, pair = _module_values(dataset)
@@ -264,6 +275,43 @@ def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> No
     assert pathway.detected_ko_ids_complete is False
     assert pathway.detected_ko_ids == ()
     assert pathway.coverage_numerator == 2
+
+
+def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -> None:
+    dataset = _dataset()
+    graph = resolve_module_definitions(
+        ModuleDefinitionCollection(
+            root_module_id="M00001",
+            definitions=(
+                ModuleDefinition.from_text(
+                    module_id="M00001",
+                    module_name="Oversized renderer layout",
+                    definition="+".join("K00001" for _ in range(400)),
+                ),
+            ),
+        ),
+        _MODULE_LIMITS,
+    )
+    pair = evaluate_module_pair(graph, dataset, _MODULE_LIMITS)
+    value = build_render_input(
+        dataset,
+        (graph,),
+        (pair,),
+        (),
+        (),
+        _execution(),
+    )
+
+    oversized = value.modules[0]
+    assert oversized.renderability is RenderabilityStatus.NOT_RENDERABLE
+    assert oversized.not_renderable_reason == "module_renderer_layout_limit_exceeded"
+    assert oversized.required_block_states == ()
+    assert oversized.optional_component_states == ()
+
+    payload = _render_input().modules[0].model_dump(mode="json")
+    payload["definitions"] = [item.model_dump(mode="json") for item in graph.modules]
+    with pytest.raises(ValidationError, match="normative renderer layout"):
+        ModuleRenderTarget.model_validate_json(json.dumps(payload), strict=True)
 
 
 def test_identity_mismatch_and_serialized_byte_limit_fail_with_dedicated_errors() -> None:

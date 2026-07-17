@@ -2,7 +2,7 @@
 
 ## Purpose and current phase
 
-This repository provides a local stdio MCP server and a repository-scoped Codex skill for
+This repository provides local stdio MCP servers and repository-scoped Codex Skills for
 KEGG-aware analysis of KO annotations.
 
 Milestones 0 through 8 and the first supported release are implemented and verified. The
@@ -54,9 +54,10 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
   configured companion MCP server and runner process with its own entry point, environment,
   lifecycle, and release review. It is an MCP-side capability, not Skill implementation code, and
   requires an assigned issue before implementation.
-- The Skill may discover and orchestrate an available companion MCP server, but it must not
-  implement inference, launch annotation subprocesses itself, manage weights, or silently install
-  or download dependencies.
+- `deepkoala-annotation` may orchestrate only an available DeepKOALA companion; `kegg-ko-analysis`
+  may orchestrate only the core server; and `kegg-pathway-rendering` may orchestrate only the
+  renderer. No Skill may implement inference, launch subprocesses itself, manage weights, or
+  silently install or download dependencies.
 - Do not download or redistribute KOfam profiles or KEGG datasets.
 - Do not add enrichment, differential-abundance statistics, a web UI, multi-user hosting, or
   remote HTTP transport. The core server must not generate pathway images; approved image
@@ -68,9 +69,9 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 
 - Keep domain, importer, KEGG client, analysis, and reporting code independent of MCP transport.
 - MCP tools must call public service-layer functions rather than reimplementing analysis.
-- The Skill should orchestrate the core MCP tools and, when explicitly available, an optional
-  companion runner; it must not duplicate deterministic normalization, analysis, inference, or
-  job-control code.
+- Each Skill must declare exactly one MCP dependency and orchestrate only that server. Stable,
+  versioned output-directory files connect stages; no Skill may duplicate deterministic
+  normalization, analysis, inference, rendering, or job-control code.
 - A companion runner must return detailed annotation output and provenance through the existing
   source-agnostic importer boundary rather than introducing a second KO normalization policy.
 - The core server produces the authoritative typed renderer handoff but does not parse KGML or

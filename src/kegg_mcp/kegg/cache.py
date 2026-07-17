@@ -337,7 +337,18 @@ class SQLiteKeggCache:
         """Return cache counts and configured limits without paths or endpoint identities."""
         try:
             checked_now = _normalize_datetime(now)
-            with closing(self._connect()) as connection:
+            connection = self._connect_existing()
+            if connection is None:
+                return CacheStatus(
+                    entry_count=0,
+                    expired_entry_count=0,
+                    payload_bytes=0,
+                    database_bytes=0,
+                    max_entries=self._max_entries,
+                    max_payload_bytes=self._max_payload_bytes,
+                    max_database_bytes=self._max_database_bytes,
+                )
+            with closing(connection):
                 aggregate = connection.execute(
                     "SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0) FROM kegg_responses"
                 ).fetchone()
@@ -364,7 +375,16 @@ class SQLiteKeggCache:
         """Delete only TTL-expired rows and compact the private cache database."""
         try:
             checked_now = _normalize_datetime(now)
-            with closing(self._connect()) as connection:
+            connection = self._connect_existing()
+            if connection is None:
+                return CacheCleanupSummary(
+                    expired_entries=0,
+                    expired_payload_bytes=0,
+                    remaining_entries=0,
+                    remaining_payload_bytes=0,
+                    database_bytes=0,
+                )
+            with closing(connection):
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     expired = connection.execute(
@@ -408,8 +428,19 @@ class SQLiteKeggCache:
         )
 
     def _connect(self) -> sqlite3.Connection:
-        path = self._prepare_location()
-        flags = os.O_RDWR | os.O_CREAT
+        return self._connect_path(self._prepare_location(), create=True)
+
+    def _connect_existing(self) -> sqlite3.Connection | None:
+        path = self._existing_location()
+        if path is None:
+            return None
+        try:
+            return self._connect_path(path, create=False)
+        except FileNotFoundError:
+            return None
+
+    def _connect_path(self, path: Path, *, create: bool) -> sqlite3.Connection:
+        flags = os.O_RDWR | (os.O_CREAT if create else 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         if hasattr(os, "O_CLOEXEC"):
@@ -512,6 +543,33 @@ class SQLiteKeggCache:
                 raise OSError("cache must be a regular file")
             if hasattr(os, "geteuid") and path_stat.st_uid != os.geteuid():
                 raise OSError("cache must be owned by the current user")
+        return path
+
+    def _existing_location(self) -> Path | None:
+        path = Path(self._configured_path).expanduser()
+        if ".." in path.parts:
+            raise OSError("cache path must not contain traversal components")
+        if not path.is_absolute():
+            raise OSError("cache path must be absolute")
+        try:
+            path_stat = path.lstat()
+        except FileNotFoundError:
+            _reject_symlink_components(path.parent)
+            return None
+
+        parent = path.parent
+        _reject_symlink_components(parent)
+        parent_stat = parent.lstat()
+        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
+            raise OSError("cache parent must be a real directory")
+        if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
+            raise OSError("cache parent must be owned by the current user")
+        if stat.S_IMODE(parent_stat.st_mode) & 0o022:
+            raise OSError("cache parent must not be group- or world-writable")
+        if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+            raise OSError("cache must be a regular file")
+        if hasattr(os, "geteuid") and path_stat.st_uid != os.geteuid():
+            raise OSError("cache must be owned by the current user")
         return path
 
     @staticmethod

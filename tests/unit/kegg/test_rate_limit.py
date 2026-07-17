@@ -11,6 +11,8 @@ from typing import cast
 
 import pytest
 
+import kegg_mcp.kegg.rate_limit as rate_limit_module
+from kegg_mcp.kegg.contracts import MIN_REQUESTS_PER_SECOND
 from kegg_mcp.kegg.rate_limit import (
     MAX_REQUESTS_PER_SECOND,
     DeploymentRateLimiter,
@@ -177,10 +179,44 @@ def test_state_root_and_files_are_owner_only(tmp_path: Path) -> None:
     assert state.name == f"{_scope('private-state')}.state"
 
 
+def test_state_file_open_remains_bound_to_the_validated_root_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root = tmp_path / "rate-limit"
+    state_root.mkdir(mode=0o700)
+    replacement = tmp_path / "replacement"
+    replacement.mkdir(mode=0o700)
+    displaced = tmp_path / "displaced"
+    clock = FakeClock()
+    limiter = DeploymentRateLimiter(
+        _scope("pinned-root"),
+        2.0,
+        state_root=state_root,
+        monotonic=clock.monotonic,
+        sleeper=clock.sleep,
+    )
+    real_open_state_file = rate_limit_module._open_state_file  # pyright: ignore[reportPrivateUsage]
+
+    def replace_named_root(root_descriptor: int, scope: str) -> int:
+        state_root.rename(displaced)
+        replacement.rename(state_root)
+        return real_open_state_file(root_descriptor, scope)
+
+    monkeypatch.setattr(rate_limit_module, "_open_state_file", replace_named_root)
+
+    limiter.acquire()
+
+    state_name = f"{_scope('pinned-root')}.state"
+    assert (displaced / state_name).is_file()
+    assert not (state_root / state_name).exists()
+
+
 @pytest.mark.parametrize(
     "rate",
     [
         0.0,
+        MIN_REQUESTS_PER_SECOND / 2.0,
         -1.0,
         MAX_REQUESTS_PER_SECOND + 0.01,
         float("inf"),
@@ -189,7 +225,7 @@ def test_state_root_and_files_are_owner_only(tmp_path: Path) -> None:
     ],
 )
 def test_rate_limiter_rejects_unsafe_rates(tmp_path: Path, rate: float) -> None:
-    with pytest.raises(ValueError, match="no greater than 3"):
+    with pytest.raises(ValueError, match="between 1/60 and 3"):
         DeploymentRateLimiter(_scope("invalid"), rate, state_root=tmp_path / "state")
 
 

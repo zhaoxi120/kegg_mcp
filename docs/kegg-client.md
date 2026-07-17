@@ -36,6 +36,7 @@ The project defaults to public-academic live access:
   `https://rest.kegg.jp`.
 - `licensed` requires `authorized_use_confirmed=True`, a caller-supplied authorized HTTPS endpoint,
   and a non-sensitive logical endpoint label.
+- `offline_cache` is explicit, network-disabled, and selects one endpoint-scoped cache namespace.
 
 The readable label is used only in status and provenance. Cache and rate-limit isolation use an
 opaque SHA-256 fingerprint of the canonical endpoint; the licensed URL and its fingerprint are not
@@ -67,6 +68,19 @@ config = KeggClientConfig(
     access=PublicAcademicAccess(academic_use_confirmed=True),
 )
 ```
+
+Internal iteration can explicitly disable network access while retaining the public cache
+namespace:
+
+```python
+from kegg_mcp.kegg.contracts import KeggClientConfig, OfflineCacheAccess
+
+config = KeggClientConfig(access=OfflineCacheAccess())
+```
+
+Every operation under this profile is forced to a cache-only read before cache lookup. The HTTP
+transport and deployment-wide limiter are never invoked. Cache misses return
+`CACHE_ENTRY_NOT_FOUND`; stale entries still require `allow_stale=True`.
 
 Licensed access also requires an explicit assertion. The endpoint must use HTTPS, must not contain
 credentials, query parameters, fragments, percent-encoded components, backslashes, or traversal
@@ -100,7 +114,7 @@ authorizing the configured service.
 
 | Setting | Default | Contract |
 | --- | ---: | --- |
-| `requests_per_second` | `2.0` | Greater than zero and no greater than `3.0` |
+| `requests_per_second` | `2.0` | From `1/60` through `3.0`, inclusive |
 | `timeout_seconds` | `15.0` | Per-request timeout, at most 120 seconds |
 | `max_response_bytes` | `5_000_000` | Checked before and while reading a response |
 | `max_identifiers` | `100` | Per public operation before batching |
@@ -114,9 +128,12 @@ owner-only state root, `${XDG_CACHE_HOME:-~/.cache}/kegg-mcp/rate-limit`, unless
 request starts across processes, starts are spaced uniformly, and idle time does not accumulate
 burst capacity. If clients configure different rates for one endpoint and state root, the strictest
 observed rate remains in force. The configuration cannot exceed the official maximum of three
-requests per second; the safer project default is two. The client always applies this limiter for
-live access. An optional injected limiter may add stricter spacing but cannot replace the mandatory
-deployment-wide limiter.
+requests per second and cannot be lower than one request per minute because the cross-process state
+contract retains at most a 60-second interval. The safer project default is two requests per second.
+The client always applies this limiter for live access. An optional injected limiter may add
+stricter spacing but cannot replace the mandatory deployment-wide limiter. State files are opened
+relative to one validated owner-only directory descriptor so replacing the configured path cannot
+redirect a pending state-file open.
 
 `RetryPolicy` defaults to two retries after the initial attempt, exponential backoff beginning at
 0.5 seconds, an 8-second backoff cap, and up to 0.25 seconds of jitter. Retries remain bounded and
@@ -277,9 +294,10 @@ parser version, metadata shape, and parser compatibility before returning a payl
 row is `CACHE_FAILED`, never a cache miss or biological absence.
 
 Multi-entry flat-file GET responses are also split into entry-level cache records after successful
-parsing and identifier reconciliation. A later single-entry GET or any fully cached subset is
-reconstructed from those records without a network call. The live request still obeys KEGG's
-maximum of ten GET entries.
+parsing and identifier reconciliation. A later single-entry GET or cached subset is reconstructed
+from those records. For a partially cached ordered request, only contiguous cache misses are sent
+to KEGG, while cached entries and returned flat-file entries are merged back into caller order. The
+live request still obeys KEGG's maximum of ten GET entries.
 
 The response parser contract version is `4`. LINK request keys are canonical unprefixed request
 paths produced after adaptive packing. The parser records nested flat-file field indentation,
@@ -298,6 +316,9 @@ Operators can inspect or remove expired cache rows without exposing paths, endpo
 kegg-mcp cache status --json
 kegg-mcp cache cleanup --expired --json
 ```
+
+When the configured database does not exist, status and expired-row cleanup return zero counts
+without creating the database or its parent directory.
 
 At lookup time:
 

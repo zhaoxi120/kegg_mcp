@@ -14,7 +14,11 @@ from kegg_mcp.analysis import (
     ModuleReferenceIssueKind,
 )
 from kegg_mcp.domain import AnalysisUnit
-from kegg_mcp.services.render_contracts import RenderabilityStatus
+from kegg_mcp.services.render_contracts import (
+    MODULE_RENDER_MAX_CANVAS_DIMENSION,
+    MODULE_RENDER_MAX_CANVAS_PIXELS,
+    RenderabilityStatus,
+)
 
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
@@ -46,6 +50,9 @@ def test_module_scene_preserves_and_or_grouping_and_authoritative_state(
     assert tuple(
         (item.source_module_id, item.target_module_id) for item in scene.reference_edges
     ) == (("M00001", "M00002"),)
+    assert scene.width <= MODULE_RENDER_MAX_CANVAS_DIMENSION
+    assert scene.height <= MODULE_RENDER_MAX_CANVAS_DIMENSION
+    assert scene.width * scene.height <= MODULE_RENDER_MAX_CANVAS_PIXELS
 
 
 def test_module_svg_uses_neutral_ast_and_evidence_colors_only_for_blocks(

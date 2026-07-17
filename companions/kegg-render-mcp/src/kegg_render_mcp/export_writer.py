@@ -75,16 +75,16 @@ def export_bundle(
 
 
 def _require_empty_directory(descriptor: int) -> None:
-    entries = os.listdir(descriptor)
-    if not entries:
+    with os.scandir(descriptor) as entries:
+        entry = next(entries, None)
+    if entry is None:
         return
-    for name in entries:
-        try:
-            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-        except OSError:
-            raise _unsafe_entry() from None
-        if not stat.S_ISREG(metadata.st_mode):
-            raise _unsafe_entry()
+    try:
+        metadata = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError:
+        raise _unsafe_entry() from None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise _unsafe_entry()
     raise _already_exists()
 
 

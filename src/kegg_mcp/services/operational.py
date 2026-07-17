@@ -1,4 +1,4 @@
-"""Operational status, connectivity, and retained-result deletion."""
+"""Operational status, connectivity, and retained-result management."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from kegg_mcp.kegg import (
     InfoRequest,
     KeggInfoDatabase,
     KeggRequestOptions,
+    OfflineCacheAccess,
     PublicAcademicAccess,
     RetrievalEndpointClass,
 )
 from kegg_mcp.services.models import ConnectivityProbeResult, ConnectivityState, ServerStatusResult
 from kegg_mcp.services.reference_budget import KeggConnectivityClient, KeggPrimitiveClient
-from kegg_mcp.services.result_store import DeletedResult, SQLiteResultStore
+from kegg_mcp.services.result_store import DeletedResult, ResultMetadataPage, SQLiteResultStore
 
 
 def get_server_status_service(
@@ -29,15 +30,19 @@ def get_server_status_service(
     """Return redacted configuration facts without probing or revealing paths."""
     access = client.config.access
     cache_endpoint_class = (
-        RetrievalEndpointClass.PUBLIC_ACADEMIC
-        if isinstance(access, PublicAcademicAccess)
-        else RetrievalEndpointClass.LICENSED
+        access.retrieval_endpoint_class
+        if isinstance(access, OfflineCacheAccess)
+        else (
+            RetrievalEndpointClass.PUBLIC_ACADEMIC
+            if isinstance(access, PublicAcademicAccess)
+            else RetrievalEndpointClass.LICENSED
+        )
     )
     return ServerStatusResult(
         server_version=server_version,
         access_mode=access.mode,
         cache_endpoint_class=cache_endpoint_class,
-        network_enabled=True,
+        network_enabled=access.mode is not AccessMode.OFFLINE_CACHE,
         academic_use_confirmed=access.mode is AccessMode.PUBLIC_ACADEMIC,
         licensed_use_confirmed=cache_endpoint_class is RetrievalEndpointClass.LICENSED,
         file_handoff_enabled=allowed_root_count > 0,
@@ -59,6 +64,17 @@ def delete_analysis_result(
     return result_store.delete(scope_id, result_id)
 
 
+def list_analysis_results(
+    *,
+    result_store: SQLiteResultStore,
+    scope_id: str,
+    offset: int,
+    limit: int,
+) -> ResultMetadataPage:
+    """List one bounded page from only the current stdio result scope."""
+    return result_store.list_results(scope_id, offset=offset, limit=limit)
+
+
 def probe_kegg_connectivity_service(
     client: KeggConnectivityClient,
     *,
@@ -68,10 +84,24 @@ def probe_kegg_connectivity_service(
     checked_now = (now or datetime.now(UTC)).astimezone(UTC)
     access = client.config.access
     endpoint_class = (
-        RetrievalEndpointClass.PUBLIC_ACADEMIC
-        if isinstance(access, PublicAcademicAccess)
-        else RetrievalEndpointClass.LICENSED
+        access.retrieval_endpoint_class
+        if isinstance(access, OfflineCacheAccess)
+        else (
+            RetrievalEndpointClass.PUBLIC_ACADEMIC
+            if isinstance(access, PublicAcademicAccess)
+            else RetrievalEndpointClass.LICENSED
+        )
     )
+    if isinstance(access, OfflineCacheAccess):
+        return ConnectivityProbeResult(
+            state=ConnectivityState.NETWORK_DISABLED,
+            access_mode=access.mode,
+            endpoint_class=endpoint_class,
+            probed_at=checked_now,
+            suggested_action=(
+                "Switch to public_academic or licensed access before requesting a live probe."
+            ),
+        )
     try:
         result = client.info(
             InfoRequest(database=KeggInfoDatabase.KEGG),
@@ -102,4 +132,9 @@ def probe_kegg_connectivity_service(
     )
 
 
-__all__ = ["delete_analysis_result", "get_server_status_service", "probe_kegg_connectivity_service"]
+__all__ = [
+    "delete_analysis_result",
+    "get_server_status_service",
+    "list_analysis_results",
+    "probe_kegg_connectivity_service",
+]

@@ -5,12 +5,15 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import TracebackType
+from typing import Self
 
 import pytest
 
 from conftest import SyntheticProvider
+from kegg_render_mcp import export_writer
 from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
-from kegg_render_mcp.config import RendererRuntimeConfig
+from kegg_render_mcp.config import RendererLimits, RendererRuntimeConfig
 from kegg_render_mcp.contracts import ErrorCode, RenderFormat, RenderMcpError
 from kegg_render_mcp.render_service import RendererService
 
@@ -171,6 +174,60 @@ async def test_export_rejects_every_nonempty_regular_directory_without_changes(
         service.close()
 
 
+def test_nonempty_output_check_does_not_enumerate_the_whole_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "many-existing-files"
+    output.mkdir(mode=0o700)
+    existing = output / "first.txt"
+    existing.write_bytes(b"existing")
+    real_scandir = os.scandir
+
+    class OneEntryScanner:
+        def __init__(self) -> None:
+            self.next_calls = 0
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exception_type: type[BaseException] | None,
+            exception: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            del exception_type, exception, traceback
+
+        def __iter__(self) -> Self:
+            return self
+
+        def __next__(self) -> os.DirEntry[str]:
+            self.next_calls += 1
+            if self.next_calls > 1:
+                raise AssertionError("the output check enumerated beyond the first entry")
+            with real_scandir(output) as real_entries:
+                return next(real_entries)
+
+    scanner = OneEntryScanner()
+
+    def fake_scandir(_: int) -> OneEntryScanner:
+        return scanner
+
+    descriptor = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(export_writer.os, "scandir", fake_scandir)
+            with pytest.raises(RenderMcpError) as raised:
+                export_writer._require_empty_directory(  # pyright: ignore[reportPrivateUsage]
+                    descriptor
+                )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
+        assert scanner.next_calls == 1
+    finally:
+        os.close(descriptor)
+
+
 @pytest.mark.asyncio
 async def test_failed_export_rolls_back_new_files_and_commit_manifest(
     runtime_config: RendererRuntimeConfig,
@@ -239,6 +296,83 @@ def test_owner_only_state_root_is_required(runtime_config: RendererRuntimeConfig
         RenderArtifactStore(runtime_config).open()
 
 
+def test_result_count_quota_is_checked_before_allocating_a_directory(
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    config = runtime_config.model_copy(
+        update={"limits": runtime_config.limits.model_copy(update={"max_results": 1})}
+    )
+    store = RenderArtifactStore(config)
+    store.open()
+    try:
+        store.retain(
+            target_ids=("M00001",),
+            artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+            warnings=(),
+            manifest_context={},
+            output_directory=None,
+        )
+        with pytest.raises(RenderMcpError) as raised:
+            store.retain(
+                target_ids=("M00002",),
+                artifacts=(ArtifactBlob("M00002.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+                warnings=(),
+                manifest_context={},
+                output_directory=None,
+            )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+        assert store.snapshot().active_result_count == 1
+        scope = config.state_root / str(store._scope_name)  # pyright: ignore[reportPrivateUsage]
+        assert len(tuple(scope.iterdir())) == 1
+    finally:
+        store.close()
+
+
+def test_storage_quota_reserves_blocks_and_metadata_before_mkdir(
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    limits = RendererLimits(
+        max_asset_bytes=100,
+        max_svg_bytes=100,
+        max_result_bytes=2_000,
+        max_disk_bytes=10_000,
+    )
+    config = runtime_config.model_copy(update={"limits": limits})
+    store = RenderArtifactStore(config)
+    store.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            store.retain(
+                target_ids=("M00001",),
+                artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+                warnings=(),
+                manifest_context={},
+                output_directory=None,
+            )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+        scope = config.state_root / str(store._scope_name)  # pyright: ignore[reportPrivateUsage]
+        assert not tuple(scope.iterdir())
+    finally:
+        store.close()
+
+
+def test_abandoned_scope_cleanup_rejects_unbounded_result_counts(
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    config = runtime_config.model_copy(
+        update={"limits": runtime_config.limits.model_copy(update={"max_results": 1})}
+    )
+    config.state_root.mkdir(mode=0o700)
+    abandoned = config.state_root / "scope_abandoned"
+    abandoned.mkdir(mode=0o700)
+    for marker in ("a", "b"):
+        (abandoned / ("render_" + marker * 32)).mkdir(mode=0o700)
+
+    with pytest.raises(ValueError, match="already active or unsafe"):
+        RenderArtifactStore(config).open()
+    assert abandoned.exists()
+
+
 def test_failed_deletion_remains_accounted_and_retryable(
     runtime_config: RendererRuntimeConfig,
     monkeypatch: pytest.MonkeyPatch,
@@ -263,7 +397,7 @@ def test_failed_deletion_remains_accounted_and_retryable(
         with pytest.raises(OSError, match="synthetic delete failure"):
             store.delete(result.render_id)
         assert store.get(result.render_id) == result
-        assert store.result_count == 1
+        assert store.snapshot().active_result_count == 1
     finally:
         monkeypatch.setattr(store, "_remove_result_directory", real_remove)
         store.close()
@@ -288,6 +422,7 @@ def test_read_only_snapshot_does_not_delete_expired_files_and_explains_quota(
     store._results[result.render_id] = type(stored)(  # pyright: ignore[reportPrivateUsage]
         expired_result,
         stored.total_bytes,
+        stored.storage_bytes,
     )
     scope_name = store._scope_name  # pyright: ignore[reportPrivateUsage]
     assert scope_name is not None
@@ -299,7 +434,8 @@ def test_read_only_snapshot_does_not_delete_expired_files_and_explains_quota(
     assert snapshot.active_result_count == 0
     assert snapshot.cleanup_pending_result_count == 1
     assert snapshot.retained_bytes == stored.total_bytes
-    assert store.result_count == 0
+    assert snapshot.retained_storage_bytes == stored.storage_bytes
+    assert snapshot.active_result_count == 0
     assert tuple(sorted(path.name for path in retained_directory.iterdir())) == before
 
     store._purge_expired()  # pyright: ignore[reportPrivateUsage]

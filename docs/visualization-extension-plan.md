@@ -68,9 +68,9 @@ The renderer does not support:
 
 The repository implements the first two computational stages as follows:
 
-1. `deepkoala-mcp` validates and stages protein FASTA, prepares a bounded service-owned
-   `device=auto` execution plan, retains a non-blocking execution notice, owns the subprocess
-   lifecycle, and returns a controlled detailed-CSV handoff after success.
+1. `deepkoala-mcp` validates an allowed protein FASTA and a new allowed output directory, starts a
+   bounded service-owned `device=auto` execution plan in one atomic request, owns the subprocess
+   lifecycle, and returns a stable detailed-CSV handoff after success.
 2. `kegg-mcp` imports that detailed table through the source-agnostic importer boundary, applies a
    named decision policy, loads KEGG references, evaluates MODULEs and pathways, writes reports,
    and creates an output bundle.
@@ -98,19 +98,20 @@ MODULE-evaluation rules.
 1. Discover `deepkoala-mcp` and call `get_deepkoala_runner_status`.
 2. Stop with a deployment explanation if the companion is absent or not ready. Do not install or
    download dependencies, model weights, or databases silently.
-3. Call `prepare_deepkoala_job` with exactly one inline FASTA or allowed absolute FASTA path.
-4. Retain the execution notice, including model, installed resource date, top-k, timeout, input
-   summary, device policy, and output bounds, as provenance rather than a confirmation gate.
-5. Call `submit_deepkoala_job` with only the opaque job identifier.
-6. Poll `get_deepkoala_job` with bounded status checks.
-7. After success, pass the controlled `output_path`, `input_format="deepkoala_detailed"`, and
-   returned source provenance to `kegg-mcp`.
-8. Call `analyze_ko_annotations` with an allowed `output_directory` so that the stable analysis
+3. After an explicit user annotation request, call `run_deepkoala_job` once with an allowed
+   absolute FASTA path and new allowed output directory. Do not request a second confirmation,
+   acknowledgement, workflow digest, or artifact digest.
+4. Retain the returned execution plan and input summary as provenance and poll
+   `get_deepkoala_job` with bounded status checks.
+5. After success, pass `annotations_path`, `input_format="deepkoala_detailed"`, and the returned
+   source provenance to `kegg-mcp`. If the two clients do not share an allowed root, read the
+   bounded annotation resource pages and provide their decoded CSV content instead.
+6. Call `analyze_ko_annotations` with an allowed `output_directory` so that the stable analysis
    bundle and `render_input.json` version 2 are written.
-9. Pass the absolute `render_input.json` path to `kegg-render-mcp`.
-10. Render selected supported targets and return bounded previews plus validated image resources.
-11. Delete the retained DeepKOALA job only after the core import and analysis bundle have
-    succeeded and its private output is no longer required.
+7. Pass the absolute `render_input.json` path to `kegg-render-mcp`.
+8. Render selected supported targets and return bounded previews plus validated image resources.
+9. Delete the terminal DeepKOALA job record after the handoff has been consumed. Delivered CSV
+    and Markdown files remain in the user-selected stable output directory.
 
 ### 5.2 Existing KO evidence
 
@@ -253,22 +254,19 @@ on a compatible `kegg-mcp` package version and use this public library interface
 later diverge substantially, the shared KEGG access code may be extracted into a separately
 reviewed package; it should not be copied into two implementations.
 
-## 7. `deepkoala-mcp` provenance correction
+## 7. `deepkoala-mcp` provenance and delivery contract
 
-The current companion handoff requires its generated CSV `output_path` to equal
-`source.input_path`. That conflates the annotation artifact with the original biological input.
+The companion accepts an allowed absolute FASTA path and a separate new output directory. Its
+versioned handoff keeps the biological input distinct from delivered artifacts:
 
-Revise the contract so that:
+- `ImportHandoff.input_path` and `SourceProvenance.input_path` identify the original FASTA;
+- `ImportHandoff.annotations_path` identifies `deepkoala_annotations.csv` for the core importer;
+- `ImportHandoff.report_path` identifies `deepkoala_run_report.md`;
+- the input, annotation, and report paths are validated independently; and
+- no private staged FASTA or raw runner path is returned.
 
-- `ImportHandoff.output_path` is the controlled detailed CSV consumed by the core importer;
-- `SourceProvenance.input_path` is the caller-supplied original FASTA path when one was supplied;
-- inline FASTA uses `input_path=null` and a sanitized logical input URI;
-- `SourceProvenance.input_uri` identifies the companion-produced annotation artifact; and
-- no private staged FASTA path is returned.
-
-The job record should retain only the bounded origin information required to construct this
-handoff. The output path and original input path must be validated independently; they must no
-longer be required to match.
+The stable output files are the cross-MCP contract. The companion's process-scoped job and
+resource identifiers are only lifecycle and bounded transfer aids.
 
 ## 8. New `kegg-render-mcp` companion
 
@@ -481,28 +479,24 @@ synthetic assets unless an authorized live-test policy is separately approved fo
 
 ### 12.1 Existing `kegg-ko-analysis` Skill
 
-Keep the Skill instruction-only and preserve its current rendering boundary. Update its workflow
-instructions to:
+Keep the Skill instruction-only and dependent only on `kegg-mcp`. Its workflow instructions must:
 
 - request an allowed `output_directory` when graphics are requested;
 - require `render_input.json` version 2 for the new renderer;
-- pass the controlled absolute renderer-input path rather than a private result identifier;
-- validate renderer readiness and compatible schema versions before handoff;
+- return the controlled absolute renderer-input path rather than a private result identifier;
 - skip annotation when usable KO evidence already exists;
-- skip annotation and analysis when a compatible renderer handoff already exists;
-- retain the DeepKOALA output until the core import and bundle write have succeeded;
-- stop with an actionable deployment result if the renderer is unavailable; and
+- stop after producing the stable handoff and direct the user to the independent rendering Skill;
 - never parse KGML, manipulate pixels, duplicate normalization, or reinterpret analysis results.
 
-Add a short reference that describes the cross-Skill handoff and compatibility failure behavior.
-Do not add scripts or rendering assets to this Skill.
+Do not add companion lifecycle or renderer instructions, scripts, or rendering assets to this
+Skill.
 
-### 12.2 New `kegg-visualization` Skill
+### 12.2 New `kegg-pathway-rendering` Skill
 
 Add a separately triggered repository-scoped Skill only when the renderer MCP is functional:
 
 ```text
-.agents/skills/kegg-visualization/
+.agents/skills/kegg-pathway-rendering/
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
@@ -515,14 +509,14 @@ Add a separately triggered repository-scoped Skill only when the renderer MCP is
 ```
 
 Its frontmatter should trigger on requests to render, draw, color, visualize, or export KEGG
-pathway or MODULE graphics from KO evidence or a compatible analysis bundle. It should explicitly
+pathway or MODULE graphics from a compatible analysis handoff. It should explicitly
 exclude protein inference, KO normalization, statistical enrichment, flux inference, arbitrary
 image editing, and non-KEGG diagrams.
 
 The Skill should:
 
-1. inspect whether a compatible `render_input.json` already exists;
-2. route missing KO analysis through `kegg-ko-analysis` and `kegg-mcp`;
+1. require exactly one compatible `render_input.json` path or bounded inline document;
+2. stop and direct the user to `kegg-ko-analysis` when the handoff is missing;
 3. call the renderer's high-level tool for ordinary workflows and primitive tools only for
    targeted rendering;
 4. surface unsupported map types, stale cache state, provenance, and truncation;
@@ -532,10 +526,9 @@ The Skill should:
 The Skill remains instruction-only. Rendering code belongs in `kegg-render-mcp`, so the Skill
 must not contain renderer scripts or duplicate a color-assignment implementation.
 
-`agents/openai.yaml` should declare the actual local stdio dependencies used by the workflow. The
-existing analysis Skill may keep its core dependency, while the visualization Skill may declare
-both `kegg-mcp` and `kegg-render-mcp` if it is responsible for ensuring that the renderer handoff
-exists.
+`agents/openai.yaml` declares only the `kegg-render-mcp` local stdio dependency. The analysis Skill
+keeps only its core dependency. If the renderer handoff is missing, rendering stops and routes the
+user to that separate analysis stage instead of calling a second MCP.
 
 ## 13. Testing strategy
 
@@ -558,11 +551,11 @@ Add unit and integration tests for:
 
 Add contract and job tests for:
 
-- original FASTA path provenance when an allowed path is supplied;
-- `input_path=null` for inline FASTA;
-- independent validation of output and original-input paths;
+- original FASTA path provenance from an allowed path;
+- independent validation of input, annotation, and report paths;
+- stable detailed CSV and Markdown filenames;
 - no disclosure of private staged FASTA paths; and
-- successful core handoff after the provenance change.
+- successful core handoff through real MCP JSON transport and bounded resource fallback.
 
 ### 13.3 Renderer tests
 
@@ -622,9 +615,10 @@ Keep each assigned issue focused on one layer or contract. Recommended order:
 6. **Renderer MCP surface**
    - add tools, schemas, annotations, resources, scope, retention, deletion, status, CLI, and stdio
      contract tests.
-7. **Skill orchestration**
-   - update `kegg-ko-analysis`, add `kegg-visualization`, validate metadata, and perform static and
-     independent forward review.
+7. **Independent Skills**
+   - keep `kegg-ko-analysis` core-only, add `deepkoala-annotation` and
+     `kegg-pathway-rendering`, validate metadata, and perform static and independent forward
+     review.
 8. **End-to-end and release readiness**
    - verify a fully synthetic FASTA-to-image workflow, package boundaries, documentation, and
      release checks; keep the renderer job synthetic and run the separately governed core live

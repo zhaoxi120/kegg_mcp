@@ -6,11 +6,10 @@ model, or contacted KEGG.
 
 ## Method
 
-An independent forward/manual review covered the seven core and annotation-companion routes
-below. A separate nine-route review covered the version 2 visualization handoff and the
-independently installed renderer MCP. The reviewer inspected route selection, necessary
-clarification, tool choice, refusal boundaries, interpretation language, and relevant Skill
-references.
+Independent forward/manual reviews covered the three repository Skills: seven core-analysis and
+annotation routes, plus focused rendering routes for the version 2 handoff. The reviewer inspected
+route selection, necessary clarification, tool choice, refusal boundaries, interpretation
+language, single-MCP dependency ownership, and the stable file handoffs between Skills.
 
 The repository tests under `tests/skill/` provide deterministic instruction-contract coverage.
 They verify metadata, trigger terms, boundaries, MCP dependency identity, required guidance, and
@@ -24,25 +23,26 @@ that every model or client will behave identically.
 Prompt: `I have a protein FASTA file and want to analyze metabolic functions.`
 
 Expected route: recognize that KO assignments are absent; never send FASTA to the core server or
-guess K numbers; discover an explicitly configured local DeepKOALA companion or route to another
-independent annotation Skill and MCP.
+guess K numbers; route to the independent `deepkoala-annotation` Skill and stop if its one declared
+companion is unavailable.
 
 Observed route: passed. The Skill states its boundary, keeps annotation outside the core MCP, and
-resumes only from a controlled versioned annotation file after KO evidence exists.
+returns controlled versioned files for a separate `kegg-ko-analysis` stage.
 
 ### Optional companion lifecycle
 
-The companion route was reviewed in five states:
+The `deepkoala-annotation` route was reviewed in four states:
 
-- **Absent:** the Skill routes to another independent annotation MCP and never sends FASTA to the
-  core server.
+- **Absent:** the Skill returns an actionable deployment result and never sends FASTA to the core
+  server or calls another MCP.
 - **Not ready:** the Skill reports the bounded structural status and stops without installing,
   downloading, or repairing dependencies.
-- **Prepared:** the Skill presents the returned CPU execution notice without starting inference.
-- **Confirmed:** only explicit user confirmation permits submission of the opaque job identifier;
-  no workflow or artifact digest is requested.
-- **Successful:** the Skill passes the controlled absolute detailed-CSV path and readable source
-  provenance to the core importer, which remains the sole normalization authority.
+- **Ready:** one explicit annotation request permits one `run_deepkoala_job` call; no second
+  confirmation, acknowledgement field, workflow digest, or artifact digest is requested.
+- **Successful:** the Skill returns the controlled absolute detailed-CSV path and readable source
+  provenance for a separate core-analysis stage, which remains the sole normalization authority.
+  When a shared allowed filesystem root is unavailable, it returns only the companion's bounded
+  resource pages for adapter reconstruction.
 
 Companion route check: passed. The instructions do not contain an annotator command, subprocess
 implementation, model management, output parser, or duplicate decision policy.
@@ -105,16 +105,16 @@ is available.
 Observed route: passed. The Skill follows the explicit no-guessing boundary and does not fabricate
 an MCP result.
 
-## Visualization extension forward review
+## Rendering Skill forward review
 
-The visualization review used the exact tracked `kegg-visualization` instructions, its five
-references, the amended `kegg-ko-analysis` instructions, and the actual six-tool renderer surface.
-All nine routes passed:
+The rendering review used the tracked `kegg-pathway-rendering` instructions and its focused
+references. The rendering Skill depends only on `kegg-render-mcp`; analysis and annotation are
+separate preceding Skills that deliver stable files. All focused routes passed:
 
 | Prompt class | Expected route and boundary | Result |
 | --- | --- | --- |
-| Protein FASTA to pathway graphic | Use `deepkoala-mcp -> kegg-mcp -> kegg-render-mcp`; retain the annotation job until the complete version 2 bundle exists. | Passed |
-| Existing K numbers | Skip annotation, request an allowed core output directory, and render the resulting handoff. | Passed |
+| Protein FASTA to pathway graphic | Route annotation, KO analysis, and rendering through three independent Skills and stable files; never create an umbrella multi-server workflow. | Passed |
+| Existing K numbers | Route first to core analysis for a version 2 handoff, then invoke the rendering Skill separately. | Passed |
 | Existing version 2 handoff | Skip annotation and analysis; let the renderer validate and render the unchanged handoff. | Passed |
 | Renderer unavailable | Stop with the deployment result; do not synthesize a fallback image or install another tool. | Passed |
 | Version 1 handoff | Request a new core analysis bundle because preview-only input cannot be upgraded losslessly. | Passed |
@@ -129,7 +129,7 @@ manipulation, endpoint configuration, or resource-URI construction logic.
 
 ## Limitations and release use
 
-This record covers the current core, companion, and visualization contracts. It used no live KEGG
+This record covers the current core, annotation, and rendering contracts. It used no live KEGG
 request, did not execute DeepKOALA, and used no real KEGG PNG or KGML payload. It did not
 benchmark model-to-model variability, malicious prompt injection, long-context degradation,
 client-specific tool selection, or external annotator compatibility. Releases must repeat the

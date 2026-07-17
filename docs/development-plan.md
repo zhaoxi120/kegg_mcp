@@ -21,11 +21,11 @@ remain unchanged.
   Private result identifiers remain same-session optimizations.
 - `PathwaySpec` infers and validates namespace, canonicalizes omitted `map` input to `ko`, and
   de-duplicates paired views by pathway number. GET cache reuse is entry-level.
-- The repository Skill is `kegg-ko-analysis`. It normally orchestrates the core MCP for existing
-  KO evidence and may also orchestrate an explicitly installed optional DeepKOALA companion for
-  FASTA input. The companion is an independent distribution and process, even when maintained in
-  this repository. Its subprocess and model lifecycle never enter the core package or Skill code;
-  pathway rendering remains an independent MCP and Skill.
+- The repository provides three independent Skills with one MCP dependency each:
+  `kegg-ko-analysis` uses the core server for existing KO evidence, `deepkoala-annotation` uses the
+  optional DeepKOALA companion for protein FASTA, and `kegg-pathway-rendering` uses the renderer.
+  Stable versioned files are the default boundary between Skills; no umbrella Skill coordinates
+  multiple servers or implements their domain logic.
 - The server includes `probe_kegg_connectivity`, returns field-level validation details, and can
   write a concise versioned output bundle beneath configured allowed roots.
 - Local tests skip live KEGG access by default. Pull-request CI runs one serialized 120-request live
@@ -39,7 +39,7 @@ MCP process boundary:
 
 - `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently installed local stdio
   processes;
-- the renderer requires `kegg-mcp>=0.3,<0.4`, and incompatible core packages must fail dependency
+- the renderer requires `kegg-mcp>=0.4,<0.5`, and incompatible core packages must fail dependency
   resolution;
 - the core produces the immutable, complete-within-limit `render_input.json` version 2 handoff and
   never parses KGML or renders an image;
@@ -49,7 +49,8 @@ MCP process boundary:
   normalizing annotations or recomputing analysis;
 - the renderer uses the core package's typed single-pathway PNG/KGML asset interface rather than
   copying KEGG access code or accepting arbitrary URLs;
-- `kegg-visualization` remains instruction-only and orchestrates the typed core and renderer tools;
+- `kegg-pathway-rendering` consumes an existing typed renderer handoff and depends only on
+  `kegg-render-mcp`;
   and
 - renderer CI, fixtures, and distribution audits are synthetic and offline. Real KEGG source
   assets remain local, and distributing rendered derivatives requires a separate rights review.
@@ -77,10 +78,10 @@ boundaries:
 
 The assigned post-MVP workflow optimization adds these compatible requirements:
 
-- protein FASTA without KO evidence always routes first to discovered local `deepkoala-mcp`; an
-  absent or unready local runtime requires explicit installation or repair permission, and the
-  GenomeNet DeepKOALA web form is never an automation fallback; a ready deployment automatically
-  prepares, submits, and polls the local job without a per-job confirmation field;
+- protein FASTA without KO evidence routes to `deepkoala-annotation`; an absent or unready local
+  runtime requires explicit installation or repair permission, and the GenomeNet DeepKOALA web
+  form is never an automation fallback. An explicit annotation request calls
+  `run_deepkoala_job` once without a second confirmation and polls the returned job identifier;
 - `analyze_ko_annotations` accepts optional server-side `pathway_selection`, ranks canonical
   pathways by unique K numbers selected under the requested evidence mode, uses pathway ID as the
   stable tie-breaker, and loads denominator/metadata references only for the selected Top-N;
@@ -106,7 +107,7 @@ The assigned post-MVP workflow optimization adds these compatible requirements:
 10. [Pathway coverage](#10-pathway-coverage)
 11. [KO-set comparison](#11-ko-set-comparison)
 12. [MCP surface](#12-mcp-surface)
-13. [Codex Skill](#13-codex-skill)
+13. [Codex Skills](#13-codex-skills)
 14. [DeepKOALA guidance](#14-deepkoala-guidance)
 15. [Reporting and provenance](#15-reporting-and-provenance)
 16. [Errors, security, and privacy](#16-errors-security-and-privacy)
@@ -119,7 +120,9 @@ The assigned post-MVP workflow optimization adds these compatible requirements:
 
 ## 1. Executive decision
 
-The original proposal has a sound product boundary and a sensible local-stdio architecture. It should proceed as one repository containing a reusable Python core, a stdio MCP server, a repository-scoped Codex Skill, tests, and user documentation.
+The original proposal has a sound product boundary and a sensible local-stdio architecture. It
+should proceed as one repository containing a reusable Python core, three focused stdio MCP
+servers, three repository-scoped Codex Skills, tests, and user documentation.
 
 It was not ready to serve as an implementation specification without revision. The largest gaps were not cosmetic: they affected KEGG usage rights, rate limiting, module semantics, pathway denominators, multiple KO assignments per sequence, DeepKOALA decision mapping, large MCP results, and duplication between the Skill and the core library.
 
@@ -211,9 +214,10 @@ No sequence-annotation guidance should be shown unless requested.
 1. Do not send FASTA to the core MCP because KO evidence is not yet available.
 2. Discover an explicitly configured local DeepKOALA companion or route annotation to another
    independent annotation Skill and MCP.
-3. If the companion is available, prepare a bounded CPU job and require explicit confirmation
-   before submission.
-4. Resume Workflow B from its controlled detailed CSV path and returned source provenance.
+3. If the companion is ready and the user explicitly requested annotation, call
+   `run_deepkoala_job` once and poll bounded status without a second confirmation.
+4. Resume Workflow B from the stable detailed CSV path and returned source provenance. Use the
+   bounded companion resource only when the two clients do not share an allowed filesystem root.
 
 The core MCP server must not execute the annotator. The Skill may orchestrate the companion's
 public lifecycle tools but must not implement inference, subprocess control, weight management, or
@@ -249,7 +253,7 @@ normalization.
 - Deterministic comparison of two or more KO sets.
 - JSON-compatible structured results and Markdown summaries.
 - stdio MCP transport.
-- One repository-scoped Codex Skill with workflow and interpretation references.
+- Three repository-scoped Codex Skills with single-server dependencies and focused references.
 - Local cache and explicit cache-only reuse of previously retrieved entries.
 
 ### 5.2 Explicitly outside the MVP
@@ -334,7 +338,12 @@ kegg-mcp/
         │   ├── agents/
         │   │   └── openai.yaml
         │   └── references/
-        └── kegg-visualization/
+        ├── deepkoala-annotation/
+        │   ├── SKILL.md
+        │   ├── agents/
+        │   │   └── openai.yaml
+        │   └── references/
+        └── kegg-pathway-rendering/
             ├── SKILL.md
             ├── agents/
             │   └── openai.yaml
@@ -698,23 +707,27 @@ Primary one-call workflow.
 
 Inputs:
 
-- inline KO text or annotation records;
+- bounded inline table text or a controlled absolute annotation-file path;
 - source format or explicit column mapping;
 - dataset context;
 - requested modules and/or pathways;
 - evidence modes;
-- cache policy; and
-- output preview limits.
+- optional bounded automatic pathway selection; and
+- an optional allowed output directory.
 
 Output:
 
-- import summary;
-- analysis summary;
-- warnings;
-- bounded previews;
-- provenance;
-- `result_id`; and
-- resource links for full structured results.
+- retained-result and artifact metadata;
+- a compact record, KO, request/cache, warning, and caveat summary;
+- bounded MODULE and pathway previews;
+- a bounded automatic-pathway-selection summary when applicable;
+- optional output-bundle metadata; and
+- resource links for the full retained structured result.
+
+The direct model excludes annotation provenance, KEGG batch provenance, execution parameters, and
+stage metrics. The retained `structured` JSON is authoritative for those details. The narrower
+MODULE and pathway tools use separate preview-specific direct models and keep their full details in
+retained `detail` JSON artifacts.
 
 This tool orchestrates existing service functions; it must not contain separate analysis logic.
 
@@ -724,7 +737,10 @@ Normalize a plain KO list or annotation table and return counts, warnings, a pre
 
 #### `get_kegg_entries`
 
-Retrieve a bounded set of supported KEGG entries. Validate database/identifier compatibility, batch `get` requests at ten entries, and never behave as an arbitrary URL proxy.
+Retrieve a bounded set of supported KEGG entries. Validate database/identifier compatibility,
+batch `get` requests at ten entries, and never behave as an arbitrary URL proxy. Report the total
+retrieval-batch count while limiting direct provenance to five records with an explicit truncation
+flag; retain the complete provenance sequence in the scoped detail artifact.
 
 #### `map_ko_ids`
 
@@ -742,9 +758,24 @@ Compute KO coverage for selected pathways under an explicit namespace and denomi
 
 Compare stored or inline datasets using compatible policy and KEGG provenance.
 
+#### `probe_kegg_connectivity`
+
+Make one explicit low-cost INFO preflight and classify network or deployment failures before a
+network-dependent analysis.
+
+#### `list_analysis_results`
+
+List one bounded metadata page of active results owned by the current stdio scope.
+
+#### `delete_analysis_result`
+
+Delete one active result owned by the current stdio scope without revealing other scopes.
+
 #### `get_server_status`
 
-Return server version, transport, supported formats, tool capabilities, access state, redacted cache status, KEGG eligibility configuration, and connectivity. Do not reveal secrets or full local paths.
+Return server version, transport, supported formats, tool capabilities, access state, redacted
+cache configuration, KEGG eligibility configuration, and `not_probed` connectivity state. Do not
+probe the network or reveal secrets or full local paths.
 
 ### 12.4 Resources and result lifecycle
 
@@ -760,6 +791,7 @@ Resource templates:
 ```text
 ko-analysis://results/{result_id}
 ko-analysis://results/{result_id}/{section}
+ko-analysis://results/{result_id}/{section}/{offset}/{limit}
 kegg-cache://entries/{database}/{identifier}
 ```
 
@@ -775,73 +807,45 @@ Requirements:
 
 MCP Prompts are not part of the MVP because workflow instructions belong in the Skill.
 
-## 13. Codex Skill
+## 13. Codex Skills
 
-### 13.1 Location and contents
+### 13.1 Locations and dependency boundary
 
-Use the repository-scoped location:
+The repository contains three instruction-only Skills:
 
 ```text
-.agents/skills/kegg-ko-analysis/
-├── SKILL.md
-├── agents/
-│   └── openai.yaml
-└── references/
-    ├── workflow-selection.md
-    ├── deepkoala-companion.md
-    ├── confidence-policy.md
-    ├── module-interpretation.md
-    └── reporting-policy.md
+.agents/skills/
+├── deepkoala-annotation/     # depends only on deepkoala-mcp
+├── kegg-ko-analysis/         # depends only on kegg-mcp
+└── kegg-pathway-rendering/   # depends only on kegg-render-mcp
 ```
 
-The Skill remains instruction-only. Do not add `scripts/normalize_ko_table.py`, annotator launch
-scripts, or model-management code; normalization belongs in the tested core MCP and external
-execution belongs in the companion process.
+Each directory contains `SKILL.md`, `agents/openai.yaml`, and focused references. No Skill may
+depend on multiple servers, implement subprocess/HTTP/parser/normalization/rendering logic, or act
+as an umbrella workflow. Named versioned files in user-selected output directories connect stages.
 
-### 13.2 Trigger contract
+### 13.2 Trigger and responsibility contracts
 
-The `SKILL.md` description must include both positive triggers and boundaries. It should cover users who provide:
+- `deepkoala-annotation` handles protein FASTA annotation only. After an explicit annotation
+  request and a ready deployment, it calls `run_deepkoala_job` once, polls bounded status, and
+  returns `deepkoala_annotations.csv` plus its run report and source provenance. It never asks for
+  a second confirmation or implements inference.
+- `kegg-ko-analysis` handles existing K numbers and annotation tables, MODULE/pathway analysis,
+  metabolic reconstruction questions, and deterministic KO-set comparison. It delegates all
+  parsing and normalization to the core, explains strict versus lenient evidence, separates exact
+  MODULE completion from block coverage, and never guesses a KO from a name.
+- `kegg-pathway-rendering` accepts an existing compatible renderer handoff and delegates static
+  SVG/PNG generation to the renderer. It never runs annotation or biological analysis.
 
-- K numbers or KO annotation tables;
-- KEGG modules or pathways;
-- metabolic reconstruction questions;
-- multiple KO sets for descriptive comparison; or
-- an explicit request to use an available local DeepKOALA companion before KO analysis.
+All three Skills stop with an actionable deployment result when their one declared MCP dependency
+is absent or unready. Private job and result identifiers remain same-process optimizations; Skills
+do not use them as cross-stage contracts or request workflow hashes.
 
-It must not implement protein inference, launch arbitrary annotation subprocesses, manage model
-weights, duplicate normalization, render pathways, or perform general gene-expression analysis,
-nucleotide assembly, sequence alignment, statistical enrichment, or non-KEGG ontology analysis.
-It may call the explicit tools of a separately installed companion; all execution and lifecycle
-controls remain inside that MCP process.
+### 13.3 Skill metadata and validation
 
-### 13.3 Skill responsibilities
-
-- Identify the user's current data type and analysis unit.
-- Avoid asking questions that can be answered from the input.
-- For protein input without KO assignments, discover an explicitly configured companion or route
-  to another independent annotation Skill and MCP.
-- When the companion is ready, prepare a bounded CPU job, present the execution notice, require
-  explicit confirmation, submit the opaque job identifier, and poll bounded status.
-- Resume core analysis from the companion's controlled detailed-CSV path and readable provenance.
-  Do not copy private result identifiers, request or verify workflow hashes, or normalize output in
-  the Skill.
-- Call the high-level MCP tool for common workflows and primitives for advanced workflows.
-- Explain strict versus lenient evidence.
-- Distinguish module completion from pathway coverage.
-- Surface provenance, stale-cache state, and biological limitations.
-- Never guess a KO from a protein or gene name.
-
-### 13.4 Skill metadata
-
-Add `agents/openai.yaml` during the Skill milestone with:
-
-- a user-facing display name;
-- a concise description;
-- a default prompt;
-- implicit invocation enabled unless testing shows excessive false positives; and
-- an MCP dependency declaration that matches the actual server name and transport configuration.
-
-Generate and validate the Skill using the current official Skill tooling at implementation time.
+Every `agents/openai.yaml` declares one matching local stdio dependency, a user-facing name, a
+concise description, a default prompt, and explicit invocation policy. Generate and validate each
+Skill with the current official Skill tooling and retain deterministic routing/boundary tests.
 
 ## 14. DeepKOALA guidance
 
@@ -855,9 +859,9 @@ The companion never becomes a core dependency. It accepts an existing operator-c
 DeepKOALA checkout and PyTorch interpreter, fixes `--device auto`, inherits the server's existing
 accelerator visibility, uses a small CPU thread-pool limit and zero data-loader workers, runs one
 job at a time with fixed arguments and bounded files, and never downloads or replaces code,
-weights, or databases. A prepare step returns a readable non-blocking execution notice; submission
-accepts only the server-held opaque job identifier. Workflow and artifact hashes are not part of
-this contract.
+weights, or databases. One atomic run request validates the allowed FASTA and new output directory,
+performs runtime preflight, and starts the job; callers then poll the opaque process-scoped job
+identifier. Workflow and artifact hashes are not part of this contract.
 
 ### 14.1 Documentation-derived baseline
 
@@ -1230,14 +1234,14 @@ Acceptance:
 
 ### Milestone 5: services, result store, and reporting
 
-Status as of 2026-07-14: typed MODULE and pathway reference loading, the bounded plain-KO
-one-call analysis service, deterministic structured JSON/Markdown/annotation CSV artifacts, and a
+Status as of 2026-07-14: typed MODULE and pathway reference loading, the bounded high-level KO
+analysis service, deterministic structured JSON/Markdown/annotation CSV artifacts, and a
 scope-isolated SQLite result store are implemented and locally verified with synthetic
 tests. The store defaults to 24-hour retention, a 512 MiB logical artifact-payload quota, a 640 MiB
 main-database page cap, and a 10,000-result cap; it supports bounded metadata pagination, artifact
 byte-range reads, explicit deletion, and cleanup without silently evicting active cross-scope
 results. Stored structured reports retain typed one-call execution parameters and producer,
-renderer, retrieval, parser, and analysis provenance. Plain-KO requests reject organism-specific
+renderer, retrieval, parser, and analysis provenance. KO-only requests reject organism-specific
 pathway references. No MCP transport, resource URI, live KEGG test, or Codex Skill is included.
 Milestone 5 is complete.
 
@@ -1258,7 +1262,7 @@ Acceptance:
 
 ### Milestone 6: MCP server
 
-Status as of 2026-07-15: the local stdio server, all nine approved tools, explicit input/output
+Status as of 2026-07-17: the local stdio server, all eleven approved tools, explicit input/output
 schemas, structured success and repairable-error envelopes, tool annotations, fixed status/cache
 resources, and four validated resource templates are implemented and locally verified with
 injected contract tests. Each stdio process generates one opaque result scope. Large sections use
@@ -1283,15 +1287,12 @@ Acceptance:
 - resource URIs are validated and scoped; and
 - status output is useful without leaking local secrets.
 
-### Milestone 7: Codex Skill
+### Milestone 7: Codex Skills
 
-Status as of 2026-07-15: the instruction-only `kegg-ko-analysis` repository-scoped Skill, focused workflow and
-interpretation references, real `kegg-mcp` stdio dependency metadata, and the six required routing
-and refusal cases are implemented. Deterministic static contract tests validate the instruction
-artifacts, and a separate recorded forward/manual review passed all six prompts; CI does not
-execute the Skill through a language model. The Skill delegates normalization and deterministic
-analysis to MCP tools, skips annotation guidance when K numbers already exist, and never guesses a
-KO from a name or sequence. Milestone 7 is complete.
+Status as of 2026-07-17: three instruction-only repository Skills each declare exactly one MCP
+dependency. Focused references and deterministic tests cover annotation execution, KO analysis,
+and static rendering without embedding server logic. A recorded forward/manual review supplements
+the static tests; CI does not execute a Skill through a language model. Milestone 7 is complete.
 
 Tasks:
 
@@ -1303,7 +1304,7 @@ Tasks:
 
 Acceptance:
 
-- the six evaluation prompts route correctly;
+- the evaluation prompts route correctly across all three Skills;
 - the Skill skips annotation guidance for KO inputs;
 - it never guesses KOs from names;
 - it routes protein FASTA and pathway rendering to independent Skills without embedding those
@@ -1384,7 +1385,7 @@ Acceptance additionally requires:
 24. Scaffold the stdio MCP server and status tool.
 25. Implement MCP tool schemas, annotations, and resources.
 26. Add MCP contract and stdout-cleanliness tests.
-27. Initialize and write the repository-scoped Codex Skill.
+27. Initialize and write the three focused repository-scoped Codex Skills.
 28. Write focused KO confidence, MODULE/pathway interpretation, and reporting references.
 29. Add synthetic end-to-end examples.
 30. Complete release, security, and data-rights review.
@@ -1394,7 +1395,7 @@ Acceptance additionally requires:
 34. Correct DeepKOALA original-input and generated-artifact provenance.
 35. Implement the renderer domain, scene, SVG/PNG, and artifact-retention layers.
 36. Implement the renderer MCP tools, resources, schemas, scope, and stdio contracts.
-37. Add the visualization Skill and cross-Skill handoff evaluation.
+37. Add `kegg-pathway-rendering` and cross-Skill file-handoff evaluation.
 38. Complete synthetic end-to-end, distribution, documentation, and release-readiness checks.
 
 Each issue should normally touch one layer or one contract. Cross-layer changes require an explicit integration issue.
@@ -1459,12 +1460,12 @@ The implementation milestones resolved the original open decisions as follows:
 9. **Python compatibility:** the current distributions support and are tested only on Linux with
    Python 3.11.x; package metadata excludes Python 3.12 and later, and macOS and Windows are not
    release-supported.
-10. **Server and Skill identity:** the stdio server name, console command, and Skill MCP dependency
-    value are `kegg-mcp`; the focused Skill name is `kegg-ko-analysis`.
+10. **Server and Skill identity:** the stdio server name and console command are `kegg-mcp`;
+    `kegg-ko-analysis` depends only on that server. `deepkoala-annotation` depends only on
+    `deepkoala-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`.
 11. **Visualization boundary:** the renderer command and MCP dependency value are
-    `kegg-render-mcp`; `kegg-visualization` orchestrates it from a compatible version 2 core
-    handoff. The three servers remain independent stdio processes and independently reviewed
-    distributions.
+    `kegg-render-mcp`; `kegg-pathway-rendering` consumes a compatible version 2 core handoff. The
+    three servers remain independent stdio processes and independently reviewed distributions.
 
 ## 22. Primary references
 

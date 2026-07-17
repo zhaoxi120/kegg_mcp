@@ -224,6 +224,66 @@ def test_result_and_artifact_listing_are_paginated_with_explicit_totals(
     assert artifact_page_two.next_offset is None
 
 
+def test_result_listing_does_not_create_a_missing_store(tmp_path: Path) -> None:
+    parent = tmp_path / "missing"
+    store = SQLiteResultStore(parent / "store.sqlite3")
+
+    page = store.list_results("scope", offset=7, limit=3, now=_NOW)
+
+    assert page.items == ()
+    assert page.total_items == 0
+    assert page.offset == 7
+    assert page.limit == 3
+    assert page.next_offset is None
+    assert not parent.exists()
+
+
+def test_result_reads_do_not_create_a_missing_store(tmp_path: Path) -> None:
+    parent = tmp_path / "missing-reads"
+    store = SQLiteResultStore(parent / "store.sqlite3")
+    result_id = "res_" + "a" * 32
+    operations = (
+        lambda: store.get_result("scope", result_id, now=_NOW),
+        lambda: store.list_artifacts("scope", result_id, now=_NOW),
+        lambda: store.read_artifact("scope", result_id, "summary.json", now=_NOW),
+    )
+
+    for operation in operations:
+        with pytest.raises(KeggMcpError) as error:
+            operation()
+        _assert_not_found(error, result_id)
+    assert not parent.exists()
+
+
+class _ReadOnlyAccessStore(SQLiteResultStore):
+    def _connect(self) -> sqlite3.Connection:
+        raise AssertionError("result read requested a writable connection")
+
+
+def test_result_reads_use_read_only_connections_for_an_existing_store(tmp_path: Path) -> None:
+    path = tmp_path / "store.sqlite3"
+    created = SQLiteResultStore(path).create(
+        "scope",
+        (_artifact("summary.json", b"safe"),),
+        now=_NOW,
+    )
+    before = path.stat()
+    store = _ReadOnlyAccessStore(path)
+
+    result = store.get_result("scope", created.result_id, now=_NOW)
+    page = store.list_results("scope", now=_NOW)
+    artifacts = store.list_artifacts("scope", created.result_id, now=_NOW)
+    content = store.read_artifact("scope", created.result_id, "summary.json", now=_NOW)
+
+    after = path.stat()
+    assert result == created
+    assert len(page.items) == 1
+    assert tuple(item.section for item in artifacts.items) == ("summary.json",)
+    assert content.content == b"safe"
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert stat.S_IMODE(after.st_mode) == stat.S_IMODE(before.st_mode)
+
+
 def test_artifact_range_reads_reconstruct_content_and_bound_each_chunk(tmp_path: Path) -> None:
     limits = ResultStoreLimits(default_range_bytes=3, max_range_bytes=3)
     store = SQLiteResultStore(tmp_path / "store.sqlite3", limits=limits)

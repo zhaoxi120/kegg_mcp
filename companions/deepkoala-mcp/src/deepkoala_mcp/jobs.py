@@ -1,5 +1,3 @@
-"""Single-record local job lifecycle for the DeepKOALA companion."""
-
 from __future__ import annotations
 
 import asyncio
@@ -8,113 +6,133 @@ import os
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, NoReturn, Protocol
 
 from deepkoala_mcp import __version__
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.contracts import (
+    ANNOTATIONS_FILENAME,
+    MAX_RESOURCE_PAGE_BYTES,
+    MAX_RETAINED_JOBS,
+    RUN_REPORT_FILENAME,
     CompanionStatus,
     DeleteDeepKoalaJobResult,
     ErrorCode,
-    ExecutionNotice,
     ExecutionPlan,
+    FastaSummary,
     GetDeepKoalaJobResult,
     ImportHandoff,
     JobState,
     JobSummary,
-    PrepareDeepKoalaInput,
-    PrepareDeepKoalaResult,
-    SourceMetadataField,
-    SourceProvenance,
+    RunDeepKoalaInput,
+    RunDeepKoalaResult,
     fail,
 )
 from deepkoala_mcp.fasta import (
-    INPUT_FILENAME,
     FastaLimitError,
     FastaValidationError,
     InputPathError,
     stage_fasta,
 )
 from deepkoala_mcp.installation import (
+    Installation,
     InstallationError,
+    RuntimeProbeResult,
     fail_installation,
     inspect_installation,
+    probe_runtime_async,
     select_installation,
 )
 from deepkoala_mcp.job_storage import (
+    ArtifactSlice,
+    ControlledOutputDirectory,
+    OutputAlreadyExistsError,
+    OutputPathError,
+    OutputValidationError,
     acquire_state_root,
+    artifact_size,
     cleanup_abandoned_sessions,
+    cleanup_output_directory,
+    close_output_directory,
+    create_output_directory,
+    publish_artifacts,
+    read_artifact_slice,
     release_state_root,
     remove_job_directory,
     remove_session_directory,
-    validate_output,
+    validate_delivered_artifacts,
 )
+from deepkoala_mcp.reporting import build_handoff, build_run_report
 from deepkoala_mcp.runner import (
-    OUTPUT_FILENAME,
     DeepKoalaProcessRunner,
     ProcessOutcome,
     RunnerPlan,
     RunnerTimedOutError,
 )
-from deepkoala_mcp.scheduler import JobScheduler
 
+ArtifactName = Literal["annotations", "report"]
 _TERMINAL = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED, JobState.TIMED_OUT})
 
 
 class Runner(Protocol):
-    """Small injectable boundary used by offline job-manager tests."""
-
     async def run(self, plan: RunnerPlan) -> ProcessOutcome: ...
+
+
+class RuntimeProbe(Protocol):
+    def __call__(
+        self,
+        *,
+        checkout: Path,
+        python_executable: Path,
+        cpu_threads: int,
+    ) -> RuntimeProbeResult: ...
 
 
 @dataclass(slots=True)
 class _JobRecord:
     job_id: str
     directory: Path
-    notice: ExecutionNotice
-    prepared_at: datetime
-    expires_at: datetime
+    output_directory: ControlledOutputDirectory
+    input_path: Path
     source_version: str
-    original_input_path: str | None
-    state: JobState = JobState.PREPARED
-    submitted_at: datetime | None = None
-    started_at: datetime | None = None
+    plan: ExecutionPlan
+    fasta: FastaSummary
+    started_at: datetime
+    state: JobState = JobState.RUNNING
     completed_at: datetime | None = None
     exit_code: int | None = None
     failure_reason: str | None = None
     correlation_id: str | None = None
     output_bytes: int | None = None
+    handoff: ImportHandoff | None = None
     task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
 
 
 class DeepKoalaJobManager:
-    """Own one bounded local runner, one queue, and one opaque job namespace."""
-
     def __init__(
         self,
         config: DeepKoalaRuntimeConfig,
         *,
         runner: Runner | None = None,
+        runtime_probe: RuntimeProbe | None = None,
     ) -> None:
         self.config = config
         self._runner = runner or DeepKoalaProcessRunner()
+        self._runtime_probe = runtime_probe
         self._lifecycle_lock = asyncio.Lock()
+        self._run_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
-        self._prepare_lock = asyncio.Lock()
         self._jobs: dict[str, _JobRecord] = {}
-        self._scheduler = JobScheduler(config.max_queue_size)
         self._session_directory: Path | None = None
         self._state_directory_fd: int | None = None
         self._state_lock_fd: int | None = None
-        self._sweeper: asyncio.Task[None] | None = None
         self._opened = False
         self._closing = False
 
     async def open(self) -> None:
-        """Acquire one deployment scope and create a private process session."""
         async with self._lifecycle_lock:
             if self._opened:
                 return
@@ -133,120 +151,66 @@ class DeepKoalaJobManager:
             self._state_lock_fd = lock_fd
             self._opened = True
             self._closing = False
-            self._sweeper = asyncio.create_task(self._sweep_expired())
 
     async def close(self) -> None:
-        """Cancel the owned child and remove the complete process scope."""
         async with self._lifecycle_lock:
-            await self._close_owned_state()
-
-    async def _close_owned_state(self) -> None:
-        async with self._lock:
-            if not self._opened:
-                return
-            self._closing = True
-            active: list[asyncio.Task[None]] = []
-            for record in self._jobs.values():
-                task = record.task
-                if task is None or task.done():
-                    continue
-                active.append(task)
-                if not record.cancel_requested:
-                    record.cancel_requested = True
-                    task.cancel()
-            tasks = tuple(active)
-            sweeper = self._sweeper
-            if sweeper is not None:
-                sweeper.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if sweeper is not None:
-            await asyncio.gather(sweeper, return_exceptions=True)
-        async with self._prepare_lock:
+            async with self._lock:
+                if not self._opened:
+                    return
+                self._closing = True
+                tasks = tuple(
+                    record.task
+                    for record in self._jobs.values()
+                    if record.task is not None and not record.task.done()
+                )
+                for record in self._jobs.values():
+                    if record.task is not None and not record.task.done():
+                        record.cancel_requested = True
+                        record.task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            async with self._lock:
+                for record in self._jobs.values():
+                    close_output_directory(record.output_directory)
             session = self._session_directory
             if session is not None:
                 try:
                     remove_session_directory(session)
-                except (OSError, ValueError) as error:
-                    self._sweeper = None
+                except (OSError, ValueError, OutputValidationError) as error:
                     raise RuntimeError("private session cleanup failed") from error
-        state_directory_fd = self._state_directory_fd
-        state_lock_fd = self._state_lock_fd
-        if state_directory_fd is None or state_lock_fd is None:
-            raise RuntimeError("state-root lease is unavailable during close")
-        release_state_root(state_directory_fd, state_lock_fd)
-        async with self._lock:
-            self._jobs.clear()
-            self._scheduler.clear()
-            self._session_directory = None
-            self._state_directory_fd = None
-            self._state_lock_fd = None
-            self._sweeper = None
-            self._opened = False
-            self._closing = False
-
-    async def prepare(self, request: PrepareDeepKoalaInput) -> PrepareDeepKoalaResult:
-        """Stage one FASTA and return an execution notice without launching DeepKOALA."""
-        self._require_open()
-        await self._cleanup_expired()
-        async with self._prepare_lock:
-            self._require_open()
+            directory_fd = self._state_directory_fd
+            lock_fd = self._state_lock_fd
+            if directory_fd is None or lock_fd is None:
+                raise RuntimeError("state-root lease is unavailable during close")
+            release_state_root(directory_fd, lock_fd)
             async with self._lock:
-                self._require_capacity_locked()
-                queued_ahead = self._scheduler.queued_count
-            session = self._session_directory
-            if session is None:
-                raise RuntimeError("job manager has no session")
-            job_id = f"job_{secrets.token_hex(16)}"
-            directory = session / job_id
-            directory.mkdir(mode=0o700)
-            os.chmod(directory, 0o700)
-            try:
-                staged = stage_fasta(
-                    fasta_text=request.fasta_text,
-                    fasta_path=request.fasta_path,
-                    allowed_roots=self.config.allowed_roots,
-                    job_directory=directory,
-                )
-                installation = select_installation(
-                    self.config.checkout,
-                    request.model,
-                    request.model_date,
-                )
-            except FastaLimitError:
-                remove_job_directory(directory, session)
-                fail(
-                    ErrorCode.INPUT_LIMIT_EXCEEDED,
-                    "The protein FASTA exceeds a hard companion limit.",
-                    suggested_action="Reduce the FASTA to the documented input bounds.",
-                )
-            except FastaValidationError:
-                remove_job_directory(directory, session)
-                fail(
-                    ErrorCode.INVALID_FASTA,
-                    "The supplied input is not an accepted protein FASTA.",
-                    suggested_action="Correct the FASTA syntax and protein residues.",
-                )
-            except InputPathError:
-                remove_job_directory(directory, session)
-                fail(
-                    ErrorCode.PATH_NOT_ALLOWED,
-                    "The FASTA path is outside the configured local input boundary.",
-                    suggested_action=(
-                        "Use inline FASTA or a direct regular file under an allowed root."
-                    ),
-                )
-            except InstallationError as error:
-                remove_job_directory(directory, session)
-                fail_installation(error)
-            except OSError:
-                remove_job_directory(directory, session)
-                fail(
-                    ErrorCode.INTERNAL_ERROR,
-                    "The companion could not create private job state.",
-                    suggested_action="Check the owner-only state root and retry.",
-                )
+                self._jobs.clear()
+                self._session_directory = None
+                self._state_directory_fd = None
+                self._state_lock_fd = None
+                self._opened = False
+                self._closing = False
 
+    async def run(self, request: RunDeepKoalaInput) -> RunDeepKoalaResult:
+        self._require_open()
+        async with self._run_lock:
+            async with self._lock:
+                if self._closing:
+                    raise RuntimeError("job manager is closing")
+                if any(record.state is JobState.RUNNING for record in self._jobs.values()):
+                    fail(
+                        ErrorCode.RUNNER_BUSY,
+                        "The deployment-wide DeepKOALA runner is already active.",
+                        suggested_action="Wait for the running job to finish or cancel it.",
+                    )
+                self._prune_terminal_locked()
+            self._validate_policy(request)
+            installation = self._select_installation(request.model, request.model_date)
+            runtime = await self._probe_runtime()
+            if not runtime.runtime_ready:
+                _fail_runtime_unavailable()
+
+            timeout = request.timeout_seconds or self.config.max_timeout_seconds
             plan = ExecutionPlan(
                 model=request.model,
                 requested_model_date=request.model_date,
@@ -254,208 +218,289 @@ class DeepKoalaJobManager:
                 batch_size=request.batch_size,
                 topk=request.topk,
                 cpu_threads=self.config.cpu_threads,
-                timeout_seconds=request.timeout_seconds or self.config.default_timeout_seconds,
+                timeout_seconds=timeout,
             )
-            notice = ExecutionNotice(
-                plan=plan,
-                fasta=staged.summary,
-                deepkoala_version=installation.source_version,
-                queued_jobs_ahead=queued_ahead,
-            )
-            prepared_at = _now()
-            record = _JobRecord(
-                job_id=job_id,
-                directory=directory,
-                notice=notice,
-                prepared_at=prepared_at,
-                expires_at=prepared_at + timedelta(seconds=self.config.plan_ttl_seconds),
-                source_version=installation.source_version,
-                original_input_path=staged.original_input_path,
-            )
-            async with self._lock:
-                if self._closing:
-                    remove_job_directory(directory, session)
-                    raise RuntimeError("job manager is closing")
-                self._require_capacity_locked()
-                self._jobs[job_id] = record
-            return self._prepare_result(record)
+            job_id = f"job_{secrets.token_hex(16)}"
+            session = self._require_session()
+            directory = session / job_id
+            output_directory: ControlledOutputDirectory | None = None
+            directory_created = False
+            started = False
+            try:
+                os.mkdir(directory, mode=0o700)
+                os.chmod(directory, 0o700)
+                directory_created = True
+                staged = stage_fasta(
+                    fasta_path=request.fasta_path,
+                    input_roots=self.config.input_roots,
+                    job_directory=directory,
+                    max_bytes=self.config.max_fasta_bytes,
+                    max_sequences=self.config.max_sequences,
+                )
+                output_directory = create_output_directory(
+                    Path(request.output_directory), self.config.output_roots
+                )
+                record = _JobRecord(
+                    job_id=job_id,
+                    directory=directory,
+                    output_directory=output_directory,
+                    input_path=staged.input_path,
+                    source_version=installation.source_version,
+                    plan=plan,
+                    fasta=staged.summary,
+                    started_at=_now(),
+                )
+                async with self._lock:
+                    if self._closing:
+                        raise RuntimeError("job manager is closing")
+                    self._jobs[job_id] = record
+                    record.task = asyncio.create_task(self._execute(record))
+                    started = True
+                return RunDeepKoalaResult(
+                    job=self._summary(record),
+                    plan=record.plan,
+                    fasta=record.fasta,
+                )
+            except OutputAlreadyExistsError:
+                fail(
+                    ErrorCode.OUTPUT_ALREADY_EXISTS,
+                    "The requested output directory already exists.",
+                    suggested_action="Choose a new empty output directory for this run.",
+                )
+            except OutputPathError:
+                fail(
+                    ErrorCode.OUTPUT_NOT_ALLOWED,
+                    "The requested output directory is outside the deployment policy.",
+                    suggested_action="Choose a new directory below a configured output root.",
+                )
+            except InputPathError:
+                fail(
+                    ErrorCode.PATH_NOT_ALLOWED,
+                    "The FASTA path is unavailable or outside the deployment policy.",
+                    suggested_action="Use a direct readable file below a configured input root.",
+                )
+            except FastaLimitError:
+                fail(
+                    ErrorCode.INPUT_LIMIT_EXCEEDED,
+                    "The FASTA exceeds a configured input limit.",
+                    suggested_action=(
+                        "Split the input or ask the operator to review deployment bounds."
+                    ),
+                )
+            except FastaValidationError:
+                fail(
+                    ErrorCode.INVALID_FASTA,
+                    "The input is not a valid bounded protein FASTA.",
+                    suggested_action="Correct the protein FASTA and retry with the same path.",
+                )
+            finally:
+                if not started:
+                    async with self._lock:
+                        self._jobs.pop(job_id, None)
+                    rollback_error: Exception | None = None
+                    if output_directory is not None:
+                        try:
+                            cleanup_output_directory(output_directory)
+                        except (OSError, ValueError, OutputValidationError) as error:
+                            rollback_error = error
+                        finally:
+                            close_output_directory(output_directory)
+                    if directory_created:
+                        try:
+                            remove_job_directory(directory, session)
+                        except (OSError, ValueError) as error:
+                            rollback_error = rollback_error or error
+                    if rollback_error is not None:
+                        _raise_internal("atomic_run_rollback", rollback_error)
 
-    async def submit(self, job_id: str) -> JobSummary:
-        """Idempotently submit one server-retained prepared plan."""
+    async def get_job(self, job_id: str) -> GetDeepKoalaJobResult:
         self._require_open()
-        await self._cleanup_expired()
         async with self._lock:
             record = self._jobs.get(job_id)
             if record is None:
                 _fail_job_not_found()
-            assert record is not None
-            if record.state is not JobState.PREPARED:
-                return self._summary(record)
-            if self._scheduler.is_full:
-                fail(
-                    ErrorCode.QUEUE_FULL,
-                    "The local DeepKOALA queue is full.",
-                    suggested_action="Wait for or cancel a queued job before retrying.",
-                )
-            else:
-                record.state = JobState.QUEUED
-                record.submitted_at = _now()
-                self._scheduler.enqueue(job_id)
-                self._schedule_locked()
-                return self._summary(record)
-
-    async def get_job(self, job_id: str) -> GetDeepKoalaJobResult:
-        """Return current state and a file handoff only after success."""
-        self._require_open()
-        async with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or _record_expired(
-                record,
-                _now(),
-                self.config.retention_seconds,
-            ):
-                _fail_job_not_found()
-            assert record is not None
-            return GetDeepKoalaJobResult(
-                job=self._summary(record),
-                handoff=self._handoff(record) if record.state is JobState.SUCCEEDED else None,
-            )
+            result = GetDeepKoalaJobResult(job=self._summary(record), handoff=record.handoff)
+            if result.handoff is not None:
+                try:
+                    validate_delivered_artifacts(
+                        record.output_directory,
+                        max_output_bytes=self.config.max_output_bytes,
+                    )
+                except OutputValidationError:
+                    _fail_artifact_not_found()
+        return result
 
     async def cancel(self, job_id: str) -> JobSummary:
-        """Cancel a prepared/queued job or terminate one running process group."""
         self._require_open()
-        await self._cleanup_expired()
         task: asyncio.Task[None] | None = None
         async with self._lock:
             record = self._jobs.get(job_id)
             if record is None:
                 _fail_job_not_found()
-            assert record is not None
             if record.state is JobState.CANCELLED:
                 return self._summary(record)
-            if record.state is JobState.PREPARED:
-                record.state = JobState.CANCELLED
-                record.completed_at = _now()
-                remove_job_directory(record.directory, self._require_session())
-                return self._summary(record)
-            elif record.state is JobState.QUEUED:
-                self._scheduler.remove(job_id)
-                record.state = JobState.CANCELLED
-                record.completed_at = _now()
-                remove_job_directory(record.directory, self._require_session())
-                self._schedule_locked()
-                return self._summary(record)
-            elif record.state is JobState.RUNNING:
-                task = record.task
-                if task is not None and not record.cancel_requested:
-                    record.cancel_requested = True
-                    task.cancel()
-            else:
+            if record.state is not JobState.RUNNING:
                 fail(
                     ErrorCode.JOB_NOT_CANCELLABLE,
                     "The job is already terminal and cannot be cancelled.",
-                    suggested_action="Read or delete the terminal job instead.",
+                    suggested_action="Read or delete the terminal job record instead.",
                 )
+            task = record.task
+            if task is not None and not record.cancel_requested:
+                record.cancel_requested = True
+                task.cancel()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
         async with self._lock:
             current = self._jobs.get(job_id)
             if current is None:
                 _fail_job_not_found()
-            return self._summary(cast(_JobRecord, current))
+            return self._summary(current)
 
     async def delete(self, job_id: str) -> DeleteDeepKoalaJobResult:
-        """Delete one terminal job and its retained local files."""
         self._require_open()
-        await self._cleanup_expired()
         async with self._lock:
             record = self._jobs.get(job_id)
             if record is None:
                 _fail_job_not_found()
-            assert record is not None
             if record.state not in _TERMINAL:
                 fail(
                     ErrorCode.NOT_TERMINAL,
-                    "Only a terminal DeepKOALA job can be deleted.",
+                    "Only a terminal DeepKOALA job record can be deleted.",
                     suggested_action="Cancel the job or wait for it to finish.",
                 )
-            self._jobs.pop(job_id)
-        try:
-            remove_job_directory(record.directory, self._require_session())
-        except (OSError, ValueError):
-            async with self._lock:
-                self._jobs.setdefault(job_id, record)
-            fail(
-                ErrorCode.INTERNAL_ERROR,
-                "The terminal job directory could not be removed.",
-                suggested_action="Repair the owner-only state root and retry.",
-            )
+            removed = self._jobs.pop(job_id)
+            close_output_directory(removed.output_directory)
         return DeleteDeepKoalaJobResult(job_id=job_id)
 
     async def status(self) -> CompanionStatus:
-        """Return structural readiness without loading a model or exposing paths."""
         self._require_open()
         try:
-            version, resources = inspect_installation(self.config.checkout)
+            version, installed = inspect_installation(self.config.checkout)
+            resources = tuple(
+                item for item in installed if item.model in self.config.allowed_models
+            )
         except InstallationError:
             version, resources = None, ()
+        try:
+            runtime = await self._probe_runtime()
+        except Exception:
+            runtime = RuntimeProbeResult(runtime_ready=False, cuda_available=False)
         async with self._lock:
-            prepared = sum(record.state is JobState.PREPARED for record in self._jobs.values())
-            queued = self._scheduler.queued_count
-            running = int(self._scheduler.running_job_id is not None)
+            running = sum(record.state is JobState.RUNNING for record in self._jobs.values())
+            terminal = sum(record.state in _TERMINAL for record in self._jobs.values())
         return CompanionStatus(
             server_version=__version__,
-            ready=bool(resources),
+            ready=runtime.runtime_ready and bool(resources),
+            runtime_ready=runtime.runtime_ready,
+            cuda_available=runtime.cuda_available,
             deepkoala_version=version,
             installed_resources=resources,
+            allowed_models=self.config.allowed_models,
             cpu_threads=self.config.cpu_threads,
-            max_queue_size=self.config.max_queue_size,
-            prepared_jobs=prepared,
-            queued_jobs=queued,
             running_jobs=running,
+            terminal_jobs=terminal,
+            max_input_bytes=self.config.max_fasta_bytes,
+            max_sequences=self.config.max_sequences,
+            max_output_bytes=self.config.max_output_bytes,
+            max_timeout_seconds=self.config.max_timeout_seconds,
+            input_root_count=len(self.config.input_roots),
+            output_root_count=len(self.config.output_roots),
         )
 
-    def _schedule_locked(self) -> None:
-        if self._closing:
-            return
-        while True:
-            job_id = self._scheduler.start_next()
-            if job_id is None:
-                return
-            record = self._jobs.get(job_id)
-            if record is None or record.state is not JobState.QUEUED:
-                self._scheduler.finish(job_id)
-                continue
-            record.state = JobState.RUNNING
-            record.started_at = _now()
-            record.task = asyncio.create_task(self._execute(record))
-            return
+    async def artifact_size(self, job_id: str, artifact: ArtifactName) -> int:
+        self._require_open()
+        async with self._lock:
+            record, name, maximum = self._artifact_access_locked(job_id, artifact)
+            try:
+                return artifact_size(record.output_directory, name, max_bytes=maximum)
+            except OutputValidationError:
+                _fail_artifact_not_found()
+
+    async def read_artifact(
+        self,
+        job_id: str,
+        artifact: ArtifactName,
+        *,
+        offset: int,
+        limit: int,
+    ) -> ArtifactSlice:
+        self._require_open()
+        async with self._lock:
+            record, name, maximum = self._artifact_access_locked(job_id, artifact)
+            try:
+                return read_artifact_slice(
+                    record.output_directory,
+                    name,
+                    max_bytes=maximum,
+                    offset=offset,
+                    limit=limit,
+                )
+            except OutputValidationError:
+                _fail_artifact_not_found()
+
+    def _artifact_access_locked(
+        self,
+        job_id: str,
+        artifact: ArtifactName,
+    ) -> tuple[_JobRecord, str, int]:
+        record = self._jobs.get(job_id)
+        if record is None or record.handoff is None:
+            _fail_artifact_not_found()
+        if artifact == "annotations":
+            return record, ANNOTATIONS_FILENAME, self.config.max_output_bytes
+        return record, RUN_REPORT_FILENAME, MAX_RESOURCE_PAGE_BYTES
 
     async def _execute(self, record: _JobRecord) -> None:
         state = JobState.FAILED
-        reason: str | None = "The local DeepKOALA process or output failed safely."
+        reason: str | None = "The DeepKOALA process did not produce a usable result."
+        handoff: ImportHandoff | None = None
         output_bytes: int | None = None
-        stage = "installation_check"
+        stage = "runtime_recheck"
+        completed_at: datetime | None = None
         try:
-            installation = select_installation(
-                self.config.checkout,
-                record.notice.plan.model,
-                record.notice.plan.resolved_model_date,
+            installation = self._select_installation(
+                record.plan.model,
+                record.plan.resolved_model_date,
             )
-            record.source_version = installation.source_version
-            stage = "runner_execution"
-            outcome = await self._runner.run(self._runner_plan(record))
-            record.exit_code = outcome.return_code
-            if outcome.return_code != 0:
-                reason = "DeepKOALA exited without a successful result."
+            runtime = await self._probe_runtime()
+            if not runtime.runtime_ready:
+                reason = "The configured DeepKOALA runtime became unavailable."
             else:
-                stage = "output_validation"
-                output_path = record.directory / OUTPUT_FILENAME
-                output_bytes = validate_output(output_path)
-                stage = "private_input_cleanup"
-                (record.directory / INPUT_FILENAME).unlink()
-                state = JobState.SUCCEEDED
-                reason = None
+                record.source_version = installation.source_version
+                stage = "runner_execution"
+                outcome = await self._runner.run(self._runner_plan(record))
+                record.exit_code = outcome.return_code
+                if outcome.return_code != 0:
+                    reason = "DeepKOALA exited without a successful detailed result."
+                else:
+                    stage = "artifact_publication"
+                    completed_at = _now()
+                    annotations, report, output_bytes = publish_artifacts(
+                        raw_output=record.directory / "output.csv",
+                        output_directory=record.output_directory,
+                        report=build_run_report(
+                            input_path=record.input_path,
+                            source_version=record.source_version,
+                            plan=record.plan,
+                            fasta=record.fasta,
+                            started_at=record.started_at,
+                            completed_at=completed_at,
+                            runtime=runtime,
+                        ),
+                        max_output_bytes=self.config.max_output_bytes,
+                    )
+                    handoff = build_handoff(
+                        job_id=record.job_id,
+                        input_path=record.input_path,
+                        source_version=record.source_version,
+                        plan=record.plan,
+                        annotations_path=annotations,
+                        report_path=report,
+                        completed_at=completed_at,
+                    )
+                    state = JobState.SUCCEEDED
+                    reason = None
         except RunnerTimedOutError:
             state = JobState.TIMED_OUT
             reason = "DeepKOALA exceeded the configured execution timeout."
@@ -464,174 +509,191 @@ class DeepKoalaJobManager:
             reason = None
         except InstallationError:
             reason = "The configured DeepKOALA installation became unavailable."
+        except OutputValidationError:
+            reason = "DeepKOALA output was missing or not a valid detailed CSV."
         except Exception as error:
             reason, record.correlation_id = _record_background_failure(stage, error)
         finally:
             if state is not JobState.SUCCEEDED:
                 try:
-                    remove_job_directory(record.directory, self._require_session())
-                except (OSError, ValueError) as error:
+                    cleanup_output_directory(record.output_directory)
+                except (OSError, ValueError, OutputValidationError) as error:
                     state = JobState.FAILED
                     if record.correlation_id is None:
                         reason, record.correlation_id = _record_background_failure(
-                            "private_job_cleanup", error
+                            "stable_output_cleanup", error
                         )
+            try:
+                remove_job_directory(record.directory, self._require_session())
+            except (OSError, ValueError) as error:
+                if state is JobState.SUCCEEDED:
+                    with contextlib.suppress(OSError, ValueError, OutputValidationError):
+                        cleanup_output_directory(record.output_directory)
+                state = JobState.FAILED
+                handoff = None
+                output_bytes = None
+                if record.correlation_id is None:
+                    reason, record.correlation_id = _record_background_failure(
+                        "private_job_cleanup", error
+                    )
+            if state is not JobState.SUCCEEDED:
+                close_output_directory(record.output_directory)
+            completed_at = completed_at or _now()
             async with self._lock:
                 record.state = state
                 record.failure_reason = reason
-                record.output_bytes = output_bytes
-                record.completed_at = _now()
+                record.output_bytes = output_bytes if state is JobState.SUCCEEDED else None
+                record.handoff = handoff if state is JobState.SUCCEEDED else None
+                record.completed_at = completed_at
                 record.task = None
-                if self._scheduler.running_job_id == record.job_id:
-                    self._scheduler.finish(record.job_id)
-                self._schedule_locked()
 
-    async def _cleanup_expired(self) -> None:
-        now = _now()
-        expired: list[Path] = []
-        async with self._lock:
-            for job_id, record in tuple(self._jobs.items()):
-                if _record_expired(record, now, self.config.retention_seconds):
-                    self._jobs.pop(job_id, None)
-                    expired.append(record.directory)
-        session = self._session_directory
-        if session is not None:
-            for directory in expired:
-                with contextlib.suppress(OSError, ValueError):
-                    remove_job_directory(directory, session)
-
-    async def _sweep_expired(self) -> None:
-        interval = max(1, min(60, self.config.plan_ttl_seconds, self.config.retention_seconds))
-        while True:
-            await asyncio.sleep(interval)
-            await self._cleanup_expired()
-
-    def _require_capacity_locked(self) -> None:
-        if len(self._jobs) >= self.config.max_queue_size + 1:
+    def _validate_policy(self, request: RunDeepKoalaInput) -> None:
+        if request.model not in self.config.allowed_models:
             fail(
-                ErrorCode.QUEUE_FULL,
-                "The bounded local job capacity is full.",
-                suggested_action=(
-                    "Delete, cancel, or wait for existing jobs before preparing another."
-                ),
+                ErrorCode.POLICY_DENIED,
+                "The requested model is outside the deployment allowlist.",
+                suggested_action="Choose a model reported by runner status.",
+            )
+        if request.device not in self.config.allowed_devices:
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "The requested device policy is not allowed.",
+                suggested_action="Use the deployment-approved auto device policy.",
+            )
+        if (
+            request.timeout_seconds is not None
+            and request.timeout_seconds > self.config.max_timeout_seconds
+        ):
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "The requested timeout exceeds the deployment policy.",
+                suggested_action="Use a timeout no greater than the status-reported maximum.",
             )
 
+    def _select_installation(self, model: str, date: str) -> Installation:
+        try:
+            return select_installation(self.config.checkout, model, date)
+        except InstallationError as error:
+            fail_installation(error)
+
+    async def _probe_runtime(self) -> RuntimeProbeResult:
+        if self._runtime_probe is not None:
+            return self._runtime_probe(
+                checkout=self.config.checkout,
+                python_executable=self.config.python_executable,
+                cpu_threads=self.config.cpu_threads,
+            )
+        return await probe_runtime_async(
+            checkout=self.config.checkout,
+            python_executable=self.config.python_executable,
+            cpu_threads=self.config.cpu_threads,
+        )
+
     def _runner_plan(self, record: _JobRecord) -> RunnerPlan:
-        plan = record.notice.plan
         return RunnerPlan(
             python_executable=self.config.python_executable,
             checkout=self.config.checkout,
             job_directory=record.directory,
-            model=plan.model,
-            resolved_date=plan.resolved_model_date,
-            batch_size=plan.batch_size,
-            topk=plan.topk,
-            timeout_seconds=plan.timeout_seconds,
-            cpu_threads=plan.cpu_threads,
-        )
-
-    def _prepare_result(self, record: _JobRecord) -> PrepareDeepKoalaResult:
-        return PrepareDeepKoalaResult(
-            job_id=record.job_id,
-            prepared_at=record.prepared_at,
-            expires_at=record.expires_at,
-            notice=record.notice,
+            model=record.plan.model,
+            resolved_date=record.plan.resolved_model_date,
+            batch_size=record.plan.batch_size,
+            topk=record.plan.topk,
+            timeout_seconds=record.plan.timeout_seconds,
+            cpu_threads=record.plan.cpu_threads,
+            max_output_bytes=self.config.max_output_bytes,
         )
 
     def _summary(self, record: _JobRecord) -> JobSummary:
         return JobSummary(
             job_id=record.job_id,
             state=record.state,
-            prepared_at=record.prepared_at,
-            submitted_at=record.submitted_at,
             started_at=record.started_at,
             completed_at=record.completed_at,
             exit_code=record.exit_code,
             failure_reason=record.failure_reason,
             correlation_id=record.correlation_id,
-            output_bytes=record.output_bytes if record.state is JobState.SUCCEEDED else None,
+            output_bytes=record.output_bytes,
         )
 
-    def _handoff(self, record: _JobRecord) -> ImportHandoff:
-        if record.completed_at is None or record.state is not JobState.SUCCEEDED:
-            raise AssertionError("handoff requires a successful job")
-        plan = record.notice.plan
-        output_path = record.directory / OUTPUT_FILENAME
-        if validate_output(output_path) != record.output_bytes:
-            raise RuntimeError("retained DeepKOALA output changed after completion")
-        resolved_directory = record.directory.resolve(strict=True)
-        resolved_output = output_path.resolve(strict=True)
-        if resolved_output.parent != resolved_directory or resolved_output != output_path:
-            raise RuntimeError("retained DeepKOALA output escaped private state")
-        metadata = (
-            SourceMetadataField(name="runner_version", value=__version__),
-            SourceMetadataField(name="device_requested", value="auto"),
-            SourceMetadataField(name="detail", value=True),
-            SourceMetadataField(name="batch_size", value=plan.batch_size),
-            SourceMetadataField(name="num_workers", value=0),
-            SourceMetadataField(name="topk", value=plan.topk),
-            SourceMetadataField(name="multi", value=False),
-            SourceMetadataField(name="cpu_threads", value=plan.cpu_threads),
-        )
-        source = SourceProvenance(
-            source_version=record.source_version,
-            model_name=plan.model,
-            model_version=plan.resolved_model_date,
-            annotation_date=record.completed_at,
-            input_uri=f"mcp://deepkoala-mcp/jobs/{record.job_id}/output",
-            input_path=record.original_input_path,
-            source_metadata=metadata,
-        )
-        return ImportHandoff(output_path=str(resolved_output), source=source)
+    def _prune_terminal_locked(self) -> None:
+        while len(self._jobs) >= MAX_RETAINED_JOBS:
+            terminal = [record for record in self._jobs.values() if record.state in _TERMINAL]
+            if not terminal:
+                fail(
+                    ErrorCode.RUNNER_BUSY,
+                    "The bounded local runner state is full.",
+                    suggested_action="Wait for the active job to finish and retry.",
+                )
+            oldest = min(
+                terminal,
+                key=lambda record: record.completed_at or record.started_at,
+            )
+            removed = self._jobs.pop(oldest.job_id)
+            close_output_directory(removed.output_directory)
 
     def _require_open(self) -> None:
-        if not self._opened or self._closing:
-            raise RuntimeError("job manager is unavailable")
+        if not self._opened:
+            raise RuntimeError("job manager is not open")
 
     def _require_session(self) -> Path:
         session = self._session_directory
         if session is None:
-            raise RuntimeError("job manager has no session")
+            raise RuntimeError("private session is unavailable")
         return session
 
 
-def _fail_job_not_found() -> None:
+def _now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def _fail_runtime_unavailable() -> NoReturn:
     fail(
-        ErrorCode.JOB_NOT_FOUND,
-        "The job is unavailable in this companion process.",
-        suggested_action="Use a current job identifier or prepare a new job.",
+        ErrorCode.RUNTIME_UNAVAILABLE,
+        "The configured Python cannot import the required DeepKOALA runtime.",
+        suggested_action="Run the redacted doctor command and repair the configured environment.",
     )
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
+def _fail_job_not_found() -> NoReturn:
+    fail(
+        ErrorCode.JOB_NOT_FOUND,
+        "The process-scoped DeepKOALA job was not found.",
+        suggested_action="Use a job ID returned by this active companion process.",
+    )
 
 
-def _record_expired(record: _JobRecord, now: datetime, retention_seconds: int) -> bool:
-    if record.state is JobState.PREPARED:
-        return record.expires_at <= now
-    return (
-        record.state in _TERMINAL
-        and record.completed_at is not None
-        and record.completed_at + timedelta(seconds=retention_seconds) <= now
+def _fail_artifact_not_found() -> NoReturn:
+    fail(
+        ErrorCode.ARTIFACT_NOT_FOUND,
+        "The requested stable DeepKOALA artifact is unavailable.",
+        suggested_action=(
+            "Use the returned stable file path or rerun annotation to a new directory."
+        ),
     )
 
 
 def _record_background_failure(stage: str, error: Exception) -> tuple[str, str]:
     correlation_id = f"joberr_{secrets.token_urlsafe(9)}"
-    reasons = {
-        "installation_check": "The configured DeepKOALA installation changed during execution.",
-        "runner_execution": "The DeepKOALA process could not be started or completed safely.",
-        "output_validation": "The DeepKOALA output failed bounded validation.",
-        "private_input_cleanup": "The private staged input could not be removed safely.",
-        "private_job_cleanup": "The private failed-job state could not be removed safely.",
-    }
     print(
-        f"deepkoala-mcp background failure correlation_id={correlation_id} "
+        f"deepkoala-mcp job failure correlation_id={correlation_id} "
         f"stage={stage} type={type(error).__name__}",
         file=sys.stderr,
     )
-    return reasons.get(stage, "The local DeepKOALA job failed unexpectedly."), correlation_id
+    return "The DeepKOALA process could not be completed safely.", correlation_id
 
 
-__all__ = ["DeepKoalaJobManager", "Runner"]
+def _raise_internal(stage: str, error: Exception) -> NoReturn:
+    correlation_id = f"err_{secrets.token_urlsafe(9)}"
+    print(
+        f"deepkoala-mcp internal error correlation_id={correlation_id} "
+        f"stage={stage} type={type(error).__name__}",
+        file=sys.stderr,
+    )
+    fail(
+        ErrorCode.INTERNAL_ERROR,
+        "The companion could not roll back a partially staged local run safely.",
+        suggested_action="Check owner-only state and output directories before retrying.",
+    )
+
+
+__all__ = ["ArtifactName", "DeepKoalaJobManager"]
