@@ -18,9 +18,12 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
    [deepkoala-companion.md](references/deepkoala-companion.md). Always attempt the configured local
    `deepkoala-mcp` route first, and make `get_deepkoala_runner_status` the first annotation-tool
    call after discovery. Never open, submit to, or automate the DeepKOALA web service. If the local
-   runtime or companion is absent or unready, report the local state and ask whether to install,
-   register, or repair it. DeepKOALA execution is local-only because GenomeNet does not provide a
-   DeepKOALA API for MCP automation. Never send FASTA to the core `kegg-mcp` server.
+   runtime or companion is absent or unready, report the precise local route state and ask whether
+   to install, register, download, or repair only the missing deployment component. When the
+   companion is registered, ready, and already authorized for the supplied local FASTA, continue
+   through prepare, submit, and bounded polling without a second per-job confirmation. DeepKOALA
+   execution is local-only because GenomeNet does not provide a DeepKOALA API for MCP automation.
+   Never send FASTA to the core `kegg-mcp` server.
 5. If the user requests pathway or MODULE graphics, read
    [visualization-handoff.md](references/visualization-handoff.md). Obtain an allowed
    `output_directory` before analysis, require `render_input.json` version 2, and hand its
@@ -51,6 +54,10 @@ description: Route K numbers, KO annotation tables, KEGG module or pathway quest
   successful retrievals. Do not request or verify workflow hashes.
 - Treat companion job identifiers as opaque. The companion owns FASTA validation, execution,
   cancellation, and output bounds; the core importer remains the only normalization authority.
+- A successful `prepare_deepkoala_job` response is a non-blocking execution notice. Preserve its
+  model, resource date, device policy, bounds, and input summary in the workflow record, then call
+  `submit_deepkoala_job` with only the opaque `job_id` and poll `get_deepkoala_job` to a terminal
+  state. Do not ask for routine inference confirmation when the deployment is already ready.
 - Prefer the stable output bundle for cross-process handoff. Retrieve full retained artifacts only
   when a bounded preview is insufficient, and treat result identifiers as opaque and
   session-scoped.

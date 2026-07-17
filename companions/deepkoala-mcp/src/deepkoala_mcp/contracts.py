@@ -138,7 +138,7 @@ class JobState(StrEnum):
 
 
 class PrepareDeepKoalaInput(FrozenModel):
-    """Bounded input used to prepare, but not launch, one local CPU job."""
+    """Bounded input used to prepare, but not launch, one local job."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -183,10 +183,9 @@ class PrepareDeepKoalaInput(FrozenModel):
 
 
 class SubmitDeepKoalaInput(FrozenModel):
-    """Explicit acknowledgement for one server-retained prepared job."""
+    """Identify one server-retained prepared job for idempotent submission."""
 
     job_id: JobId
-    acknowledged: Literal[True]
 
 
 class GetDeepKoalaJobInput(FrozenModel):
@@ -217,12 +216,12 @@ class FastaSummary(FrozenModel):
 
 
 class ExecutionPlan(FrozenModel):
-    """Effective CPU-only execution settings retained by the server."""
+    """Effective service-owned execution settings retained by the server."""
 
     model: ModelName
     requested_model_date: ModelDate
     resolved_model_date: ResolvedModelDate
-    device: Literal["cpu"] = "cpu"
+    device: Literal["auto"] = "auto"
     detail: Literal[True] = True
     batch_size: int = Field(strict=True, ge=1, le=64)
     num_workers: Literal[0] = 0
@@ -233,23 +232,23 @@ class ExecutionPlan(FrozenModel):
 
 
 class ExecutionNotice(FrozenModel):
-    """Facts shown before any DeepKOALA process starts."""
+    """Non-blocking provenance facts retained before DeepKOALA starts."""
 
     plan: ExecutionPlan
     fasta: FastaSummary
     deepkoala_version: str | None = Field(default=None, max_length=128)
     queued_jobs_ahead: int = Field(strict=True, ge=0, le=MAX_QUEUE_SIZE)
-    cpu_only: Literal[True] = True
+    gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
     companion_network_requests: Literal[False] = False
     warning: BoundedText = (
-        "DeepKOALA will run locally on CPU with existing installed resources; the companion "
-        "does not download or update weights."
+        "DeepKOALA will select an available accelerator or CPU through its local auto policy and "
+        "existing installed resources; the companion does not download or update weights."
     )
 
 
 class PrepareDeepKoalaResult(FrozenModel):
-    """One retained plan awaiting explicit acknowledgement."""
+    """One retained plan ready for idempotent submission."""
 
     job_id: JobId
     state: Literal["prepared"] = "prepared"
@@ -277,6 +276,11 @@ class JobSummary(FrozenModel):
     completed_at: datetime | None = None
     exit_code: int | None = Field(default=None, strict=True, ge=-255, le=255)
     failure_reason: BoundedText | None = None
+    correlation_id: str | None = Field(
+        default=None,
+        pattern=r"^joberr_[A-Za-z0-9_-]{12}$",
+        max_length=19,
+    )
     output_bytes: int | None = Field(default=None, strict=True, ge=1, le=MAX_OUTPUT_BYTES)
 
     @model_validator(mode="after")
@@ -305,6 +309,8 @@ class JobSummary(FrozenModel):
             raise ValueError("only successful jobs expose output_bytes")
         if self.state in {JobState.FAILED, JobState.TIMED_OUT} and self.failure_reason is None:
             raise ValueError("failed and timed-out jobs require failure_reason")
+        if self.correlation_id is not None and self.state is not JobState.FAILED:
+            raise ValueError("only failed jobs may expose a correlation identifier")
         return self
 
 
@@ -385,14 +391,15 @@ class InstalledResource(FrozenModel):
 
 
 class CompanionStatus(FrozenModel):
-    """Redacted CPU-only readiness and scheduler state."""
+    """Redacted local readiness, device policy, and scheduler state."""
 
     server_name: Literal["deepkoala-mcp"] = "deepkoala-mcp"
     server_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$", max_length=32)
     ready: bool
     deepkoala_version: str | None = Field(default=None, max_length=128)
     installed_resources: Annotated[tuple[InstalledResource, ...], Field(max_length=256)]
-    cpu_only: Literal[True] = True
+    device_policy: Literal["auto"] = "auto"
+    gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
     companion_network_requests: Literal[False] = False
     cpu_threads: int = Field(strict=True, ge=1, le=4)

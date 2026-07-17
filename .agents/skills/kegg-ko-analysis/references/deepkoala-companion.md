@@ -8,29 +8,33 @@ predictions.
 
 ## Route states
 
-Use these stable routing states internally: `local_ready`, `local_runner_misconfigured`,
-`local_deepkoala_present_companion_missing`, `local_not_installed`, `installation_declined`, and
-`remote_api_unavailable`. Do not return local paths, environment values, or credentials with a
-state.
+Use these stable routing states internally: `local_ready`, `companion_not_registered`,
+`companion_not_installed`, `deepkoala_checkout_missing`, `deepkoala_python_missing`,
+`model_resources_missing`, `state_root_missing`, `core_handoff_root_missing`,
+`runner_misconfigured`, `installation_declined`, and `remote_api_unavailable`. Do not return local
+paths, environment values, or credentials with a state.
 
-1. **Absent (`local_deepkoala_present_companion_missing` or `local_not_installed`):** report that
-   the local companion is unavailable and ask whether the user wants to install and register local
-   DeepKOALA and `deepkoala-mcp`. Stop if permission is not granted. Do not open, submit to, or
-   automate the DeepKOALA web form. GenomeNet does not provide a DeepKOALA API, so this workflow
-   has no remote execution route.
+1. **Absent (`companion_not_registered` or `companion_not_installed`):** report which component is
+   unavailable. Explain that registration changes MCP configuration, installation changes a local
+   environment, and either action requires permission. When the executable exists, recommend
+   `deepkoala-mcp doctor --json` before changing anything. Stop if permission is not granted. Do
+   not open, submit to, or automate the DeepKOALA web form. GenomeNet does not provide a DeepKOALA
+   API, so this workflow has no remote execution route.
 2. **Discovered:** make `get_deepkoala_runner_status` the first annotation-tool call.
-3. **Not ready (`local_runner_misconfigured`):** report whether the local checkout, interpreter,
-   model resources, private state root, companion package, or MCP registration is missing. Ask for
-   repair or installation permission. Do not install, download, or repair dependencies silently;
-   do not modify an environment or MCP configuration silently.
-4. **Ready (`local_ready`) and prepared:** call `prepare_deepkoala_job` with exactly one inline FASTA or allowed absolute
-   FASTA path. Request only the documented CPU execution settings. Present the returned execution
-   notice, including model, installed resource date, top-k, timeout, input summary, and output
-   boundary, before inference starts.
-5. **Confirmed:** obtain explicit user confirmation for that prepared job. Only then call
-   `submit_deepkoala_job` with its opaque `job_id` and `acknowledged=true`. Do not request or verify
-   a digest.
-6. **Running or terminal:** use `get_deepkoala_job` for bounded status checks. Use
+3. **Not ready:** map the diagnostic to `deepkoala_checkout_missing`,
+   `deepkoala_python_missing`, `model_resources_missing`, `state_root_missing`,
+   `core_handoff_root_missing`, or `runner_misconfigured`. State the one required operator action
+   and whether it creates state, changes an environment or MCP registration, or downloads software
+   or model resources. Ask permission before that deployment change. Do not install, download,
+   register, or repair silently.
+4. **Ready (`local_ready`):** call `prepare_deepkoala_job` with exactly one inline FASTA or allowed
+   absolute FASTA path. Preserve the returned execution notice, including model, installed resource
+   date, top-k, timeout, input summary, device policy, and output boundary. The notice is provenance,
+   not a per-job approval gate.
+5. **Prepared:** call `submit_deepkoala_job` with only its opaque `job_id`, then poll
+   `get_deepkoala_job` at bounded intervals. Do not request or verify a digest and do not repeat a
+   confirmation already implied by the user's analysis request and the ready deployment.
+6. **Running or terminal:** continue using `get_deepkoala_job` for bounded status checks. Use
    `cancel_deepkoala_job` only when requested or when the surrounding task is cancelled. Use
    `delete_deepkoala_job` when retained local job data is no longer needed.
 
@@ -42,12 +46,14 @@ configuration route.
 
 ## Installation or repair confirmation
 
-Before any installation action, tell the user which local component is missing, which checkout,
-environment, model-resource directory, companion installation, state root, or MCP registration
-would be created or changed, whether dependency or model downloads are needed, and the expected
-disk and compute requirements. State that the FASTA remains local and that there is no remote
-upload branch. Obtain permission before any package install, environment change, checkout or model
-download, state-root creation, or MCP configuration write.
+Before any deployment action, tell the user which local component is missing, which checkout,
+environment, model-resource directory, companion installation, state root, allowed-root setting,
+or MCP registration would be created or changed, whether dependency or model downloads are needed,
+and the expected disk and compute requirements. State that the FASTA remains local and that there
+is no remote upload branch. Obtain permission before any package install, environment change,
+checkout or model download, state-root creation, allowed-root change, GPU or system configuration,
+or MCP configuration write. Ordinary execution in an already registered and ready deployment does
+not require another permission prompt.
 
 ## Successful handoff
 

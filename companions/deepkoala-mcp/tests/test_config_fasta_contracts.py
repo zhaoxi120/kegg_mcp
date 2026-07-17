@@ -109,7 +109,7 @@ def test_runtime_config_rejects_overlapping_state_and_input_roots(
         )
 
 
-def test_prepare_contract_is_cpu_only_and_memory_bounded() -> None:
+def test_prepare_contract_keeps_device_service_owned_and_memory_bounded() -> None:
     request = PrepareDeepKoalaInput(fasta_text=">p\nMPEPTIDE\n")
     assert request.batch_size == 1
     with pytest.raises(ValidationError):
@@ -126,12 +126,12 @@ def test_prepare_contract_is_cpu_only_and_memory_bounded() -> None:
         )
 
 
-def test_submit_requires_literal_acknowledgement() -> None:
+def test_submit_accepts_only_the_opaque_job_identifier() -> None:
     job_id = "job_" + "a" * 32
-    assert SubmitDeepKoalaInput(job_id=job_id, acknowledged=True).acknowledged is True
+    assert SubmitDeepKoalaInput(job_id=job_id).job_id == job_id
     with pytest.raises(ValidationError):
         SubmitDeepKoalaInput.model_validate(
-            {"job_id": job_id, "acknowledged": False},
+            {"job_id": job_id, "acknowledged": True},
             strict=True,
         )
 
