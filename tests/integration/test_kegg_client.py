@@ -53,11 +53,9 @@ from kegg_mcp.kegg.transport import (
     TransportErrorKind,
     TransportResponse,
 )
-from kegg_mcp.services import (
-    NormalizeAnnotationsRequest,
-    SQLiteResultStore,
-    analyze_annotation_targets,
-)
+from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
+from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.result_store import SQLiteResultStore
 
 _NOW = datetime(2026, 7, 14, 3, 0, tzinfo=UTC)
 _INFO_BODY = (

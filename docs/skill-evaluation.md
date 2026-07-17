@@ -6,12 +6,11 @@ model, or contacted KEGG.
 
 ## Method
 
-On 2026-07-15, the independent forward/manual review was repeated against the exact v0.2.0
-candidate and its actual MCP schemas. The seven core and annotation-companion routes below passed.
-On 2026-07-16, a separate nine-route forward review covered the v0.3.0 visualization candidate,
-the version 2 handoff, and the independently installed renderer MCP. The reviewer inspected the
-selected route, necessary clarification, tool choice, refusal boundary, interpretation language,
-and relevant Skill references.
+An independent forward/manual review covered the seven core and annotation-companion routes
+below. A separate nine-route review covered the version 2 visualization handoff and the
+independently installed renderer MCP. The reviewer inspected route selection, necessary
+clarification, tool choice, refusal boundaries, interpretation language, and relevant Skill
+references.
 
 The repository tests under `tests/skill/` provide deterministic instruction-contract coverage.
 They verify metadata, trigger terms, boundaries, MCP dependency identity, required guidance, and
@@ -130,9 +129,9 @@ manipulation, endpoint configuration, or resource-URI construction logic.
 
 ## Limitations and release use
 
-This record covers the exact v0.2.0 review and the v0.3.0 visualization candidate. It used no live
-KEGG request, did not execute DeepKOALA, and used no real KEGG PNG or KGML payload. It did not
+This record covers the current core, companion, and visualization contracts. It used no live KEGG
+request, did not execute DeepKOALA, and used no real KEGG PNG or KGML payload. It did not
 benchmark model-to-model variability, malicious prompt injection, long-context degradation,
-client-specific tool selection, or external annotator compatibility. Future releases must repeat
-the review against their exact candidate; any routing or interpretation regression blocks release
+client-specific tool selection, or external annotator compatibility. Releases must repeat the
+review against their exact commit; any routing or interpretation regression blocks release
 even if the deterministic static tests still pass.

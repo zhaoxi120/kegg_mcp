@@ -234,9 +234,8 @@ reference-pathway evidence overlays and project-owned MODULE logic diagrams as c
 SVG and optional bounded PNG. It never imports annotation tables, normalizes evidence, evaluates
 MODULEs, recomputes pathway coverage, or starts either other process.
 
-This handoff first appears in the unreleased core 0.3 series. The renderer declares
-`kegg-mcp>=0.3,<0.4`; the published core 0.1 release and abandoned 0.2 candidate are intentionally
-incompatible.
+The renderer declares `kegg-mcp>=0.3,<0.4`; incompatible core packages fail dependency
+resolution.
 
 Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and
 `KEGG_RENDER_MCP_ALLOWED_ROOTS`. The state root must be private and must not overlap a renderer

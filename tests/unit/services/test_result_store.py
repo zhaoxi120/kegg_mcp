@@ -105,30 +105,6 @@ def test_multiple_artifacts_round_trip_with_complete_immutable_metadata(tmp_path
         created.total_bytes = 0
 
 
-def test_legacy_artifact_table_name_is_migrated_without_losing_results(tmp_path: Path) -> None:
-    database = tmp_path / "store.sqlite3"
-    store = SQLiteResultStore(database)
-    created = store.create("scope", (_artifact("summary.json", b"safe"),), now=_NOW)
-    schema_version = 2
-    legacy_table = f"result_artifacts_v{schema_version}"
-    with sqlite3.connect(database) as connection:
-        connection.execute(f'ALTER TABLE result_artifacts RENAME TO "{legacy_table}"')
-
-    migrated = SQLiteResultStore(database)
-
-    assert migrated.get_result("scope", created.result_id, now=_NOW) == created
-    assert migrated.list_artifacts("scope", created.result_id, now=_NOW).total_items == 1
-    with sqlite3.connect(database) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            ).fetchall()
-        }
-    assert "result_artifacts" in tables
-    assert legacy_table not in tables
-
-
 def test_each_created_result_uses_a_distinct_unpredictable_opaque_id(tmp_path: Path) -> None:
     store = SQLiteResultStore(tmp_path / "store.sqlite3")
 

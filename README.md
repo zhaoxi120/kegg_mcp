@@ -5,15 +5,6 @@ Orthology (KO) annotations. It normalizes source evidence, retrieves bounded KEG
 evaluates MODULE logic, summarizes pathway KO coverage, compares KO sets deterministically, and
 produces traceable local reports.
 
-> Release status: the only published GitHub release is core `v0.1.0`. This checkout contains
-> unreleased candidates and no distribution here is published to a Python package registry.
-
-| Distribution | Source version | Release state | Compatibility |
-| --- | --- | --- | --- |
-| `kegg-mcp` | `0.3.0` | Unreleased candidate | Produces `RenderInput`; Python 3.11.x |
-| `deepkoala-mcp` | `0.2.0` | Unreleased candidate | Controlled detailed-CSV handoff; Python 3.11.x |
-| `kegg-render-mcp` | `0.1.0` | Unreleased candidate | Requires `kegg-mcp>=0.3,<0.4`; Python 3.11.x |
-
 The release-supported platform is Linux with CPython 3.11.x.
 
 ## What it does
