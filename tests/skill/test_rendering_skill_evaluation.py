@@ -18,7 +18,11 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
         ),
         (
             "I only have K numbers; draw the pathway.",
-            ("independent annotation or KO-analysis Skill", "never call those MCP servers here"),
+            (
+                "original request starts with only protein FASTA or KO evidence",
+                "earlier stages through the installed focused Skills",
+                "never call those MCP servers here",
+            ),
         ),
         (
             "Render this old version 1 handoff.",
@@ -58,3 +62,16 @@ def test_rendering_never_reimplements_analysis_or_active_output() -> None:
         "or non-KEGG diagrams.",
         "",
     )
+
+
+def test_preceding_core_handoff_finishes_the_original_graphics_request() -> None:
+    for fragment in (
+        "use that handoff path unchanged",
+        "formats and target scope",
+        "from the original request",
+        "without asking the user to copy the path",
+        "do not rerun or revise any upstream analysis",
+        "final stage unless the user requests a new or different analysis",
+        "did not ask for graphics",
+    ):
+        assert fragment in CORPUS

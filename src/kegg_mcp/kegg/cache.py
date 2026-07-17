@@ -96,6 +96,39 @@ ON CONFLICT (
     http_metadata_json = excluded.http_metadata_json
 """
 
+_EXPECTED_CREATE_SCHEMA = _CREATE_SCHEMA.lstrip().replace(
+    "CREATE TABLE IF NOT EXISTS",
+    "CREATE TABLE",
+    1,
+)
+_EXPECTED_SCHEMA_OBJECTS = (("table", "kegg_responses", "kegg_responses", _EXPECTED_CREATE_SCHEMA),)
+_EXPECTED_TABLE_LIST = (("main", "kegg_responses", "table", 10, 1, 0),)
+_EXPECTED_TABLE_XINFO = (
+    (0, "operation", "TEXT", 1, None, 1, 0),
+    (1, "normalized_request_key", "TEXT", 1, None, 2, 0),
+    (2, "endpoint_class", "TEXT", 1, None, 3, 0),
+    (3, "endpoint_fingerprint", "TEXT", 1, None, 4, 0),
+    (4, "response_body", "BLOB", 1, None, 0, 0),
+    (5, "retrieved_at", "TEXT", 1, None, 0, 0),
+    (6, "expires_at", "TEXT", 1, None, 0, 0),
+    (7, "parser_version", "TEXT", 1, None, 0, 0),
+    (8, "database_release", "TEXT", 0, None, 0, 0),
+    (9, "http_metadata_json", "TEXT", 1, None, 0, 0),
+)
+_EXPECTED_INDEX_LIST = ((0, "sqlite_autoindex_kegg_responses_1", 1, "pk", 0),)
+_EXPECTED_INDEX_XINFO = (
+    (0, 0, "operation", 0, "BINARY", 1),
+    (1, 1, "normalized_request_key", 0, "BINARY", 1),
+    (2, 2, "endpoint_class", 0, "BINARY", 1),
+    (3, 3, "endpoint_fingerprint", 0, "BINARY", 1),
+    (4, 4, "response_body", 0, "BINARY", 0),
+    (5, 5, "retrieved_at", 0, "BINARY", 0),
+    (6, 6, "expires_at", 0, "BINARY", 0),
+    (7, 7, "parser_version", 0, "BINARY", 0),
+    (8, 8, "database_release", 0, "BINARY", 0),
+    (9, 9, "http_metadata_json", 0, "BINARY", 0),
+)
+
 
 class CacheReadState(StrEnum):
     """Freshness state returned by one cache lookup."""
@@ -175,11 +208,13 @@ class SQLiteKeggCache:
         max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
         max_payload_bytes: int = DEFAULT_CACHE_MAX_PAYLOAD_BYTES,
         max_database_bytes: int = DEFAULT_CACHE_MAX_DATABASE_BYTES,
+        read_only: bool = False,
     ) -> None:
         self._configured_path = os.fspath(path)
         raw_max_entries = cast(object, max_entries)
         raw_max_payload_bytes = cast(object, max_payload_bytes)
         raw_max_database_bytes = cast(object, max_database_bytes)
+        raw_read_only = cast(object, read_only)
         if (
             isinstance(raw_max_entries, bool)
             or not isinstance(raw_max_entries, int)
@@ -199,9 +234,17 @@ class SQLiteKeggCache:
             or raw_max_payload_bytes >= raw_max_database_bytes
         ):
             raise ValueError("max_database_bytes must leave bounded metadata capacity")
+        if not isinstance(raw_read_only, bool):
+            raise TypeError("read_only must be a boolean")
         self._max_entries = raw_max_entries
         self._max_payload_bytes = raw_max_payload_bytes
         self._max_database_bytes = raw_max_database_bytes
+        self._read_only = raw_read_only
+
+    @property
+    def read_only(self) -> bool:
+        """Report whether this cache is restricted to existing read-only storage."""
+        return self._read_only
 
     def read(
         self,
@@ -227,7 +270,10 @@ class SQLiteKeggCache:
             _raise_cache_failed(operation, "request_validation")
 
         try:
-            with closing(self._connect()) as connection:
+            connection = self._connect_existing() if self._read_only else self._connect()
+            if connection is None:
+                return CacheLookup(state=CacheReadState.MISS, response=None)
+            with closing(connection):
                 raw_row = connection.execute(_READ_RESPONSE, namespace).fetchone()
         except (OSError, RuntimeError, sqlite3.Error, _CacheIntegrityError):
             _raise_cache_failed(operation, "read")
@@ -258,6 +304,8 @@ class SQLiteKeggCache:
         http_metadata: tuple[HttpMetadata, ...] = (),
     ) -> CachedResponse:
         """Atomically insert or replace one already validated successful response."""
+        if self._read_only:
+            _raise_cache_failed(operation, "read_only")
         try:
             namespace = self._validate_namespace(
                 operation,
@@ -373,6 +421,8 @@ class SQLiteKeggCache:
 
     def cleanup_expired(self, *, now: datetime) -> CacheCleanupSummary:
         """Delete only TTL-expired rows and compact the private cache database."""
+        if self._read_only:
+            _raise_cache_failed("cleanup", "read_only")
         try:
             checked_now = _normalize_datetime(now)
             connection = self._connect_existing()
@@ -435,9 +485,94 @@ class SQLiteKeggCache:
         if path is None:
             return None
         try:
+            if self._read_only:
+                return self._connect_read_only(path)
             return self._connect_path(path, create=False)
         except FileNotFoundError:
             return None
+
+    def _connect_read_only(self, path: Path) -> sqlite3.Connection:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        descriptor = os.open(path, flags)
+        connection: sqlite3.Connection | None = None
+        try:
+            descriptor_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(descriptor_stat.st_mode):
+                raise OSError("cache is not a regular file")
+            if hasattr(os, "geteuid") and descriptor_stat.st_uid != os.geteuid():
+                raise OSError("cache must be owned by the current user")
+            if stat.S_IMODE(descriptor_stat.st_mode) != 0o600:
+                raise OSError("read-only cache mode must be 0600")
+            if descriptor_stat.st_size > self._max_database_bytes:
+                raise OSError("cache database exceeds the configured physical-size bound")
+            _validate_existing_cache_parent(path.parent)
+            path_stat = _validate_named_cache_file(path)
+            if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ):
+                raise OSError("cache changed while it was opened")
+            descriptor_path = Path("/proc/self/fd") / str(descriptor)
+            descriptor_path_stat = descriptor_path.stat()
+            if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
+                descriptor_path_stat.st_dev,
+                descriptor_path_stat.st_ino,
+            ):
+                raise OSError("cache descriptor binding is unavailable")
+            connection = sqlite3.connect(
+                f"{descriptor_path.as_uri()}?mode=ro",
+                uri=True,
+                timeout=5.0,
+            )
+            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA trusted_schema = OFF")
+            (query_only,) = _decode_integer_row(
+                connection.execute("PRAGMA query_only").fetchone(),
+                length=1,
+            )
+            if query_only != 1:
+                raise _CacheIntegrityError("SQLite query-only mode was not applied")
+            (trusted_schema,) = _decode_integer_row(
+                connection.execute("PRAGMA trusted_schema").fetchone(),
+                length=1,
+            )
+            if trusted_schema != 0:
+                raise _CacheIntegrityError("SQLite trusted-schema mode was not disabled")
+            if connection.execute("PRAGMA journal_mode").fetchone() != ("delete",):
+                raise _CacheIntegrityError("read-only cache requires delete journal mode")
+            page_size_row = connection.execute("PRAGMA page_size").fetchone()
+            (page_size,) = _decode_integer_row(page_size_row, length=1, positive=True)
+            (page_count,) = _decode_integer_row(
+                connection.execute("PRAGMA page_count").fetchone(),
+                length=1,
+                positive=True,
+            )
+            if page_count * page_size > self._max_database_bytes:
+                raise _CacheIntegrityError("cache database exceeds the configured logical bound")
+            schema_version_row = connection.execute("PRAGMA user_version").fetchone()
+            if schema_version_row is None or len(schema_version_row) != 1:
+                raise _CacheIntegrityError("missing SQLite schema version")
+            if schema_version_row[0] != _SCHEMA_VERSION:
+                raise _CacheIntegrityError("unsupported SQLite schema version")
+            (auto_vacuum,) = _decode_integer_row(
+                connection.execute("PRAGMA auto_vacuum").fetchone(),
+                length=1,
+            )
+            if auto_vacuum != 1:
+                raise _CacheIntegrityError("cache database must use full auto-vacuum")
+            _validate_cache_schema(connection)
+        except BaseException:
+            if connection is not None:
+                connection.close()
+            raise
+        finally:
+            os.close(descriptor)
+        return connection
 
     def _connect_path(self, path: Path, *, create: bool) -> sqlite3.Connection:
         flags = os.O_RDWR | (os.O_CREAT if create else 0)
@@ -501,6 +636,7 @@ class SQLiteKeggCache:
             )
             if auto_vacuum != 1:
                 raise _CacheIntegrityError("cache database must use full auto-vacuum")
+            _validate_cache_schema(connection)
         except BaseException:
             connection.close()
             raise
@@ -551,25 +687,15 @@ class SQLiteKeggCache:
             raise OSError("cache path must not contain traversal components")
         if not path.is_absolute():
             raise OSError("cache path must be absolute")
-        try:
-            path_stat = path.lstat()
-        except FileNotFoundError:
-            _reject_symlink_components(path.parent)
-            return None
-
         parent = path.parent
-        _reject_symlink_components(parent)
-        parent_stat = parent.lstat()
-        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
-            raise OSError("cache parent must be a real directory")
-        if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
-            raise OSError("cache parent must be owned by the current user")
-        if stat.S_IMODE(parent_stat.st_mode) & 0o022:
-            raise OSError("cache parent must not be group- or world-writable")
-        if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
-            raise OSError("cache must be a regular file")
-        if hasattr(os, "geteuid") and path_stat.st_uid != os.geteuid():
-            raise OSError("cache must be owned by the current user")
+        try:
+            _validate_existing_cache_parent(parent)
+        except FileNotFoundError:
+            return None
+        try:
+            _validate_named_cache_file(path)
+        except FileNotFoundError:
+            return None
         return path
 
     @staticmethod
@@ -774,6 +900,50 @@ def _database_bytes(connection: sqlite3.Connection) -> int:
     return page_count * page_size
 
 
+def _validate_cache_schema(connection: sqlite3.Connection) -> None:
+    schema_objects = _fetch_bounded_rows(
+        connection.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name LIMIT 2"
+        ),
+        maximum=1,
+    )
+    if schema_objects != _EXPECTED_SCHEMA_OBJECTS:
+        raise _CacheIntegrityError("cache schema objects do not match the supported version")
+    table_list = tuple(
+        row
+        for row in _fetch_bounded_rows(connection.execute("PRAGMA table_list"), maximum=16)
+        if row[0] == "main" and not str(row[1]).startswith("sqlite_")
+    )
+    if table_list != _EXPECTED_TABLE_LIST:
+        raise _CacheIntegrityError("cache table flags do not match the supported version")
+    table_xinfo = _fetch_bounded_rows(
+        connection.execute("PRAGMA table_xinfo(kegg_responses)"),
+        maximum=len(_EXPECTED_TABLE_XINFO),
+    )
+    if table_xinfo != _EXPECTED_TABLE_XINFO:
+        raise _CacheIntegrityError("cache columns do not match the supported version")
+    index_list = _fetch_bounded_rows(
+        connection.execute("PRAGMA index_list(kegg_responses)"),
+        maximum=len(_EXPECTED_INDEX_LIST),
+    )
+    if index_list != _EXPECTED_INDEX_LIST:
+        raise _CacheIntegrityError("cache primary key does not match the supported version")
+    index_xinfo = _fetch_bounded_rows(
+        connection.execute("PRAGMA index_xinfo(sqlite_autoindex_kegg_responses_1)"),
+        maximum=len(_EXPECTED_INDEX_XINFO),
+    )
+    if index_xinfo != _EXPECTED_INDEX_XINFO:
+        raise _CacheIntegrityError("cache index columns do not match the supported version")
+
+
+def _fetch_bounded_rows(cursor: sqlite3.Cursor, *, maximum: int) -> tuple[tuple[object, ...], ...]:
+    rows = tuple(cursor.fetchmany(maximum + 1))
+    if len(rows) > maximum:
+        raise _CacheIntegrityError("cache schema metadata exceeds the supported bound")
+    return rows
+
+
 def _tighten_directory_permissions(path: Path) -> None:
     try:
         path_stat = path.lstat()
@@ -781,6 +951,27 @@ def _tighten_directory_permissions(path: Path) -> None:
             path.chmod(0o700)
     except OSError:
         pass
+
+
+def _validate_existing_cache_parent(path: Path) -> os.stat_result:
+    _reject_symlink_components(path)
+    path_stat = path.lstat()
+    if not stat.S_ISDIR(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        raise OSError("cache parent must be a real directory")
+    if hasattr(os, "geteuid") and path_stat.st_uid != os.geteuid():
+        raise OSError("cache parent must be owned by the current user")
+    if stat.S_IMODE(path_stat.st_mode) & 0o022:
+        raise OSError("cache parent must not be group- or world-writable")
+    return path_stat
+
+
+def _validate_named_cache_file(path: Path) -> os.stat_result:
+    path_stat = path.lstat()
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        raise OSError("cache must be a regular file")
+    if hasattr(os, "geteuid") and path_stat.st_uid != os.geteuid():
+        raise OSError("cache must be owned by the current user")
+    return path_stat
 
 
 def _reject_symlink_components(path: Path) -> None:

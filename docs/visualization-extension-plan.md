@@ -101,8 +101,8 @@ MODULE-evaluation rules.
 3. After an explicit user annotation request, call `run_deepkoala_job` once with an allowed
    absolute FASTA path and new allowed output directory. Do not request a second confirmation,
    acknowledgement, workflow digest, or artifact digest.
-4. Retain the returned execution plan and input summary as provenance and poll
-   `get_deepkoala_job` with bounded status checks.
+4. Retain the returned process-scoped job identifier only for bounded status polling. Use the
+   completed stable files and returned source provenance for the downstream handoff.
 5. After success, pass `annotations_path`, `input_format="deepkoala_detailed"`, and the returned
    source provenance to `kegg-mcp`. If the two clients do not share an allowed root, read the
    bounded annotation resource pages and provide their decoded CSV content instead.
@@ -110,8 +110,8 @@ MODULE-evaluation rules.
    bundle and `render_input.json` version 2 are written.
 7. Pass the absolute `render_input.json` path to `kegg-render-mcp`.
 8. Render selected supported targets and return bounded previews plus validated image resources.
-9. Delete the terminal DeepKOALA job record after the handoff has been consumed. Delivered CSV
-    and Markdown files remain in the user-selected stable output directory.
+9. Delete the terminal DeepKOALA job record only when the user requests cleanup. Delivered CSV
+   and Markdown files remain in the user-selected stable output directory.
 
 ### 5.2 Existing KO evidence
 
@@ -318,7 +318,8 @@ The first MCP surface should include:
 
 - `get_renderer_status`: return redacted capabilities, compatible schema versions, output formats,
   bounds, access state, and retention configuration;
-- `probe_renderer_kegg_connectivity`: perform one explicit low-cost connectivity check;
+- `probe_renderer_kegg_connectivity`: perform one explicit low-cost connectivity check in live
+  access modes and zero requests in `offline_cache` or `unconfigured` mode;
 - `render_analysis_bundle`: validate one allowed `render_input.json` path and render a bounded set
   of selected MODULE and pathway targets;
 - `render_pathway`: render one pathway target from a compatible handoff;
@@ -342,16 +343,18 @@ code, arbitrary fonts, or unbounded canvas dimensions.
 Tool annotations must reflect actual behavior:
 
 - status is read-only, idempotent, and closed-world;
-- connectivity probing is non-destructive but is not annotated read-only or idempotent because it
-  performs an external request and advances local cache and rate-limit state; it is open-world;
+- connectivity probing is non-destructive but remains conservatively annotated as not read-only,
+  not idempotent, and open-world because live modes perform an external request and advance local
+  cache and rate-limit state; `offline_cache` and `unconfigured` perform zero requests;
 - MODULE rendering writes artifacts but is closed-world when all data are in the handoff;
 - pathway rendering writes artifacts and is open-world when it may retrieve KEGG assets; and
 - result deletion is destructive and scoped.
 
 ### 8.4 Results and resources
 
-Return an opaque, process-scoped `render_id`, bounded artifact metadata, warnings, provenance, and
-validated resource links. Suggested templates are:
+Return an opaque, process-scoped `render_id`, bounded artifact metadata, warnings, and validated
+resource links. Publish complete rendering and source-asset provenance in the bounded
+`render_manifest.json` artifact. Suggested templates are:
 
 ```text
 kegg-render://results/{render_id}
@@ -461,7 +464,12 @@ release-blocking deployment requirement for the renderer.
 
 The renderer must:
 
-- support explicit public-academic and licensed endpoint configurations;
+- support explicit public-academic, licensed, read-only offline-cache, and MODULE-only
+  configurations;
+- require one existing safe cache path for offline pathway rendering, perform no network request
+  or cache mutation in that mode, and preserve public-versus-licensed namespace isolation;
+- reject stale offline assets by default and expose any deployment-authorized stale use in
+  warnings and provenance;
 - use a safe no-burst request rate no greater than three requests per second;
 - retrieve one pathway image or KGML document per request as required by the endpoint;
 - keep raw and cached KEGG payloads local;
@@ -485,7 +493,10 @@ Keep the Skill instruction-only and dependent only on `kegg-mcp`. Its workflow i
 - require `render_input.json` version 2 for the new renderer;
 - return the controlled absolute renderer-input path rather than a private result identifier;
 - skip annotation when usable KO evidence already exists;
-- stop after producing the stable handoff and direct the user to the independent rendering Skill;
+- automatically continue to the independent rendering Skill when the original user request also
+  asks for graphics and a compatible renderer is available, passing the stable handoff unchanged;
+- stop after producing the stable handoff when graphics were not requested or the renderer is
+  unavailable or incompatible;
 - never parse KGML, manipulate pixels, duplicate normalization, or reinterpret analysis results.
 
 Do not add companion lifecycle or renderer instructions, scripts, or rendering assets to this
@@ -493,7 +504,9 @@ Skill.
 
 ### 12.2 New `kegg-pathway-rendering` Skill
 
-Add a separately triggered repository-scoped Skill only when the renderer MCP is functional:
+Add an independently scoped repository Skill only when the renderer MCP is functional. It may be
+selected directly for an existing handoff or automatically after a successful analysis when the
+original request also asks for graphics:
 
 ```text
 .agents/skills/kegg-pathway-rendering/
@@ -515,20 +528,26 @@ image editing, and non-KEGG diagrams.
 
 The Skill should:
 
-1. require exactly one compatible `render_input.json` path or bounded inline document;
-2. stop and direct the user to `kegg-ko-analysis` when the handoff is missing;
-3. call the renderer's high-level tool for ordinary workflows and primitive tools only for
+1. require exactly one compatible `render_input.json` path or bounded inline document at its MCP
+   boundary;
+2. continue automatically from `kegg-ko-analysis` when the original combined request authorized
+   graphics and the stable handoff is available, without requesting another prompt, confirmation,
+   or manual path copy;
+3. stop and route to `kegg-ko-analysis` when the handoff is missing and no upstream stage has just
+   produced one;
+4. call the renderer's high-level tool for ordinary workflows and primitive tools only for
    targeted rendering;
-4. surface unsupported map types, stale cache state, provenance, and truncation;
-5. return the renderer-provided resource URI rather than constructing one; and
-6. report graphics as visualizations of annotation evidence, not validated activity or phenotype.
+5. surface unsupported map types, stale cache state, provenance, and truncation;
+6. return the renderer-provided resource URI rather than constructing one; and
+7. report graphics as visualizations of annotation evidence, not validated activity or phenotype.
 
 The Skill remains instruction-only. Rendering code belongs in `kegg-render-mcp`, so the Skill
 must not contain renderer scripts or duplicate a color-assignment implementation.
 
 `agents/openai.yaml` declares only the `kegg-render-mcp` local stdio dependency. The analysis Skill
 keeps only its core dependency. If the renderer handoff is missing, rendering stops and routes the
-user to that separate analysis stage instead of calling a second MCP.
+user to that separate analysis stage; once the upstream Skill returns a compatible stable handoff,
+the original combined request may continue without changing either Skill's MCP dependency.
 
 ## 13. Testing strategy
 

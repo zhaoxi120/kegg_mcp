@@ -84,33 +84,57 @@ def build_runtime(config: RendererRuntimeConfig | None = None) -> RendererRuntim
         provider = UnconfiguredAssetProvider()
     else:
         from kegg_mcp.kegg import (
+            CachePolicy,
             KeggClient,
             KeggClientConfig,
             KeggClientLimits,
             LicensedAccess,
+            OfflineCacheAccess,
             PublicAcademicAccess,
             RateLimitPolicy,
+            RetrievalEndpointClass,
             RetryPolicy,
+            endpoint_fingerprint,
         )
 
-        access = (
-            PublicAcademicAccess(academic_use_confirmed=True)
-            if effective.access_mode == "public_academic"
-            else LicensedAccess(
+        if effective.access_mode == "public_academic":
+            access = PublicAcademicAccess(academic_use_confirmed=True)
+        elif effective.access_mode == "licensed":
+            access = LicensedAccess(
                 endpoint=effective.licensed_endpoint,  # type: ignore[arg-type]
                 endpoint_label="licensed-renderer-endpoint",
                 authorized_use_confirmed=True,
             )
+        elif effective.licensed_endpoint is None:
+            access = OfflineCacheAccess()
+        else:
+            licensed_namespace = LicensedAccess(
+                endpoint=effective.licensed_endpoint,
+                endpoint_label="licensed-renderer-cache",
+                authorized_use_confirmed=True,
+            )
+            access = OfflineCacheAccess(
+                retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
+                endpoint=licensed_namespace.endpoint,
+                endpoint_fingerprint=endpoint_fingerprint(licensed_namespace.endpoint),
+                endpoint_label=licensed_namespace.endpoint_label,
+            )
+        cache = (
+            CachePolicy(path=str(effective.cache_path))
+            if effective.cache_path is not None
+            else CachePolicy()
         )
         provider = CorePathwayAssetProvider(
             KeggClient(
                 KeggClientConfig(
                     access=access,
+                    cache=cache,
                     limits=KeggClientLimits(max_response_bytes=effective.limits.max_asset_bytes),
                     retry=RetryPolicy(max_retries=0),
                     rate_limit=RateLimitPolicy(state_root=effective.rate_limit_root),
                 )
-            )
+            ),
+            allow_stale=effective.offline_allow_stale,
         )
     return RendererRuntime(effective, RendererService(effective, provider))
 
@@ -157,7 +181,12 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                     ConnectivityResult(
                         reachable=classification is ConnectivityStatus.REACHABLE,
                         classification=classification,
-                        request_count=1 if state.service.provider.configured else 0,
+                        request_count=(
+                            0
+                            if classification
+                            in {ConnectivityStatus.NOT_CONFIGURED, ConnectivityStatus.OFFLINE_CACHE}
+                            else 1
+                        ),
                         message=_connectivity_message(classification),
                     ),
                     "Completed the bounded renderer KEGG connectivity preflight.",
@@ -321,7 +350,7 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "probe_renderer_kegg_connectivity",
             "Probe renderer KEGG connectivity",
-            "Make exactly one explicit low-cost KEGG INFO request.",
+            "Make one low-cost KEGG INFO request for live access; offline modes make none.",
             EmptyInput,
             ConnectivityResult,
             probe_annotations,
@@ -410,6 +439,9 @@ def _connectivity_message(classification: ConnectivityStatus) -> str:
     return {
         ConnectivityStatus.REACHABLE: "The configured KEGG endpoint answered one INFO request.",
         ConnectivityStatus.NOT_CONFIGURED: "KEGG access is not configured for this renderer.",
+        ConnectivityStatus.OFFLINE_CACHE: (
+            "Network access is disabled by the renderer offline-cache deployment policy."
+        ),
         ConnectivityStatus.DNS_FAILURE: "The configured KEGG endpoint name could not be resolved.",
         ConnectivityStatus.CONNECTION_FAILURE: "The configured KEGG endpoint could not be reached.",
         ConnectivityStatus.TIMEOUT: "The bounded KEGG INFO request timed out.",

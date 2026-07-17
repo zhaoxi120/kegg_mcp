@@ -77,3 +77,28 @@ def test_rendering_skill_uses_only_renderer_tools_and_stable_handoff() -> None:
     skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     for reference in EXPECTED_FILES - {"SKILL.md", "agents/openai.yaml"}:
         assert f"({reference})" in skill
+
+
+def test_rendering_skill_finishes_cross_skill_requests_without_upstream_calls() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "immediately preceding `kegg-ko-analysis`",
+        "use that handoff path unchanged",
+        "formats and target scope",
+        "stable image files and manifest",
+        "Do not call either earlier MCP",
+    ):
+        assert fragment in corpus
+
+
+def test_rendering_skill_distinguishes_live_and_offline_asset_preflights() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "In a live access mode",
+        "In `offline_cache`",
+        "probe makes zero requests",
+        "requested cache entries exist",
+        "stale-disallowed",
+        "deployment configuration",
+    ):
+        assert fragment in corpus

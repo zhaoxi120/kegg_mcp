@@ -30,6 +30,8 @@ completion or pathway coverage.
 Record the following in the release notes:
 
 - exact Git commit and tag;
+- the installer-reported Skill source-tree SHA-256 and its
+  `kegg-mcp-tree-sha256-v2:source` digest domain for the exact tagged source;
 - operating system and Python version used for validation;
 - versions and SHA-256 digests for all published wheels and source distributions;
 - `uv.lock` digest for each included distribution;
@@ -58,6 +60,22 @@ uploaded KEGG payloads. The workflow has no `push` trigger, so merge does not re
 Maintainer server runs that must not contact KEGG can additionally select the explicit
 `KEGG_MCP_ACCESS_MODE=offline_cache` profile; the external unconfigured default remains
 `public_academic`.
+
+Renderer release validation must cover all four access modes: `public_academic`, `licensed`,
+`offline_cache`, and `unconfigured`. Offline-cache tests must prove that a missing cache is not
+created, no HTTP transport or rate limiter is invoked, the existing database is opened read-only,
+public and confirmed licensed namespaces remain isolated, stale entries are denied by default,
+and status, errors, probes, and provenance do not disclose a path, endpoint, or fingerprint.
+
+Validate the repository Skill installer independently from the Python distributions. From the
+exact clean release commit, cover a normal checkout and a nested checkout, and record the
+installer-reported `source_tree_sha256`. Reproduce the tag-source-archive path using the published
+full commit and that digest; a missing or mismatched digest must fail before creating a managed
+Skill directory. Tests must also cover dirty and untracked source rejection, strict marker
+validation, unknown and locally modified target refusal, symlink and install-root replacement
+resistance, staged-source digest checks, successful rollback, and preservation of the relative
+transaction backup when rollback itself fails. Confirm explicit `$skill-name` and implicit focused
+Skill selection separately from MCP registration and runtime readiness.
 
 Validate the DeepKOALA companion independently:
 
@@ -94,6 +112,12 @@ distribution before upload. Each archive must include the complete MIT license a
 - secrets, local absolute paths, private fixtures, biological inputs, or generated results;
 - bytecode, virtual environments, caches, or repository metadata; and
 - another distribution's implementation or any repository-scoped Skill.
+
+The automatically generated GitHub tag source archives are the reviewed source for the three
+repository Skills and `scripts/install-skills.py`; they are not Python package artifacts. Publish
+the installer source-tree digest in the release notes so an extracted archive can bind its managed
+copy to the same commit and selected source content. Do not attach a second, independently assembled
+Skill bundle.
 
 CI clean-installs each freshly built wheel in a temporary Linux CPython 3.11 environment, runs
 package import from outside the checkout, and checks console `--version` where the distribution has
@@ -134,6 +158,12 @@ This checklist is operational guidance, not legal advice.
   unknown, expired, deleted, or cross-scope.
 - Status, logs, and errors redact secrets, environment values, usernames, endpoints, and full
   local paths.
+- Offline Core and Renderer access never creates, initializes, migrates, cleans, or writes the
+  cache database, never invokes HTTP, and fails closed on unsafe permissions, schema, journal, or
+  size metadata.
+- The managed Skill installer anchors workspace directories with no-follow descriptors, installs
+  only commit- or digest-bound snapshots, never downloads dependencies or data, and never deletes
+  the last backup after a failed rollback.
 - Renderer XML, images, SVG, artifacts, and resources are bounded, static, and free of active or
   external content.
 - DeepKOALA execution uses a service-owned automatic-device policy, inherits existing accelerator

@@ -8,15 +8,34 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
 ## Select a core-only route
 
 1. Inspect the supplied KO list or annotation table and identify the analysis unit when possible.
-   If the only input is protein FASTA without KO evidence, stop and hand that stage to the
-   independent `deepkoala-annotation` Skill; never call `deepkoala-mcp` here.
+   If the only input is protein FASTA without KO evidence, route the annotation stage through the
+   installed `deepkoala-annotation` Skill. When the original request also includes KEGG analysis,
+   resume this Skill automatically after a successful stable handoff; never call `deepkoala-mcp`
+   here.
 2. Read [workflow-selection.md](references/workflow-selection.md) and choose the smallest core
    workflow. Do not ask the user to restate readable input.
 3. For a shared annotation file, pass its controlled absolute path, declared format, source
    provenance, and a new or empty allowed output directory. Do not parse or rewrite a companion
    CSV in the Skill.
-4. If the input is an existing compatible `render_input.json`, stop and hand that file to the
-   independent `kegg-pathway-rendering` Skill; do not repeat analysis.
+4. If the input is an existing compatible `render_input.json`, route it unchanged to the installed
+   `kegg-pathway-rendering` Skill; do not repeat analysis.
+
+## Continue the original request across focused Skills
+
+1. If the current evidence was produced by the immediately preceding `deepkoala-annotation`
+   stage, consume its stable CSV handoff directly. Use the returned `annotations_path`,
+   `input_format`, and `source` object unchanged; do not ask the user to restate the path, repeat
+   the analysis goal, or confirm continuation. Do not rerun annotation or rewrite the CSV.
+2. Complete the requested core analysis and require a successfully written, compatible
+   `render_input.json` before any rendering transition.
+3. If the original request also asks to render, visualize, draw, export SVG or PNG, create pathway
+   images, or create MODULE diagrams, automatically continue with the installed
+   `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path plus the original
+   requested formats and target scope. Do not ask the user to copy the path or send another
+   prompt, and do not repeat analysis.
+4. If the original request asks only for a core report, return that report and stop without
+   invoking the rendering stage. A failed core analysis has no renderer handoff and must not
+   continue downstream.
 
 ## Call only core `kegg-mcp`
 

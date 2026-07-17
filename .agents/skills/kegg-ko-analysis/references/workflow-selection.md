@@ -22,6 +22,19 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
    requested lenient view.
 5. Use stable bundle files for later MCP stages; do not pass a process-private result identifier.
 
+## Automatic cross-Skill continuation
+
+- When the immediately preceding `deepkoala-annotation` stage produced the evidence, consume the
+  returned stable CSV path, `input_format`, and source provenance unchanged. Do not ask the user to
+  copy the path, repeat the request, or confirm a KEGG-analysis stage already present in the
+  original request. Do not rerun or reinterpret annotation.
+- When the original request also asks for graphics, retain its formats and target scope. After the
+  core writes a compatible `render_input.json`, continue with the installed
+  `kegg-pathway-rendering` Skill using that path unchanged. Do not repeat analysis in the rendering
+  transition.
+- When graphics were not requested, stop after the core report. Continue only after a successful
+  handoff; never treat an upstream failure as empty KO evidence.
+
 ## Multiple KO sets
 
 - Use `compare_ko_sets` with compatible evidence modes and reference provenance.
@@ -30,7 +43,9 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Out-of-scope starting points
 
-- Protein FASTA without KO evidence belongs to the independent `deepkoala-annotation` Skill.
-- A compatible `render_input.json` belongs to the independent `kegg-pathway-rendering` Skill.
+- Protein FASTA without KO evidence starts with the independent `deepkoala-annotation` Skill and
+  returns here automatically only when the original request includes KEGG analysis.
+- A compatible `render_input.json` continues directly with the independent
+  `kegg-pathway-rendering` Skill without rerunning core analysis.
 - Statistical enrichment, abundance testing, nucleotide assembly, sequence alignment, and
   non-KEGG ontologies require a separate workflow.

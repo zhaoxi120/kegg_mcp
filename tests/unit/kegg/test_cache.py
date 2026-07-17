@@ -1,14 +1,17 @@
 """Tests for the integrity-checked user-local KEGG response cache."""
 
+import hashlib
 import json
 import os
 import sqlite3
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+import kegg_mcp.kegg.cache as cache_module
 from kegg_mcp.domain import ErrorCode, KeggMcpError
 from kegg_mcp.kegg.cache import (
     CachedResponse,
@@ -584,3 +587,260 @@ def test_existing_cache_file_permissions_are_tightened(tmp_path: Path) -> None:
     _write_response(SQLiteKeggCache(configured))
 
     assert stat.S_IMODE(configured.stat().st_mode) == 0o600
+
+
+def test_read_only_cache_miss_does_not_create_a_database_or_parent(tmp_path: Path) -> None:
+    cache_path = tmp_path / "missing-private" / "kegg.sqlite3"
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+
+    lookup = _read_response(cache)
+    status = cache.status(now=_RETRIEVED_AT)
+
+    assert cache.read_only is True
+    assert lookup == CacheLookup(state=CacheReadState.MISS, response=None)
+    assert status.entry_count == 0
+    assert not cache_path.parent.exists()
+
+
+def test_read_only_cache_reuses_an_existing_database_and_rejects_mutation(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+    digest_before = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    modified_before = cache_path.stat().st_mtime_ns
+    sidecars_before = tuple(sorted(item.name for item in tmp_path.glob("kegg.sqlite3-*")))
+
+    lookup = _read_response(cache)
+    status = cache.status(now=_RETRIEVED_AT)
+
+    assert lookup.state is CacheReadState.FRESH
+    assert lookup.response is not None
+    assert status.entry_count == 1
+    assert hashlib.sha256(cache_path.read_bytes()).hexdigest() == digest_before
+    assert cache_path.stat().st_mtime_ns == modified_before
+    assert tuple(sorted(item.name for item in tmp_path.glob("kegg.sqlite3-*"))) == sidecars_before
+    with pytest.raises(KeggMcpError) as write_error:
+        _write_response(cache)
+    with pytest.raises(KeggMcpError) as cleanup_error:
+        cache.cleanup_expired(now=_EXPIRES_AT)
+    _assert_cache_failed(write_error, cache_path)
+    _assert_cache_failed(cleanup_error, cache_path)
+    assert {item.value for item in write_error.value.detail.safe_details} >= {"read_only"}
+    assert {item.value for item in cleanup_error.value.detail.safe_details} >= {"read_only"}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits are unavailable")
+def test_read_only_cache_requires_exact_owner_only_file_and_safe_parent_modes(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "private" / "kegg.sqlite3"
+    cache_path.parent.mkdir(mode=0o700)
+    _write_response(SQLiteKeggCache(cache_path))
+
+    cache_path.chmod(0o640)
+    with pytest.raises(KeggMcpError) as file_mode_error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+    _assert_cache_failed(file_mode_error, cache_path)
+
+    cache_path.chmod(0o600)
+    cache_path.parent.chmod(0o770)
+    with pytest.raises(KeggMcpError) as parent_mode_error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+    _assert_cache_failed(parent_mode_error, cache_path)
+
+
+def test_read_only_cache_rejects_symlink_schema_and_physical_size_failures(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "private" / "kegg.sqlite3"
+    cache_path.parent.mkdir(mode=0o700)
+    _write_response(SQLiteKeggCache(cache_path))
+    symlink_path = tmp_path / "cache-link.sqlite3"
+    symlink_path.symlink_to(cache_path)
+
+    with pytest.raises(KeggMcpError) as symlink_error:
+        _read_response(SQLiteKeggCache(symlink_path, read_only=True))
+    _assert_cache_failed(symlink_error, symlink_path)
+
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute("PRAGMA user_version = 999")
+    with pytest.raises(KeggMcpError) as schema_error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+    _assert_cache_failed(schema_error, cache_path)
+
+    cache_path.unlink()
+    _write_response(SQLiteKeggCache(cache_path))
+    with cache_path.open("r+b") as cache_file:
+        cache_file.truncate(1024 * 1024 + 1)
+    bounded = SQLiteKeggCache(
+        cache_path,
+        max_payload_bytes=512 * 1024,
+        max_database_bytes=1024 * 1024,
+        read_only=True,
+    )
+    with pytest.raises(KeggMcpError) as size_error:
+        _read_response(bounded)
+    _assert_cache_failed(size_error, cache_path)
+
+
+@pytest.mark.parametrize("swap_kind", ["file", "ancestor"])
+def test_read_only_connection_remains_bound_to_the_validated_descriptor_during_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    swap_kind: str,
+) -> None:
+    original_directory = tmp_path / "original"
+    replacement_directory = tmp_path / "replacement"
+    original_directory.mkdir(mode=0o700)
+    replacement_directory.mkdir(mode=0o700)
+    original_path = original_directory / "kegg.sqlite3"
+    replacement_path = replacement_directory / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(original_path), body=b"validated-original")
+    _write_response(SQLiteKeggCache(replacement_path), body=b"unvalidated-replacement")
+    real_connect = cache_module.sqlite3.connect
+    swapped = False
+
+    def swapping_connect(
+        database: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *args: object,
+        **kwargs: object,
+    ) -> sqlite3.Connection:
+        nonlocal swapped
+        if not swapped and kwargs.get("uri") is True:
+            assert "/proc/self/fd/" in os.fsdecode(database)
+            if swap_kind == "file":
+                moved_path = original_directory / "validated.sqlite3"
+                original_path.rename(moved_path)
+                replacement_path.rename(original_path)
+            else:
+                moved_directory = tmp_path / "validated-original-directory"
+                original_directory.rename(moved_directory)
+                replacement_directory.rename(original_directory)
+            swapped = True
+        return real_connect(database, *args, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(cache_module.sqlite3, "connect", swapping_connect)
+
+    lookup = _read_response(SQLiteKeggCache(original_path, read_only=True))
+
+    assert swapped is True
+    assert lookup.response is not None
+    assert lookup.response.body == b"validated-original"
+
+
+def test_read_only_connection_verifies_trusted_schema_was_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    real_connect = cache_module.sqlite3.connect
+
+    class TrustedSchemaProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        def execute(
+            self,
+            statement: str,
+            parameters: tuple[object, ...] = (),
+        ) -> sqlite3.Cursor:
+            if statement == "PRAGMA trusted_schema = OFF":
+                statement = "PRAGMA trusted_schema = ON"
+            return self.connection.execute(statement, parameters)
+
+        def close(self) -> None:
+            self.connection.close()
+
+    def connect_with_ignored_pragma(
+        database: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *args: object,
+        **kwargs: object,
+    ) -> sqlite3.Connection:
+        connection = cast(
+            sqlite3.Connection,
+            real_connect(database, *args, **kwargs),  # type: ignore[call-overload]
+        )
+        return cast(sqlite3.Connection, TrustedSchemaProxy(connection))
+
+    monkeypatch.setattr(cache_module.sqlite3, "connect", connect_with_ignored_pragma)
+
+    with pytest.raises(KeggMcpError) as error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    _assert_cache_failed(error, cache_path)
+
+
+@pytest.mark.parametrize("invalid_schema", ["view", "columns", "primary_key", "trigger"])
+def test_read_only_cache_rejects_same_version_with_incompatible_schema_structure(
+    tmp_path: Path,
+    invalid_schema: str,
+) -> None:
+    cache_path = tmp_path / f"invalid-{invalid_schema}.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    with sqlite3.connect(cache_path) as connection:
+        if invalid_schema == "view":
+            connection.execute("DROP TABLE kegg_responses")
+            connection.execute(
+                "CREATE VIEW kegg_responses AS SELECT 'get' AS operation, X'00' AS response_body"
+            )
+        elif invalid_schema == "columns":
+            connection.execute("DROP TABLE kegg_responses")
+            connection.execute(
+                "CREATE TABLE kegg_responses (operation TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+        else:
+            if invalid_schema == "primary_key":
+                schema_row = connection.execute(
+                    "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'kegg_responses'"
+                ).fetchone()
+                assert schema_row is not None
+                original_schema = str(schema_row[0])
+                connection.execute("DROP TABLE kegg_responses")
+                reversed_primary_key = original_schema.replace(
+                    "operation,\n        normalized_request_key,",
+                    "normalized_request_key,\n        operation,",
+                )
+                connection.execute(reversed_primary_key)
+            else:
+                connection.execute(
+                    "CREATE TRIGGER reject_cache_update BEFORE UPDATE ON kegg_responses "
+                    "BEGIN SELECT RAISE(ABORT, 'blocked'); END"
+                )
+        assert connection.execute("PRAGMA auto_vacuum").fetchone() == (1,)
+    cache_path.chmod(0o600)
+
+    with pytest.raises(KeggMcpError) as error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    _assert_cache_failed(error, cache_path)
+
+
+def test_read_only_cache_rejects_incompatible_journal_mode(tmp_path: Path) -> None:
+    cache_path = tmp_path / "wal-cache.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+    cache_path.chmod(0o600)
+
+    with pytest.raises(KeggMcpError) as error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    _assert_cache_failed(error, cache_path)
+
+
+def test_read_only_cache_rejects_incompatible_auto_vacuum_mode(tmp_path: Path) -> None:
+    cache_path = tmp_path / "no-auto-vacuum.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute("PRAGMA auto_vacuum = NONE")
+        connection.execute("VACUUM")
+        assert connection.execute("PRAGMA auto_vacuum").fetchone() == (0,)
+    cache_path.chmod(0o600)
+
+    with pytest.raises(KeggMcpError) as error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    _assert_cache_failed(error, cache_path)

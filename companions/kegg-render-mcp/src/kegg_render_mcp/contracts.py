@@ -35,6 +35,7 @@ class RenderFormat(StrEnum):
 class ConnectivityStatus(StrEnum):
     REACHABLE = "reachable"
     NOT_CONFIGURED = "not_configured"
+    OFFLINE_CACHE = "offline_cache"
     DNS_FAILURE = "dns_failure"
     CONNECTION_FAILURE = "connection_failure"
     TIMEOUT = "timeout"
@@ -188,7 +189,7 @@ class RendererStatus(_Model):
     compatible_schema_versions: tuple[Literal["2"], ...] = ("2",)
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
-    access_mode: Literal["public_academic", "licensed", "unconfigured"]
+    access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
     allowed_root_count: int = Field(ge=0, le=64)
     retention_seconds: int = Field(ge=1)
     retained_result_count: int = Field(ge=0)
@@ -209,8 +210,12 @@ class ConnectivityResult(_Model):
     def classification_matches_reachability(self) -> Self:
         if self.reachable != (self.classification is ConnectivityStatus.REACHABLE):
             raise ValueError("reachable must match the connectivity classification")
-        if (self.classification is ConnectivityStatus.NOT_CONFIGURED) != (self.request_count == 0):
-            raise ValueError("only an unconfigured probe may report request_count zero")
+        zero_request_classifications = {
+            ConnectivityStatus.NOT_CONFIGURED,
+            ConnectivityStatus.OFFLINE_CACHE,
+        }
+        if (self.classification in zero_request_classifications) != (self.request_count == 0):
+            raise ValueError("only unconfigured and offline probes may report request_count zero")
         return self
 
 

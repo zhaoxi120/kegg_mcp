@@ -70,12 +70,19 @@ class KeggClient:
         sleeper: Callable[[float], None] = time.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ) -> None:
+        if (
+            isinstance(config.access, OfflineCacheAccess)
+            and cache is not None
+            and not cache.read_only
+        ):
+            raise ValueError("offline cache access requires a read-only cache adapter")
         self._config = config
         self._cache = cache or SQLiteKeggCache(
             config.cache.path,
             max_entries=config.cache.max_entries,
             max_payload_bytes=config.cache.max_payload_bytes,
             max_database_bytes=config.cache.max_database_bytes,
+            read_only=isinstance(config.access, OfflineCacheAccess),
         )
         access = config.access
         if isinstance(access, PublicAcademicAccess):

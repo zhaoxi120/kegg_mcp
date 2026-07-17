@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, Self, cast
 
-from kegg_mcp.kegg import LicensedAccess, RateLimitPolicy
+from kegg_mcp.kegg import CachePolicy, LicensedAccess, RateLimitPolicy
 from kegg_mcp.kegg.contracts import default_rate_limit_root
 from kegg_mcp.services.render_contracts import (
     MODULE_RENDER_MAX_CANVAS_PIXELS,
@@ -24,6 +24,8 @@ ACCESS_MODE_ENV = f"{ENV_PREFIX}ACCESS_MODE"
 ACADEMIC_CONFIRMATION_ENV = f"{ENV_PREFIX}ACADEMIC_USE_CONFIRMED"
 LICENSED_ENDPOINT_ENV = f"{ENV_PREFIX}LICENSED_ENDPOINT"
 LICENSED_CONFIRMATION_ENV = f"{ENV_PREFIX}LICENSED_USE_CONFIRMED"
+CACHE_PATH_ENV = f"{ENV_PREFIX}CACHE_PATH"
+OFFLINE_ALLOW_STALE_ENV = f"{ENV_PREFIX}OFFLINE_ALLOW_STALE"
 RETENTION_SECONDS_ENV = f"{ENV_PREFIX}RETENTION_SECONDS"
 MAX_DISK_BYTES_ENV = f"{ENV_PREFIX}MAX_DISK_BYTES"
 MAX_RESULTS_ENV = f"{ENV_PREFIX}MAX_RESULTS"
@@ -37,6 +39,8 @@ DEFAULT_MAX_SVG_BYTES = 16 * 1024 * 1024
 DEFAULT_MAX_RESULT_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_DISK_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_RESULTS = 128
+
+RendererAccessMode = Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
 
 
 class RendererLimits(BaseModel):
@@ -82,8 +86,10 @@ class RendererRuntimeConfig(BaseModel):
 
     state_root: Path
     allowed_roots: tuple[Path, ...]
-    access_mode: Literal["public_academic", "licensed", "unconfigured"] = "public_academic"
+    access_mode: RendererAccessMode = "public_academic"
     licensed_endpoint: str | None = Field(default=None, min_length=1, max_length=2048, repr=False)
+    cache_path: Path | None = Field(default=None, repr=False)
+    offline_allow_stale: bool = False
     retention_seconds: int = Field(default=DEFAULT_RETENTION_SECONDS, ge=1, le=2_592_000)
     rate_limit_root: str = Field(default_factory=default_rate_limit_root)
     limits: RendererLimits = RendererLimits()
@@ -107,14 +113,25 @@ class RendererRuntimeConfig(BaseModel):
             _validate_allowed_root(checked)
             if _overlap(state, checked):
                 raise ValueError("allowed_roots must not overlap state_root")
-        if (self.access_mode == "licensed") != (self.licensed_endpoint is not None):
+        if self.access_mode == "licensed" and self.licensed_endpoint is None:
             raise ValueError("licensed access requires exactly one private endpoint")
+        if self.access_mode not in {"licensed", "offline_cache"} and (
+            self.licensed_endpoint is not None
+        ):
+            raise ValueError("a private endpoint is supported only for licensed namespaces")
         if self.licensed_endpoint is not None:
             LicensedAccess(
                 endpoint=self.licensed_endpoint,
                 endpoint_label="licensed-renderer-endpoint",
                 authorized_use_confirmed=True,
             )
+        if self.access_mode == "offline_cache" and self.cache_path is None:
+            raise ValueError("offline cache access requires an explicit cache path")
+        if self.cache_path is not None:
+            checked_cache = _safe_absolute(self.cache_path, "cache_path")
+            CachePolicy(path=str(checked_cache))
+        if self.access_mode != "offline_cache" and self.offline_allow_stale:
+            raise ValueError("offline_allow_stale applies only to offline cache access")
         RateLimitPolicy(state_root=self.rate_limit_root)
         return self
 
@@ -127,16 +144,24 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
     if len(roots) != len(roots_raw.split(os.pathsep)):
         raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an empty root")
     raw_mode = values.get(ACCESS_MODE_ENV, "public_academic")
-    if raw_mode not in {"public_academic", "licensed", "unconfigured"}:
+    if raw_mode not in {"public_academic", "licensed", "offline_cache", "unconfigured"}:
         raise ValueError(f"{ACCESS_MODE_ENV} is invalid")
-    mode = cast(Literal["public_academic", "licensed", "unconfigured"], raw_mode)
+    mode = cast(RendererAccessMode, raw_mode)
     if mode == "public_academic" and values.get(ACADEMIC_CONFIRMATION_ENV, "true") != "true":
         raise ValueError(f"{ACADEMIC_CONFIRMATION_ENV}=true is required")
     licensed_endpoint: str | None = None
-    if mode == "licensed":
+    licensed_namespace_requested = (
+        LICENSED_ENDPOINT_ENV in values or LICENSED_CONFIRMATION_ENV in values
+    )
+    if mode == "licensed" or (mode == "offline_cache" and licensed_namespace_requested):
         if values.get(LICENSED_CONFIRMATION_ENV) != "true":
             raise ValueError(f"{LICENSED_CONFIRMATION_ENV}=true is required")
         licensed_endpoint = _required(values, LICENSED_ENDPOINT_ENV)
+    cache_path: Path | None = None
+    if mode == "offline_cache":
+        cache_path = _safe_absolute(Path(_required(values, CACHE_PATH_ENV)), CACHE_PATH_ENV)
+    elif raw_cache_path := values.get(CACHE_PATH_ENV):
+        cache_path = _safe_absolute(Path(raw_cache_path), CACHE_PATH_ENV)
     limits = RendererLimits(
         max_disk_bytes=_integer(
             values, MAX_DISK_BYTES_ENV, DEFAULT_MAX_DISK_BYTES, 1, 2 * 1024 * 1024 * 1024
@@ -148,6 +173,8 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         allowed_roots=roots,
         access_mode=mode,
         licensed_endpoint=licensed_endpoint,
+        cache_path=cache_path,
+        offline_allow_stale=_boolean(values, OFFLINE_ALLOW_STALE_ENV, False),
         retention_seconds=_integer(
             values, RETENTION_SECONDS_ENV, DEFAULT_RETENTION_SECONDS, 1, 2_592_000
         ),
@@ -218,6 +245,15 @@ def _integer(values: Mapping[str, str], name: str, default: int, minimum: int, m
     if not minimum <= result <= maximum:
         raise ValueError(f"{name} is outside its supported range")
     return result
+
+
+def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = values.get(name)
+    if raw is None:
+        return default
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return raw == "true"
 
 
 def _overlap(left: Path, right: Path) -> bool:

@@ -30,11 +30,15 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
         ),
         (
             "I only have protein FASTA.",
-            ("independent `deepkoala-annotation` Skill", "never call `deepkoala-mcp` here"),
+            ("installed `deepkoala-annotation` Skill", "never call `deepkoala-mcp`"),
         ),
         (
             "Render this completed render_input.json.",
-            ("independent `kegg-pathway-rendering` Skill", "do not repeat analysis"),
+            (
+                "existing compatible `render_input.json`",
+                "`kegg-pathway-rendering` Skill",
+                "do not repeat analysis",
+            ),
         ),
     ],
 )
@@ -57,3 +61,25 @@ def test_ko_analysis_preserves_scientific_and_process_boundaries() -> None:
     assert "python3 -m deepkoala" not in CORPUS
     assert "prepare_deepkoala_job" not in CORPUS
     assert "render_analysis_bundle" not in CORPUS
+
+
+def test_preceding_annotation_handoff_is_consumed_without_user_repetition() -> None:
+    for fragment in (
+        "consume its stable CSV handoff directly",
+        "source` object unchanged",
+        "do not ask the user to restate the path",
+        "Do not rerun annotation or rewrite the CSV",
+    ):
+        assert fragment in CORPUS
+
+
+def test_graphics_goal_continues_only_after_successful_core_analysis() -> None:
+    for fragment in (
+        "original request also asks to render",
+        "successfully written, compatible",
+        "requested formats and target scope",
+        "Do not ask the user to copy the path",
+        "asks only for a core report",
+        "continue downstream",
+    ):
+        assert fragment in CORPUS

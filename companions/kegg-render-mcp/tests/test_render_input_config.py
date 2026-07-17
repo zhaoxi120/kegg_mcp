@@ -12,9 +12,11 @@ from pydantic import ValidationError
 from kegg_render_mcp.config import (
     ACCESS_MODE_ENV,
     ALLOWED_ROOTS_ENV,
+    CACHE_PATH_ENV,
     LICENSED_CONFIRMATION_ENV,
     LICENSED_ENDPOINT_ENV,
     MAX_RESULTS_ENV,
+    OFFLINE_ALLOW_STALE_ENV,
     STATE_ROOT_ENV,
     RendererLimits,
     RendererRuntimeConfig,
@@ -57,6 +59,54 @@ def test_licensed_config_requires_acknowledgement_and_endpoint(tmp_path: Path) -
         load_runtime_config(environment)
     environment[LICENSED_ENDPOINT_ENV] = "https://licensed.example.invalid"
     assert load_runtime_config(environment).licensed_endpoint == environment[LICENSED_ENDPOINT_ENV]
+
+
+def test_offline_cache_config_requires_an_explicit_absolute_cache_path(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    environment = {
+        STATE_ROOT_ENV: str(tmp_path / "state"),
+        ALLOWED_ROOTS_ENV: str(allowed),
+        ACCESS_MODE_ENV: "offline_cache",
+    }
+    with pytest.raises(ValueError, match=CACHE_PATH_ENV):
+        load_runtime_config(environment)
+
+    environment[CACHE_PATH_ENV] = str(tmp_path / "cache" / "kegg.sqlite3")
+    config = load_runtime_config(environment)
+    assert config.access_mode == "offline_cache"
+    assert config.cache_path == Path(environment[CACHE_PATH_ENV])
+    assert config.offline_allow_stale is False
+
+    environment[CACHE_PATH_ENV] = "relative.sqlite3"
+    with pytest.raises(ValueError, match="absolute"):
+        load_runtime_config(environment)
+
+
+def test_offline_licensed_namespace_requires_confirmation_and_controls_stale_policy(
+    tmp_path: Path,
+) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    environment = {
+        STATE_ROOT_ENV: str(tmp_path / "state"),
+        ALLOWED_ROOTS_ENV: str(allowed),
+        ACCESS_MODE_ENV: "offline_cache",
+        CACHE_PATH_ENV: str(tmp_path / "cache.sqlite3"),
+        LICENSED_ENDPOINT_ENV: "https://licensed.example.invalid",
+    }
+    with pytest.raises(ValueError, match=LICENSED_CONFIRMATION_ENV):
+        load_runtime_config(environment)
+
+    environment[LICENSED_CONFIRMATION_ENV] = "true"
+    environment[OFFLINE_ALLOW_STALE_ENV] = "true"
+    config = load_runtime_config(environment)
+    assert config.licensed_endpoint == environment[LICENSED_ENDPOINT_ENV]
+    assert config.offline_allow_stale is True
+
+    environment[OFFLINE_ALLOW_STALE_ENV] = "yes"
+    with pytest.raises(ValueError, match=OFFLINE_ALLOW_STALE_ENV):
+        load_runtime_config(environment)
 
 
 def test_config_rejects_state_overlap(tmp_path: Path) -> None:

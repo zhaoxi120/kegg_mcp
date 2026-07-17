@@ -25,7 +25,7 @@ from kegg_mcp.domain.errors import (
 from kegg_mcp.domain.errors import (
     SafeDetail as CoreSafeDetail,
 )
-from kegg_mcp.kegg import KeggClient, KeggRequestOptions
+from kegg_mcp.kegg import KeggClient, KeggClientConfig, KeggRequestOptions
 from mcp import types
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
@@ -33,7 +33,12 @@ from pydantic import AnyUrl
 
 from conftest import SyntheticProvider
 from kegg_render_mcp.config import RendererRuntimeConfig
-from kegg_render_mcp.contracts import ConnectivityStatus
+from kegg_render_mcp.contracts import (
+    ConnectivityStatus,
+    ErrorCode,
+    ErrorDetail,
+    RenderMcpError,
+)
 from kegg_render_mcp.pathway_scene import CorePathwayAssetProvider
 from kegg_render_mcp.render_service import RendererService
 from kegg_render_mcp.server import TOOL_NAMES, RendererRuntime, build_runtime, create_server
@@ -41,6 +46,7 @@ from kegg_render_mcp.server import TOOL_NAMES, RendererRuntime, build_runtime, c
 
 class _ProbeClient:
     def __init__(self) -> None:
+        self.config = KeggClientConfig()
         self.options: list[KeggRequestOptions | None] = []
 
     def info(self, request: object, *, options: KeggRequestOptions | None = None) -> object:
@@ -50,6 +56,8 @@ class _ProbeClient:
 
 
 class _FailingProbeClient:
+    config = KeggClientConfig()
+
     def info(self, request: object, *, options: KeggRequestOptions | None = None) -> object:
         del request, options
         raise CoreKeggMcpError(
@@ -61,6 +69,22 @@ class _FailingProbeClient:
                 safe_details=(CoreSafeDetail(name="transport_kind", value="dns"),),
             )
         )
+
+
+class _FailingAssetClient:
+    config = KeggClientConfig()
+
+    def __init__(self, detail: CoreErrorDetail) -> None:
+        self.detail = detail
+
+    def get_pathway_asset(
+        self,
+        request: object,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> object:
+        del request, options
+        raise CoreKeggMcpError(self.detail)
 
 
 def _tool(tools: list[types.Tool], name: str) -> types.Tool:
@@ -97,6 +121,105 @@ async def test_probe_classifies_redacted_transport_failures() -> None:
     provider = CorePathwayAssetProvider(cast(KeggClient, _FailingProbeClient()))
 
     assert await provider.probe() is ConnectivityStatus.DNS_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("core_code", "core_details", "renderer_code", "action_fragment"),
+    [
+        (
+            CoreErrorCode.CACHE_ENTRY_NOT_FOUND,
+            (CoreSafeDetail(name="cache_state", value="miss"),),
+            ErrorCode.ASSET_UNAVAILABLE,
+            "Populate",
+        ),
+        (
+            CoreErrorCode.CACHE_FAILED,
+            (CoreSafeDetail(name="stage", value="read"),),
+            ErrorCode.ASSET_UNAVAILABLE,
+            "Inspect",
+        ),
+        (
+            CoreErrorCode.CACHE_FAILED,
+            (CoreSafeDetail(name="stage", value="pathway_asset_validation"),),
+            ErrorCode.ASSET_INVALID,
+            "Refresh",
+        ),
+        (
+            CoreErrorCode.KEGG_PARSE_FAILED,
+            (CoreSafeDetail(name="operation", value="get"),),
+            ErrorCode.ASSET_INVALID,
+            "Refresh",
+        ),
+        (
+            CoreErrorCode.INPUT_LIMIT_EXCEEDED,
+            (CoreSafeDetail(name="operation", value="get"),),
+            ErrorCode.INPUT_LIMIT_EXCEEDED,
+            "bounds",
+        ),
+        (
+            CoreErrorCode.KEGG_RATE_LIMITED,
+            (CoreSafeDetail(name="status_code", value="429"),),
+            ErrorCode.ASSET_UNAVAILABLE,
+            "Retry later",
+        ),
+        (
+            CoreErrorCode.KEGG_REQUEST_FAILED,
+            (CoreSafeDetail(name="transport_kind", value="dns"),),
+            ErrorCode.ASSET_UNAVAILABLE,
+            "connectivity probe",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_core_asset_errors_keep_stable_actionable_renderer_structure(
+    core_code: CoreErrorCode,
+    core_details: tuple[CoreSafeDetail, ...],
+    renderer_code: ErrorCode,
+    action_fragment: str,
+) -> None:
+    private_details = (
+        CoreSafeDetail(name="endpoint_label", value="private-endpoint-label"),
+        CoreSafeDetail(name="cache_path", value="/private/cache/kegg.sqlite3"),
+        CoreSafeDetail(name="endpoint_fingerprint", value="f" * 64),
+        CoreSafeDetail(name="request_key", value="/get/private/request"),
+        CoreSafeDetail(name="payload", value="private-payload"),
+    )
+    provider = CorePathwayAssetProvider(
+        cast(
+            KeggClient,
+            _FailingAssetClient(
+                CoreErrorDetail(
+                    code=core_code,
+                    message="Synthetic core failure.",
+                    recoverable=True,
+                    suggested_action="Synthetic core action.",
+                    safe_details=(*core_details, *private_details),
+                )
+            ),
+        )
+    )
+
+    with pytest.raises(RenderMcpError) as raised:
+        await provider.get_asset("ko00010", "image")
+
+    detail = raised.value.detail
+    serialized = detail.model_dump(mode="json")
+    Draft202012Validator(ErrorDetail.model_json_schema(mode="serialization")).validate(  # pyright: ignore[reportUnknownMemberType]
+        serialized
+    )
+    assert ErrorDetail.model_validate_json(detail.model_dump_json(), strict=True) == detail
+    assert detail.code is renderer_code
+    assert action_fragment in detail.suggested_action
+    safe_details = {item.name: item.value for item in detail.safe_details}
+    assert safe_details["asset_kind"] == "image"
+    assert safe_details["core_error_code"] == core_code.value
+    assert not {
+        "endpoint_label",
+        "cache_path",
+        "endpoint_fingerprint",
+        "request_key",
+        "payload",
+    }.intersection(safe_details)
 
 
 @pytest.mark.asyncio

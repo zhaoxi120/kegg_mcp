@@ -7,9 +7,11 @@ model, or contacted KEGG.
 ## Method
 
 Independent forward/manual reviews covered the three repository Skills: seven core-analysis and
-annotation routes, plus focused rendering routes for the version 2 handoff. The reviewer inspected
-route selection, necessary clarification, tool choice, refusal boundaries, interpretation
-language, single-MCP dependency ownership, and the stable file handoffs between Skills.
+annotation routes, plus focused rendering routes for the version 2 handoff. On 2026-07-18, two
+fresh Codex reviews also exercised one combined FASTA-to-SVG request, once with the focused Skills
+named and once through implicit selection. The reviewers inspected route selection, necessary
+clarification, tool choice, refusal boundaries, interpretation language, single-MCP dependency
+ownership, automatic continuation, and the stable file handoffs between Skills.
 
 The repository tests under `tests/skill/` provide deterministic instruction-contract coverage.
 They verify metadata, trigger terms, boundaries, MCP dependency identity, required guidance, and
@@ -27,7 +29,9 @@ guess K numbers; route to the independent `deepkoala-annotation` Skill and stop 
 companion is unavailable.
 
 Observed route: passed. The Skill states its boundary, keeps annotation outside the core MCP, and
-returns controlled versioned files for a separate `kegg-ko-analysis` stage.
+returns controlled versioned files. It stops after annotation when that is the complete request;
+when the original request also asks for KEGG analysis, the model continues with the independent
+`kegg-ko-analysis` Skill without asking for another prompt or a manual path copy.
 
 ### Optional companion lifecycle
 
@@ -40,9 +44,11 @@ The `deepkoala-annotation` route was reviewed in four states:
 - **Ready:** one explicit annotation request permits one `run_deepkoala_job` call; no second
   confirmation, acknowledgement field, workflow digest, or artifact digest is requested.
 - **Successful:** the Skill returns the controlled absolute detailed-CSV path and readable source
-  provenance for a separate core-analysis stage, which remains the sole normalization authority.
-  When a shared allowed filesystem root is unavailable, it returns only the companion's bounded
-  resource pages for adapter reconstruction.
+  provenance for the independent core-analysis stage, which remains the sole normalization
+  authority. If that stage was already requested, the model passes `annotations_path`,
+  `input_format`, and `source` unchanged and continues automatically. When a shared allowed
+  filesystem root is unavailable, it returns only the companion's bounded resource pages for
+  adapter reconstruction.
 
 Companion route check: passed. The instructions do not contain an annotator command, subprocess
 implementation, model management, output parser, or duplicate decision policy.
@@ -109,12 +115,14 @@ an MCP result.
 
 The rendering review used the tracked `kegg-pathway-rendering` instructions and its focused
 references. The rendering Skill depends only on `kegg-render-mcp`; analysis and annotation are
-separate preceding Skills that deliver stable files. All focused routes passed:
+independent preceding Skills that deliver stable files. One original request may continue across
+all three focused Skills, but no Skill calls more than its one declared MCP. All focused routes
+passed:
 
 | Prompt class | Expected route and boundary | Result |
 | --- | --- | --- |
-| Protein FASTA to pathway graphic | Route annotation, KO analysis, and rendering through three independent Skills and stable files; never create an umbrella multi-server workflow. | Passed |
-| Existing K numbers | Route first to core analysis for a version 2 handoff, then invoke the rendering Skill separately. | Passed |
+| Protein FASTA to pathway graphic | Route annotation, KO analysis, and rendering through three independent Skills and stable files; continue automatically after each successful handoff without creating an umbrella multi-server Skill. | Passed |
+| Existing K numbers | Route first to core analysis for a version 2 handoff, then continue with the rendering Skill when graphics were part of the original request. | Passed |
 | Existing version 2 handoff | Skip annotation and analysis; let the renderer validate and render the unchanged handoff. | Passed |
 | Renderer unavailable | Stop with the deployment result; do not synthesize a fallback image or install another tool. | Passed |
 | Version 1 handoff | Request a new core analysis bundle because preview-only input cannot be upgraded losslessly. | Passed |
@@ -122,6 +130,13 @@ separate preceding Skills that deliver stable files. All focused routes passed:
 | Rejected prediction as a missing gene | Refuse the absence claim and exclude rejected evidence from coloring. | Passed |
 | Global or overview pathway | Preserve explicit rejection or summary-only behavior; do not approximate a regular box overlay. | Passed |
 | MODULE logic diagram | Preserve AND, OR, optional, grouping, and MODULE-reference semantics from the authoritative core AST. | Passed |
+
+The explicit and implicit combined-request reviews both selected the same order:
+`deepkoala-annotation` -> stable detailed CSV -> `kegg-ko-analysis` -> version 2
+`render_input.json` -> `kegg-pathway-rendering`. They requested no second prompt, stage-transition
+confirmation, or manual path copy. They also preserved stop conditions for an unavailable or
+failed upstream dependency and did not claim that any MCP call or biological analysis had actually
+run.
 
 The review also confirmed that the Skill does not contain inference, normalization, KGML parsing,
 MODULE evaluation, pathway-coverage calculation, color assignment, SVG construction, pixel

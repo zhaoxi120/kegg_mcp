@@ -65,3 +65,15 @@ def test_deepkoala_skill_uses_only_companion_tools_and_stable_files() -> None:
     assert "deepkoala_annotations.csv" in corpus
     assert "deepkoala_run_report.md" in corpus
     assert "not a private identifier" in corpus
+
+
+def test_deepkoala_skill_allows_stable_cross_skill_continuation() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "original request also asks for KEGG",
+        "automatically continue with the installed `kegg-ko-analysis` Skill",
+        "Do not ask the user to copy",
+        "source` object unchanged",
+        "not call either downstream MCP itself",
+    ):
+        assert fragment in corpus

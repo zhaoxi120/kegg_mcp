@@ -39,3 +39,15 @@ def test_annotation_stage_preserves_scientific_boundaries() -> None:
     assert "notice digest" in CORPUS
     assert "workflow digests" in CORPUS
     assert "python3 -m deepkoala" not in CORPUS
+
+
+def test_original_fasta_to_analysis_request_continues_without_reprompting() -> None:
+    for fragment in (
+        "If the original request ends at protein annotation",
+        "automatically continue with the installed `kegg-ko-analysis` Skill",
+        'input_format="deepkoala_detailed"',
+        "send another prompt",
+        "parse, or rewrite the CSV",
+        "preserve its requested formats and target scope",
+    ):
+        assert fragment in CORPUS

@@ -1,7 +1,7 @@
 # KEGG Client and Cache Contract
 
-Status: Milestone 2 client-layer contract plus the post-MVP typed pathway-asset extension as
-implemented on 2026-07-16.
+Status: Milestone 2 client-layer contract plus the post-MVP typed pathway-asset and read-only cache
+extensions as implemented on 2026-07-18.
 
 This document describes the typed KEGG request contracts, access eligibility gate, bounded request
 preparation, response parsing, local cache, and retrieval provenance, including the public library
@@ -80,7 +80,9 @@ config = KeggClientConfig(access=OfflineCacheAccess())
 
 Every operation under this profile is forced to a cache-only read before cache lookup. The HTTP
 transport and deployment-wide limiter are never invoked. Cache misses return
-`CACHE_ENTRY_NOT_FOUND`; stale entries still require `allow_stale=True`.
+`CACHE_ENTRY_NOT_FOUND`; stale entries still require `allow_stale=True`. The client also forces its
+SQLite adapter into read-only mode. A missing database is a cache miss and neither the database nor
+its parent is created; cache writes and cleanup fail closed.
 
 Licensed access also requires an explicit assertion. The endpoint must use HTTPS, must not contain
 credentials, query parameters, fragments, percent-encoded components, backslashes, or traversal
@@ -319,6 +321,14 @@ kegg-mcp cache cleanup --expired --json
 
 When the configured database does not exist, status and expired-row cleanup return zero counts
 without creating the database or its parent directory.
+
+An `offline_cache` client opens only an existing owner-controlled database through SQLite
+`mode=ro`, enables query-only and untrusted-schema protections, and requires an owner-only `0600`
+regular file beneath a safe owner-controlled parent. It validates the schema version,
+auto-vacuum mode, journal mode, parser metadata, and configured logical and physical size bounds
+before serving a row. It does not initialize or migrate a database and cannot write, clean up, or
+fall back to HTTP. Operators must populate or refresh the selected public-academic or confirmed
+licensed endpoint namespace in a separately authorized live deployment.
 
 At lookup time:
 
