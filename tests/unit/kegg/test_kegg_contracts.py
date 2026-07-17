@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from kegg_mcp.kegg.contracts import (
     PUBLIC_KEGG_ENDPOINT,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     CachePolicy,
     ConvRequest,
     KeggBriteEntryKind,
@@ -17,6 +18,8 @@ from kegg_mcp.kegg.contracts import (
     LicensedAccess,
     LinkRequest,
     PublicAcademicAccess,
+    RateLimitPolicy,
+    endpoint_fingerprint,
 )
 
 
@@ -37,6 +40,12 @@ def test_request_options_default_to_network_refresh() -> None:
 def test_cache_only_requests_reject_network_refresh() -> None:
     with pytest.raises(ValidationError):
         KeggRequestOptions(cache_only=True)
+
+
+@pytest.mark.parametrize("state_root", ["relative", "../rate-limit"])
+def test_rate_limit_state_root_must_be_absolute_and_traversal_free(state_root: str) -> None:
+    with pytest.raises(ValidationError):
+        RateLimitPolicy(state_root=state_root)
 
 
 def test_public_access_requires_literal_academic_confirmation() -> None:
@@ -70,7 +79,7 @@ def test_licensed_access_rejects_unsafe_or_mislabeled_endpoints(endpoint: str) -
         LicensedAccess(
             authorized_use_confirmed=True,
             endpoint=endpoint,
-            endpoint_label="institutional service",
+            endpoint_label="institutional-service",
         )
 
 
@@ -78,7 +87,7 @@ def test_licensed_access_normalizes_one_trailing_slash() -> None:
     access = LicensedAccess(
         authorized_use_confirmed=True,
         endpoint="https://licensed.example.test/api/",
-        endpoint_label="institutional service",
+        endpoint_label="institutional-service",
     )
 
     assert access.endpoint == "https://licensed.example.test/api"
@@ -88,7 +97,7 @@ def test_licensed_access_canonicalizes_equivalent_authority_forms() -> None:
     access = LicensedAccess(
         authorized_use_confirmed=True,
         endpoint="HTTPS://Licensed.Example.Test.:443/api/",
-        endpoint_label="institutional service",
+        endpoint_label="institutional-service",
     )
 
     assert access.endpoint == "https://licensed.example.test/api"
@@ -98,7 +107,7 @@ def test_licensed_access_preserves_a_valid_nondefault_port() -> None:
     access = LicensedAccess(
         authorized_use_confirmed=True,
         endpoint="https://licensed.example.test:8443/api",
-        endpoint_label="institutional service",
+        endpoint_label="institutional-service",
     )
 
     assert access.endpoint == "https://licensed.example.test:8443/api"
@@ -113,7 +122,7 @@ def test_licensed_access_rejects_invalid_ports(endpoint: str) -> None:
         LicensedAccess(
             authorized_use_confirmed=True,
             endpoint=endpoint,
-            endpoint_label="institutional service",
+            endpoint_label="institutional-service",
         )
 
 
@@ -124,13 +133,35 @@ def test_sensitive_configuration_values_are_hidden_in_validation_errors() -> Non
         LicensedAccess(
             authorized_use_confirmed=True,
             endpoint=f"https://user:{secret}@licensed.example.test",
-            endpoint_label="institutional service",
+            endpoint_label="institutional-service",
         )
     with pytest.raises(ValidationError) as cache_error:
         CachePolicy(path=f"/private/{secret}\x00/cache.sqlite3")
 
     assert secret not in str(endpoint_error.value)
     assert secret not in str(cache_error.value)
+
+
+def test_endpoint_fingerprint_is_stable_opaque_and_endpoint_specific() -> None:
+    first = endpoint_fingerprint("https://licensed.example.test/api")
+    equivalent = endpoint_fingerprint("https://licensed.example.test/api")
+    second = endpoint_fingerprint("https://other.example.test/api")
+
+    assert first == equivalent
+    assert first != second
+    assert len(first) == 64
+    assert "licensed.example.test" not in first
+    assert endpoint_fingerprint(PUBLIC_KEGG_ENDPOINT) == PUBLIC_KEGG_ENDPOINT_FINGERPRINT
+
+
+@pytest.mark.parametrize("label", ["has space", " leading", "trailing ", "bad/label"])
+def test_endpoint_label_uses_one_shared_strict_logical_pattern(label: str) -> None:
+    with pytest.raises(ValidationError):
+        LicensedAccess(
+            authorized_use_confirmed=True,
+            endpoint="https://licensed.example.test/api",
+            endpoint_label=label,
+        )
 
 
 @pytest.mark.parametrize(

@@ -62,3 +62,28 @@ def test_allowed_roots_are_canonicalized_and_deduplicated(tmp_path: Path) -> Non
 def test_allowed_roots_reject_relative_or_empty_entries(value: str) -> None:
     with pytest.raises(ValueError, match="ALLOWED_ROOTS"):
         load_runtime_config({"KEGG_MCP_ALLOWED_ROOTS": value})
+
+
+def test_cache_capacity_and_shared_rate_limit_root_are_deployment_configurable(
+    tmp_path: Path,
+) -> None:
+    config = load_runtime_config(
+        {
+            "KEGG_MCP_CACHE_PATH": str(tmp_path / "cache.sqlite3"),
+            "KEGG_MCP_CACHE_MAX_ENTRIES": "12",
+            "KEGG_MCP_CACHE_MAX_PAYLOAD_BYTES": "1000000",
+            "KEGG_MCP_CACHE_MAX_DATABASE_BYTES": "2000000",
+            "KEGG_MCP_RATE_LIMIT_ROOT": str(tmp_path / "rate-limit"),
+        }
+    )
+
+    assert config.kegg.cache.max_entries == 12
+    assert config.kegg.cache.max_payload_bytes == 1_000_000
+    assert config.kegg.cache.max_database_bytes == 2_000_000
+    assert config.kegg.rate_limit.state_root == str(tmp_path / "rate-limit")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "01", "not-a-number"])
+def test_cache_capacity_environment_requires_positive_decimal_integers(value: str) -> None:
+    with pytest.raises(ValueError):
+        load_runtime_config({"KEGG_MCP_CACHE_MAX_ENTRIES": value})

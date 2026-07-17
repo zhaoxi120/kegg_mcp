@@ -9,6 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from kegg_mcp.kegg.cache import SQLiteKeggCache
+from kegg_mcp.kegg.contracts import (
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+    KeggOperation,
+    RetrievalEndpointClass,
+)
 from kegg_mcp.mcp import cli
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
@@ -145,3 +151,52 @@ def test_cleanup_expired_is_explicit_bounded_and_path_redacted(tmp_path: Path) -
         "status": "ok",
     }
     assert str(store_path) not in output.getvalue()
+
+
+def test_cache_status_and_cleanup_are_explicit_and_redacted(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private-kegg-cache.sqlite3"
+    now = datetime.now(UTC)
+    SQLiteKeggCache(cache_path).write(
+        KeggOperation.GET,
+        "/get/K00001",
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=b"expired",
+        retrieved_at=now - timedelta(days=8),
+        expires_at=now - timedelta(days=1),
+        parser_version="1",
+        database_release=None,
+    )
+    environment = {"KEGG_MCP_CACHE_PATH": str(cache_path)}
+    status_output = StringIO()
+
+    assert (
+        cli.main(
+            ["cache", "status", "--json"],
+            environment=environment,
+            stdout=status_output,
+        )
+        == 0
+    )
+    status = json.loads(status_output.getvalue())
+    assert status["status"] == "ok"
+    assert status["operation"] == "cache_status"
+    assert status["entry_count"] == 1
+    assert status["expired_entry_count"] == 1
+    assert str(cache_path) not in status_output.getvalue()
+    assert PUBLIC_KEGG_ENDPOINT_FINGERPRINT not in status_output.getvalue()
+
+    cleanup_output = StringIO()
+    assert (
+        cli.main(
+            ["cache", "cleanup", "--expired", "--json"],
+            environment=environment,
+            stdout=cleanup_output,
+        )
+        == 0
+    )
+    cleanup = json.loads(cleanup_output.getvalue())
+    assert cleanup["operation"] == "expired_cache_entries"
+    assert cleanup["expired_entries"] == 1
+    assert cleanup["remaining_entries"] == 0
+    assert str(cache_path) not in cleanup_output.getvalue()

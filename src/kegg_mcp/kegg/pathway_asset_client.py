@@ -50,7 +50,7 @@ class PathwayAssetClient:
                 prepared.operation,
                 prepared.normalized_request_key,
                 self._executor.retrieval_endpoint_class,
-                self._executor.endpoint_label,
+                self._executor.endpoint_fingerprint,
                 now=now,
                 expected_parser_version=PATHWAY_ASSET_PARSER_VERSION,
             )
@@ -108,7 +108,7 @@ class PathwayAssetClient:
             prepared.operation,
             prepared.normalized_request_key,
             self._executor.retrieval_endpoint_class,
-            self._executor.endpoint_label,
+            self._executor.endpoint_fingerprint,
             body=response.body,
             retrieved_at=retrieved_at,
             expires_at=expires_at,

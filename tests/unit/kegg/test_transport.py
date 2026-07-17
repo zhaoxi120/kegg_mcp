@@ -16,7 +16,6 @@ import pytest
 import kegg_mcp.kegg.transport as transport_module
 from kegg_mcp.kegg.contracts import MAX_HTTP_METADATA_ITEMS, HttpMetadata
 from kegg_mcp.kegg.transport import (
-    PROJECT_DOCUMENTATION_URL,
     USER_AGENT,
     HttpsTransport,
     TransportError,
@@ -104,7 +103,9 @@ def test_transport_sends_fixed_safe_headers_and_retains_only_allowlisted_metadat
     assert request.get_header("Accept") == "text/plain"
     assert request.get_header("Accept-encoding") == "identity"
     assert request.get_header("User-agent") == USER_AGENT
-    assert PROJECT_DOCUMENTATION_URL in USER_AGENT
+    assert USER_AGENT.startswith("kegg-mcp/")
+    assert "github" not in USER_AGENT.casefold()
+    assert "zhaoxi120" not in USER_AGENT.casefold()
     assert opener.timeouts == [7.5]
     assert response.read_sizes == [101]
     assert response.closed is True

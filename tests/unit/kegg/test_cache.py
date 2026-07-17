@@ -18,7 +18,7 @@ from kegg_mcp.kegg.cache import (
 )
 from kegg_mcp.kegg.contracts import (
     MAX_HTTP_METADATA_ITEMS,
-    PUBLIC_KEGG_ENDPOINT_LABEL,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     HttpMetadata,
     KeggOperation,
     RetrievalEndpointClass,
@@ -36,14 +36,14 @@ def _write_response(
     operation: KeggOperation = KeggOperation.GET,
     request_key: str = _REQUEST_KEY,
     endpoint_class: RetrievalEndpointClass = RetrievalEndpointClass.PUBLIC_ACADEMIC,
-    endpoint_label: str = PUBLIC_KEGG_ENDPOINT_LABEL,
+    endpoint_fingerprint: str = PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     body: bytes = b"ENTRY       K00001\n///\n",
 ) -> CachedResponse:
     return cache.write(
         operation,
         request_key,
         endpoint_class,
-        endpoint_label,
+        endpoint_fingerprint,
         body=body,
         retrieved_at=_RETRIEVED_AT,
         expires_at=_EXPIRES_AT,
@@ -62,7 +62,7 @@ def _read_response(
     operation: KeggOperation = KeggOperation.GET,
     request_key: str = _REQUEST_KEY,
     endpoint_class: RetrievalEndpointClass = RetrievalEndpointClass.PUBLIC_ACADEMIC,
-    endpoint_label: str = PUBLIC_KEGG_ENDPOINT_LABEL,
+    endpoint_fingerprint: str = PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     now: datetime = _RETRIEVED_AT,
     parser_version: str = _PARSER_VERSION,
 ) -> CacheLookup:
@@ -70,7 +70,7 @@ def _read_response(
         operation,
         request_key,
         endpoint_class,
-        endpoint_label,
+        endpoint_fingerprint,
         now=now,
         expected_parser_version=parser_version,
     )
@@ -117,31 +117,31 @@ def test_expired_response_is_returned_as_stale_without_policy_decision(tmp_path:
 
 
 @pytest.mark.parametrize(
-    ("operation", "request_key", "endpoint_class", "endpoint_label"),
+    ("operation", "request_key", "endpoint_class", "endpoint_fingerprint"),
     [
         (
             KeggOperation.INFO,
             _REQUEST_KEY,
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         ),
         (
             KeggOperation.GET,
             "/get/K00002",
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         ),
         (
             KeggOperation.GET,
             _REQUEST_KEY,
             RetrievalEndpointClass.LICENSED,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
         ),
         (
             KeggOperation.GET,
             _REQUEST_KEY,
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            "licensed-test",
+            "f" * 64,
         ),
     ],
 )
@@ -150,7 +150,7 @@ def test_cache_namespace_includes_every_retrieval_dimension(
     operation: KeggOperation,
     request_key: str,
     endpoint_class: RetrievalEndpointClass,
-    endpoint_label: str,
+    endpoint_fingerprint: str,
 ) -> None:
     cache = SQLiteKeggCache(tmp_path / "kegg.sqlite3")
     _write_response(cache)
@@ -160,7 +160,7 @@ def test_cache_namespace_includes_every_retrieval_dimension(
         operation=operation,
         request_key=request_key,
         endpoint_class=endpoint_class,
-        endpoint_label=endpoint_label,
+        endpoint_fingerprint=endpoint_fingerprint,
     )
 
     assert lookup == CacheLookup(state=CacheReadState.MISS, response=None)
@@ -176,6 +176,99 @@ def test_upsert_replaces_one_namespace_atomically(tmp_path: Path) -> None:
     assert lookup.response == replacement
     assert lookup.response is not None
     assert lookup.response.body == b"second"
+
+
+def test_cache_refuses_fresh_entry_eviction_at_entry_capacity(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    cache = SQLiteKeggCache(
+        cache_path,
+        max_entries=1,
+        max_payload_bytes=1_000,
+        max_database_bytes=1024 * 1024,
+    )
+    _write_response(cache, request_key="/get/K00001", body=b"first")
+
+    with pytest.raises(KeggMcpError) as error:
+        _write_response(cache, request_key="/get/K00002", body=b"second")
+
+    _assert_cache_failed(error, cache_path)
+    assert any(detail.value == "entry_limit" for detail in error.value.detail.safe_details)
+    assert _read_response(cache, request_key="/get/K00001").response is not None
+    assert _read_response(cache, request_key="/get/K00002").state is CacheReadState.MISS
+
+
+def test_cache_refuses_payload_growth_without_deleting_fresh_rows(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    cache = SQLiteKeggCache(
+        cache_path,
+        max_entries=10,
+        max_payload_bytes=8,
+        max_database_bytes=1024 * 1024,
+    )
+    _write_response(cache, body=b"12345678")
+
+    with pytest.raises(KeggMcpError) as error:
+        _write_response(cache, request_key="/get/K00002", body=b"x")
+
+    _assert_cache_failed(error, cache_path)
+    assert any(detail.value == "payload_limit" for detail in error.value.detail.safe_details)
+
+
+def test_write_removes_expired_rows_before_applying_capacity(tmp_path: Path) -> None:
+    cache = SQLiteKeggCache(
+        tmp_path / "kegg.sqlite3",
+        max_entries=1,
+        max_payload_bytes=100,
+        max_database_bytes=1024 * 1024,
+    )
+    _write_response(cache, request_key="/get/K00001", body=b"expired")
+    retrieved_at = _EXPIRES_AT + timedelta(seconds=1)
+
+    cache.write(
+        KeggOperation.GET,
+        "/get/K00002",
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=b"fresh",
+        retrieved_at=retrieved_at,
+        expires_at=retrieved_at + timedelta(days=1),
+        parser_version=_PARSER_VERSION,
+        database_release=None,
+    )
+
+    assert _read_response(cache, request_key="/get/K00001").state is CacheReadState.MISS
+    assert (
+        _read_response(cache, request_key="/get/K00002", now=retrieved_at).state
+        is CacheReadState.FRESH
+    )
+
+
+def test_status_and_expired_cleanup_are_redacted_and_bounded(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private-cache-name.sqlite3"
+    cache = SQLiteKeggCache(
+        cache_path,
+        max_entries=10,
+        max_payload_bytes=1_000,
+        max_database_bytes=1024 * 1024,
+    )
+    _write_response(cache, body=b"expired-payload")
+
+    status = cache.status(now=_EXPIRES_AT)
+
+    assert status.entry_count == 1
+    assert status.expired_entry_count == 1
+    assert status.payload_bytes == len(b"expired-payload")
+    assert status.database_bytes <= status.max_database_bytes
+    assert str(cache_path) not in repr(status)
+    assert PUBLIC_KEGG_ENDPOINT_FINGERPRINT not in repr(status)
+
+    summary = cache.cleanup_expired(now=_EXPIRES_AT)
+
+    assert summary.expired_entries == 1
+    assert summary.expired_payload_bytes == len(b"expired-payload")
+    assert summary.remaining_entries == 0
+    assert summary.remaining_payload_bytes == 0
+    assert summary.database_bytes <= status.max_database_bytes
 
 
 @pytest.mark.parametrize(
@@ -223,7 +316,7 @@ def test_non_allowlisted_http_metadata_is_rejected_before_storage(tmp_path: Path
             KeggOperation.GET,
             _REQUEST_KEY,
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
             body=b"valid parsed response",
             retrieved_at=_RETRIEVED_AT,
             expires_at=_EXPIRES_AT,
@@ -249,7 +342,7 @@ def test_excess_http_metadata_is_rejected_before_storage(tmp_path: Path) -> None
             KeggOperation.GET,
             _REQUEST_KEY,
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
             body=b"valid parsed response",
             retrieved_at=_RETRIEVED_AT,
             expires_at=_EXPIRES_AT,
@@ -307,7 +400,7 @@ def test_invalid_cache_timestamps_fail_before_storage(
             KeggOperation.GET,
             _REQUEST_KEY,
             RetrievalEndpointClass.PUBLIC_ACADEMIC,
-            PUBLIC_KEGG_ENDPOINT_LABEL,
+            PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
             body=b"valid parsed response",
             retrieved_at=retrieved_at,
             expires_at=expires_at,

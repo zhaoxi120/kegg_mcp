@@ -26,11 +26,10 @@ from pydantic import ValidationError
 from kegg_mcp import __version__
 from kegg_mcp.kegg.contracts import MAX_HTTP_METADATA_ITEMS, HttpMetadata
 
-PROJECT_DOCUMENTATION_URL = "https://github.com/zhaoxi120/kegg_mcp"
 _ALLOWED_METADATA_HEADERS = ("content-type", "etag", "last-modified", "date")
 
 
-USER_AGENT = f"kegg-mcp/{__version__} (+{PROJECT_DOCUMENTATION_URL})"
+USER_AGENT = f"kegg-mcp/{__version__}"
 
 
 class TransportErrorKind(StrEnum):

@@ -18,16 +18,19 @@ from pydantic import ValidationError
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.kegg.contracts import (
+    DEFAULT_CACHE_MAX_DATABASE_BYTES,
+    DEFAULT_CACHE_MAX_ENTRIES,
+    DEFAULT_CACHE_MAX_PAYLOAD_BYTES,
     MAX_HTTP_METADATA_ITEMS,
     HttpMetadata,
     KeggOperation,
     RetrievalEndpointClass,
 )
 
-_SCHEMA_VERSION: Final = 2
+_SCHEMA_VERSION: Final = 3
 _MAX_REQUEST_KEY_CHARACTERS: Final = 65_536
 _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
-_ENDPOINT_LABEL_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
+_ENDPOINT_FINGERPRINT_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
 
 _CREATE_SCHEMA = """
@@ -35,7 +38,7 @@ CREATE TABLE IF NOT EXISTS kegg_responses (
     operation TEXT NOT NULL,
     normalized_request_key TEXT NOT NULL,
     endpoint_class TEXT NOT NULL,
-    endpoint_label TEXT NOT NULL,
+    endpoint_fingerprint TEXT NOT NULL,
     response_body BLOB NOT NULL,
     retrieved_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
@@ -46,7 +49,7 @@ CREATE TABLE IF NOT EXISTS kegg_responses (
         operation,
         normalized_request_key,
         endpoint_class,
-        endpoint_label
+        endpoint_fingerprint
     )
 ) WITHOUT ROWID
 """
@@ -63,7 +66,7 @@ FROM kegg_responses
 WHERE operation = ?
   AND normalized_request_key = ?
   AND endpoint_class = ?
-  AND endpoint_label = ?
+  AND endpoint_fingerprint = ?
 """
 
 _UPSERT_RESPONSE = """
@@ -71,7 +74,7 @@ INSERT INTO kegg_responses (
     operation,
     normalized_request_key,
     endpoint_class,
-    endpoint_label,
+    endpoint_fingerprint,
     response_body,
     retrieved_at,
     expires_at,
@@ -83,7 +86,7 @@ ON CONFLICT (
     operation,
     normalized_request_key,
     endpoint_class,
-    endpoint_label
+    endpoint_fingerprint
 ) DO UPDATE SET
     response_body = excluded.response_body,
     retrieved_at = excluded.retrieved_at,
@@ -126,22 +129,86 @@ class CacheLookup:
             raise ValueError("cache misses alone must omit a response")
 
 
+@dataclass(frozen=True, slots=True)
+class CacheStatus:
+    """Redacted bounded cache capacity metadata."""
+
+    entry_count: int
+    expired_entry_count: int
+    payload_bytes: int
+    database_bytes: int
+    max_entries: int
+    max_payload_bytes: int
+    max_database_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CacheCleanupSummary:
+    """Redacted outcome of one explicit expired-row cleanup."""
+
+    expired_entries: int
+    expired_payload_bytes: int
+    remaining_entries: int
+    remaining_payload_bytes: int
+    database_bytes: int
+
+
 class _CacheIntegrityError(Exception):
     """Internal marker for malformed or incompatible cache content."""
+
+
+class _CacheCapacityError(Exception):
+    """Internal marker for a configured cache capacity refusal."""
+
+    def __init__(self, stage: str) -> None:
+        super().__init__("cache capacity exceeded")
+        self.stage = stage
 
 
 class SQLiteKeggCache:
     """Store KEGG responses in endpoint-scoped local SQLite namespaces."""
 
-    def __init__(self, path: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
+        max_payload_bytes: int = DEFAULT_CACHE_MAX_PAYLOAD_BYTES,
+        max_database_bytes: int = DEFAULT_CACHE_MAX_DATABASE_BYTES,
+    ) -> None:
         self._configured_path = os.fspath(path)
+        raw_max_entries = cast(object, max_entries)
+        raw_max_payload_bytes = cast(object, max_payload_bytes)
+        raw_max_database_bytes = cast(object, max_database_bytes)
+        if (
+            isinstance(raw_max_entries, bool)
+            or not isinstance(raw_max_entries, int)
+            or raw_max_entries <= 0
+        ):
+            raise ValueError("max_entries must be a positive integer")
+        if (
+            isinstance(raw_max_payload_bytes, bool)
+            or not isinstance(raw_max_payload_bytes, int)
+            or raw_max_payload_bytes <= 0
+        ):
+            raise ValueError("max_payload_bytes must be a positive integer")
+        if (
+            isinstance(raw_max_database_bytes, bool)
+            or not isinstance(raw_max_database_bytes, int)
+            or raw_max_database_bytes < 1024 * 1024
+            or raw_max_payload_bytes >= raw_max_database_bytes
+        ):
+            raise ValueError("max_database_bytes must leave bounded metadata capacity")
+        self._max_entries = raw_max_entries
+        self._max_payload_bytes = raw_max_payload_bytes
+        self._max_database_bytes = raw_max_database_bytes
 
     def read(
         self,
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_label: str,
+        endpoint_fingerprint: str,
         *,
         now: datetime,
         expected_parser_version: str,
@@ -152,7 +219,7 @@ class SQLiteKeggCache:
                 operation,
                 normalized_request_key,
                 retrieval_endpoint_class,
-                endpoint_label,
+                endpoint_fingerprint,
             )
             checked_now = _normalize_datetime(now)
             _validate_parser_version(expected_parser_version)
@@ -181,7 +248,7 @@ class SQLiteKeggCache:
         operation: KeggOperation,
         normalized_request_key: str,
         retrieval_endpoint_class: RetrievalEndpointClass,
-        endpoint_label: str,
+        endpoint_fingerprint: str,
         *,
         body: bytes,
         retrieved_at: datetime,
@@ -196,7 +263,7 @@ class SQLiteKeggCache:
                 operation,
                 normalized_request_key,
                 retrieval_endpoint_class,
-                endpoint_label,
+                endpoint_fingerprint,
             )
             response = _validate_response_for_write(
                 body=body,
@@ -220,11 +287,125 @@ class SQLiteKeggCache:
             metadata_json,
         )
         try:
-            with closing(self._connect()) as connection, connection:
-                connection.execute(_UPSERT_RESPONSE, values)
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute(
+                        "DELETE FROM kegg_responses WHERE expires_at <= ?",
+                        (_encode_datetime(response.retrieved_at),),
+                    )
+                    existing = connection.execute(
+                        """
+                        SELECT length(response_body)
+                        FROM kegg_responses
+                        WHERE operation = ?
+                          AND normalized_request_key = ?
+                          AND endpoint_class = ?
+                          AND endpoint_fingerprint = ?
+                        """,
+                        namespace,
+                    ).fetchone()
+                    aggregate = connection.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0) "
+                        "FROM kegg_responses"
+                    ).fetchone()
+                    entry_count, payload_bytes = _decode_integer_row(aggregate, length=2)
+                    replaced_bytes = 0
+                    if existing is not None:
+                        if len(existing) != 1 or not isinstance(existing[0], int):
+                            raise _CacheIntegrityError("invalid existing cache payload size")
+                        replaced_bytes = existing[0]
+                    proposed_entries = entry_count + (0 if existing is not None else 1)
+                    proposed_payload = payload_bytes - replaced_bytes + len(response.body)
+                    if proposed_entries > self._max_entries:
+                        raise _CacheCapacityError("entry_limit")
+                    if proposed_payload > self._max_payload_bytes:
+                        raise _CacheCapacityError("payload_limit")
+                    connection.execute(_UPSERT_RESPONSE, values)
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+        except _CacheCapacityError as error:
+            _raise_cache_failed(operation, error.stage)
         except (OSError, RuntimeError, sqlite3.Error, _CacheIntegrityError):
             _raise_cache_failed(operation, "write")
         return response
+
+    def status(self, *, now: datetime) -> CacheStatus:
+        """Return cache counts and configured limits without paths or endpoint identities."""
+        try:
+            checked_now = _normalize_datetime(now)
+            with closing(self._connect()) as connection:
+                aggregate = connection.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0) FROM kegg_responses"
+                ).fetchone()
+                expired = connection.execute(
+                    "SELECT COUNT(*) FROM kegg_responses WHERE expires_at <= ?",
+                    (_encode_datetime(checked_now),),
+                ).fetchone()
+                entry_count, payload_bytes = _decode_integer_row(aggregate, length=2)
+                (expired_entry_count,) = _decode_integer_row(expired, length=1)
+                database_bytes = _database_bytes(connection)
+        except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError, _CacheIntegrityError):
+            _raise_cache_failed("status", "status")
+        return CacheStatus(
+            entry_count=entry_count,
+            expired_entry_count=expired_entry_count,
+            payload_bytes=payload_bytes,
+            database_bytes=database_bytes,
+            max_entries=self._max_entries,
+            max_payload_bytes=self._max_payload_bytes,
+            max_database_bytes=self._max_database_bytes,
+        )
+
+    def cleanup_expired(self, *, now: datetime) -> CacheCleanupSummary:
+        """Delete only TTL-expired rows and compact the private cache database."""
+        try:
+            checked_now = _normalize_datetime(now)
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    expired = connection.execute(
+                        """
+                        SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0)
+                        FROM kegg_responses
+                        WHERE expires_at <= ?
+                        """,
+                        (_encode_datetime(checked_now),),
+                    ).fetchone()
+                    expired_entries, expired_payload_bytes = _decode_integer_row(
+                        expired,
+                        length=2,
+                    )
+                    connection.execute(
+                        "DELETE FROM kegg_responses WHERE expires_at <= ?",
+                        (_encode_datetime(checked_now),),
+                    )
+                    remaining = connection.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0) "
+                        "FROM kegg_responses"
+                    ).fetchone()
+                    remaining_entries, remaining_payload_bytes = _decode_integer_row(
+                        remaining,
+                        length=2,
+                    )
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+                database_bytes = _database_bytes(connection)
+        except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError, _CacheIntegrityError):
+            _raise_cache_failed("cleanup", "cleanup")
+        return CacheCleanupSummary(
+            expired_entries=expired_entries,
+            expired_payload_bytes=expired_payload_bytes,
+            remaining_entries=remaining_entries,
+            remaining_payload_bytes=remaining_payload_bytes,
+            database_bytes=database_bytes,
+        )
 
     def _connect(self) -> sqlite3.Connection:
         path = self._prepare_location()
@@ -259,6 +440,16 @@ class SQLiteKeggCache:
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA trusted_schema = OFF")
             connection.execute("PRAGMA journal_mode = DELETE")
+            page_size_row = connection.execute("PRAGMA page_size").fetchone()
+            (page_size,) = _decode_integer_row(page_size_row, length=1, positive=True)
+            max_page_count = max(1, self._max_database_bytes // page_size)
+            (configured_page_count,) = _decode_integer_row(
+                connection.execute(f"PRAGMA max_page_count = {max_page_count}").fetchone(),
+                length=1,
+                positive=True,
+            )
+            if configured_page_count > max_page_count:
+                raise _CacheIntegrityError("SQLite database limit was not applied")
             schema_version_row = connection.execute("PRAGMA user_version").fetchone()
             if schema_version_row is None or len(schema_version_row) != 1:
                 raise _CacheIntegrityError("missing SQLite schema version")
@@ -268,9 +459,17 @@ class SQLiteKeggCache:
             if schema_version not in {0, _SCHEMA_VERSION}:
                 raise _CacheIntegrityError("unsupported SQLite schema version")
             with connection:
+                if schema_version == 0:
+                    connection.execute("PRAGMA auto_vacuum = FULL")
                 connection.execute(_CREATE_SCHEMA)
                 if schema_version == 0:
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            (auto_vacuum,) = _decode_integer_row(
+                connection.execute("PRAGMA auto_vacuum").fetchone(),
+                length=1,
+            )
+            if auto_vacuum != 1:
+                raise _CacheIntegrityError("cache database must use full auto-vacuum")
         except BaseException:
             connection.close()
             raise
@@ -320,7 +519,7 @@ class SQLiteKeggCache:
         operation: object,
         normalized_request_key: object,
         retrieval_endpoint_class: object,
-        endpoint_label: object,
+        endpoint_fingerprint: object,
     ) -> tuple[str, str, str, str]:
         if not isinstance(operation, KeggOperation):
             raise TypeError("operation must be a KeggOperation")
@@ -335,15 +534,15 @@ class SQLiteKeggCache:
         ):
             raise ValueError("invalid normalized request key")
         normalized_request_key.encode("utf-8", errors="strict")
-        if not isinstance(endpoint_label, str) or not _ENDPOINT_LABEL_PATTERN.fullmatch(
-            endpoint_label
+        if not isinstance(endpoint_fingerprint, str) or not _ENDPOINT_FINGERPRINT_PATTERN.fullmatch(
+            endpoint_fingerprint
         ):
-            raise ValueError("invalid endpoint label")
+            raise ValueError("invalid endpoint fingerprint")
         return (
             operation.value,
             normalized_request_key,
             retrieval_endpoint_class.value,
-            endpoint_label,
+            endpoint_fingerprint,
         )
 
 
@@ -484,6 +683,37 @@ def _decode_http_metadata(value: str) -> tuple[HttpMetadata, ...]:
             raise _CacheIntegrityError("HTTP metadata is not allowlisted")
         items.append(item)
     return tuple(items)
+
+
+def _decode_integer_row(
+    row: object,
+    *,
+    length: int,
+    positive: bool = False,
+) -> tuple[int, ...]:
+    if not isinstance(row, tuple):
+        raise _CacheIntegrityError("invalid SQLite integer row")
+    values = cast(tuple[object, ...], row)
+    minimum = 1 if positive else 0
+    if len(values) != length or any(
+        isinstance(value, bool) or not isinstance(value, int) or value < minimum for value in values
+    ):
+        raise _CacheIntegrityError("invalid SQLite integer row")
+    return cast(tuple[int, ...], values)
+
+
+def _database_bytes(connection: sqlite3.Connection) -> int:
+    (page_count,) = _decode_integer_row(
+        connection.execute("PRAGMA page_count").fetchone(),
+        length=1,
+        positive=True,
+    )
+    (page_size,) = _decode_integer_row(
+        connection.execute("PRAGMA page_size").fetchone(),
+        length=1,
+        positive=True,
+    )
+    return page_count * page_size
 
 
 def _tighten_directory_permissions(path: Path) -> None:
