@@ -51,6 +51,15 @@ class _StoredResult:
     total_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactStoreSnapshot:
+    """Read-only in-memory retention and cleanup-pending counts."""
+
+    active_result_count: int
+    cleanup_pending_result_count: int
+    retained_bytes: int
+
+
 class RenderArtifactStore:
     """One-process scope with opaque IDs and no cross-process namespace reuse."""
 
@@ -64,8 +73,17 @@ class RenderArtifactStore:
 
     @property
     def result_count(self) -> int:
-        self._purge_expired()
-        return len(self._results)
+        return self.snapshot().active_result_count
+
+    def snapshot(self) -> ArtifactStoreSnapshot:
+        """Inspect current records without changing memory or the filesystem."""
+        now = datetime.now(UTC)
+        active = sum(stored.result.expires_at > now for stored in self._results.values())
+        return ArtifactStoreSnapshot(
+            active_result_count=active,
+            cleanup_pending_result_count=len(self._results) - active,
+            retained_bytes=sum(stored.total_bytes for stored in self._results.values()),
+        )
 
     def open(self) -> None:
         if self._state_fd is not None:

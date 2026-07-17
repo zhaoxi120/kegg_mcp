@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -266,3 +267,41 @@ def test_failed_deletion_remains_accounted_and_retryable(
     finally:
         monkeypatch.setattr(store, "_remove_result_directory", real_remove)
         store.close()
+
+
+def test_read_only_snapshot_does_not_delete_expired_files_and_explains_quota(
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    store = RenderArtifactStore(runtime_config)
+    store.open()
+    result = store.retain(
+        target_ids=("M00001",),
+        artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+        warnings=(),
+        manifest_context={},
+        output_directory=None,
+    )
+    stored = store._results[result.render_id]  # pyright: ignore[reportPrivateUsage]
+    expired_result = stored.result.model_copy(
+        update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    store._results[result.render_id] = type(stored)(  # pyright: ignore[reportPrivateUsage]
+        expired_result,
+        stored.total_bytes,
+    )
+    scope_name = store._scope_name  # pyright: ignore[reportPrivateUsage]
+    assert scope_name is not None
+    retained_directory = runtime_config.state_root / scope_name / result.render_id
+    before = tuple(sorted(path.name for path in retained_directory.iterdir()))
+
+    snapshot = store.snapshot()
+
+    assert snapshot.active_result_count == 0
+    assert snapshot.cleanup_pending_result_count == 1
+    assert snapshot.retained_bytes == stored.total_bytes
+    assert store.result_count == 0
+    assert tuple(sorted(path.name for path in retained_directory.iterdir())) == before
+
+    store._purge_expired()  # pyright: ignore[reportPrivateUsage]
+    assert not retained_directory.exists()
+    store.close()

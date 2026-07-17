@@ -60,9 +60,11 @@ export KEGG_RENDER_MCP_LICENSED_ENDPOINT=https://licensed.example.invalid
 
 Set `KEGG_RENDER_MCP_ACCESS_MODE=unconfigured` for MODULE-only rendering. Status never returns
 endpoint URLs, credentials, environment values, usernames, or local paths. Pathway assets use the
-core client's HTTPS validation, cache, retry policy, and process-wide no-burst rate limit of no
-more than three requests per second. Raw KEGG PNG and KGML payloads remain local and must not be
-uploaded or redistributed without a specific rights review.
+core client's HTTPS validation, cache, retry policy, and deployment-wide no-burst rate limit of no
+more than three requests per second. Core and Renderer use the same
+`KEGG_MCP_RATE_LIMIT_ROOT`, which defaults to an owner-only user cache directory. Raw KEGG PNG and
+KGML payloads remain local and must not be uploaded or redistributed without a specific rights
+review.
 
 Optional bounded deployment settings are:
 
@@ -116,7 +118,8 @@ files installed by the failed operation if publication cannot complete.
 
 SVG resources use `image/svg+xml`; PNG resources return binary `image/png`. Unknown, expired,
 deleted, and cross-process identifiers share the same safe not-found response. Explicit deletion
-removes all artifacts in the result.
+removes all artifacts in the result. A repeated deletion may return not-found, but its filesystem
+effect is idempotent.
 
 One state root is owned exclusively by one active renderer process. An owner-only advisory lock
 prevents concurrent processes from sharing a quota namespace. After a crashed process releases the

@@ -140,6 +140,7 @@ class RendererBounds(_Model):
     max_pixels: int = Field(ge=1)
     max_svg_bytes: int = Field(ge=1)
     max_result_bytes: int = Field(ge=1)
+    max_disk_bytes: int = Field(ge=1)
 
 
 class RendererStatus(_Model):
@@ -153,6 +154,8 @@ class RendererStatus(_Model):
     allowed_root_count: int = Field(ge=0, le=64)
     retention_seconds: int = Field(ge=1)
     retained_result_count: int = Field(ge=0)
+    cleanup_pending_result_count: int = Field(ge=0)
+    retained_bytes: int = Field(ge=0)
     bounds: RendererBounds
 
 

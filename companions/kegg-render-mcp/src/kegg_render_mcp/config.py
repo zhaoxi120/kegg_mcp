@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, Self, cast
 
+from kegg_mcp.kegg import LicensedAccess, RateLimitPolicy
+from kegg_mcp.kegg.contracts import default_rate_limit_root
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ENV_PREFIX = "KEGG_RENDER_MCP_"
@@ -20,6 +22,7 @@ LICENSED_ENDPOINT_ENV = f"{ENV_PREFIX}LICENSED_ENDPOINT"
 LICENSED_CONFIRMATION_ENV = f"{ENV_PREFIX}LICENSED_USE_CONFIRMED"
 RETENTION_SECONDS_ENV = f"{ENV_PREFIX}RETENTION_SECONDS"
 MAX_DISK_BYTES_ENV = f"{ENV_PREFIX}MAX_DISK_BYTES"
+RATE_LIMIT_ROOT_ENV = "KEGG_MCP_RATE_LIMIT_ROOT"
 
 DEFAULT_RETENTION_SECONDS = 86_400
 DEFAULT_MAX_INPUT_BYTES = 50_000_000
@@ -67,6 +70,7 @@ class RendererRuntimeConfig(BaseModel):
     access_mode: Literal["public_academic", "licensed", "unconfigured"] = "public_academic"
     licensed_endpoint: str | None = Field(default=None, min_length=1, max_length=2048, repr=False)
     retention_seconds: int = Field(default=DEFAULT_RETENTION_SECONDS, ge=1, le=2_592_000)
+    rate_limit_root: str = Field(default_factory=default_rate_limit_root)
     limits: RendererLimits = RendererLimits()
 
     @model_validator(mode="after")
@@ -91,13 +95,12 @@ class RendererRuntimeConfig(BaseModel):
         if (self.access_mode == "licensed") != (self.licensed_endpoint is not None):
             raise ValueError("licensed access requires exactly one private endpoint")
         if self.licensed_endpoint is not None:
-            from kegg_mcp.kegg import LicensedAccess
-
             LicensedAccess(
                 endpoint=self.licensed_endpoint,
                 endpoint_label="licensed-renderer-endpoint",
                 authorized_use_confirmed=True,
             )
+        RateLimitPolicy(state_root=self.rate_limit_root)
         return self
 
 
@@ -132,6 +135,7 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         retention_seconds=_integer(
             values, RETENTION_SECONDS_ENV, DEFAULT_RETENTION_SECONDS, 1, 2_592_000
         ),
+        rate_limit_root=values.get(RATE_LIMIT_ROOT_ENV, default_rate_limit_root()),
         limits=limits,
     )
 

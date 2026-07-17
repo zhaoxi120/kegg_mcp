@@ -247,7 +247,7 @@ async def construct_pathway_scene(
 async def _retrieve_pair(
     provider: PathwayAssetProvider, pathway_id: str
 ) -> tuple[RetrievedAsset, RetrievedAsset]:
-    # Sequential retrieval preserves the core client's no-burst process-wide rate policy.
+    # Sequential retrieval preserves the core client's no-burst deployment-wide rate policy.
     image = await provider.get_asset(pathway_id, "image")
     kgml = await provider.get_asset(pathway_id, "kgml")
     return image, kgml
