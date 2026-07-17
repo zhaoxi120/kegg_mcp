@@ -24,6 +24,7 @@ from kegg_mcp.services.models import (
     DETAIL_SECTION,
     MAX_ENTRY_PREVIEW_CHARACTERS,
     MAX_ENTRY_PREVIEW_FIELDS,
+    MAX_GET_PROVENANCE_BATCHES,
     MAX_MAPPING_PREVIEW_ROWS,
     CachedKeggEntryServiceResult,
     KeggEntriesServiceResult,
@@ -33,7 +34,11 @@ from kegg_mcp.services.models import (
 )
 from kegg_mcp.services.reference_budget import KeggPrimitiveClient
 from kegg_mcp.services.result_builders import _artifact_metadata, _json_bytes
-from kegg_mcp.services.result_store import ResultArtifactInput, SQLiteResultStore
+from kegg_mcp.services.result_store import (
+    ResultArtifactInput,
+    SQLiteResultStore,
+    compensate_created_result,
+)
 
 
 def retrieve_kegg_entries(
@@ -47,6 +52,9 @@ def retrieve_kegg_entries(
     """Retrieve approved entries and retain the complete parsed response locally."""
     fetched = client.get(request, options=options)
     payload = fetched.model_dump_json().encode("utf-8")
+    previews = _entry_previews(fetched, request)
+    provenance = tuple(fetched.batches[:MAX_GET_PROVENANCE_BATCHES])
+    artifact = _artifact_metadata(DETAIL_SECTION, "application/json", payload)
     stored = result_store.create(
         scope_id,
         (
@@ -55,17 +63,26 @@ def retrieve_kegg_entries(
             ),
         ),
     )
-    previews = _entry_previews(fetched, request)
-    returned = len(previews)
-    return KeggEntriesServiceResult(
-        result=stored,
-        artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
-        requested_count=len(request.entries),
-        returned_count=returned,
-        missing_identifiers=tuple(item.identifier for item in fetched.missing_entries),
-        previews=previews,
-        provenance=tuple(fetched.batches),
-    )
+    try:
+        return KeggEntriesServiceResult(
+            result=stored,
+            artifact=artifact,
+            requested_count=len(request.entries),
+            returned_count=len(previews),
+            missing_identifiers=tuple(item.identifier for item in fetched.missing_entries),
+            previews=previews,
+            provenance_batch_count=len(fetched.batches),
+            provenance=provenance,
+            provenance_truncated=len(provenance) < len(fetched.batches),
+        )
+    except BaseException:
+        compensate_created_result(
+            result_store,
+            scope_id,
+            stored.result_id,
+            stored.created_at,
+        )
+        raise
 
 
 def _entry_previews(fetched: GetResult, request: GetRequest) -> tuple[KeggEntryPreview, ...]:

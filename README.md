@@ -1,9 +1,9 @@
 # KEGG MCP
 
-KEGG MCP is a local stdio MCP server and repository-scoped Codex Skill for analyzing KEGG
-Orthology (KO) annotations. It normalizes source evidence, retrieves bounded KEGG references,
-evaluates MODULE logic, summarizes pathway KO coverage, compares KO sets deterministically, and
-produces traceable local reports.
+KEGG MCP provides a local stdio analysis server, two optional companion servers, and three focused
+repository-scoped Codex Skills for KEGG Orthology (KO) workflows. The core normalizes source
+evidence, retrieves bounded KEGG references, evaluates MODULE logic, summarizes pathway KO
+coverage, compares KO sets deterministically, and produces traceable local reports.
 
 The release-supported platform is Linux with CPython 3.11.x.
 
@@ -85,7 +85,8 @@ Core tools:
 - `analyze_ko_annotations`, `normalize_ko_annotations`
 - `get_kegg_entries`, `map_ko_ids`
 - `analyze_modules`, `analyze_pathways`, `compare_ko_sets`
-- `probe_kegg_connectivity`, `get_server_status`, `delete_analysis_result`
+- `probe_kegg_connectivity`, `get_server_status`
+- `list_analysis_results`, `delete_analysis_result`
 
 Fixed resources expose redacted server and cache status. Validated resource templates expose
 scope-isolated result metadata, sections, byte ranges, and cache-only KEGG entry reads. Result IDs
@@ -93,8 +94,27 @@ belong to one stdio process; an output bundle is the durable cross-process artif
 
 The repository-scoped Skills are:
 
-- `.agents/skills/kegg-ko-analysis/` for KO evidence, MODULE/pathway analysis, and comparisons;
-- `.agents/skills/kegg-visualization/` for renderer orchestration from authoritative core output.
+- `.agents/skills/deepkoala-annotation/` for controlled local protein-FASTA annotation;
+- `.agents/skills/kegg-ko-analysis/` for existing KO evidence, MODULE/pathway analysis, and
+  comparisons; and
+- `.agents/skills/kegg-pathway-rendering/` for static renderer orchestration from an authoritative
+  core handoff.
+
+Each Skill declares exactly one MCP dependency. Stable output-directory files connect stages; no
+Skill owns the complete annotation-to-rendering workflow.
+
+For a protein FASTA workflow, create separate private output directories and proceed through the
+three Skills explicitly:
+
+1. Ask `deepkoala-annotation` to run the allowed FASTA into a new annotation directory. It returns
+   `deepkoala_annotations.csv` and `deepkoala_run_report.md`.
+2. Give that CSV and its returned source provenance to `kegg-ko-analysis`, with a new analysis
+   directory. It writes the report tables and `render_input.json`.
+3. If graphics are needed, give that unchanged renderer handoff to
+   `kegg-pathway-rendering`, with a new image directory.
+
+The default handoff is the named file in each output directory. Opaque job and result identifiers
+are useful only while the originating stdio process remains active.
 
 ## KEGG access and local-data boundary
 
@@ -118,8 +138,8 @@ status responses.
 ## Installation and distribution boundary
 
 The core Python wheel contains the MCP server and required notices. It does not contain either
-optional companion or either repository-scoped Skill. Use a tag source archive or an exact GitHub
-checkout when the Skills are required; installing the wheel alone does not make either Skill
+optional companion or any repository-scoped Skill. Use a tag source archive or an exact GitHub
+checkout when the Skills are required; installing the wheel alone does not make the Skills
 available.
 
 For deployment instructions, see:

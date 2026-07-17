@@ -60,6 +60,9 @@ RENDER_INPUT_SCHEMA_VERSION = "2"
 RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=2"
 RENDER_INPUT_BUILDER_NAME = "kegg_render_handoff"
 RENDER_INPUT_BUILDER_VERSION = "1"
+MODULE_RENDER_MAX_CANVAS_DIMENSION = 20_000
+MODULE_RENDER_MAX_CANVAS_PIXELS = 20_000_000
+MODULE_RENDER_MAX_SVG_NODES = 4_096
 
 ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 PathwayId = Annotated[str, Field(pattern=r"^(?:ko|map|[a-z][a-z0-9]{1,7})[0-9]{5}$")]
@@ -74,6 +77,60 @@ class RenderabilityStatus(StrEnum):
     RENDERABLE = "renderable"
     SUMMARY_ONLY = "summary_only"
     NOT_RENDERABLE = "not_renderable"
+
+
+def module_scene_layout(
+    *,
+    node_count: int,
+    max_depth: int,
+    required_block_count: int,
+    optional_component_count: int,
+    reference_edge_count: int,
+) -> tuple[int, int, int]:
+    """Return the renderer's normative width, height, and SVG-node estimate."""
+    maximum_node_x = 50 + max_depth * 220
+    has_panels = bool(required_block_count or optional_component_count or reference_edge_count)
+    panel_height = (
+        required_block_count * 34
+        + optional_component_count * 28
+        + reference_edge_count * 28
+        + 34 * int(bool(optional_component_count))
+        + 34 * int(bool(reference_edge_count))
+    )
+    width = max(900, maximum_node_x + (950 if has_panels else 260))
+    height = max(620, 360 + max(node_count * 58, panel_height))
+    svg_nodes = (
+        24
+        + node_count * 4
+        + required_block_count * 4
+        + optional_component_count * 2
+        + reference_edge_count * 2
+    )
+    return width, height, svg_nodes
+
+
+def module_scene_fits_renderer(
+    *,
+    node_count: int,
+    max_depth: int,
+    required_block_count: int,
+    optional_component_count: int,
+    reference_edge_count: int,
+) -> bool:
+    """Return whether a complete MODULE scene fits every normative renderer bound."""
+    width, height, svg_nodes = module_scene_layout(
+        node_count=node_count,
+        max_depth=max_depth,
+        required_block_count=required_block_count,
+        optional_component_count=optional_component_count,
+        reference_edge_count=reference_edge_count,
+    )
+    return (
+        width <= MODULE_RENDER_MAX_CANVAS_DIMENSION
+        and height <= MODULE_RENDER_MAX_CANVAS_DIMENSION
+        and width * height <= MODULE_RENDER_MAX_CANVAS_PIXELS
+        and svg_nodes <= MODULE_RENDER_MAX_SVG_NODES
+    )
 
 
 class RenderInputLimits(FrozenModel):
@@ -371,6 +428,8 @@ class ModuleRenderTarget(FrozenModel):
                 and self.optional_component_states_complete
             ):
                 raise ValueError("renderable MODULE targets require complete renderer data")
+            if not _module_render_target_fits(self):
+                raise ValueError("renderable MODULE target exceeds the normative renderer layout")
         elif self.not_renderable_reason is None:
             raise ValueError("non-renderable MODULE targets require a machine reason")
         return self
@@ -665,6 +724,54 @@ def parse_render_input_json(payload: str | bytes) -> RenderInput:
     return value
 
 
+def _module_render_target_fits(target: ModuleRenderTarget) -> bool:
+    return _module_render_payload_fits(
+        target.definitions,
+        required_block_count=len(target.required_block_states),
+        optional_component_count=len(target.optional_component_states),
+        reference_edge_count=len(target.reference_edges),
+    )
+
+
+def _module_render_payload_fits(
+    definitions: tuple[ResolvedModuleDefinition, ...],
+    *,
+    required_block_count: int,
+    optional_component_count: int,
+    reference_edge_count: int,
+) -> bool:
+    node_count, max_depth = _module_definition_scene_metrics(definitions)
+    return module_scene_fits_renderer(
+        node_count=node_count,
+        max_depth=max_depth,
+        required_block_count=required_block_count,
+        optional_component_count=optional_component_count,
+        reference_edge_count=reference_edge_count,
+    )
+
+
+def _module_definition_scene_metrics(
+    definitions: tuple[ResolvedModuleDefinition, ...],
+) -> tuple[int, int]:
+    node_count = 0
+    max_depth = 0
+    for definition in definitions:
+        node_count += 1
+        parse_result = definition.parse_result
+        ast = parse_result.ast
+        if ast is None:
+            node_count += 1
+            max_depth = max(max_depth, 1)
+            continue
+        node_count += parse_result.ast_node_count
+        pending: list[tuple[ModuleExpression, int]] = [(block, 1) for block in ast.required_blocks]
+        while pending:
+            expression, depth = pending.pop()
+            max_depth = max(max_depth, depth)
+            pending.extend((child, depth + 1) for child in expression.children)
+    return node_count, max_depth
+
+
 def _module_target(
     dataset: AnnotationDataset,
     graph: ResolvedModuleGraph,
@@ -729,6 +836,19 @@ def _module_target(
             renderability = RenderabilityStatus.NOT_RENDERABLE
             reason = "module_optional_component_limit_exceeded"
             optional_states = ()
+        elif not _module_render_payload_fits(
+            definitions,
+            required_block_count=len(block_states),
+            optional_component_count=len(optional_states),
+            reference_edge_count=len(edges),
+        ):
+            renderability = RenderabilityStatus.NOT_RENDERABLE
+            reason = "module_renderer_layout_limit_exceeded"
+            block_states = ()
+            blocks_complete = False
+            optional_states = ()
+            optional_complete = False
+            support = ()
 
     warnings_by_code: dict[ModuleWarningCode, ModuleWarning] = {
         warning.code: warning for warning in (*pair.strict.warnings, *pair.lenient.warnings)

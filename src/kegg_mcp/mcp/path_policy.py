@@ -110,6 +110,7 @@ def resolve_output_directory(
         return None
     candidate = Path(value)
     root = _select_allowed_root(candidate, allowed_roots, field="output_directory")
+    _validate_allowed_root(root, field="output_directory")
     current = root
     _validate_private_output_ancestor(current)
     for component in candidate.relative_to(root).parts:
@@ -156,7 +157,7 @@ def _access_allowed_file(
     directories: list[int] = []
     descriptor: int | None = None
     try:
-        current_fd = os.open(root, directory_flags)
+        current_fd = _open_allowed_root(root)
         directories.append(current_fd)
         for component in parts[:-1]:
             current_fd = os.open(component, directory_flags, dir_fd=current_fd)
@@ -218,6 +219,45 @@ def _select_allowed_root(
     if root is None:
         _raise_disallowed_path(field)
     return root
+
+
+def _open_allowed_root(root: Path) -> int:
+    try:
+        named_before = root.lstat()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(root, flags)
+    except OSError:
+        raise _UnsafeInputFile from None
+    try:
+        opened = os.fstat(descriptor)
+        named_after = root.lstat()
+        identities = {
+            (named_before.st_dev, named_before.st_ino),
+            (opened.st_dev, opened.st_ino),
+            (named_after.st_dev, named_after.st_ino),
+        }
+        if (
+            len(identities) != 1
+            or stat.S_ISLNK(named_before.st_mode)
+            or stat.S_ISLNK(named_after.st_mode)
+            or not stat.S_ISDIR(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) & 0o022
+        ):
+            raise _UnsafeInputFile
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _validate_allowed_root(root: Path, *, field: str) -> None:
+    try:
+        descriptor = _open_allowed_root(root)
+    except (OSError, _UnsafeInputFile):
+        _raise_disallowed_path(field)
+    os.close(descriptor)
 
 
 def _validate_private_output_ancestor(path: Path) -> None:

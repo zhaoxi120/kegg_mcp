@@ -6,7 +6,11 @@ from dataclasses import dataclass
 
 from kegg_mcp.analysis import ModuleExpression, ResolvedModuleDefinition
 from kegg_mcp.domain import AnalysisUnit
-from kegg_mcp.services.render_contracts import ModuleRenderTarget
+from kegg_mcp.services.render_contracts import (
+    ModuleRenderTarget,
+    module_scene_fits_renderer,
+    module_scene_layout,
+)
 
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 
@@ -91,30 +95,42 @@ def construct_module_scene(
         if summary_only
         else _flatten_definitions(definitions, max_nodes=max_nodes)
     )
-    blocks = tuple(
-        ModuleBlockPanel(
-            block_index=item.block_index,
-            strict_state=item.strict_state.value,
-            lenient_state=item.lenient_state.value,
-            uncertain_support_ko_ids=item.uncertain_support_ko_ids,
+    blocks = (
+        ()
+        if summary_only
+        else tuple(
+            ModuleBlockPanel(
+                block_index=item.block_index,
+                strict_state=item.strict_state.value,
+                lenient_state=item.lenient_state.value,
+                uncertain_support_ko_ids=item.uncertain_support_ko_ids,
+            )
+            for item in target.required_block_states
         )
-        for item in target.required_block_states
     )
-    optional_components = tuple(
-        ModuleOptionalPanel(
-            component_index=item.component_index,
-            source_module_id=item.source_module_id,
-            strict_state=item.strict_state.value,
-            lenient_state=item.lenient_state.value,
+    optional_components = (
+        ()
+        if summary_only
+        else tuple(
+            ModuleOptionalPanel(
+                component_index=item.component_index,
+                source_module_id=item.source_module_id,
+                strict_state=item.strict_state.value,
+                lenient_state=item.lenient_state.value,
+            )
+            for item in target.optional_component_states
         )
-        for item in target.optional_component_states
     )
-    reference_edges = tuple(
-        ModuleReferencePanel(
-            source_module_id=edge.source_module_id,
-            target_module_id=edge.target_module_id,
+    reference_edges = (
+        ()
+        if summary_only
+        else tuple(
+            ModuleReferencePanel(
+                source_module_id=edge.source_module_id,
+                target_module_id=edge.target_module_id,
+            )
+            for edge in target.reference_edges
         )
-        for edge in target.reference_edges
     )
     strict = target.strict
     lenient = target.lenient
@@ -132,18 +148,20 @@ def construct_module_scene(
     if summary_only:
         warnings = (f"Summary only: {str(reason or 'not_renderable')[:160]}", *warnings)
     max_depth = max((node.depth for node in nodes), default=0)
-    maximum_node_x = 50 + max_depth * 220
-    has_panels = bool(blocks or optional_components or reference_edges)
-    panel_height = (
-        len(blocks) * 34
-        + len(optional_components) * 28
-        + len(reference_edges) * 28
-        + 34 * int(bool(optional_components))
-        + 34 * int(bool(reference_edges))
+    width, height, _ = module_scene_layout(
+        node_count=len(nodes),
+        max_depth=max_depth,
+        required_block_count=len(blocks),
+        optional_component_count=len(optional_components),
+        reference_edge_count=len(reference_edges),
     )
-    width = max(900, maximum_node_x + (950 if has_panels else 260))
-    height = max(620, 360 + max(len(nodes) * 58, panel_height))
-    if width > 20_000 or height > 20_000:
+    if not module_scene_fits_renderer(
+        node_count=len(nodes),
+        max_depth=max_depth,
+        required_block_count=len(blocks),
+        optional_component_count=len(optional_components),
+        reference_edge_count=len(reference_edges),
+    ):
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.OUTPUT_LIMIT_EXCEEDED,

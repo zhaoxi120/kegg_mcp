@@ -1,35 +1,62 @@
-"""Bounded inspection and selection of an external DeepKOALA installation."""
+"""Bounded inspection and runtime probing of an external DeepKOALA installation."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import stat
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, cast
 
 from deepkoala_mcp.contracts import ErrorCode, InstalledResource, fail
+from deepkoala_mcp.runner import build_runtime_environment
 
 _DATE = re.compile(r"^[0-9]{4}(?:0[1-9]|1[0-2])$")
 _MAX_RESOURCE_DIRECTORIES = 128
 _MAX_PYPROJECT_BYTES = 256 * 1024
+_PROBE_TIMEOUT_SECONDS = 20
+_CUDA_AVAILABLE_EXIT_CODE = 42
+_RUNTIME_PROBE = f"""\
+import importlib
+import sys
+
+importlib.import_module("deepkoala")
+importlib.import_module("deepkoala.utils")
+torch = importlib.import_module("torch")
+raise SystemExit({_CUDA_AVAILABLE_EXIT_CODE} if torch.cuda.is_available() else 0)
+"""
 
 
 @dataclass(frozen=True, slots=True)
 class Installation:
+    """One selected source version and local resource pair."""
+
     source_version: str
     resource: InstalledResource
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeProbeResult:
+    """Redacted interpreter readiness facts."""
+
+    runtime_ready: bool
+    cuda_available: bool
+
+
 class InstallationError(RuntimeError):
+    """A structural checkout or resource inspection failure."""
+
     def __init__(self, code: ErrorCode) -> None:
         super().__init__(code.value)
         self.code = code
 
 
 def select_installation(checkout: Path, model: str, requested_date: str) -> Installation:
+    """Select the newest or exact readable installed resource pair."""
     version, resources = inspect_installation(checkout)
     matches = [
         resource
@@ -44,6 +71,7 @@ def select_installation(checkout: Path, model: str, requested_date: str) -> Inst
 
 
 def inspect_installation(checkout: Path) -> tuple[str, tuple[InstalledResource, ...]]:
+    """Inspect only bounded local source and resource metadata."""
     package = checkout / "deepkoala"
     for path in (package, checkout / "resources"):
         if not _direct_directory(path):
@@ -83,7 +111,68 @@ def inspect_installation(checkout: Path) -> tuple[str, tuple[InstalledResource, 
     return version, tuple(resources)
 
 
+def probe_runtime(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    """Import the configured local runtime with fixed argv, no output, and no downloads."""
+    try:
+        completed = subprocess.run(
+            (str(python_executable), "-c", _RUNTIME_PROBE),
+            cwd=checkout,
+            env=build_runtime_environment(checkout, cpu_threads),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+    if completed.returncode == _CUDA_AVAILABLE_EXIT_CODE:
+        return RuntimeProbeResult(runtime_ready=True, cuda_available=True)
+    return RuntimeProbeResult(
+        runtime_ready=completed.returncode == 0,
+        cuda_available=False,
+    )
+
+
+async def probe_runtime_async(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    """Run the same fixed probe without blocking or retaining an executor thread."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            str(python_executable),
+            "-c",
+            _RUNTIME_PROBE,
+            cwd=checkout,
+            env=build_runtime_environment(checkout, cpu_threads),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+    try:
+        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+            return_code = await process.wait()
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+    if return_code == _CUDA_AVAILABLE_EXIT_CODE:
+        return RuntimeProbeResult(runtime_ready=True, cuda_available=True)
+    return RuntimeProbeResult(runtime_ready=return_code == 0, cuda_available=False)
+
+
 def fail_installation(error: InstallationError) -> NoReturn:
+    """Map one structural error to a bounded public companion error."""
     if error.code is ErrorCode.WEIGHTS_NOT_FOUND:
         fail(
             ErrorCode.WEIGHTS_NOT_FOUND,
@@ -126,7 +215,11 @@ def _direct_directory(path: Path) -> bool:
         metadata = path.lstat()
     except OSError:
         return False
-    return stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and not stat.S_ISLNK(metadata.st_mode)
+        and os.access(path, os.R_OK | os.X_OK)
+    )
 
 
 def _direct_regular(path: Path, *, nonempty: bool) -> bool:
@@ -137,6 +230,7 @@ def _direct_regular(path: Path, *, nonempty: bool) -> bool:
     return (
         stat.S_ISREG(metadata.st_mode)
         and not stat.S_ISLNK(metadata.st_mode)
+        and os.access(path, os.R_OK)
         and (not nonempty or metadata.st_size > 0)
     )
 
@@ -144,7 +238,10 @@ def _direct_regular(path: Path, *, nonempty: bool) -> bool:
 __all__ = [
     "Installation",
     "InstallationError",
+    "RuntimeProbeResult",
     "fail_installation",
     "inspect_installation",
+    "probe_runtime",
+    "probe_runtime_async",
     "select_installation",
 ]

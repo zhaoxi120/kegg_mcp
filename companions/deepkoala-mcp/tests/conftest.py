@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
+from deepkoala_mcp.installation import RuntimeProbeResult
+
+DETAILED_CSV = b"name,predict_label,probability,threshold,annotate\nprotein-1,K00001,0.95,0.50,*\n"
 
 
 def build_checkout(root: Path, *, cli_source: str = "# test CLI\n") -> Path:
@@ -31,6 +34,17 @@ def build_checkout(root: Path, *, cli_source: str = "# test CLI\n") -> Path:
     return checkout.resolve()
 
 
+def ready_probe(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    """Return deterministic offline readiness for manager and MCP tests."""
+    del checkout, python_executable, cpu_threads
+    return RuntimeProbeResult(runtime_ready=True, cuda_available=False)
+
+
 @pytest.fixture
 def checkout(tmp_path: Path) -> Path:
     return build_checkout(tmp_path)
@@ -38,16 +52,16 @@ def checkout(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def runtime_config(tmp_path: Path, checkout: Path) -> DeepKoalaRuntimeConfig:
-    allowed = tmp_path / "inputs"
-    allowed.mkdir()
+    inputs = tmp_path / "inputs"
+    outputs = tmp_path / "outputs"
+    inputs.mkdir()
+    outputs.mkdir()
     return DeepKoalaRuntimeConfig(
         checkout=checkout,
         python_executable=Path(sys.executable).resolve(),
         state_root=(tmp_path / "state").resolve(),
-        allowed_roots=(allowed.resolve(),),
+        input_roots=(inputs.resolve(),),
+        output_roots=(outputs.resolve(),),
         cpu_threads=2,
-        max_queue_size=2,
-        default_timeout_seconds=30,
-        plan_ttl_seconds=30,
-        retention_seconds=30,
+        max_timeout_seconds=30,
     )

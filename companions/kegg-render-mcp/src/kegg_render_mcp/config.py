@@ -11,6 +11,10 @@ from typing import Literal, Self, cast
 
 from kegg_mcp.kegg import LicensedAccess, RateLimitPolicy
 from kegg_mcp.kegg.contracts import default_rate_limit_root
+from kegg_mcp.services.render_contracts import (
+    MODULE_RENDER_MAX_CANVAS_PIXELS,
+    MODULE_RENDER_MAX_SVG_NODES,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ENV_PREFIX = "KEGG_RENDER_MCP_"
@@ -22,6 +26,7 @@ LICENSED_ENDPOINT_ENV = f"{ENV_PREFIX}LICENSED_ENDPOINT"
 LICENSED_CONFIRMATION_ENV = f"{ENV_PREFIX}LICENSED_USE_CONFIRMED"
 RETENTION_SECONDS_ENV = f"{ENV_PREFIX}RETENTION_SECONDS"
 MAX_DISK_BYTES_ENV = f"{ENV_PREFIX}MAX_DISK_BYTES"
+MAX_RESULTS_ENV = f"{ENV_PREFIX}MAX_RESULTS"
 RATE_LIMIT_ROOT_ENV = "KEGG_MCP_RATE_LIMIT_ROOT"
 
 DEFAULT_RETENTION_SECONDS = 86_400
@@ -31,6 +36,7 @@ DEFAULT_MAX_PIXELS = 20_000_000
 DEFAULT_MAX_SVG_BYTES = 16 * 1024 * 1024
 DEFAULT_MAX_RESULT_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_DISK_BYTES = 256 * 1024 * 1024
+DEFAULT_MAX_RESULTS = 128
 
 
 class RendererLimits(BaseModel):
@@ -40,14 +46,23 @@ class RendererLimits(BaseModel):
 
     max_input_bytes: int = Field(default=DEFAULT_MAX_INPUT_BYTES, ge=1, le=64 * 1024 * 1024)
     max_asset_bytes: int = Field(default=DEFAULT_MAX_ASSET_BYTES, ge=1, le=50_000_000)
-    max_pixels: int = Field(default=DEFAULT_MAX_PIXELS, ge=1, le=100_000_000)
+    max_pixels: int = Field(
+        default=DEFAULT_MAX_PIXELS,
+        ge=MODULE_RENDER_MAX_CANVAS_PIXELS,
+        le=100_000_000,
+    )
     max_svg_bytes: int = Field(default=DEFAULT_MAX_SVG_BYTES, ge=1, le=64 * 1024 * 1024)
     max_result_bytes: int = Field(default=DEFAULT_MAX_RESULT_BYTES, ge=1, le=256 * 1024 * 1024)
     max_disk_bytes: int = Field(default=DEFAULT_MAX_DISK_BYTES, ge=1, le=2 * 1024 * 1024 * 1024)
+    max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=4_096)
     max_xml_elements: int = Field(default=20_000, ge=1, le=100_000)
     max_xml_attributes: int = Field(default=100_000, ge=1, le=500_000)
     max_xml_depth: int = Field(default=32, ge=1, le=128)
-    max_svg_nodes: int = Field(default=50_000, ge=1, le=200_000)
+    max_svg_nodes: int = Field(
+        default=50_000,
+        ge=MODULE_RENDER_MAX_SVG_NODES,
+        le=200_000,
+    )
 
     @model_validator(mode="after")
     def related_bounds(self) -> Self:
@@ -125,7 +140,8 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
     limits = RendererLimits(
         max_disk_bytes=_integer(
             values, MAX_DISK_BYTES_ENV, DEFAULT_MAX_DISK_BYTES, 1, 2 * 1024 * 1024 * 1024
-        )
+        ),
+        max_results=_integer(values, MAX_RESULTS_ENV, DEFAULT_MAX_RESULTS, 1, 4_096),
     )
     return RendererRuntimeConfig(
         state_root=_safe_absolute(Path(state_raw), STATE_ROOT_ENV),

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepkoala-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local MCP companion for bounded DeepKOALA execution"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -48,6 +48,7 @@ docstring-code-format = true
 
 [tool.pyright]
 include = ["src", "tests"]
+extraPaths = ["src", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 venv = ".venv"

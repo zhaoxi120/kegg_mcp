@@ -23,8 +23,7 @@ from kegg_mcp.importers.contracts import ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
 from kegg_mcp.report_limits import ReportLimits
 
-ANALYSIS_SERVICE_NAME = "kegg_mcp_plain_ko_analysis"
-ANNOTATION_ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
+ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
 ANALYSIS_SERVICE_VERSION = "2"
 
 
@@ -184,10 +183,7 @@ class AnalysisExecutionProvenance(FrozenModel):
         }
     )
 
-    service_name: Literal[
-        "kegg_mcp_plain_ko_analysis",
-        "kegg_mcp_annotation_analysis",
-    ] = ANALYSIS_SERVICE_NAME
+    service_name: Literal["kegg_mcp_annotation_analysis"] = ANALYSIS_SERVICE_NAME
     service_version: Literal["2"] = ANALYSIS_SERVICE_VERSION
     import_limits: ImportLimits
     kegg_request_options: KeggRequestOptions
@@ -204,7 +200,6 @@ class AnalysisExecutionProvenance(FrozenModel):
 __all__ = [
     "ANALYSIS_SERVICE_NAME",
     "ANALYSIS_SERVICE_VERSION",
-    "ANNOTATION_ANALYSIS_SERVICE_NAME",
     "AnalysisExecutionProvenance",
     "AnalysisServiceLimits",
     "ExecutionStage",

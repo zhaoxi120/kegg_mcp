@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from anyio import to_thread
+from kegg_mcp.domain import ErrorCode as CoreErrorCode
+from kegg_mcp.domain import KeggMcpError as CoreKeggMcpError
 from kegg_mcp.kegg import (
     InfoRequest,
-    KeggBatchProvenance,
     KeggClient,
     KeggInfoDatabase,
     KeggRequestOptions,
@@ -19,8 +20,15 @@ from kegg_mcp.kegg import (
 from kegg_mcp.services.render_contracts import PathwayRenderTarget
 
 from kegg_render_mcp.config import RendererLimits
-from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError, SafeDetail
+from kegg_render_mcp.contracts import (
+    ConnectivityStatus,
+    ErrorCode,
+    ErrorDetail,
+    RenderMcpError,
+    SafeDetail,
+)
 from kegg_render_mcp.kgml import KgmlDocument, parse_kgml, validate_graphic_bounds
+from kegg_render_mcp.provenance import safe_batch_provenance
 from kegg_render_mcp.render_input import ValidatedRenderInput
 
 
@@ -41,7 +49,7 @@ class PathwayAssetProvider(Protocol):
 
     async def get_asset(self, pathway_id: str, kind: str) -> RetrievedAsset: ...
 
-    async def probe(self) -> bool: ...
+    async def probe(self) -> ConnectivityStatus: ...
 
 
 class CorePathwayAssetProvider:
@@ -85,7 +93,7 @@ class CorePathwayAssetProvider:
                 )
             ) from error
         request = result.request
-        provenance = _safe_provenance(result.provenance)
+        provenance = safe_batch_provenance(result.provenance)
         return RetrievedAsset(
             pathway_id=request.pathway_id,
             kind=str(request.kind.value),
@@ -96,7 +104,7 @@ class CorePathwayAssetProvider:
             provenance=provenance,
         )
 
-    async def probe(self) -> bool:
+    async def probe(self) -> ConnectivityStatus:
         def request() -> object:
             return self._client.info(
                 InfoRequest(database=KeggInfoDatabase.PATHWAY),
@@ -105,9 +113,11 @@ class CorePathwayAssetProvider:
 
         try:
             await to_thread.run_sync(request)
+        except CoreKeggMcpError as error:
+            return _classify_probe_error(error)
         except Exception:
-            return False
-        return True
+            return ConnectivityStatus.UNKNOWN_FAILURE
+        return ConnectivityStatus.REACHABLE
 
 
 class UnconfiguredAssetProvider:
@@ -125,16 +135,8 @@ class UnconfiguredAssetProvider:
             )
         )
 
-    async def probe(self) -> bool:
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.ASSET_UNAVAILABLE,
-                message="KEGG access is not configured for this renderer.",
-                suggested_action=(
-                    "Configure authorized access before probing or rendering pathways."
-                ),
-            )
-        )
+    async def probe(self) -> ConnectivityStatus:
+        return ConnectivityStatus.NOT_CONFIGURED
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,22 +293,28 @@ def _require_regular_renderable(target: PathwayRenderTarget) -> None:
         )
 
 
-def _safe_provenance(provenance: KeggBatchProvenance) -> dict[str, object]:
-    safe: dict[str, object] = {
-        "request_key": provenance.request_key,
-        "access_mode": provenance.access_mode.value,
-        "retrieval_endpoint_class": provenance.retrieval_endpoint_class.value,
-        "origin": provenance.origin.value,
-        "cache_lookup_state": provenance.cache_lookup_state.value,
-        "retrieved_at": provenance.retrieved_at.isoformat(),
-        "served_at": provenance.served_at.isoformat(),
-        "is_stale": provenance.is_stale,
-        "parser_name": provenance.parser_name,
-        "parser_version": provenance.parser_version,
+def _classify_probe_error(error: CoreKeggMcpError) -> ConnectivityStatus:
+    details = {item.name: item.value for item in error.detail.safe_details}
+    if error.detail.code is CoreErrorCode.KEGG_RATE_LIMITED:
+        return ConnectivityStatus.RATE_LIMITED
+    if details.get("status_code") in {"401", "403"}:
+        return ConnectivityStatus.PERMISSION_DENIED
+    transport = details.get("transport_kind")
+    if transport is None:
+        return ConnectivityStatus.UNKNOWN_FAILURE
+    classifications: dict[str, ConnectivityStatus] = {
+        "dns": ConnectivityStatus.DNS_FAILURE,
+        "connection": ConnectivityStatus.CONNECTION_FAILURE,
+        "timeout": ConnectivityStatus.TIMEOUT,
+        "tls": ConnectivityStatus.TLS_FAILURE,
+        "permission": ConnectivityStatus.PERMISSION_DENIED,
+        "redirect_rejected": ConnectivityStatus.ENDPOINT_REJECTED,
+        "invalid_request": ConnectivityStatus.ENDPOINT_REJECTED,
+        "unsupported_encoding": ConnectivityStatus.ENDPOINT_REJECTED,
+        "invalid_response": ConnectivityStatus.ENDPOINT_REJECTED,
+        "response_too_large": ConnectivityStatus.ENDPOINT_REJECTED,
     }
-    if provenance.database_release is not None:
-        safe["database_release"] = provenance.database_release
-    return safe
+    return classifications.get(transport, ConnectivityStatus.UNKNOWN_FAILURE)
 
 
 def _asset_invalid(message: str) -> RenderMcpError:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from kegg_mcp.kegg import AccessMode
+from kegg_mcp.kegg import AccessMode, RetrievalEndpointClass, endpoint_fingerprint
 from kegg_mcp.mcp.config import load_runtime_config
 
 
@@ -27,9 +27,34 @@ def test_public_academic_defaults_confirmation_but_rejects_explicit_false() -> N
     assert config.kegg.access.mode is AccessMode.PUBLIC_ACADEMIC
 
 
-def test_removed_offline_cache_mode_is_rejected() -> None:
-    with pytest.raises(ValueError, match="public_academic or licensed"):
-        load_runtime_config({"KEGG_MCP_ACCESS_MODE": "offline_cache"})
+def test_explicit_offline_cache_mode_reuses_the_public_namespace_without_network() -> None:
+    config = load_runtime_config({"KEGG_MCP_ACCESS_MODE": "offline_cache"})
+
+    assert config.kegg.access.mode is AccessMode.OFFLINE_CACHE
+    assert config.kegg.access.retrieval_endpoint_class is RetrievalEndpointClass.PUBLIC_ACADEMIC
+
+
+def test_offline_licensed_cache_selection_requires_the_authorized_endpoint_pair() -> None:
+    endpoint = "https://licensed.example.test/kegg"
+    config = load_runtime_config(
+        {
+            "KEGG_MCP_ACCESS_MODE": "offline_cache",
+            "KEGG_MCP_LICENSED_ENDPOINT": endpoint,
+            "KEGG_MCP_LICENSED_USE_CONFIRMED": "true",
+        }
+    )
+
+    assert config.kegg.access.mode is AccessMode.OFFLINE_CACHE
+    assert config.kegg.access.retrieval_endpoint_class is RetrievalEndpointClass.LICENSED
+    assert config.kegg.access.endpoint == endpoint
+    assert config.kegg.access.endpoint_fingerprint == endpoint_fingerprint(endpoint)
+    with pytest.raises(ValueError, match="both licensed endpoint and confirmation"):
+        load_runtime_config(
+            {
+                "KEGG_MCP_ACCESS_MODE": "offline_cache",
+                "KEGG_MCP_LICENSED_ENDPOINT": endpoint,
+            }
+        )
 
 
 def test_licensed_live_mode_requires_endpoint_and_confirmation() -> None:

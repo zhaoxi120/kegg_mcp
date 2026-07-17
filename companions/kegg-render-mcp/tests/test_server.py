@@ -13,6 +13,18 @@ from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
+from kegg_mcp.domain.errors import (
+    ErrorCode as CoreErrorCode,
+)
+from kegg_mcp.domain.errors import (
+    ErrorDetail as CoreErrorDetail,
+)
+from kegg_mcp.domain.errors import (
+    KeggMcpError as CoreKeggMcpError,
+)
+from kegg_mcp.domain.errors import (
+    SafeDetail as CoreSafeDetail,
+)
 from kegg_mcp.kegg import KeggClient, KeggRequestOptions
 from mcp import types
 from mcp.shared.exceptions import McpError
@@ -21,6 +33,7 @@ from pydantic import AnyUrl
 
 from conftest import SyntheticProvider
 from kegg_render_mcp.config import RendererRuntimeConfig
+from kegg_render_mcp.contracts import ConnectivityStatus
 from kegg_render_mcp.pathway_scene import CorePathwayAssetProvider
 from kegg_render_mcp.render_service import RendererService
 from kegg_render_mcp.server import TOOL_NAMES, RendererRuntime, build_runtime, create_server
@@ -34,6 +47,20 @@ class _ProbeClient:
         del request
         self.options.append(options)
         return object()
+
+
+class _FailingProbeClient:
+    def info(self, request: object, *, options: KeggRequestOptions | None = None) -> object:
+        del request, options
+        raise CoreKeggMcpError(
+            CoreErrorDetail(
+                code=CoreErrorCode.KEGG_REQUEST_FAILED,
+                message="The KEGG request failed before a valid response was received.",
+                recoverable=True,
+                suggested_action="Verify network availability.",
+                safe_details=(CoreSafeDetail(name="transport_kind", value="dns"),),
+            )
+        )
 
 
 def _tool(tools: list[types.Tool], name: str) -> types.Tool:
@@ -61,8 +88,15 @@ async def test_explicit_probe_bypasses_cache_for_one_wire_attempt() -> None:
     client = _ProbeClient()
     provider = CorePathwayAssetProvider(cast(KeggClient, client))
 
-    assert await provider.probe() is True
+    assert await provider.probe() is ConnectivityStatus.REACHABLE
     assert client.options == [KeggRequestOptions(refresh=True)]
+
+
+@pytest.mark.asyncio
+async def test_probe_classifies_redacted_transport_failures() -> None:
+    provider = CorePathwayAssetProvider(cast(KeggClient, _FailingProbeClient()))
+
+    assert await provider.probe() is ConnectivityStatus.DNS_FAILURE
 
 
 @pytest.mark.asyncio
@@ -89,6 +123,11 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert delete_annotations.idempotentHint is True
         assert len((await session.list_resources()).resources) == 1
         assert len((await session.list_resource_templates()).resourceTemplates) == 2
+        render_schema = _tool(tools, "render_analysis_bundle").inputSchema
+        assert render_schema["oneOf"] == [
+            {"required": ["render_input_path"]},
+            {"required": ["render_input_json"]},
+        ]
 
 
 @pytest.mark.asyncio
@@ -101,6 +140,13 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         status = await session.call_tool("get_renderer_status", {})
         _validate(_tool(tools, "get_renderer_status"), status)
         assert status.isError is False
+        status_data = cast(
+            dict[str, object],
+            cast(dict[str, object], status.structuredContent["result"])["data"],  # type: ignore[index]
+        )
+        bounds = cast(dict[str, object], status_data["bounds"])
+        assert bounds["max_results"] == runtime_config.limits.max_results
+        assert status_data["retained_storage_bytes"] == 0
         probe = await session.call_tool("probe_renderer_kegg_connectivity", {})
         _validate(_tool(tools, "probe_renderer_kegg_connectivity"), probe)
         assert probe.isError is False
@@ -132,6 +178,16 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         assert svg_content.mimeType == "image/svg+xml"
         assert "<svg" in svg_content.text
 
+        inline = await session.call_tool(
+            "render_module",
+            {
+                "render_input_json": render_input_file.read_text(encoding="utf-8"),
+                "target_id": "M00001",
+            },
+        )
+        _validate(_tool(tools, "render_module"), inline)
+        assert inline.isError is False
+
         deleted = await session.call_tool("delete_render_result", {"render_id": render_id})
         _validate(_tool(tools, "delete_render_result"), deleted)
         assert deleted.isError is False
@@ -140,7 +196,7 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
 
 
 @pytest.mark.asyncio
-async def test_invalid_request_and_unconfigured_probe_return_schema_errors(
+async def test_invalid_request_is_actionable_and_unconfigured_probe_is_classified(
     runtime_config: RendererRuntimeConfig, render_input_file: Path
 ) -> None:
     from kegg_render_mcp.pathway_scene import UnconfiguredAssetProvider
@@ -157,10 +213,20 @@ async def test_invalid_request_and_unconfigured_probe_return_schema_errors(
         )
         assert invalid.isError is True
         _validate(_tool(tools, "render_module"), invalid)
+        invalid_error = cast(dict[str, object], invalid.structuredContent["error"])  # type: ignore[index]
+        invalid_details = cast(list[dict[str, str]], invalid_error["safe_details"])
+        assert {item["name"]: item["value"] for item in invalid_details} == {
+            "field_path": "target_id",
+            "validation_issue_count": "1",
+            "stage": "tool_input",
+        }
         probe = await session.call_tool("probe_renderer_kegg_connectivity", {})
-        assert probe.isError is True
+        assert probe.isError is False
         _validate(_tool(tools, "probe_renderer_kegg_connectivity"), probe)
-        assert probe.structuredContent["error"]["code"] == "ASSET_UNAVAILABLE"  # type: ignore[index]
+        probe_data = probe.structuredContent["result"]["data"]  # type: ignore[index]
+        assert probe_data["reachable"] is False
+        assert probe_data["classification"] == "not_configured"
+        assert probe_data["request_count"] == 0
 
 
 @pytest.mark.asyncio

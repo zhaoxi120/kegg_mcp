@@ -11,6 +11,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, NoReturn, Self, cast
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -462,7 +463,9 @@ class SQLiteResultStore:
         checked_scope, checked_result = _validate_lookup(scope_id, result_id)
         checked_now = _normalize_now(now)
         try:
-            with closing(self._connect()) as connection:
+            if not self._configured_store_exists():
+                _raise_result_not_found()
+            with closing(self._connect_read_only()) as connection:
                 row = connection.execute(
                     """
                     SELECT
@@ -513,7 +516,15 @@ class SQLiteResultStore:
         checked_now = _normalize_now(now)
         now_text = _encode_datetime(checked_now)
         try:
-            with closing(self._connect()) as connection:
+            if not self._configured_store_exists():
+                return ResultMetadataPage(
+                    items=(),
+                    total_items=0,
+                    offset=checked_offset,
+                    limit=checked_limit,
+                    next_offset=None,
+                )
+            with closing(self._connect_read_only()) as connection:
                 connection.execute("BEGIN")
                 total_row = connection.execute(
                     """
@@ -563,7 +574,9 @@ class SQLiteResultStore:
         checked_offset, checked_limit = self._validate_page(offset, limit)
         checked_now = _normalize_now(now)
         try:
-            with closing(self._connect()) as connection:
+            if not self._configured_store_exists():
+                _raise_result_not_found()
+            with closing(self._connect_read_only()) as connection:
                 connection.execute("BEGIN")
                 result_row = connection.execute(
                     """
@@ -631,7 +644,9 @@ class SQLiteResultStore:
         checked_offset, checked_limit = self._validate_range(offset, limit)
         checked_now = _normalize_now(now)
         try:
-            with closing(self._connect()) as connection:
+            if not self._configured_store_exists():
+                _raise_result_not_found()
+            with closing(self._connect_read_only()) as connection:
                 row = connection.execute(
                     """
                     SELECT
@@ -1109,18 +1124,87 @@ class SQLiteResultStore:
         _tighten_file_permissions(path)
         return connection
 
+    def _connect_read_only(self) -> sqlite3.Connection:
+        path = self._validate_existing_location()
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        try:
+            descriptor_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(descriptor_stat.st_mode):
+                raise OSError("result store is not a regular file")
+            if hasattr(os, "geteuid") and descriptor_stat.st_uid != os.geteuid():
+                raise OSError("result store must be owned by the current user")
+            if stat.S_IMODE(descriptor_stat.st_mode) & 0o077:
+                raise OSError("result store must be owner-only")
+            uri = f"file:{quote(path.as_posix(), safe='/')}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+            path_stat = path.stat(follow_symlinks=False)
+            if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ):
+                connection.close()
+                raise OSError("result store changed while it was opened")
+        finally:
+            os.close(descriptor)
+        try:
+            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA trusted_schema = OFF")
+            connection.execute("PRAGMA query_only = ON")
+            schema_version = _decode_single_nonnegative_integer(
+                connection.execute("PRAGMA user_version").fetchone()
+            )
+            if schema_version != _SCHEMA_VERSION:
+                raise _ResultStoreIntegrityError("unsupported SQLite schema version")
+            page_size = _decode_single_positive_integer(
+                connection.execute("PRAGMA page_size").fetchone()
+            )
+            page_count = _decode_single_nonnegative_integer(
+                connection.execute("PRAGMA page_count").fetchone()
+            )
+            if page_count * page_size > self._limits.max_database_bytes:
+                raise _ResultStoreIntegrityError("database exceeds its physical limit")
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_schema "
+                    "WHERE type = 'table' AND name IN ('stored_results', 'result_artifacts')"
+                ).fetchall()
+            }
+            if tables != {"stored_results", "result_artifacts"}:
+                raise _ResultStoreIntegrityError("result store schema is incomplete")
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
     def _configured_store_exists(self) -> bool:
+        return os.path.lexists(self._resolved_configured_path())
+
+    def _validate_existing_location(self) -> Path:
+        path = self._resolved_configured_path()
+        parent = path.parent
+        _reject_symlink_components(parent)
+        parent_stat = parent.lstat()
+        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
+            raise OSError("result store parent must be a real directory")
+        if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
+            raise OSError("result store parent must be owned by the current user")
+        if stat.S_IMODE(parent_stat.st_mode) & 0o022:
+            raise OSError("result store parent must not be group- or world-writable")
+        return path
+
+    def _resolved_configured_path(self) -> Path:
         configured = Path(self._configured_path).expanduser()
         if ".." in configured.parts:
             raise OSError("result store path must not contain traversal components")
-        path = configured if configured.is_absolute() else Path.cwd() / configured
-        return os.path.lexists(path)
+        return configured if configured.is_absolute() else Path.cwd() / configured
 
     def _prepare_location(self) -> Path:
-        configured = Path(self._configured_path).expanduser()
-        if ".." in configured.parts:
-            raise OSError("result store path must not contain traversal components")
-        path = configured if configured.is_absolute() else Path.cwd() / configured
+        path = self._resolved_configured_path()
         parent = path.parent
         missing_directories: list[Path] = []
         candidate = parent

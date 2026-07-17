@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Generic, Literal, TypeVar
+from typing import Generic, Literal, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -13,6 +13,7 @@ MAX_FORMATS = 2
 MAX_WARNINGS = 32
 MAX_ARTIFACTS = 97
 MAX_SAFE_DETAILS = 8
+MAX_INLINE_INPUT_CHARACTERS = 50_000_000
 
 
 class _Model(BaseModel):
@@ -29,6 +30,19 @@ class _Model(BaseModel):
 class RenderFormat(StrEnum):
     SVG = "svg"
     PNG = "png"
+
+
+class ConnectivityStatus(StrEnum):
+    REACHABLE = "reachable"
+    NOT_CONFIGURED = "not_configured"
+    DNS_FAILURE = "dns_failure"
+    CONNECTION_FAILURE = "connection_failure"
+    TIMEOUT = "timeout"
+    TLS_FAILURE = "tls_failure"
+    PERMISSION_DENIED = "permission_denied"
+    RATE_LIMITED = "rate_limited"
+    ENDPOINT_REJECTED = "endpoint_rejected"
+    UNKNOWN_FAILURE = "unknown_failure"
 
 
 class ArtifactKind(StrEnum):
@@ -77,8 +91,32 @@ class EmptyInput(_Model):
     pass
 
 
-class RenderAnalysisBundleInput(_Model):
-    render_input_path: str = Field(min_length=1, max_length=4096)
+class _RenderInputSource(_Model):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "oneOf": [
+                {"required": ["render_input_path"]},
+                {"required": ["render_input_json"]},
+            ]
+        }
+    )
+
+    render_input_path: str | None = Field(default=None, min_length=1, max_length=4096)
+    render_input_json: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=MAX_INLINE_INPUT_CHARACTERS,
+        repr=False,
+    )
+
+    @model_validator(mode="after")
+    def exactly_one_render_input(self) -> Self:
+        if (self.render_input_path is None) == (self.render_input_json is None):
+            raise ValueError("provide exactly one of render_input_path or render_input_json")
+        return self
+
+
+class RenderAnalysisBundleInput(_RenderInputSource):
     output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
     formats: tuple[RenderFormat, ...] = Field(
         default=(RenderFormat.SVG,), min_length=1, max_length=MAX_FORMATS
@@ -105,8 +143,7 @@ class RenderAnalysisBundleInput(_Model):
         return value
 
 
-class RenderOneInput(_Model):
-    render_input_path: str = Field(min_length=1, max_length=4096)
+class RenderOneInput(_RenderInputSource):
     target_id: str = Field(min_length=6, max_length=7)
     output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
     formats: tuple[RenderFormat, ...] = Field(
@@ -136,6 +173,7 @@ class DeleteRenderResultInput(_Model):
 class RendererBounds(_Model):
     max_input_bytes: int = Field(ge=1)
     max_targets: int = Field(ge=1)
+    max_results: int = Field(ge=1)
     max_asset_bytes: int = Field(ge=1)
     max_pixels: int = Field(ge=1)
     max_svg_bytes: int = Field(ge=1)
@@ -156,14 +194,24 @@ class RendererStatus(_Model):
     retained_result_count: int = Field(ge=0)
     cleanup_pending_result_count: int = Field(ge=0)
     retained_bytes: int = Field(ge=0)
+    retained_storage_bytes: int = Field(ge=0)
     bounds: RendererBounds
 
 
 class ConnectivityResult(_Model):
     reachable: bool
+    classification: ConnectivityStatus
     operation: Literal["info"] = "info"
-    request_count: Literal[1] = 1
+    request_count: int = Field(ge=0, le=1)
     message: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def classification_matches_reachability(self) -> Self:
+        if self.reachable != (self.classification is ConnectivityStatus.REACHABLE):
+            raise ValueError("reachable must match the connectivity classification")
+        if (self.classification is ConnectivityStatus.NOT_CONFIGURED) != (self.request_count == 0):
+            raise ValueError("only an unconfigured probe may report request_count zero")
+        return self
 
 
 class ArtifactMetadata(_Model):

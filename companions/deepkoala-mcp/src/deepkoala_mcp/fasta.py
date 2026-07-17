@@ -1,4 +1,4 @@
-"""Bounded protein FASTA validation and private staging."""
+"""Bounded protein FASTA intake and private staging."""
 
 from __future__ import annotations
 
@@ -22,11 +22,11 @@ _PROTEIN_ALPHABET: Final = frozenset("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
 
 
 class FastaValidationError(ValueError):
-    """The supplied content is not an accepted bounded protein FASTA."""
+    """The supplied file is not an accepted protein FASTA."""
 
 
 class FastaLimitError(FastaValidationError):
-    """The supplied FASTA exceeds a hard companion limit."""
+    """The supplied FASTA exceeds one deployment bound."""
 
 
 class InputPathError(ValueError):
@@ -35,42 +35,49 @@ class InputPathError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class StagedFasta:
-    """Validated FASTA summary and bounded caller-visible origin."""
+    """A private canonical copy and safe aggregate intake facts."""
 
     summary: FastaSummary
-    original_input_path: str | None
+    input_path: Path
 
 
 def stage_fasta(
     *,
-    fasta_text: str | None,
-    fasta_path: str | None,
-    allowed_roots: tuple[Path, ...],
+    fasta_path: str,
+    input_roots: tuple[Path, ...],
     job_directory: Path,
+    max_bytes: int,
+    max_sequences: int,
 ) -> StagedFasta:
-    """Read one source once and retain a canonical copy plus safe origin metadata."""
-    if (fasta_text is None) == (fasta_path is None):
-        raise FastaValidationError("exactly one FASTA source is required")
-    original_input_path: str | None = None
-    if fasta_text is not None:
-        try:
-            content = fasta_text.encode("ascii")
-        except UnicodeEncodeError as error:
-            raise FastaValidationError("FASTA must be ASCII") from error
-    else:
-        assert fasta_path is not None
-        content, resolved = _read_allowed_file(Path(fasta_path), allowed_roots)
-        original_input_path = str(resolved)
-    summary, canonical = validate_fasta_bytes(content)
+    """Read one allowlisted file once and retain a canonical private copy."""
+    content, resolved = _read_allowed_file(
+        Path(fasta_path),
+        input_roots,
+        max_bytes=max_bytes,
+    )
+    summary, canonical = validate_fasta_bytes(
+        content,
+        max_bytes=max_bytes,
+        max_sequences=max_sequences,
+    )
     _write_private(job_directory / INPUT_FILENAME, canonical)
-    return StagedFasta(summary=summary, original_input_path=original_input_path)
+    return StagedFasta(summary=summary, input_path=resolved)
 
 
-def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
-    """Validate bounded protein FASTA bytes and return a canonical ASCII document."""
+def validate_fasta_bytes(
+    content: bytes,
+    *,
+    max_bytes: int = MAX_FASTA_BYTES,
+    max_sequences: int = MAX_SEQUENCE_COUNT,
+) -> tuple[FastaSummary, bytes]:
+    """Validate bounded protein FASTA bytes and return canonical ASCII bytes."""
+    if not 1 <= max_bytes <= MAX_FASTA_BYTES:
+        raise ValueError("max_bytes is outside the hard companion limit")
+    if not 1 <= max_sequences <= MAX_SEQUENCE_COUNT:
+        raise ValueError("max_sequences is outside the hard companion limit")
     if not content:
         raise FastaValidationError("FASTA is empty")
-    if len(content) > MAX_FASTA_BYTES:
+    if len(content) > max_bytes:
         raise FastaLimitError("FASTA exceeds the byte limit")
     try:
         text = content.decode("ascii")
@@ -92,7 +99,7 @@ def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
             if sequence_id in sequence_ids:
                 raise FastaValidationError("FASTA sequence identifiers must be unique")
             sequence_ids.add(sequence_id)
-            if len(sequence_ids) > MAX_SEQUENCE_COUNT:
+            if len(sequence_ids) > max_sequences:
                 raise FastaLimitError("FASTA exceeds the sequence-count limit")
             canonical.append(line)
             current_length = 0
@@ -102,15 +109,15 @@ def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
         if current_length is None:
             raise FastaValidationError("FASTA residues must follow a header")
         if any(character.isspace() or _control(character) for character in line):
-            raise FastaValidationError("FASTA residue lines must not contain whitespace or control")
+            raise FastaValidationError("FASTA residue lines contain whitespace or control text")
         residues = line.upper()
         if any(character not in _PROTEIN_ALPHABET for character in residues):
             raise FastaValidationError("FASTA contains an invalid protein residue")
         current_length += len(residues)
         total_residues += len(residues)
         if current_length > MAX_SEQUENCE_LENGTH:
-            raise FastaLimitError("FASTA sequence exceeds the residue limit")
-        if total_residues > MAX_FASTA_BYTES:
+            raise FastaLimitError("one FASTA sequence exceeds the residue limit")
+        if total_residues > max_bytes:
             raise FastaLimitError("FASTA exceeds the total-residue limit")
         canonical.append(residues)
 
@@ -118,7 +125,7 @@ def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
         raise FastaValidationError("FASTA contains no records")
     _finish_sequence(current_length, lengths)
     canonical_bytes = ("\n".join(canonical) + "\n").encode("ascii")
-    if len(canonical_bytes) > MAX_FASTA_BYTES:
+    if len(canonical_bytes) > max_bytes:
         raise FastaLimitError("canonical FASTA exceeds the byte limit")
     return (
         FastaSummary(
@@ -131,7 +138,12 @@ def validate_fasta_bytes(content: bytes) -> tuple[FastaSummary, bytes]:
     )
 
 
-def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[bytes, Path]:
+def _read_allowed_file(
+    path: Path,
+    allowed_roots: tuple[Path, ...],
+    *,
+    max_bytes: int,
+) -> tuple[bytes, Path]:
     if not path.is_absolute() or ".." in path.parts or not allowed_roots:
         raise InputPathError("input path is not allowed")
     try:
@@ -139,12 +151,9 @@ def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[byt
         resolved = path.resolve(strict=True)
     except OSError as error:
         raise InputPathError("input path is unavailable") from error
-    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
-        raise InputPathError("input path must be a direct regular file")
-    root = next(
-        (root for root in allowed_roots if resolved == root or resolved.is_relative_to(root)),
-        None,
-    )
+    if resolved != path or stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
+        raise InputPathError("input path must be a direct regular file without symlinks")
+    root = next((root for root in allowed_roots if resolved.is_relative_to(root)), None)
     if root is None:
         raise InputPathError("input path escapes the configured roots")
 
@@ -156,16 +165,16 @@ def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[byt
         before = os.fstat(descriptor)
         if _file_state(named) != _file_state(before) or not stat.S_ISREG(before.st_mode):
             raise InputPathError("input path changed before intake")
-        if before.st_size > MAX_FASTA_BYTES:
+        if before.st_size > max_bytes:
             raise FastaLimitError("FASTA exceeds the byte limit")
         content = bytearray()
-        while len(content) <= MAX_FASTA_BYTES:
-            chunk = os.read(descriptor, min(65_536, MAX_FASTA_BYTES + 1 - len(content)))
+        while len(content) <= max_bytes:
+            chunk = os.read(descriptor, min(65_536, max_bytes + 1 - len(content)))
             if not chunk:
                 break
             content.extend(chunk)
         after = os.fstat(descriptor)
-        if len(content) > MAX_FASTA_BYTES:
+        if len(content) > max_bytes:
             raise FastaLimitError("FASTA exceeds the byte limit")
         if _file_state(before) != _file_state(after):
             raise InputPathError("input file changed during intake")
@@ -177,13 +186,13 @@ def _read_allowed_file(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[byt
 
 
 def _open_beneath(path: Path, root: Path) -> int:
-    """Open a resolved file by walking from its allowed root without symlinks."""
+    """Open a resolved file by walking from an allowed root without symlinks."""
     parts = path.relative_to(root).parts
     if not parts:
         raise OSError("input path names an allowed directory")
-    directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags |= os.O_DIRECTORY | os.O_NOFOLLOW
-    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     directories: list[int] = []
     try:
         current = os.open(root, directory_flags)
@@ -198,8 +207,8 @@ def _open_beneath(path: Path, root: Path) -> int:
 
 
 def _write_private(path: Path, content: bytes) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    flags |= os.O_NOFOLLOW
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    flags |= getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(path, flags, 0o600)
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as stream:

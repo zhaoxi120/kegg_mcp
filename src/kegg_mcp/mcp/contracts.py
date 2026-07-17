@@ -5,18 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeVar, cast
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from kegg_mcp.analysis import (
-    ComparisonLimits,
-    ComparisonPreviewLimits,
-    FunctionalComparisonLimits,
-    ModuleAnalysisLimits,
-)
-from kegg_mcp.analysis.pathway_coverage import (
-    PathwayCoverageLimits,
-    PathwayReferenceNamespace,
-)
+from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection, PathwaySelectionMode
 from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel
 from kegg_mcp.domain.errors import ErrorDetail
@@ -25,6 +16,9 @@ from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
 from kegg_mcp.kegg import KeggEntryRef
 from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
+    AnalyzeKoAnnotationsResult,
+    AnalyzeModulesResult,
+    AnalyzePathwaysResult,
     AnnotationInputFormat,
     CompareDatasetSource,
     CompareKoSetsResult,
@@ -35,15 +29,18 @@ from kegg_mcp.services.models import (
     KoMappingServiceResult,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
-    PrimitiveAnalysisResult,
     ServerStatusResult,
 )
 from kegg_mcp.services.output_bundle import ManifestPathMode
-from kegg_mcp.services.reference_loading import PathwaySpec, ReferenceLoadingLimits
+from kegg_mcp.services.reference_loading import (
+    PathwaySpec,
+    canonicalize_pathway_specs,
+)
 from kegg_mcp.services.result_store import (
     DeletedResult,
     ResultArtifactMetadata,
     ResultMetadata,
+    ResultMetadataPage,
 )
 
 T = TypeVar("T")
@@ -127,6 +124,11 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
     pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
     output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
+
+    @field_validator("pathways")
+    @classmethod
+    def canonicalize_pathways(cls, value: tuple[PathwaySpec, ...]) -> tuple[PathwaySpec, ...]:
+        return canonicalize_pathway_specs(value)
 
     @model_validator(mode="after")
     def validate_common_path(self) -> Self:
@@ -213,11 +215,13 @@ class AnalyzePathwaysInput(FrozenModel):
     evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
 
+    @field_validator("pathways")
+    @classmethod
+    def canonicalize_pathways(cls, value: tuple[PathwaySpec, ...]) -> tuple[PathwaySpec, ...]:
+        return canonicalize_pathway_specs(value)
+
     @model_validator(mode="after")
-    def require_unique_pathways(self) -> Self:
-        numbers = tuple(item.pathway_number for item in self.pathways)
-        if len(numbers) != len(set(numbers)):
-            raise ValueError("pathways must use unique pathway numbers after ko/map deduplication")
+    def reject_unsupported_pathways(self) -> Self:
         _reject_organism_pathways(self.pathways)
         return self
 
@@ -229,6 +233,11 @@ class CompareKoSetsInput(FrozenModel):
     module_ids: Annotated[tuple[ModuleId, ...], Field(max_length=25)] = ()
     pathways: Annotated[tuple[PathwaySpec, ...], Field(max_length=25)] = ()
     allow_global_or_overview: bool = False
+
+    @field_validator("pathways")
+    @classmethod
+    def canonicalize_pathways(cls, value: tuple[PathwaySpec, ...]) -> tuple[PathwaySpec, ...]:
+        return canonicalize_pathway_specs(value)
 
     @model_validator(mode="after")
     def reject_unsupported_organism_context(self) -> Self:
@@ -248,6 +257,13 @@ class DeleteAnalysisResultInput(FrozenModel):
     """One opaque current-session retained result selected for immediate deletion."""
 
     result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+
+
+class ListAnalysisResultsInput(FrozenModel):
+    """Bounded current-session retained-result page."""
+
+    offset: int = Field(default=0, strict=True, ge=0, le=1_000_000)
+    limit: int = Field(default=50, strict=True, ge=1, le=100)
 
 
 class ResultResourceIndex(FrozenModel):
@@ -301,46 +317,22 @@ class CacheInfoResource(FrozenModel):
 NormalizeToolEnvelope = ToolEnvelope[NormalizeAnnotationsResult]
 EntriesToolEnvelope = ToolEnvelope[KeggEntriesServiceResult]
 MappingToolEnvelope = ToolEnvelope[KoMappingServiceResult]
-PrimitiveAnalysisToolEnvelope = ToolEnvelope[PrimitiveAnalysisResult]
+AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
+AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
+AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]
 CompareToolEnvelope = ToolEnvelope[CompareKoSetsResult]
 StatusToolEnvelope = ToolEnvelope[ServerStatusResult]
 ConnectivityToolEnvelope = ToolEnvelope[ConnectivityProbeResult]
 DeleteToolEnvelope = ToolEnvelope[DeletedResult]
+ListResultsToolEnvelope = ToolEnvelope[ResultMetadataPage]
 
 
 def constrain_mcp_input_schema(schema: dict[str, object]) -> None:
-    """Advertise the same hard maxima enforced by the MCP request validators."""
-    module_limits = ModuleAnalysisLimits()
-    bounded_models = (
-        DEFAULT_IMPORT_LIMITS,
-        ReferenceLoadingLimits(),
-        module_limits.parsing,
-        module_limits.resolution,
-        module_limits.evaluation,
-        PathwayCoverageLimits(),
-        FunctionalComparisonLimits(),
-        ComparisonLimits(),
-        ComparisonPreviewLimits(),
-    )
+    """Add string bounds that Pydantic cannot express on datetime or scalar unions."""
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         return
     definition_map = cast(dict[str, object], definitions)
-    for model in bounded_models:
-        definition = definition_map.get(type(model).__name__)
-        if not isinstance(definition, dict):
-            continue
-        properties = cast(dict[str, object], definition).get("properties")
-        if not isinstance(properties, dict):
-            continue
-        property_map = cast(dict[str, object], properties)
-        for field_name, maximum in model.model_dump(mode="python").items():
-            if not isinstance(maximum, (int, float)) or isinstance(maximum, bool):
-                continue
-            property_schema = property_map.get(field_name)
-            if not isinstance(property_schema, dict):
-                continue
-            cast(dict[str, object], property_schema)["maximum"] = maximum
     source_definition = definition_map.get("SourceProvenanceInput")
     if isinstance(source_definition, dict):
         properties = cast(dict[str, object], source_definition).get("properties")
@@ -377,6 +369,16 @@ def constrain_mcp_output_schema(schema: dict[str, object]) -> None:
     if not isinstance(definitions, dict):
         return
     definition_map = cast(dict[str, object], definitions)
+    result_page = definition_map.get("ResultMetadataPage")
+    if isinstance(result_page, dict):
+        properties = cast(dict[str, object], result_page).get("properties")
+        if isinstance(properties, dict):
+            item_schema = cast(dict[str, object], properties).get("items")
+            if isinstance(item_schema, dict):
+                cast(dict[str, object], item_schema)["maxItems"] = 100
+            limit_schema = cast(dict[str, object], properties).get("limit")
+            if isinstance(limit_schema, dict):
+                cast(dict[str, object], limit_schema)["maximum"] = 100
     maxima = {
         "KoPreview": {"ko_ids": 100},
         "KoClassComparisonSummary": {
@@ -422,8 +424,11 @@ def _reject_organism_pathways(pathways: tuple[PathwaySpec, ...]) -> None:
 
 __all__ = [
     "AnalyzeKoAnnotationsInput",
+    "AnalyzeKoAnnotationsToolEnvelope",
     "AnalyzeModulesInput",
+    "AnalyzeModulesToolEnvelope",
     "AnalyzePathwaysInput",
+    "AnalyzePathwaysToolEnvelope",
     "ArtifactRangeEnvelope",
     "CacheInfoResource",
     "CompareKoSetsInput",
@@ -435,13 +440,14 @@ __all__ = [
     "GetKeggEntriesInput",
     "GetServerStatusInput",
     "KoMappingTarget",
+    "ListAnalysisResultsInput",
+    "ListResultsToolEnvelope",
     "MapKoIdsInput",
     "MappingToolEnvelope",
     "NormalizeAnnotationsRequest",
     "NormalizeKoAnnotationsInput",
     "NormalizeToolEnvelope",
     "OversizedArtifactNotice",
-    "PrimitiveAnalysisToolEnvelope",
     "ProbeKeggConnectivityInput",
     "ResultResourceIndex",
     "StatusToolEnvelope",

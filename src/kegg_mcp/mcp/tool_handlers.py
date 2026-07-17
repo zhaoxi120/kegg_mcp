@@ -19,6 +19,7 @@ from kegg_mcp.mcp.contracts import (
     GetKeggEntriesInput,
     GetServerStatusInput,
     KoMappingTarget,
+    ListAnalysisResultsInput,
     MapKoIdsInput,
     NormalizeKoAnnotationsInput,
     ProbeKeggConnectivityInput,
@@ -34,6 +35,7 @@ from kegg_mcp.services.normalization import normalize_annotations
 from kegg_mcp.services.operational import (
     delete_analysis_result,
     get_server_status_service,
+    list_analysis_results,
     probe_kegg_connectivity_service,
 )
 from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
@@ -223,6 +225,18 @@ async def delete_result(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
+async def list_results(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(ListAnalysisResultsInput, model)
+    runtime = context.runtime
+    result = list_analysis_results(
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+        offset=request.offset,
+        limit=request.limit,
+    )
+    return ToolOutcome(result, f"Returned {len(result.items)} current-session retained results.")
+
+
 async def get_status(context: ToolContext, model: BaseModel) -> ToolOutcome:
     cast(GetServerStatusInput, model)
     runtime = context.runtime
@@ -257,6 +271,7 @@ __all__ = [
     "delete_result",
     "get_entries",
     "get_status",
+    "list_results",
     "map_identifiers",
     "normalize",
     "probe_connectivity",

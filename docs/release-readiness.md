@@ -4,20 +4,21 @@ Use this checklist against the exact commit and distributions proposed for a Git
 Passing source tests is necessary but does not authorize KEGG access or redistribution of KEGG
 content.
 
-Current status: validate the merged commit before tagging. Record package digests and final CI
-evidence in the GitHub release notes, not in biological workflows or repository history files.
+Current status: validate the exact merged release-candidate commit before creating a new tag. Never
+reuse a version identifier already present in a published release. Record package digests and final
+CI evidence in the GitHub release notes, not in biological workflows or repository history files.
 
 ## Distribution boundary
 
 | Distribution | Source version | Contract |
 | --- | --- | --- |
-| `kegg-mcp` | `0.3.0` | Core analysis server and `RenderInput` producer |
-| `deepkoala-mcp` | `0.2.0` | Optional controlled detailed-CSV handoff |
-| `kegg-render-mcp` | `0.1.0` | Optional renderer requiring `kegg-mcp>=0.3,<0.4` |
+| `kegg-mcp` | `0.4.0` | Core analysis server and `RenderInput` producer |
+| `deepkoala-mcp` | `0.3.0` | Optional controlled detailed-CSV handoff |
+| `kegg-render-mcp` | `0.2.0` | Optional renderer requiring `kegg-mcp>=0.4,<0.5` |
 
 All distributions support Linux with CPython 3.11.x. They are independently installed and
-locked. The core Python wheel does not install either companion or either repository-scoped
-Skill. Use an exact GitHub checkout or tag source archive when the Skills are required.
+locked. The core Python wheel does not install either companion or any repository-scoped Skill.
+Use an exact GitHub checkout or tag source archive when the Skills are required.
 
 The core produces `render_input.json` schema version 2 and preserves
 `AnalysisExecutionProvenance` version 2. These are data contracts, not package-history labels.
@@ -54,6 +55,9 @@ uv run --frozen pytest
 The default local suite is offline. Pull-request CI runs one serialized live campaign with 30
 requests each for `INFO`, `GET`, `LINK`, and `CONV`, one request per second, zero retries, and no
 uploaded KEGG payloads. The workflow has no `push` trigger, so merge does not repeat the campaign.
+Maintainer server runs that must not contact KEGG can additionally select the explicit
+`KEGG_MCP_ACCESS_MODE=offline_cache` profile; the external unconfigured default remains
+`public_academic`.
 
 Validate the DeepKOALA companion independently:
 
@@ -89,11 +93,13 @@ distribution before upload. Each archive must include the complete MIT license a
 - DeepKOALA weights, KOfam profiles, model code, or annotation databases;
 - secrets, local absolute paths, private fixtures, biological inputs, or generated results;
 - bytecode, virtual environments, caches, or repository metadata; and
-- another distribution's implementation or either repository-scoped Skill.
+- another distribution's implementation or any repository-scoped Skill.
 
-Clean-install each wheel in a Linux CPython 3.11 environment and verify stdio startup, tool and
-resource discovery, schema-conforming output, clean protocol stdout, redacted status, scoped
-result deletion, and safe output-bundle behavior.
+CI clean-installs each freshly built wheel in a temporary Linux CPython 3.11 environment, runs
+package import from outside the checkout, and checks console `--version` where the distribution has
+a non-server CLI. Before publication, additionally verify stdio startup, tool and resource
+discovery, schema-conforming output, clean protocol stdout, redacted status, scoped result deletion,
+and safe output-bundle behavior.
 
 ## Rights and data gates
 

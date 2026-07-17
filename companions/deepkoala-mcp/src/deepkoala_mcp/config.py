@@ -1,4 +1,4 @@
-"""Small environment-only configuration for the local companion."""
+"""Environment-only deployment policy for the local companion."""
 
 from __future__ import annotations
 
@@ -7,32 +7,37 @@ import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from deepkoala_mcp.contracts import MAX_QUEUE_SIZE
+from deepkoala_mcp.contracts import (
+    MAX_FASTA_BYTES,
+    MAX_OUTPUT_BYTES,
+    MAX_SEQUENCE_COUNT,
+    ModelName,
+)
 
 ENV_PREFIX = "DEEPKOALA_MCP_"
 CHECKOUT_ENV = f"{ENV_PREFIX}CHECKOUT"
 PYTHON_ENV = f"{ENV_PREFIX}PYTHON"
 STATE_ROOT_ENV = f"{ENV_PREFIX}STATE_ROOT"
-ALLOWED_ROOTS_ENV = f"{ENV_PREFIX}ALLOWED_ROOTS"
+INPUT_ROOTS_ENV = f"{ENV_PREFIX}INPUT_ROOTS"
+OUTPUT_ROOTS_ENV = f"{ENV_PREFIX}OUTPUT_ROOTS"
+ALLOWED_MODELS_ENV = f"{ENV_PREFIX}ALLOWED_MODELS"
+ALLOWED_DEVICES_ENV = f"{ENV_PREFIX}ALLOWED_DEVICES"
 CPU_THREADS_ENV = f"{ENV_PREFIX}CPU_THREADS"
-MAX_QUEUE_SIZE_ENV = f"{ENV_PREFIX}MAX_QUEUE_SIZE"
-DEFAULT_TIMEOUT_SECONDS_ENV = f"{ENV_PREFIX}DEFAULT_TIMEOUT_SECONDS"
-PLAN_TTL_SECONDS_ENV = f"{ENV_PREFIX}PLAN_TTL_SECONDS"
-RETENTION_SECONDS_ENV = f"{ENV_PREFIX}RETENTION_SECONDS"
+MAX_FASTA_BYTES_ENV = f"{ENV_PREFIX}MAX_FASTA_BYTES"
+MAX_SEQUENCES_ENV = f"{ENV_PREFIX}MAX_SEQUENCES"
+MAX_OUTPUT_BYTES_ENV = f"{ENV_PREFIX}MAX_OUTPUT_BYTES"
+MAX_TIMEOUT_SECONDS_ENV = f"{ENV_PREFIX}MAX_TIMEOUT_SECONDS"
 
 DEFAULT_CPU_THREADS = 2
-DEFAULT_MAX_QUEUE_SIZE = 4
-DEFAULT_TIMEOUT_SECONDS = 3_600
-DEFAULT_PLAN_TTL_SECONDS = 600
-DEFAULT_RETENTION_SECONDS = 86_400
+DEFAULT_MAX_TIMEOUT_SECONDS = 3_600
 
 
 class DeepKoalaRuntimeConfig(BaseModel):
-    """Private deployment settings that status output must not expose."""
+    """Private deployment paths and the complete execution allowlist."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -45,35 +50,35 @@ class DeepKoalaRuntimeConfig(BaseModel):
     checkout: Path
     python_executable: Path
     state_root: Path
-    allowed_roots: tuple[Path, ...] = ()
+    input_roots: tuple[Path, ...]
+    output_roots: tuple[Path, ...]
+    allowed_models: tuple[ModelName, ...] = ("full", "frag")
+    allowed_devices: tuple[Literal["auto"], ...] = ("auto",)
     cpu_threads: int = Field(default=DEFAULT_CPU_THREADS, strict=True, ge=1, le=4)
-    max_queue_size: int = Field(
-        default=DEFAULT_MAX_QUEUE_SIZE,
+    max_fasta_bytes: int = Field(default=MAX_FASTA_BYTES, strict=True, ge=1, le=MAX_FASTA_BYTES)
+    max_sequences: int = Field(
+        default=MAX_SEQUENCE_COUNT,
         strict=True,
         ge=1,
-        le=MAX_QUEUE_SIZE,
+        le=MAX_SEQUENCE_COUNT,
     )
-    default_timeout_seconds: int = Field(
-        default=DEFAULT_TIMEOUT_SECONDS,
+    max_output_bytes: int = Field(
+        default=MAX_OUTPUT_BYTES,
+        strict=True,
+        ge=1,
+        le=MAX_OUTPUT_BYTES,
+    )
+    max_timeout_seconds: int = Field(
+        default=DEFAULT_MAX_TIMEOUT_SECONDS,
         strict=True,
         ge=1,
         le=86_400,
     )
-    plan_ttl_seconds: int = Field(
-        default=DEFAULT_PLAN_TTL_SECONDS,
-        strict=True,
-        ge=1,
-        le=86_400,
-    )
-    retention_seconds: int = Field(
-        default=DEFAULT_RETENTION_SECONDS,
-        strict=True,
-        ge=1,
-        le=2_592_000,
-    )
+    allow_multi: Literal[False] = False
+    max_concurrent_jobs: Literal[1] = 1
 
     @model_validator(mode="after")
-    def validate_paths(self) -> Self:
+    def validate_paths_and_policy(self) -> Self:
         _require_posix_runtime()
         for name, path in (
             ("checkout", self.checkout),
@@ -90,66 +95,62 @@ class DeepKoalaRuntimeConfig(BaseModel):
             raise ValueError("state_root must not be a filesystem root")
         if _overlap(self.state_root, self.checkout):
             raise ValueError("state_root must not overlap checkout")
-        if len(self.allowed_roots) != len(set(self.allowed_roots)):
-            raise ValueError("allowed_roots must be unique")
-        for root in self.allowed_roots:
-            if (
-                not root.is_absolute()
-                or ".." in root.parts
-                or not root.is_dir()
-                or root == Path(root.anchor)
-            ):
-                raise ValueError(
-                    "allowed_roots must contain traversal-free non-root absolute directories"
-                )
-            if _overlap(root, self.state_root):
-                raise ValueError("allowed_roots must not overlap state_root")
+        _validate_roots("input_roots", self.input_roots)
+        _validate_roots("output_roots", self.output_roots, writable=True)
+        if any(_overlap(root, self.state_root) for root in (*self.input_roots, *self.output_roots)):
+            raise ValueError("input and output roots must not overlap state_root")
+        if any(_overlap(root, self.checkout) for root in self.output_roots):
+            raise ValueError("output_roots must not overlap checkout")
+        if len(self.allowed_models) != len(set(self.allowed_models)):
+            raise ValueError("allowed_models must be unique")
+        if not self.allowed_models:
+            raise ValueError("allowed_models must not be empty")
+        if self.allowed_devices != ("auto",):
+            raise ValueError("the supported device allowlist is exactly 'auto'")
         return self
 
 
 def load_runtime_config(
     environment: Mapping[str, str] | None = None,
 ) -> DeepKoalaRuntimeConfig:
-    """Load the documented minimal ``DEEPKOALA_MCP_*`` environment contract."""
+    """Load the explicit ``DEEPKOALA_MCP_*`` deployment policy."""
     values = os.environ if environment is None else environment
-    checkout = _required_existing(values, CHECKOUT_ENV, directory=True)
-    python = _required_existing(values, PYTHON_ENV, directory=False)
-    raw_state = _required(values, STATE_ROOT_ENV)
-    state = _absolute(raw_state, STATE_ROOT_ENV)
-    roots = _allowed_roots(values.get(ALLOWED_ROOTS_ENV))
     return DeepKoalaRuntimeConfig(
-        checkout=checkout,
-        python_executable=python,
-        state_root=state,
-        allowed_roots=roots,
+        checkout=_required_existing(values, CHECKOUT_ENV, directory=True),
+        python_executable=_required_existing(values, PYTHON_ENV, directory=False),
+        state_root=_absolute(_required(values, STATE_ROOT_ENV), STATE_ROOT_ENV),
+        input_roots=_roots(_required(values, INPUT_ROOTS_ENV), INPUT_ROOTS_ENV),
+        output_roots=_roots(_required(values, OUTPUT_ROOTS_ENV), OUTPUT_ROOTS_ENV),
+        allowed_models=_models(values.get(ALLOWED_MODELS_ENV, "full,frag")),
+        allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, "auto")),
         cpu_threads=_integer(values, CPU_THREADS_ENV, DEFAULT_CPU_THREADS, 1, 4),
-        max_queue_size=_integer(
+        max_fasta_bytes=_integer(
             values,
-            MAX_QUEUE_SIZE_ENV,
-            DEFAULT_MAX_QUEUE_SIZE,
+            MAX_FASTA_BYTES_ENV,
+            MAX_FASTA_BYTES,
             1,
-            MAX_QUEUE_SIZE,
+            MAX_FASTA_BYTES,
         ),
-        default_timeout_seconds=_integer(
+        max_sequences=_integer(
             values,
-            DEFAULT_TIMEOUT_SECONDS_ENV,
-            DEFAULT_TIMEOUT_SECONDS,
+            MAX_SEQUENCES_ENV,
+            MAX_SEQUENCE_COUNT,
+            1,
+            MAX_SEQUENCE_COUNT,
+        ),
+        max_output_bytes=_integer(
+            values,
+            MAX_OUTPUT_BYTES_ENV,
+            MAX_OUTPUT_BYTES,
+            1,
+            MAX_OUTPUT_BYTES,
+        ),
+        max_timeout_seconds=_integer(
+            values,
+            MAX_TIMEOUT_SECONDS_ENV,
+            DEFAULT_MAX_TIMEOUT_SECONDS,
             1,
             86_400,
-        ),
-        plan_ttl_seconds=_integer(
-            values,
-            PLAN_TTL_SECONDS_ENV,
-            DEFAULT_PLAN_TTL_SECONDS,
-            1,
-            86_400,
-        ),
-        retention_seconds=_integer(
-            values,
-            RETENTION_SECONDS_ENV,
-            DEFAULT_RETENTION_SECONDS,
-            1,
-            2_592_000,
         ),
     )
 
@@ -203,27 +204,35 @@ def _required_existing(
 
 
 def _absolute(value: str, name: str) -> Path:
-    if "\x00" in value:
-        raise ValueError(f"{name} contains NUL")
+    if "\x00" in value or any(ord(character) < 32 for character in value):
+        raise ValueError(f"{name} contains a control character")
     path = Path(value).expanduser()
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{name} must be absolute and traversal-free")
     return path
 
 
-def _allowed_roots(value: str | None) -> tuple[Path, ...]:
-    if not value:
-        return ()
+def _roots(value: str, name: str) -> tuple[Path, ...]:
     parts = value.split(os.pathsep)
     if any(not part for part in parts):
-        raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an empty root")
-    roots = tuple(
-        _required_existing({ALLOWED_ROOTS_ENV: part}, ALLOWED_ROOTS_ENV, directory=True)
-        for part in parts
-    )
+        raise ValueError(f"{name} contains an empty root")
+    roots = tuple(_required_existing({name: part}, name, directory=True) for part in parts)
     if len(roots) != len(set(roots)):
-        raise ValueError(f"{ALLOWED_ROOTS_ENV} contains duplicate roots")
+        raise ValueError(f"{name} contains duplicate roots")
     return roots
+
+
+def _models(value: str) -> tuple[ModelName, ...]:
+    values = tuple(value.split(","))
+    if not values or any(item not in {"full", "frag"} for item in values):
+        raise ValueError(f"{ALLOWED_MODELS_ENV} must be a comma-separated subset of full,frag")
+    return cast(tuple[ModelName, ...], values)
+
+
+def _devices(value: str) -> tuple[Literal["auto"], ...]:
+    if value != "auto":
+        raise ValueError(f"{ALLOWED_DEVICES_ENV} must be exactly auto")
+    return ("auto",)
 
 
 def _integer(
@@ -244,19 +253,39 @@ def _integer(
     return parsed
 
 
+def _validate_roots(name: str, roots: tuple[Path, ...], *, writable: bool = False) -> None:
+    if not roots:
+        raise ValueError(f"{name} must not be empty")
+    if len(roots) != len(set(roots)):
+        raise ValueError(f"{name} must be unique")
+    for root in roots:
+        if (
+            not root.is_absolute()
+            or ".." in root.parts
+            or not root.is_dir()
+            or root == Path(root.anchor)
+        ):
+            raise ValueError(f"{name} must contain traversal-free non-root absolute directories")
+        if writable and not os.access(root, os.W_OK | os.X_OK):
+            raise ValueError("output_roots must be writable directories")
+
+
 def _overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
 __all__ = [
-    "ALLOWED_ROOTS_ENV",
+    "ALLOWED_DEVICES_ENV",
+    "ALLOWED_MODELS_ENV",
     "CHECKOUT_ENV",
     "CPU_THREADS_ENV",
-    "DEFAULT_TIMEOUT_SECONDS_ENV",
-    "MAX_QUEUE_SIZE_ENV",
-    "PLAN_TTL_SECONDS_ENV",
+    "INPUT_ROOTS_ENV",
+    "MAX_FASTA_BYTES_ENV",
+    "MAX_OUTPUT_BYTES_ENV",
+    "MAX_SEQUENCES_ENV",
+    "MAX_TIMEOUT_SECONDS_ENV",
+    "OUTPUT_ROOTS_ENV",
     "PYTHON_ENV",
-    "RETENTION_SECONDS_ENV",
     "STATE_ROOT_ENV",
     "DeepKoalaRuntimeConfig",
     "load_runtime_config",

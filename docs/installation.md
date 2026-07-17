@@ -4,7 +4,7 @@ KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs de
 analysis, and retrieves KEGG references through public-academic access by default. The core
 server does not run DeepKOALA or another sequence annotator. An optional independently installed
 companion can run an existing local DeepKOALA installation with its fixed automatic device policy
-and hand detailed CSV to the core importer. A second independent companion can turn the core's
+and hand a stable detailed CSV to the core importer. A second independent companion can turn the core's
 complete renderer handoff into bounded static pathway overlays and MODULE logic diagrams.
 
 Release evidence and archive checks belong in the
@@ -80,9 +80,9 @@ Do not install an artifact solely because its filename matches this example. Ver
 version, and published SHA-256 digest first.
 
 The Python wheel and Python source distribution install the MCP Python server only. They do not
-install the repository-scoped Codex Skill or include the complete repository documentation and
+install repository-scoped Codex Skills or include the complete repository documentation and
 examples. Obtain an exact GitHub repository checkout or tag source archive separately when the
-Skill and its references are required.
+Skills and their references are required.
 
 ## Choose one KEGG access mode
 
@@ -93,7 +93,8 @@ selected variables in the MCP client's environment configuration.
 The supported operating profiles are:
 
 - unconfigured operation defaults to `public_academic` with academic use confirmed;
-- licensed operation configures the operator's authorized endpoint; and
+- licensed operation configures the operator's authorized endpoint;
+- internal iteration can explicitly select network-disabled `offline_cache`;
 - local pytest skips live KEGG tests unless explicitly enabled; and
 - pull-request CI runs the bounded live compatibility campaign once.
 
@@ -141,6 +142,31 @@ institution or activity is eligible or licensed. If an authorized service requir
 authentication mechanism this release does not support, do not place credentials in the URL or
 start the server; request a separately reviewed integration.
 
+### Offline cache for internal iteration
+
+The external server default remains `public_academic`. Internal work that must never contact KEGG
+can select the explicit offline profile:
+
+```text
+KEGG_MCP_ACCESS_MODE=offline_cache
+```
+
+This profile always converts KEGG operations to cache-only reads. It never calls the HTTP
+transport, even when a caller requests the normal refresh default. A missing or disallowed stale
+entry returns `CACHE_ENTRY_NOT_FOUND`; it does not fall back to the network. By default the profile
+reads the public-academic cache namespace. To reuse a cache previously populated through one
+authorized licensed endpoint without enabling network access, select that namespace with the same
+validated endpoint and confirmation:
+
+```text
+KEGG_MCP_ACCESS_MODE=offline_cache
+KEGG_MCP_LICENSED_ENDPOINT=https://kegg.example.edu/api
+KEGG_MCP_LICENSED_USE_CONFIRMED=true
+```
+
+The endpoint is used only to derive the existing opaque cache namespace in this profile. Local KO
+normalization does not require cached KEGG content; MODULE and pathway reference analysis does.
+
 ### Optional local storage locations
 
 These variables select local SQLite files:
@@ -159,6 +185,9 @@ counts and capacity, or delete only expired rows, with:
 kegg-mcp cache status --json
 kegg-mcp cache cleanup --expired --json
 ```
+
+If the configured cache database does not exist, both commands return zero counts without creating
+the database or its parent directory.
 
 Omit them to use the user-local defaults. Create private parent directories owned by the server
 user. The result store rejects unsafe parents, traversal, symlinks, non-regular files, and unsafe
@@ -187,12 +216,11 @@ making a private `result_id` a cross-process contract.
 The optional package under `companions/deepkoala-mcp/` is an independent stdio server. Installing
 the core wheel does not install it. The companion also does not install DeepKOALA, PyTorch, model
 weights, HMMER, KOfam profiles, or KEGG data. It requires an operator-reviewed official checkout,
-an existing Python interpreter where that checkout already runs, and a private state root. Add
-that state root to the core server's `KEGG_MCP_ALLOWED_ROOTS` for file handoff. When using
-caller-supplied `fasta_path`, also allow the original FASTA root so the distinct provenance
-`input_path` passes the core boundary. Inline FASTA provenance uses `input_path=null`. Create the
-owner-only directory before starting either server, as shown in the companion README, because the
-core validates allowed roots during startup.
+an existing Python interpreter where that checkout already runs, a private temporary state root,
+and separate input and output root allowlists. For file handoff, add the DeepKOALA output root and
+the original FASTA root to the core server's `KEGG_MCP_ALLOWED_ROOTS`; never expose the companion's
+private state root. Create all configured roots as owner-only directories before either server
+starts.
 
 The local-only routing policy was reviewed on 2026-07-16 against the official
 [GenomeNet DeepKOALA page](https://www.genome.jp/tools/deepkoala/), the linked official
@@ -204,15 +232,16 @@ treats the absence of a documented remote API as a deployment boundary: MCP auto
 opens, submits to, or simulates the web form and uses only the configured local runtime through
 `deepkoala-mcp`.
 
-For protein FASTA without KO evidence, the Skill first discovers `deepkoala-mcp` and makes
+For protein FASTA without KO evidence, `deepkoala-annotation` first discovers `deepkoala-mcp` and makes
 `get_deepkoala_runner_status` its first annotation-tool call. If the runtime, model resources,
 companion installation, state root, or MCP registration is missing, it reports that local state and
-asks permission before making any change. The confirmation states which local checkout,
+asks permission before making any deployment change. That deployment request states which local checkout,
 environment, resources, state, and registration would change; whether dependencies or models must
 be downloaded; expected disk and compute requirements; and that FASTA remains local with no remote
 upload branch. Declining preserves the FASTA and stops annotation. No package install, environment
 change, checkout or model download, directory creation, or MCP configuration write occurs before
-permission.
+permission. Once status is ready, the user's explicit annotation request authorizes the single
+`run_deepkoala_job` call; no second confirmation is required.
 
 Install and validate the lightweight companion separately:
 
@@ -238,18 +267,45 @@ job. Callers cannot select a device. The companion never claims which device was
 the external runtime reports it reliably, and it never downloads or replaces a weight.
 
 Register `deepkoala-mcp` as a second local server using the configuration contract in the
-[companion README](../companions/deepkoala-mcp/README.md). The companion writes successful output
-beneath `DEEPKOALA_MCP_STATE_ROOT`; configure the core server to allow that same root.
-`DEEPKOALA_MCP_ALLOWED_ROOTS` is separate and controls only caller-supplied FASTA intake. A
-successful path-input handoff identifies that original FASTA as `source.input_path`, while inline
-input leaves it null; neither form exposes the private staged FASTA. The repository Skill can then
-prepare a job, retain the non-blocking execution notice as provenance, submit only the opaque job
-identifier without a per-job confirmation field, poll it, and pass the successful `output_path` to the core importer as
-`input_format="deepkoala_detailed"`. No digest or cross-server private result identifier is part
-of this handoff.
+[companion README](../companions/deepkoala-mcp/README.md). Configure
+`DEEPKOALA_MCP_INPUT_ROOTS` for caller-supplied FASTA and `DEEPKOALA_MCP_OUTPUT_ROOTS` for stable
+delivery directories. An explicit annotation request calls `run_deepkoala_job` once with an
+allowed absolute FASTA path and a new output directory, then polls `get_deepkoala_job`. There is no
+prepare/submit phase, acknowledgement field, plan TTL, or second confirmation. Success returns
+`deepkoala_annotations.csv`, `deepkoala_run_report.md`, and source provenance; pass
+`annotations_path` to the core with `input_format="deepkoala_detailed"`. The companion job ID is
+process-scoped and is not a cross-server result identity. When the clients cannot share allowed
+filesystem roots, reconstruct the companion's bounded annotation resource and provide that CSV as
+inline core input instead.
 
-The handoff validates the generated CSV and caller-supplied original FASTA separately. The private
-staged FASTA is never exposed.
+An output-directory-driven annotation call is:
+
+```json
+{
+  "fasta_path": "/absolute/private/input/proteins.faa",
+  "output_directory": "/absolute/private/handoff/deepkoala-run-001",
+  "model": "full",
+  "model_date": "latest"
+}
+```
+
+Poll the returned `job_id` until it is terminal. On success, use the returned
+`annotations_path` and `source` object unchanged in the high-level core request shown below; use a
+new analysis output directory. This is the default FASTA-to-report route and does not repeat
+normalization.
+
+In a Codex checkout with the Skills installed, use two explicit prompts rather than an umbrella
+workflow:
+
+> Use `$deepkoala-annotation` to annotate
+> `/absolute/private/input/proteins.faa` into the new directory
+> `/absolute/private/handoff/deepkoala-run-001`. Return the stable CSV path and source provenance.
+
+After that task succeeds:
+
+> Use `$kegg-ko-analysis` with the returned `deepkoala_annotations.csv` and source provenance.
+> Analyze the requested MODULEs/pathways once and write the report bundle to the new directory
+> `/absolute/private/results/analysis-001`.
 
 ## Optional renderer companion
 
@@ -288,14 +344,15 @@ authorized HTTPS `KEGG_RENDER_MCP_LICENSED_ENDPOINT`, and
 `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true`. Set the renderer mode to `unconfigured` only for
 MODULE-only rendering; pathway rendering then returns an actionable access error.
 
-The renderer accepts only a validated `render_input.json` schema version 2 path below an allowed
-root. Incompatible handoffs must be regenerated by the core analysis. Source pathway PNG and KGML
+The renderer accepts exactly one validated schema-version-2 handoff, either as a path below an
+allowed root or as bounded inline JSON. Incompatible handoffs must be regenerated by the core
+analysis. Source pathway PNG and KGML
 are fetched one asset at a time through the typed core client, remain local, and are not
 distributable under the project's MIT license. See the
 [renderer README](../companions/kegg-render-mcp/README.md) for its six tools, resource templates,
 retention settings, and exact bounds.
 
-The renderer dependency must remain `kegg-mcp>=0.3,<0.4`, and both distributions must come from
+The renderer dependency must remain `kegg-mcp>=0.4,<0.5`, and both distributions must come from
 one compatible reviewed source baseline.
 
 ## Configure an MCP client
@@ -388,23 +445,18 @@ or set the command to the absolute `uv` executable with arguments equivalent to
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
-Codex discovers the repository-scoped Skill at `.agents/skills/kegg-ko-analysis/` while working in
-an exact repository checkout or tag source archive. Its MCP dependencies are `kegg-mcp` and
-`deepkoala-mcp`. The Skill can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is
-enabled for KO/KEGG evidence and clear protein FASTA requests. Existing KO evidence routes directly
-to the core. Protein FASTA without KO evidence checks `get_deepkoala_runner_status` first and uses
-the ready companion automatically; an absent or unready companion produces a specific deployment
-state and requests authorization only for installation, downloads, directory changes, or MCP
-registration. The Skill chooses workflows and explains results, while deterministic normalization
-and analysis remain in the core server. Codex discovers the separate
-`.agents/skills/kegg-visualization/` Skill for pathway and MODULE graphics; it requires the core and
-renderer stdio dependencies and contains no rendering code. A wheel installation supplies the
-core server command but does not install either repository-scoped Skill or either companion.
+Codex discovers three repository-scoped Skills from an exact checkout or tag source archive:
+`deepkoala-annotation` depends only on `deepkoala-mcp`, `kegg-ko-analysis` depends only on
+`kegg-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`. Invoke the Skill that
+owns the current stage and pass the named versioned output file to the next stage. No Skill depends
+on multiple MCP servers or contains subprocess, HTTP, parsing, normalization, or rendering logic.
+A wheel installs its server command only; it does not install repository-scoped Skills or another
+distribution.
 
 ## Verify discovery and status
 
 Restart the MCP client after changing server configuration. Confirm that discovery shows these
-ten tools:
+eleven tools:
 
 ```text
 analyze_ko_annotations
@@ -415,6 +467,7 @@ analyze_modules
 analyze_pathways
 compare_ko_sets
 probe_kegg_connectivity
+list_analysis_results
 delete_analysis_result
 get_server_status
 ```
@@ -498,7 +551,7 @@ original FASTA under `KEGG_MCP_ALLOWED_ROOTS` and use one high-level call:
 ```json
 {
   "annotations": {
-    "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
+    "file_path": "/absolute/private/handoff/deepkoala-run-001/deepkoala_annotations.csv",
     "input_format": "deepkoala_detailed",
     "analysis_unit": "isolate_proteome",
     "source": {
@@ -520,7 +573,7 @@ For a most-detected or Top-N pathway request, prefer server-side selection:
 ```json
 {
   "annotations": {
-    "file_path": "/absolute/private/handoff/deepkoala_annotations.csv",
+    "file_path": "/absolute/private/handoff/deepkoala-run-001/deepkoala_annotations.csv",
     "input_format": "deepkoala_detailed",
     "analysis_unit": "isolate_proteome"
   },
@@ -625,6 +678,10 @@ the opaque ID as local and session-scoped. Unknown, expired, deleted, or differe
 all return `RESULT_NOT_FOUND` without revealing whether another scope owns a result. Call
 `delete_analysis_result` to remove one current-scope result immediately; repeated, unknown, and
 cross-scope deletion attempts retain the same safe not-found behavior.
+
+Call `list_analysis_results` to inspect a bounded metadata page of active results in the current
+stdio session. The tool accepts only `offset` and a `limit` of at most 100 and never reveals
+another session's results.
 
 Normal stdio shutdown removes all results in the current server scope. The default 24-hour value
 is both the hard TTL for an active result and the cleanup threshold for orphan rows left by an

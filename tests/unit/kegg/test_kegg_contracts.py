@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from kegg_mcp.kegg.contracts import (
+    MIN_REQUESTS_PER_SECOND,
     PUBLIC_KEGG_ENDPOINT,
     PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     CachePolicy,
@@ -17,8 +18,10 @@ from kegg_mcp.kegg.contracts import (
     KeggRequestOptions,
     LicensedAccess,
     LinkRequest,
+    OfflineCacheAccess,
     PublicAcademicAccess,
     RateLimitPolicy,
+    RetrievalEndpointClass,
     endpoint_fingerprint,
 )
 
@@ -35,6 +38,40 @@ def test_request_options_default_to_network_refresh() -> None:
 
     assert options.refresh is True
     assert options.cache_only is False
+
+
+def test_offline_cache_access_defaults_to_the_public_endpoint_namespace() -> None:
+    access = OfflineCacheAccess()
+
+    assert access.mode == "offline_cache"
+    assert access.endpoint_fingerprint == PUBLIC_KEGG_ENDPOINT_FINGERPRINT
+
+
+def test_offline_licensed_cache_namespace_requires_matching_endpoint_fingerprint() -> None:
+    endpoint = "https://licensed.example.test/kegg"
+
+    access = OfflineCacheAccess(
+        retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
+        endpoint=endpoint,
+        endpoint_fingerprint=endpoint_fingerprint(endpoint),
+        endpoint_label="licensed-endpoint",
+    )
+
+    assert access.endpoint == endpoint
+    with pytest.raises(ValidationError):
+        OfflineCacheAccess(
+            retrieval_endpoint_class=RetrievalEndpointClass.LICENSED,
+            endpoint=endpoint,
+            endpoint_fingerprint=endpoint_fingerprint("https://other.example.test/kegg"),
+            endpoint_label="licensed-endpoint",
+        )
+
+
+def test_client_limits_reject_rates_below_the_persisted_cross_process_minimum() -> None:
+    with pytest.raises(ValidationError):
+        KeggClientConfig.model_validate(
+            {"limits": {"requests_per_second": MIN_REQUESTS_PER_SECOND / 2.0}}
+        )
 
 
 def test_cache_only_requests_reject_network_refresh() -> None:

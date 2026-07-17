@@ -38,9 +38,9 @@ export KEGG_RENDER_MCP_STATE_ROOT=/absolute/private/renderer-state
 export KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/analysis-results
 ```
 
-`KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. Renderer input
-and optional output directories must be direct, traversal-free paths below one of these roots.
-Symlink escapes and unsafe writable intermediate directories are rejected.
+`KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. File-based
+renderer input and optional output directories must be direct, traversal-free paths below one of
+these roots. Symlink escapes and unsafe writable intermediate directories are rejected.
 
 Pathway access defaults to `public_academic`, which is permitted only for eligible academic users
 and academic use. The explicit confirmation defaults to `true` in this academic repository:
@@ -68,7 +68,8 @@ review.
 
 Optional bounded deployment settings are:
 
-- `KEGG_RENDER_MCP_RETENTION_SECONDS` (default `86400`, maximum 30 days); and
+- `KEGG_RENDER_MCP_RETENTION_SECONDS` (default `86400`, maximum 30 days);
+- `KEGG_RENDER_MCP_MAX_RESULTS` (default `128`, maximum `4096`); and
 - `KEGG_RENDER_MCP_MAX_DISK_BYTES` (default 256 MiB, maximum 2 GiB).
 
 ## MCP surface
@@ -88,9 +89,11 @@ Tools:
 - `render_module`
 - `delete_render_result`
 
-The probe performs exactly one explicit KEGG `INFO` request. Ordinary MODULE rendering is
-closed-world. Pathway rendering may retrieve one image and one KGML document through the typed
-core client.
+The probe performs exactly one explicit KEGG `INFO` request when access is configured and zero
+requests in `unconfigured` mode. Its bounded classification distinguishes configuration, DNS,
+connection, timeout, TLS, permission, rate-limit, endpoint, and unknown failures. Ordinary MODULE
+rendering is closed-world. Pathway rendering may retrieve one image and one KGML document through
+the typed core client.
 
 Example high-level input:
 
@@ -124,15 +127,16 @@ effect is idempotent.
 One state root is owned exclusively by one active renderer process. An owner-only advisory lock
 prevents concurrent processes from sharing a quota namespace. After a crashed process releases the
 lock, the next process removes only the bounded `scope_*` layout created by this companion before
-accepting work, so abandoned artifacts cannot evade the configured disk quota.
+accepting work. Result count, payload bytes, estimated allocation blocks, and per-file metadata
+reserves are checked before a result directory is created.
 
 ## Security boundary
 
 - Only schema version 2 is accepted; incompatible handoffs require a new core analysis bundle.
-- Input uses a direct allowed-root `render_input.json` path; inline renderer JSON is not part of
-  the MCP request surface.
+- Every render tool requires exactly one input source: a direct allowed-root `render_input_path` or
+  bounded inline `render_input_json`. Both sources use the same strict schema-version-2 parser.
 - Input JSON, target counts, assets, XML structure, coordinates, pixels, SVG nodes, artifact bytes,
-  retained bytes, and disk use are bounded.
+  retained result count, payload bytes, estimated allocated storage, and cleanup work are bounded.
 - KGML DTDs, entities, external resolution, excessive depth, and mismatched identities are
   rejected.
 - PNG signatures, chunks (in the core client), decoded dimensions, decompression limits, and total

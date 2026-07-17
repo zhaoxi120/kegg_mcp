@@ -55,9 +55,11 @@ environment values or private paths.
 
 Run `kegg-mcp doctor --json`. Select one documented access mode:
 
-- `public_academic` is the default and treats academic use as confirmed; or
+- `public_academic` is the external default and treats academic use as confirmed;
 - `licensed` requires an authorized HTTPS endpoint and
-  `KEGG_MCP_LICENSED_USE_CONFIRMED=true`.
+  `KEGG_MCP_LICENSED_USE_CONFIRMED=true`; or
+- `offline_cache` disables network access for internal iteration and returns a repairable cache
+  miss instead of falling back to KEGG.
 
 Do not place credentials in an endpoint URL. The diagnostic intentionally returns a generic error
 rather than echoing rejected values.

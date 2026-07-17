@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kegg_mcp.kegg import KeggBatchProvenance
 from kegg_mcp.services.render_contracts import ModuleRenderTarget, PathwayRenderTarget
 
 from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
@@ -18,6 +17,7 @@ from kegg_render_mcp.contracts import (
 )
 from kegg_render_mcp.module_scene import construct_module_scene
 from kegg_render_mcp.pathway_scene import PathwayAssetProvider, construct_pathway_scene
+from kegg_render_mcp.provenance import safe_batch_provenance
 from kegg_render_mcp.raster import render_module_png, render_pathway_png, validate_png
 from kegg_render_mcp.render_input import (
     ValidatedRenderInput,
@@ -57,12 +57,17 @@ class RendererService:
     async def render(
         self,
         *,
-        render_input_path: str,
+        render_input_path: str | None,
+        render_input_json: str | None = None,
         target_ids: tuple[str, ...] | None,
         formats: tuple[RenderFormat, ...],
         output_directory: str | None,
     ) -> RenderResult:
-        source = load_render_input(render_input_path, self.config)
+        source = load_render_input(
+            render_input_path,
+            self.config,
+            render_input_json=render_input_json,
+        )
         selected = source.target_ids if target_ids is None else target_ids
         if not selected or len(selected) > 32 or len(selected) != len(set(selected)):
             raise RenderMcpError(
@@ -205,10 +210,10 @@ async def _render_pathway_target(
             "calculation_method": target.calculation_method,
             "calculation_version": target.calculation_version,
             "reference_link_provenance": [
-                _safe_batch(item) for item in target.reference_link_provenance
+                safe_batch_provenance(item) for item in target.reference_link_provenance
             ],
             "reference_metadata_provenance": [
-                _safe_batch(item) for item in target.reference_metadata_provenance
+                safe_batch_provenance(item) for item in target.reference_metadata_provenance
             ],
             "assets": scene.asset_provenance,
         },
@@ -276,26 +281,7 @@ def _render_module_target(
             "strict_calculation_method": target.strict.calculation_method.model_dump(mode="json"),
             "lenient_calculation_method": target.lenient.calculation_method.model_dump(mode="json"),
             "reference_retrieval_provenance": [
-                _safe_batch(item) for item in target.reference_retrieval_provenance
+                safe_batch_provenance(item) for item in target.reference_retrieval_provenance
             ],
         },
     )
-
-
-def _safe_batch(value: KeggBatchProvenance) -> dict[str, object]:
-    result: dict[str, object] = {
-        "operation": value.operation.value,
-        "request_key": value.request_key,
-        "access_mode": value.access_mode.value,
-        "retrieval_endpoint_class": value.retrieval_endpoint_class.value,
-        "origin": value.origin.value,
-        "cache_lookup_state": value.cache_lookup_state.value,
-        "retrieved_at": value.retrieved_at.isoformat(),
-        "served_at": value.served_at.isoformat(),
-        "is_stale": value.is_stale,
-        "parser_name": value.parser_name,
-        "parser_version": value.parser_version,
-    }
-    if value.database_release is not None:
-        result["database_release"] = value.database_release
-    return result

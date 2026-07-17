@@ -25,7 +25,7 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.errors import ErrorCode, fail
 from kegg_mcp.execution import (
-    ANNOTATION_ANALYSIS_SERVICE_NAME,
+    ANALYSIS_SERVICE_NAME,
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
     ExecutionStage,
@@ -46,16 +46,14 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.reporting import ReportInput, ReportLimits, render_report
 from kegg_mcp.services.models import (
     MAX_DIRECT_ANALYSIS_TARGETS,
-    MAX_DIRECT_WARNINGS,
+    AnalyzeKoAnnotationsResult,
+    AutomaticPathwaySelectionSummary,
     NormalizeAnnotationsRequest,
-    PrimitiveAnalysisResult,
     SelectedPathwaySummary,
 )
 from kegg_mcp.services.normalization import _import_dataset
 from kegg_mcp.services.output_bundle import write_analysis_bundle
 from kegg_mcp.services.previews import (
-    _annotation_provenance,
-    _import_summary,
     _module_preview,
     _pathway_preview,
 )
@@ -72,11 +70,11 @@ from kegg_mcp.services.reference_loading import (
 from kegg_mcp.services.result_builders import (
     _analysis_warnings,
     _artifact_metadata,
+    _build_analysis_summary,
     _elapsed_ms,
     _execution_metrics,
     _json_bytes,
     _reference_provenance,
-    _status_record_counts,
     _validate_report_capacity,
 )
 from kegg_mcp.services.result_store import (
@@ -104,7 +102,7 @@ def analyze_annotation_targets(
     pathway_limits: PathwayCoverageLimits | None = None,
     report_limits: ReportLimits | None = None,
     output_directory: Path | None = None,
-) -> PrimitiveAnalysisResult:
+) -> AnalyzeKoAnnotationsResult:
     """Normalize any supported inline format and analyze all selected targets in one call."""
     effective_report_limits = report_limits or ReportLimits()
     effective_module_limits = module_limits or ModuleAnalysisLimits()
@@ -216,7 +214,7 @@ def analyze_annotation_targets(
         for reference in references
     )
     execution = AnalysisExecutionProvenance(
-        service_name=ANNOTATION_ANALYSIS_SERVICE_NAME,
+        service_name=ANALYSIS_SERVICE_NAME,
         import_limits=request.import_limits,
         kegg_request_options=effective_options,
         reference_loading_limits=effective_reference_limits,
@@ -237,10 +235,19 @@ def analyze_annotation_targets(
             max_pathway_previews=MAX_DIRECT_ANALYSIS_TARGETS,
         ),
     )
+    stage_elapsed[ExecutionStage.ANALYSIS] = _elapsed_ms(started)
+    reference_provenance = _reference_provenance(modules, coverages)
+    metrics = _execution_metrics(
+        stage_elapsed,
+        mapping_provenance=discovery_provenance,
+        reference_provenance=reference_provenance,
+    )
     rendered = render_report(
         ReportInput(
             dataset=dataset,
             execution=execution,
+            execution_metrics=metrics,
+            mapping_provenance=discovery_provenance,
             module_evaluations=modules,
             pathway_coverages=coverages,
             pathway_selection=pathway_selection if ranking is not None else None,
@@ -248,7 +255,6 @@ def analyze_annotation_targets(
         ),
         limits=effective_report_limits,
     )
-    stage_elapsed[ExecutionStage.ANALYSIS] = _elapsed_ms(started)
     stored_inputs = [
         ResultArtifactInput(
             section=artifact.section.value,
@@ -330,14 +336,11 @@ def analyze_annotation_targets(
             "Pathway KO coverage is descriptive and does not establish presence, activity, or flux."
         )
     warnings = _analysis_warnings(dataset, modules, coverages)
-    warning_preview = warnings[:MAX_DIRECT_WARNINGS]
-    reference_provenance = _reference_provenance(modules, coverages)
-    metrics = _execution_metrics(
+    final_metrics = _execution_metrics(
         stage_elapsed,
         mapping_provenance=discovery_provenance,
         reference_provenance=reference_provenance,
     )
-    selected_ko_ids = select_ko_ids(build_ko_evidence_view(dataset), pathway_evidence_mode)
     selected_pathways = (
         tuple(
             SelectedPathwaySummary(
@@ -352,43 +355,30 @@ def analyze_annotation_targets(
         if ranking is not None and pathway_selection is not None
         else ()
     )
-    status_counts = _status_record_counts(dataset)
-    return PrimitiveAnalysisResult(
+    automatic_selection = (
+        AutomaticPathwaySelectionSummary(
+            parameters=pathway_selection,
+            candidate_pathway_count=len(ranking.rows),
+            selected_pathways=selected_pathways,
+        )
+        if ranking is not None and pathway_selection is not None
+        else None
+    )
+    return AnalyzeKoAnnotationsResult(
         result=result,
         artifacts=artifacts,
-        input_records=dataset.import_report.input_rows,
-        accepted_records=status_counts[NormalizedStatus.ACCEPTED],
-        uncertain_records=status_counts[NormalizedStatus.UNCERTAIN],
-        rejected_records=status_counts[NormalizedStatus.REJECTED],
-        selected_unique_ko_count=len(selected_ko_ids),
-        pathway_selection=pathway_selection if ranking is not None else None,
-        candidate_pathway_count=len(ranking.rows) if ranking is not None else None,
-        selected_pathways=selected_pathways,
-        kegg_request_count=sum(item.request_count for item in metrics),
-        network_request_count=sum(item.network_request_count for item in metrics),
-        cache_hit_count=sum(item.cache_hit_count for item in metrics),
-        kegg_response_bytes=sum(item.response_bytes for item in metrics),
-        execution_metrics=metrics,
+        summary=_build_analysis_summary(
+            dataset,
+            evidence_mode=pathway_evidence_mode,
+            metrics=final_metrics,
+            caveats=tuple(caveats),
+            warnings=warnings,
+        ),
         module_target_count=len(modules),
         module_previews=tuple(_module_preview(item) for item in modules),
         pathway_target_count=len(coverages),
         pathway_previews=tuple(_pathway_preview(item) for item in coverages),
-        caveats=tuple(caveats),
-        import_summary=_import_summary(dataset),
-        annotation_provenance=_annotation_provenance(dataset),
-        warning_count=len(warnings),
-        warnings=warning_preview,
-        warnings_truncated=len(warning_preview) < len(warnings),
-        reference_provenance=(
-            ()
-            if ranking is not None
-            else _reference_provenance(
-                modules,
-                coverages,
-                additional=discovery_provenance,
-            )
-        ),
-        execution=execution,
+        automatic_pathway_selection=automatic_selection,
         output_bundle=output_bundle,
     )
 

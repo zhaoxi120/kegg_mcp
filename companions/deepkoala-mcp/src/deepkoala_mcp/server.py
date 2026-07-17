@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import re
 import secrets
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import anyio
 from mcp import types
 from mcp.server import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
-from pydantic import BaseModel, ValidationError
+from mcp.shared.exceptions import McpError
+from pydantic import AnyUrl, BaseModel, ValidationError
 
 from deepkoala_mcp import SERVER_NAME, __version__
 from deepkoala_mcp.config import load_runtime_config
 from deepkoala_mcp.contracts import (
+    MAX_RESOURCE_PAGE_BYTES,
     CancelDeepKoalaJobInput,
     CompanionStatus,
     DeepKoalaMcpError,
@@ -28,21 +34,23 @@ from deepkoala_mcp.contracts import (
     GetDeepKoalaJobResult,
     GetDeepKoalaStatusInput,
     JobSummary,
-    PrepareDeepKoalaInput,
-    PrepareDeepKoalaResult,
+    RunDeepKoalaInput,
+    RunDeepKoalaResult,
     SafeDetail,
-    SubmitDeepKoalaInput,
     ToolEnvelope,
 )
-from deepkoala_mcp.jobs import DeepKoalaJobManager
+from deepkoala_mcp.jobs import ArtifactName, DeepKoalaJobManager
 
 TOOL_NAMES = (
     "get_deepkoala_runner_status",
-    "prepare_deepkoala_job",
-    "submit_deepkoala_job",
+    "run_deepkoala_job",
     "get_deepkoala_job",
     "cancel_deepkoala_job",
     "delete_deepkoala_job",
+)
+_RESOURCE = re.compile(
+    r"^deepkoala://jobs/(job_[a-f0-9]{32})/(annotations|report)"
+    r"(?:/(0|[1-9][0-9]{0,7})/([1-9][0-9]{0,5}))?$"
 )
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -69,10 +77,10 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Prepare and run bounded local DeepKOALA jobs with the service-owned auto device "
-            "policy. Preparation returns non-blocking provenance and submission is idempotent. "
-            "This server never downloads weights and never interprets KO predictions. Pass the "
-            "successful file handoff through the core kegg-mcp DeepKOALA importer."
+            "Run one bounded local DeepKOALA annotation job directly from an allowlisted protein "
+            "FASTA path into a new controlled output directory. The runner uses auto device, "
+            "detailed output, no worker processes, no multi-domain mode, and never downloads "
+            "resources. Pass the successful stable CSV path and source object to core kegg-mcp."
         ),
         lifespan=lifespan,
     )
@@ -90,16 +98,10 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
             if name == "get_deepkoala_runner_status":
                 _parse(GetDeepKoalaStatusInput, arguments)
                 return _success(await state.status(), "Returned redacted local runner status.")
-            if name == "prepare_deepkoala_job":
-                request = _parse(PrepareDeepKoalaInput, arguments)
-                return _success(
-                    await state.prepare(request),
-                    "Prepared a bounded local job without starting DeepKOALA.",
-                )
-            if name == "submit_deepkoala_job":
-                request = _parse(SubmitDeepKoalaInput, arguments)
-                result = await state.submit(request.job_id)
-                return _success(result, f"Job is {result.state.value}.")
+            if name == "run_deepkoala_job":
+                request = _parse(RunDeepKoalaInput, arguments)
+                result = await state.run(request)
+                return _success(result, f"Started DeepKOALA job {result.job.job_id}.")
             if name == "get_deepkoala_job":
                 request = _parse(GetDeepKoalaJobInput, arguments)
                 result = await state.get_job(request.job_id)
@@ -110,7 +112,10 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
                 return _success(result, f"Job is {result.state.value}.")
             if name == "delete_deepkoala_job":
                 request = _parse(DeleteDeepKoalaJobInput, arguments)
-                return _success(await state.delete(request.job_id), "Deleted the terminal job.")
+                return _success(
+                    await state.delete(request.job_id),
+                    "Forgot the terminal job record and retained delivered files.",
+                )
             return _error(
                 ErrorDetail(
                     code=ErrorCode.INVALID_REQUEST,
@@ -139,7 +144,116 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         except Exception as error:
             return _error(_internal_error(error, stage=f"tool:{name}"))
 
+    @server.list_resources()
+    async def _list_resources() -> list[types.Resource]:  # pyright: ignore[reportUnusedFunction]
+        return []
+
+    @server.list_resource_templates()
+    async def _list_resource_templates(  # pyright: ignore[reportUnusedFunction]
+    ) -> list[types.ResourceTemplate]:
+        return [
+            types.ResourceTemplate(
+                name="deepkoala-artifact",
+                title="Scoped DeepKOALA stable artifact",
+                uriTemplate="deepkoala://jobs/{job_id}/{artifact}",
+                description=(
+                    "Return a small stable artifact directly or a pagination notice for a large "
+                    "artifact. Artifacts are annotations or report."
+                ),
+            ),
+            types.ResourceTemplate(
+                name="deepkoala-artifact-range",
+                title="Bounded DeepKOALA artifact range",
+                uriTemplate="deepkoala://jobs/{job_id}/{artifact}/{offset}/{limit}",
+                description="Return at most 65536 bytes as base64 with explicit continuation.",
+                mimeType="application/json",
+            ),
+        ]
+
+    @server.read_resource()
+    async def _read_resource(  # pyright: ignore[reportUnusedFunction]
+        uri: AnyUrl,
+    ) -> list[ReadResourceContents]:
+        try:
+            return [await _resource_contents(str(uri), state)]
+        except DeepKoalaMcpError as error:
+            raise McpError(
+                types.ErrorData(
+                    code=types.INVALID_PARAMS,
+                    message=f"{error.detail.code.value}: {error.detail.message}",
+                    data=error.detail.model_dump(mode="json"),
+                )
+            ) from None
+        except (UnicodeError, ValueError):
+            raise McpError(
+                types.ErrorData(
+                    code=types.INVALID_PARAMS,
+                    message="INVALID_RESOURCE_URI: unknown or non-canonical resource URI",
+                )
+            ) from None
+
     return server
+
+
+async def _resource_contents(
+    uri: str,
+    manager: DeepKoalaJobManager,
+) -> ReadResourceContents:
+    match = _RESOURCE.fullmatch(uri)
+    if match is None:
+        raise ValueError("unknown resource")
+    job_id, raw_artifact, raw_offset, raw_limit = match.groups()
+    artifact = cast(ArtifactName, raw_artifact)
+    mime_type = "text/csv" if artifact == "annotations" else "text/markdown"
+    if raw_offset is None and raw_limit is None:
+        total = await manager.artifact_size(job_id, artifact)
+        if total <= MAX_RESOURCE_PAGE_BYTES:
+            page = await manager.read_artifact(job_id, artifact, offset=0, limit=total)
+            return ReadResourceContents(
+                content=page.content.decode("utf-8", errors="strict"),
+                mime_type=mime_type,
+            )
+        notice = {
+            "schema_version": "1",
+            "artifact": artifact,
+            "encoding": "base64",
+            "total_bytes": total,
+            "page_size": MAX_RESOURCE_PAGE_BYTES,
+            "next_uri": f"deepkoala://jobs/{job_id}/{artifact}/0/{MAX_RESOURCE_PAGE_BYTES}",
+        }
+        return _json_resource(notice)
+    if raw_offset is None or raw_limit is None:
+        raise ValueError("incomplete range")
+    offset = int(raw_offset)
+    limit = int(raw_limit)
+    if limit > MAX_RESOURCE_PAGE_BYTES:
+        raise ValueError("range exceeds maximum")
+    page = await manager.read_artifact(job_id, artifact, offset=offset, limit=limit)
+    next_offset = offset + len(page.content)
+    next_uri = (
+        f"deepkoala://jobs/{job_id}/{artifact}/{next_offset}/{limit}"
+        if next_offset < page.total_bytes
+        else None
+    )
+    return _json_resource(
+        {
+            "schema_version": "1",
+            "artifact": artifact,
+            "encoding": "base64",
+            "offset": offset,
+            "returned_bytes": len(page.content),
+            "total_bytes": page.total_bytes,
+            "content_base64": base64.b64encode(page.content).decode("ascii"),
+            "next_uri": next_uri,
+        }
+    )
+
+
+def _json_resource(value: Mapping[str, object]) -> ReadResourceContents:
+    return ReadResourceContents(
+        content=json.dumps(value, sort_keys=True, separators=(",", ":")),
+        mime_type="application/json",
+    )
 
 
 def _tool_definitions() -> list[types.Tool]:
@@ -149,16 +263,10 @@ def _tool_definitions() -> list[types.Tool]:
         idempotentHint=True,
         openWorldHint=False,
     )
-    prepare = types.ToolAnnotations(
+    run = types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=False,
-        openWorldHint=False,
-    )
-    submit = types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
         openWorldHint=False,
     )
     cancel = types.ToolAnnotations(
@@ -179,31 +287,23 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "get_deepkoala_runner_status",
             "Get local DeepKOALA runner status",
-            "Return redacted local readiness, device policy, bounds, and scheduler counts.",
+            "Return redacted runtime readiness, CUDA availability, policy, bounds, and job counts.",
             GetDeepKoalaStatusInput,
             CompanionStatus,
             read_only,
         ),
         (
-            "prepare_deepkoala_job",
-            "Prepare a local DeepKOALA job",
-            "Validate and privately stage protein FASTA, then return execution provenance.",
-            PrepareDeepKoalaInput,
-            PrepareDeepKoalaResult,
-            prepare,
-        ),
-        (
-            "submit_deepkoala_job",
-            "Submit a prepared DeepKOALA job",
-            "Idempotently start or queue one server-retained prepared plan.",
-            SubmitDeepKoalaInput,
-            JobSummary,
-            submit,
+            "run_deepkoala_job",
+            "Run a local DeepKOALA job",
+            "Validate paths and policy, stage FASTA, and start detailed annotation atomically.",
+            RunDeepKoalaInput,
+            RunDeepKoalaResult,
+            run,
         ),
         (
             "get_deepkoala_job",
             "Get a local DeepKOALA job",
-            "Read lifecycle state and the core importer file handoff after success.",
+            "Read state and the stable file handoff after success.",
             GetDeepKoalaJobInput,
             GetDeepKoalaJobResult,
             read_only,
@@ -211,15 +311,15 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "cancel_deepkoala_job",
             "Cancel a local DeepKOALA job",
-            "Cancel a retained plan or terminate and reap its running process group.",
+            "Terminate and reap the one running DeepKOALA process group.",
             CancelDeepKoalaJobInput,
             JobSummary,
             cancel,
         ),
         (
             "delete_deepkoala_job",
-            "Delete a terminal DeepKOALA job",
-            "Delete one terminal job and its retained local files.",
+            "Delete a terminal DeepKOALA job record",
+            "Forget one terminal process record while retaining delivered files.",
             DeleteDeepKoalaJobInput,
             DeleteDeepKoalaJobResult,
             delete,
@@ -292,17 +392,15 @@ def _internal_error(error: Exception, *, stage: str) -> ErrorDetail:
 async def _run_stdio() -> None:
     server = create_server()
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 def main() -> None:
     """Run stdio transport and restrict startup diagnostics to stderr."""
     try:
         anyio.run(_run_stdio)
+    except (KeyboardInterrupt, BrokenPipeError):
+        return
     except (OSError, RuntimeError, ValueError) as error:
         print(f"{SERVER_NAME} startup failed: {type(error).__name__}", file=sys.stderr)
         raise SystemExit(2) from None

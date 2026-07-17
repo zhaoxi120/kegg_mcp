@@ -11,6 +11,7 @@ from typing import TextIO, TypedDict
 
 from kegg_mcp import __version__
 from kegg_mcp.domain.errors import KeggMcpError
+from kegg_mcp.kegg import AccessMode
 from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.mcp.config import load_runtime_config
 from kegg_mcp.mcp.server import main as run_stdio
@@ -130,10 +131,15 @@ def _doctor_document(environment: Mapping[str, str] | None) -> tuple[_DoctorDocu
         )
 
     root_count = len(config.allowed_roots)
-    network_enabled = True
-    next_actions = [
-        "Call probe_kegg_connectivity from an MCP client before the first live analysis."
-    ]
+    network_enabled = config.kegg.access.mode is not AccessMode.OFFLINE_CACHE
+    next_actions = (
+        ["Call probe_kegg_connectivity from an MCP client before the first live analysis."]
+        if network_enabled
+        else [
+            "Use an authorized live profile to populate missing KEGG cache entries; offline mode "
+            "never contacts KEGG."
+        ]
+    )
     if root_count == 0:
         next_actions.append("Set KEGG_MCP_ALLOWED_ROOTS to enable file handoff and output bundles.")
     return (

@@ -7,7 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from kegg_mcp.services.render_contracts import (
     ModuleRenderTarget,
@@ -18,13 +18,13 @@ from pydantic import ValidationError
 
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError, SafeDetail
+from kegg_render_mcp.input_validation import validate_tool_input
+from kegg_render_mcp.validation_errors import summarize_validation_error
 
 
 @dataclass(frozen=True, slots=True)
 class ValidatedRenderInput:
     document: RenderInput
-    path: Path
-    source_bytes: int
 
     @property
     def accepted_ko_ids(self) -> frozenset[str]:
@@ -53,36 +53,50 @@ class ValidatedRenderInput:
         return tuple(values)
 
 
-def load_render_input(path_text: str, config: RendererRuntimeConfig) -> ValidatedRenderInput:
-    """Read one no-follow regular file and strictly validate the core renderer contract."""
-    path, descriptor = _open_beneath(path_text, config.allowed_roots, final_kind="file")
+def load_render_input(
+    path_text: str | None,
+    config: RendererRuntimeConfig,
+    *,
+    render_input_json: str | None = None,
+) -> ValidatedRenderInput:
+    """Strictly validate exactly one bounded file or inline renderer handoff."""
+    if (path_text is None) == (render_input_json is None):
+        raise _invalid_input("Provide exactly one renderer input source.")
+    if path_text is not None:
+        _, descriptor = _open_beneath(path_text, config.allowed_roots, final_kind="file")
+        try:
+            payload = _bounded_read(descriptor, config.limits.max_input_bytes)
+        finally:
+            os.close(descriptor)
+    else:
+        assert render_input_json is not None
+        try:
+            payload = render_input_json.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as error:
+            raise _invalid_input("The inline renderer input is not valid UTF-8 JSON.") from error
+        if len(payload) > config.limits.max_input_bytes:
+            raise _input_limit(config.limits.max_input_bytes)
+    return _parse_payload(payload)
+
+
+def _parse_payload(payload: bytes) -> ValidatedRenderInput:
+    """Parse JSON once, then strictly validate the already-decoded object graph."""
     try:
-        payload = _bounded_read(descriptor, config.limits.max_input_bytes)
-    finally:
-        os.close(descriptor)
-    try:
-        decoded = payload.decode("utf-8", errors="strict")
+        parsed: object = json.loads(payload)
     except UnicodeDecodeError as error:
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.INVALID_REQUEST,
-                message="The renderer input is not valid UTF-8 JSON.",
-                suggested_action="Provide the unchanged render_input.json written by kegg-mcp.",
-            )
-        ) from error
-    try:
-        parsed: object = json.loads(decoded)
+        raise _invalid_input("The renderer input is not valid UTF-8 JSON.") from error
     except (json.JSONDecodeError, RecursionError) as error:
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.INVALID_REQUEST,
                 message="The renderer input is not a valid bounded JSON document.",
                 suggested_action="Rerun core analysis to create a new renderer handoff.",
+                safe_details=(SafeDetail(name="stage", value="render_input_json"),),
             )
         ) from error
     if not isinstance(parsed, dict):
         raise _invalid_input("The renderer input root must be a JSON object.")
-    raw = cast(dict[str, object], parsed)
+    raw = cast(dict[str, Any], parsed)
     version: object = raw.get("schema_version")
     if version != "2":
         raise RenderMcpError(
@@ -94,25 +108,24 @@ def load_render_input(path_text: str, config: RendererRuntimeConfig) -> Validate
             )
         )
     try:
-        document = RenderInput.model_validate_json(payload, strict=True)
+        document = validate_tool_input(RenderInput, raw)
     except ValidationError as error:
+        summary = summarize_validation_error(error)
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.INVALID_REQUEST,
                 message="The renderer handoff does not satisfy the complete schema contract.",
                 suggested_action="Rerun core analysis instead of editing render_input.json.",
                 safe_details=(
-                    SafeDetail(name="validation_issue_count", value=str(error.error_count())),
+                    SafeDetail(name="field_path", value=summary.field_path),
+                    SafeDetail(name="validation_issue_count", value=str(summary.issue_count)),
+                    SafeDetail(name="stage", value="render_input_schema"),
                 ),
             )
         ) from None
-    return ValidatedRenderInput(document=document, path=path, source_bytes=len(payload))
-
-
-def resolve_input_file(path_text: str, roots: tuple[Path, ...]) -> Path:
-    path, descriptor = _open_beneath(path_text, roots, final_kind="file")
-    os.close(descriptor)
-    return path
+    if len(payload) > document.limits.max_serialized_bytes:
+        raise _input_limit(document.limits.max_serialized_bytes)
+    return ValidatedRenderInput(document=document)
 
 
 def resolve_output_directory(path_text: str | None, roots: tuple[Path, ...]) -> Path | None:
@@ -137,32 +150,18 @@ def _bounded_read(descriptor: int, limit: int) -> bytes:
         if not stat.S_ISREG(metadata.st_mode):
             raise _path_error("The renderer input must be a direct regular file.")
         if metadata.st_size > limit:
-            raise RenderMcpError(
-                ErrorDetail(
-                    code=ErrorCode.INPUT_LIMIT_EXCEEDED,
-                    message="The renderer input exceeds the configured byte limit.",
-                    suggested_action="Select fewer bounded render targets in core analysis.",
-                    safe_details=(SafeDetail(name="maximum_bytes", value=str(limit)),),
-                )
-            )
-        chunks: list[bytes] = []
+            raise _input_limit(limit)
+        content = bytearray()
         remaining = limit + 1
         while remaining:
             chunk = os.read(descriptor, min(remaining, 64 * 1024))
             if not chunk:
                 break
-            chunks.append(chunk)
+            content.extend(chunk)
             remaining -= len(chunk)
-        result = b"".join(chunks)
-        if len(result) > limit:
-            raise RenderMcpError(
-                ErrorDetail(
-                    code=ErrorCode.INPUT_LIMIT_EXCEEDED,
-                    message="The renderer input exceeds the configured byte limit.",
-                    suggested_action="Select fewer bounded render targets in core analysis.",
-                )
-            )
-        return result
+        if len(content) > limit:
+            raise _input_limit(limit)
+        return bytes(content)
     except RenderMcpError:
         raise
     except OSError as error:
@@ -281,6 +280,20 @@ def _path_error(message: str) -> RenderMcpError:
             code=ErrorCode.INPUT_PATH_REJECTED,
             message=message,
             suggested_action="Use a direct path beneath a configured allowed root.",
+        )
+    )
+
+
+def _input_limit(limit: int) -> RenderMcpError:
+    return RenderMcpError(
+        ErrorDetail(
+            code=ErrorCode.INPUT_LIMIT_EXCEEDED,
+            message="The renderer input exceeds the configured byte limit.",
+            suggested_action="Select fewer bounded render targets in core analysis.",
+            safe_details=(
+                SafeDetail(name="maximum_bytes", value=str(limit)),
+                SafeDetail(name="stage", value="render_input_read"),
+            ),
         )
     )
 

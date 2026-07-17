@@ -39,7 +39,7 @@ Every reference and result records one `PathwayReferenceNamespace`:
 
 At the MCP boundary, `PathwaySpec` infers namespace from `pathway_id`. An omitted namespace on
 `mapNNNNN` is canonicalized to the default `koNNNNN` reference view. Explicit conflicts fail at the
-field boundary, and equivalent `ko`/`map` pathway numbers are rejected as duplicates. KO-to-pathway
+field boundary, and equivalent `ko`/`map` pathway numbers are stably deduplicated. KO-to-pathway
 mapping previews include `pathway_number`, `namespace`, and `paired_reference_id`; summary counts
 are deduplicated by pathway number so paired views cannot inflate the result.
 

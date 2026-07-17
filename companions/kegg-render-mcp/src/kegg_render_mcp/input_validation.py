@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, TypeVar, Union, cast, get_args, get_origin
 
@@ -42,6 +43,11 @@ def _prepare_value(annotation: object, value: object) -> object:
         item_annotation = arguments[0] if arguments else object
         items = cast(list[object] | tuple[object, ...], value)
         return tuple(_prepare_value(item_annotation, item) for item in items)
+    if annotation is datetime and isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return value
     if isinstance(annotation, type) and issubclass(annotation, Enum):
         try:
             return annotation(value)

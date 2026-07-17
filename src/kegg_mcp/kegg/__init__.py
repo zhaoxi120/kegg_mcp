@@ -3,6 +3,7 @@
 from kegg_mcp.kegg.client import KeggClient
 from kegg_mcp.kegg.contracts import (
     MAX_HTTP_METADATA_ITEMS,
+    MIN_REQUESTS_PER_SECOND,
     PUBLIC_KEGG_ENDPOINT,
     PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     AccessMode,
@@ -27,6 +28,7 @@ from kegg_mcp.kegg.contracts import (
     LicensedAccess,
     LinkRequest,
     LinkResult,
+    OfflineCacheAccess,
     PublicAcademicAccess,
     RateLimitPolicy,
     ResponseOrigin,
@@ -43,6 +45,7 @@ from kegg_mcp.kegg.pathway_assets import (
 
 __all__ = [
     "MAX_HTTP_METADATA_ITEMS",
+    "MIN_REQUESTS_PER_SECOND",
     "PATHWAY_ASSET_PARSER_VERSION",
     "PUBLIC_KEGG_ENDPOINT",
     "PUBLIC_KEGG_ENDPOINT_FINGERPRINT",
@@ -69,6 +72,7 @@ __all__ = [
     "LicensedAccess",
     "LinkRequest",
     "LinkResult",
+    "OfflineCacheAccess",
     "PathwayAssetKind",
     "PathwayAssetRequest",
     "PathwayAssetResult",

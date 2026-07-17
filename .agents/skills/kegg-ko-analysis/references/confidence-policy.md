@@ -2,6 +2,8 @@
 
 Keep source evidence and normalized analysis decisions separate.
 
+A K-number assignment is computational annotation evidence, not experimental validation.
+
 - Preserve every raw decision, score, score type, threshold rule, rank, domain coordinate, and
   source/model version. Apply only a named, versioned normalization policy.
 - Use accepted K numbers only for strict analysis.

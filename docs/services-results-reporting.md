@@ -18,43 +18,19 @@ The Milestone 5 packages remain independent of MCP transport:
 The service layer does not duplicate importer or analysis rules. It accepts an injected typed KEGG
 client and calls the public Milestone 1 through 4 interfaces.
 
-## Plain-KO one-call analysis
+## High-level annotation analysis
 
-`analyze_plain_ko` implements the common KO-list workflow in one service call. Its
-`PlainKoAnalysisRequest` supplies inline plain-KO text, bounded import settings, dataset context,
-one or more MODULE or pathway targets, KEGG request options, and serializable analysis and report
-limits. The caller separately supplies a validated result scope, a typed KEGG reference client,
-and a result store.
+`analyze_ko_annotations` is the supported one-call workflow for a KO list or annotation table. It
+normalizes evidence once, optionally discovers canonical pathways, loads requested references,
+evaluates MODULE and pathway targets, and writes one transactional output bundle when an output
+directory is supplied. The narrower normalization, mapping, MODULE, pathway, and comparison tools
+reuse the same public service functions without a second legacy orchestration layer.
 
-The retained structured artifact records the one-call service name and version, deployment-owned
-import and reference limits, direct-result preview limits, renderer name and version, and report
-limits. Module and pathway results retain their calculation parameters and versions. Ordinary MCP
-input does not expose refresh, stale-cache, or internal limit tuning.
-
-The service performs these operations in order:
-
-1. import the inline text as an immutable annotation dataset;
-2. load requested MODULE and pathway references through typed KEGG operations;
-3. evaluate strict and lenient MODULE evidence and the requested pathway evidence mode;
-4. render the three report artifacts;
-5. retain the complete artifacts under an opaque scoped result identifier; and
-6. return a bounded summary containing import counts, MODULE and pathway previews, artifact
-   metadata, expiry information, and conservative interpretation caveats.
-
-The direct result never repeats the caller's raw KO text. Preview counts are explicit, and each
-preview reports whether additional targets were omitted from the direct response. Full results
-remain in the stored artifacts within configured hard limits.
-
-At least one MODULE or pathway target is required. Target identifiers must be unique in caller
-order. A plain KO list contains KO evidence, not organism-gene membership, so the request rejects
-organism-specific pathway references even when dataset metadata includes a KEGG organism code.
-The general pathway reference loader can represent organism references for other, appropriately
-contextualized services, but this one-call service does not turn KO-only input into an
-organism-specific claim.
-
-Global or overview pathway evaluation remains an explicit opt-in. Pathway coverage is descriptive
-KO coverage and is not pathway presence, completeness, expression, activity, flux, phenotype, or
-statistical significance.
+Ordinary MCP inputs expose only choices that change the requested analysis. Cache policy,
+reference budgets, result retention, and report bounds remain deployment-owned. An opaque result
+identifier is a same-process pagination aid; the versioned output bundle is the durable handoff.
+Pathway coverage remains descriptive and never establishes pathway presence, completeness,
+expression, activity, flux, phenotype, or statistical significance.
 
 ## Typed KEGG reference loading
 
@@ -68,7 +44,8 @@ release metadata when available remain explicit in the resolved graph and its pr
 
 `load_pathway_references` accepts ordered `PathwaySpec` values. Each specification infers and
 validates its namespace from the pathway identifier; omitted `map` input is canonicalized to the
-default `ko` reference view, and paired views with the same pathway number are rejected. The loader uses the typed
+default `ko` reference view, and paired views with the same pathway number are stably deduplicated
+with the KO reference preferred. The loader uses the typed
 `PATHWAY_TO_KO` link relationship and a typed pathway `get` request, then delegates denominator and
 metadata validation to the Milestone 4 pathway reference builder. Aggregate relationship rows,
 reference K numbers, exclusions, response bytes, and request count are bounded; a limit failure
@@ -103,13 +80,22 @@ The complete ranking and normalized KO-to-pathway relationships are retained in 
 artifacts and, when an output directory is supplied, in `pathway_ranking.tsv` and
 `ko_pathway_relationships.tsv`. The report and manifest record the evidence mode, decision policy,
 ranking method/version, candidate count, selected identifiers, and compact request/cache summary.
-The direct response returns only bounded selected-pathway rows without complete detected-KO lists.
+The direct response returns only aggregate counts and bounded selected-pathway rows without
+complete detected-KO lists.
 
-High-level results also contain six fixed `StageMetric` rows: `annotation_import`,
-`ko_pathway_mapping`, `pathway_ranking`, `reference_loading`, `analysis`, and `bundle_write`. Each
-row uses integer elapsed milliseconds and sanitized logical request, actual network-attempt, cache
-hit, and response-byte counts. Endpoint URLs, credentials, environment values, usernames, and
-private cache paths are absent.
+Analysis tools no longer share one provenance-heavy direct-result model. A small shared summary
+holds record, KO, request/cache, warning, and caveat fields, while three tool-specific result models
+expose only their relevant MODULE and/or pathway previews. Automatic Top-N selection and output
+bundle metadata occur only on the high-level model. Full annotation provenance, KEGG batch
+provenance, execution parameters, and stage metrics are retained rather than repeated directly.
+
+The authoritative high-level `structured` artifact contains six fixed `StageMetric` rows:
+`annotation_import`, `ko_pathway_mapping`, `pathway_ranking`, `reference_loading`, `analysis`, and
+`bundle_write`, together with complete mapping provenance. Each row uses integer elapsed
+milliseconds and sanitized logical request, actual network-attempt, cache-hit, and response-byte
+counts. Narrow MODULE and pathway services retain the same execution and provenance classes in
+their `detail` artifacts. Endpoint URLs, credentials, environment values, usernames, and private
+cache paths are absent.
 
 ## Report artifacts
 

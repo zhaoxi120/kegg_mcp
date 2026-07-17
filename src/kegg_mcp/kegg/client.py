@@ -22,7 +22,9 @@ from kegg_mcp.kegg.contracts import (
     KeggBatchProvenance,
     KeggBriteHtextDocument,
     KeggClientConfig,
+    KeggEntryRef,
     KeggFlatFileDocument,
+    KeggFlatFileEntry,
     KeggGetDatabase,
     KeggGetDocument,
     KeggInfoDocument,
@@ -31,6 +33,7 @@ from kegg_mcp.kegg.contracts import (
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
+    OfflineCacheAccess,
     PublicAcademicAccess,
     RetrievalEndpointClass,
     endpoint_fingerprint,
@@ -79,11 +82,17 @@ class KeggClient:
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.PUBLIC_ACADEMIC
             self._endpoint_label = PUBLIC_KEGG_ENDPOINT_LABEL
+            self._endpoint_fingerprint = endpoint_fingerprint(self._endpoint)
+        elif isinstance(access, OfflineCacheAccess):
+            self._endpoint = access.endpoint
+            self._retrieval_endpoint_class = access.retrieval_endpoint_class
+            self._endpoint_label = access.endpoint_label
+            self._endpoint_fingerprint = access.endpoint_fingerprint
         else:
             self._endpoint = access.endpoint
             self._retrieval_endpoint_class = RetrievalEndpointClass.LICENSED
             self._endpoint_label = access.endpoint_label
-        self._endpoint_fingerprint = endpoint_fingerprint(self._endpoint)
+            self._endpoint_fingerprint = endpoint_fingerprint(self._endpoint)
         mandatory_rate_limiter = DeploymentRateLimiter(
             self._endpoint_fingerprint,
             config.limits.requests_per_second,
@@ -120,7 +129,7 @@ class KeggClient:
         prepared = prepare_info(request, self._config.limits)[0]
         executed = self._executor.execute(
             prepared,
-            options or KeggRequestOptions(),
+            self._effective_options(options),
             info_request=request,
         )
         if not isinstance(executed.document, KeggInfoDocument):
@@ -134,17 +143,8 @@ class KeggClient:
         options: KeggRequestOptions | None = None,
     ) -> GetResult:
         """Retrieve selected textual entries and report partial 200 responses explicitly."""
-        effective_options = options or KeggRequestOptions()
-        entry_cache_hits = self._read_complete_entry_cache(request, effective_options)
-        if entry_cache_hits is None:
-            prepared_batches = prepare_get(request, self._config.limits)
-            executed_batches = tuple(
-                self._executor.execute(prepared, effective_options) for prepared in prepared_batches
-            )
-            for prepared, executed in zip(prepared_batches, executed_batches, strict=True):
-                self._store_entry_cache_rows(prepared, executed)
-        else:
-            prepared_batches, executed_batches = entry_cache_hits
+        effective_options = self._effective_options(options)
+        prepared_batches, executed_batches = self._execute_get_batches(request, effective_options)
         documents: list[KeggGetDocument] = []
         returned_keys: set[tuple[KeggGetDatabase, str]] = set()
 
@@ -154,11 +154,11 @@ class KeggClient:
                 entry.identifier: entry for entry in prepared.requested_entries
             }
             if isinstance(document, KeggFlatFileDocument):
-                returned_identifiers: set[str] = set()
+                returned_by_identifier: dict[str, KeggFlatFileEntry] = {}
                 for entry in document.entries:
                     if (
                         entry.identifier not in expected_by_identifier
-                        or entry.identifier in returned_identifiers
+                        or entry.identifier in returned_by_identifier
                     ):
                         fail(
                             ErrorCode.KEGG_PARSE_FAILED,
@@ -171,10 +171,15 @@ class KeggClient:
                                 SafeDetail(name="reason", value="unexpected_or_duplicate_entry"),
                             ),
                         )
-                    returned_identifiers.add(entry.identifier)
+                    returned_by_identifier[entry.identifier] = entry
                     requested_entry = expected_by_identifier[entry.identifier]
                     returned_keys.add((requested_entry.database, requested_entry.identifier))
-                documents.append(document)
+                ordered_entries = tuple(
+                    returned_by_identifier[entry.identifier]
+                    for entry in prepared.requested_entries
+                    if entry.identifier in returned_by_identifier
+                )
+                documents.append(document.model_copy(update={"entries": ordered_entries}))
             elif isinstance(document, KeggBriteHtextDocument):
                 requested_entry = prepared.requested_entries[0]
                 if document.identifier != requested_entry.identifier:
@@ -208,22 +213,65 @@ class KeggClient:
         return self._pathway_assets.execute(
             request,
             prepared,
-            options or KeggRequestOptions(),
+            self._effective_options(options),
         )
 
-    def _read_complete_entry_cache(
+    def _execute_get_batches(
         self,
         request: GetRequest,
         options: KeggRequestOptions,
-    ) -> tuple[tuple[PreparedRequest, ...], tuple[ExecutedBatch, ...]] | None:
+    ) -> tuple[tuple[PreparedRequest, ...], tuple[ExecutedBatch, ...]]:
         if options.refresh or len(request.entries) < 2:
-            return None
+            return self._execute_get_entries(request.entries, options)
+
+        cache_hits = self._read_entry_cache_hits(request, options)
+        prepared_batches: list[PreparedRequest] = []
+        executed_batches: list[ExecutedBatch] = []
+        missing_entries: list[KeggEntryRef] = []
+
+        def flush_missing() -> None:
+            if not missing_entries:
+                return
+            prepared, executed = self._execute_get_entries(tuple(missing_entries), options)
+            prepared_batches.extend(prepared)
+            executed_batches.extend(executed)
+            missing_entries.clear()
+
+        for entry, cache_hit in zip(request.entries, cache_hits, strict=True):
+            if cache_hit is None:
+                missing_entries.append(entry)
+                continue
+            flush_missing()
+            prepared, executed = cache_hit
+            prepared_batches.append(prepared)
+            executed_batches.append(executed)
+        flush_missing()
+        return tuple(prepared_batches), tuple(executed_batches)
+
+    def _execute_get_entries(
+        self,
+        entries: tuple[KeggEntryRef, ...],
+        options: KeggRequestOptions,
+    ) -> tuple[tuple[PreparedRequest, ...], tuple[ExecutedBatch, ...]]:
+        prepared_batches = prepare_get(GetRequest(entries=entries), self._config.limits)
+        executed_batches = tuple(
+            self._executor.execute(prepared, options) for prepared in prepared_batches
+        )
+        for prepared, executed in zip(prepared_batches, executed_batches, strict=True):
+            self._store_entry_cache_rows(prepared, executed)
+        return prepared_batches, executed_batches
+
+    def _read_entry_cache_hits(
+        self,
+        request: GetRequest,
+        options: KeggRequestOptions,
+    ) -> tuple[tuple[PreparedRequest, ExecutedBatch] | None, ...]:
         prepared_entries = tuple(
             prepare_get(GetRequest(entries=(entry,)), self._config.limits)[0]
             for entry in request.entries
         )
         now = self._executor.read_clock()
-        executed: list[ExecutedBatch] = []
+        cache_hits: list[tuple[PreparedRequest, ExecutedBatch] | None] = []
         for prepared in prepared_entries:
             lookup = self._cache.read(
                 prepared.operation,
@@ -234,14 +282,17 @@ class KeggClient:
                 expected_parser_version=PARSER_VERSION,
             )
             if lookup.state is CacheReadState.FRESH and lookup.response is not None:
-                executed.append(
-                    self._executor.from_cache(
+                cache_hits.append(
+                    (
                         prepared,
-                        lookup.response,
-                        CacheLookupState.FRESH_HIT,
-                        now,
-                        info_request=None,
-                        is_stale=False,
+                        self._executor.from_cache(
+                            prepared,
+                            lookup.response,
+                            CacheLookupState.FRESH_HIT,
+                            now,
+                            info_request=None,
+                            is_stale=False,
+                        ),
                     )
                 )
             elif (
@@ -249,19 +300,22 @@ class KeggClient:
                 and options.allow_stale
                 and lookup.response is not None
             ):
-                executed.append(
-                    self._executor.from_cache(
+                cache_hits.append(
+                    (
                         prepared,
-                        lookup.response,
-                        CacheLookupState.STALE_HIT,
-                        now,
-                        info_request=None,
-                        is_stale=True,
+                        self._executor.from_cache(
+                            prepared,
+                            lookup.response,
+                            CacheLookupState.STALE_HIT,
+                            now,
+                            info_request=None,
+                            is_stale=True,
+                        ),
                     )
                 )
             else:
-                return None
-        return prepared_entries, tuple(executed)
+                cache_hits.append(None)
+        return tuple(cache_hits)
 
     def _store_entry_cache_rows(
         self,
@@ -311,7 +365,7 @@ class KeggClient:
                 self._config.limits,
                 url_prefix_bytes=len(self._endpoint.encode("ascii")),
             ),
-            options or KeggRequestOptions(),
+            self._effective_options(options),
         )
         return LinkResult(request=request, rows=rows, batches=provenance)
 
@@ -323,8 +377,14 @@ class KeggClient:
     ) -> ConvResult:
         """Convert one bounded selected set of approved gene identifiers."""
         prepared = prepare_conv(request, self._config.limits)
-        rows, provenance = self._execute_pair_batches(prepared, options or KeggRequestOptions())
+        rows, provenance = self._execute_pair_batches(prepared, self._effective_options(options))
         return ConvResult(request=request, rows=rows, batches=provenance)
+
+    def _effective_options(self, options: KeggRequestOptions | None) -> KeggRequestOptions:
+        effective = options or KeggRequestOptions()
+        if isinstance(self._config.access, OfflineCacheAccess):
+            return effective.model_copy(update={"refresh": False, "cache_only": True})
+        return effective
 
     def _execute_pair_batches(
         self,

@@ -1,7 +1,7 @@
 interface:
   display_name: "KEGG KO Analysis"
-  short_description: "Route KO evidence or a local-first annotation handoff"
-  default_prompt: "Use $kegg-ko-analysis to analyze KO evidence. For protein FASTA without KO evidence, check deepkoala-mcp status first, automatically prepare, submit, and poll when it is ready, and request permission only for installation, registration, downloads, or repair."
+  short_description: "Analyze existing KO evidence with cautious KEGG logic"
+  default_prompt: "Use $kegg-ko-analysis to normalize this existing KO evidence and evaluate the requested KEGG MODULEs or pathways."
 
 dependencies:
   tools:
@@ -9,10 +9,5 @@ dependencies:
       value: "kegg-mcp"
       description: "Local KEGG KO analysis MCP server"
       transport: "stdio"
-    - type: "mcp"
-      value: "deepkoala-mcp"
-      description: "Optional local protein FASTA annotation companion"
-      transport: "stdio"
-
 policy:
   allow_implicit_invocation: true

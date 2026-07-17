@@ -149,3 +149,66 @@ def test_named_file_replacement_during_read_is_rejected(
         )
 
     assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
+
+
+def test_allowed_root_permissions_are_rechecked_for_each_access(tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    source = root / "annotations.txt"
+    source.write_text("K00001\n", encoding="utf-8")
+    allowed_roots = (str(root.resolve()),)
+    root.chmod(0o777)
+
+    try:
+        with pytest.raises(KeggMcpError) as caught:
+            path_policy.materialize_annotation_file(
+                _request(source, max_bytes=100),
+                allowed_roots,
+            )
+    finally:
+        root.chmod(0o700)
+
+    assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
+
+
+def test_allowed_root_replacement_between_name_check_and_open_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    source = root / "annotations.txt"
+    source.write_text("K00001\n", encoding="utf-8")
+    replacement = tmp_path / "replacement"
+    replacement.mkdir(mode=0o700)
+    (replacement / source.name).write_text("K00002\n", encoding="utf-8")
+    displaced = tmp_path / "displaced"
+    real_open = os.open
+    replaced = False
+
+    def replace_root_before_open(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal replaced
+        if not replaced and dir_fd is None and Path(path) == root:
+            root.rename(displaced)
+            replacement.rename(root)
+            replaced = True
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(path_policy.os, "open", replace_root_before_open)
+
+    with pytest.raises(KeggMcpError) as caught:
+        path_policy.materialize_annotation_file(
+            _request(source, max_bytes=100),
+            (str(root.resolve()),),
+        )
+
+    assert replaced is True
+    assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE

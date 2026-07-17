@@ -271,6 +271,25 @@ def test_status_and_expired_cleanup_are_redacted_and_bounded(tmp_path: Path) -> 
     assert summary.database_bytes <= status.max_database_bytes
 
 
+def test_status_and_cleanup_do_not_create_a_missing_cache_or_parent(tmp_path: Path) -> None:
+    cache_path = tmp_path / "missing-parent" / "kegg.sqlite3"
+    cache = SQLiteKeggCache(cache_path)
+
+    status = cache.status(now=_RETRIEVED_AT)
+    cleanup = cache.cleanup_expired(now=_RETRIEVED_AT)
+
+    assert status.entry_count == 0
+    assert status.expired_entry_count == 0
+    assert status.payload_bytes == 0
+    assert status.database_bytes == 0
+    assert cleanup.expired_entries == 0
+    assert cleanup.expired_payload_bytes == 0
+    assert cleanup.remaining_entries == 0
+    assert cleanup.remaining_payload_bytes == 0
+    assert cleanup.database_bytes == 0
+    assert not cache_path.parent.exists()
+
+
 @pytest.mark.parametrize(
     ("column", "replacement"),
     [

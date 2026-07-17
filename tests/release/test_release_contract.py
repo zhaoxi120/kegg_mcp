@@ -116,7 +116,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.3.0"
+    assert project["version"] == "0.4.0"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
     assert scripts == {"kegg-mcp": "kegg_mcp.mcp.cli:main"}
@@ -155,7 +155,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.3,<0.4" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.4,<0.5" in renderer_project["dependencies"]
     assert "latest GitHub release and the current `main` branch" in security
     assert "Distribution boundary" in readiness
 
@@ -181,6 +181,9 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
         "process-wide request rate",
         "process-wide rate limiter",
         "process-wide no-burst rate limit",
+        "prepare_deepkoala_job",
+        "submit_deepkoala_job",
+        "kegg-visualization",
     ):
         assert stale_contract not in document_corpus
 
@@ -295,7 +298,7 @@ def test_visualization_extension_has_an_independent_synthetic_release_boundary()
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.3,<0.4" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.4,<0.5" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -303,7 +306,7 @@ def test_visualization_extension_has_an_independent_synthetic_release_boundary()
     locked_renderer = next(
         package for package in locked_packages if package["name"] == "kegg-render-mcp"
     )
-    assert locked_core["version"] == "0.3.0"
+    assert locked_core["version"] == _project_table()["version"]
     assert locked_renderer["version"] == renderer_project["version"]
 
     for document in (readme, installation, server_doc, readiness, renderer_readme):
@@ -363,15 +366,39 @@ def test_deepkoala_companion_has_an_independent_build_gate() -> None:
     assert "KEGG_MCP_RUN_LIVE_TESTS" not in companion_job
 
 
+def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke_path = PROJECT_ROOT / "tests/release/smoke_wheel.py"
+    smoke = smoke_path.read_text(encoding="utf-8")
+
+    assert smoke_path.is_file()
+    assert ci.count("tests/release/smoke_wheel.py") == 3
+    for distribution, version in (
+        ("kegg-mcp", "0.4.0"),
+        ("deepkoala-mcp", "0.3.0"),
+        ("kegg-render-mcp", "0.2.0"),
+    ):
+        assert f"--distribution {distribution}" in ci
+        assert f"--expected-version {version}" in ci
+    assert ci.count("Smoke-test installed") == 3
+    assert "uv build --no-sources --wheel" in ci
+    for isolation_marker in (
+        '"-I"',
+        "module_path.is_relative_to(environment_path)",
+        "environment.pop(name, None)",
+        "cwd=root",
+    ):
+        assert isolation_marker in smoke
+
+
 def test_rights_and_release_status_are_prominent() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
     ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-    for required in ("public_academic", "licensed"):
+    for required in ("public_academic", "licensed", "offline_cache"):
         assert required in installation
-    assert "offline_cache" not in installation
     assert "Python 3.11.x" in installation
     assert "https://www.kegg.jp/kegg/rest/" in installation
     assert "https://www.kegg.jp/kegg/legal.html" in installation
@@ -392,10 +419,11 @@ def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review(
     record = (PROJECT_ROOT / "docs/skill-evaluation.md").read_text(encoding="utf-8")
 
     assert "not a runtime LLM evaluation" in record
-    assert "independent forward/manual review" in record
+    assert "Independent forward/manual reviews" in record
     assert record.count("Observed route: passed.") == 6
-    assert "current core, companion, and visualization contracts" in re.sub(r"\s+", " ", record)
-    assert "separate nine-route review" in re.sub(r"\s+", " ", record)
+    normalized = re.sub(r"\s+", " ", record)
+    assert "current core, annotation, and rendering contracts" in normalized
+    assert "All focused routes passed" in normalized
 
 
 def test_distribution_boundary_is_explicit() -> None:
@@ -410,9 +438,9 @@ def test_distribution_boundary_is_explicit() -> None:
     normalized_readme = re.sub(r"\s+", " ", readme)
     normalized_installation = re.sub(r"\s+", " ", installation)
     normalized_readiness = re.sub(r"\s+", " ", readiness)
-    assert "installing the wheel alone does not make either Skill available" in normalized_readme
-    assert "does not install either repository-scoped Skill" in normalized_installation
-    assert "does not install either companion or either repository-scoped Skill" in (
+    assert "installing the wheel alone does not make the Skills available" in normalized_readme
+    assert "does not install repository-scoped Skills" in normalized_installation
+    assert "does not install either companion or any repository-scoped Skill" in (
         normalized_readiness
     )
 

@@ -42,7 +42,7 @@ default stdio command.
 
 | Environment variable | Meaning |
 | --- | --- |
-| `KEGG_MCP_ACCESS_MODE` | `public_academic` (default) or `licensed` |
+| `KEGG_MCP_ACCESS_MODE` | `public_academic` (default), `licensed`, or network-disabled `offline_cache` |
 | `KEGG_MCP_ACADEMIC_USE_CONFIRMED` | Defaults to `true`; an explicit value other than `true` is rejected |
 | `KEGG_MCP_LICENSED_ENDPOINT` | Authorized HTTPS endpoint for licensed access |
 | `KEGG_MCP_LICENSED_USE_CONFIRMED` | Must equal `true` before licensed access is enabled |
@@ -79,7 +79,7 @@ boundaries. It does not replace the explicit input and output schemas.
 
 ## Tools
 
-The server exposes ten tools:
+The server exposes eleven tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no target is supplied, accepted K numbers are
@@ -91,7 +91,9 @@ The server exposes ten tools:
   `metric="unique_selected_ko_count"`; ranking occurs before reference loading.
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
-- `get_kegg_entries`: retrieve selected allowlisted KEGG entries. It is not an arbitrary URL proxy.
+- `get_kegg_entries`: retrieve selected allowlisted KEGG entries. The direct response reports the
+  total retrieval-batch count, returns at most five provenance records with an explicit truncation
+  flag, and retains every batch in the scoped `detail` artifact. It is not an arbitrary URL proxy.
 - `map_ko_ids`: map selected K numbers to pathways, modules, reactions, EC numbers, or BRITE.
   Pathway summaries distinguish `unique_reference_pathway_number_count` from the paired
   `available_ko_reference_view_count` and `available_map_reference_view_count`; these view counts
@@ -99,11 +101,15 @@ The server exposes ten tools:
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
-  pathway namespace; omitted `mapNNNNN` input is canonicalized to the `koNNNNN` reference view.
+  pathway namespace; paired `mapNNNNN` input is canonicalized to the `koNNNNN` reference view,
+  while organism-specific identifiers are never folded into that pair and are rejected by the
+  public KO-only analysis tools.
 - `compare_ko_sets`: calculate deterministic set differences for two to ten datasets, with optional
   shared-reference MODULE or pathway comparisons.
 - `probe_kegg_connectivity`: make one explicit low-cost INFO request and classify DNS,
   connection, or authorization/configuration outcomes.
+- `list_analysis_results`: list a bounded metadata page of active results in the current stdio
+  scope without exposing any other scope.
 - `delete_analysis_result`: immediately delete one retained result in the current stdio scope.
 - `get_server_status`: return redacted access, capability, and result-retention information.
 
@@ -111,7 +117,7 @@ The advertised MCP behavior hints describe local effects as well as remote effec
 
 | Tool class | Read-only | Destructive | Idempotent | Open world |
 | --- | --- | --- | --- | --- |
-| `get_server_status` | Yes | No | Yes | No |
+| `get_server_status`, `list_analysis_results` | Yes | No | Yes | No |
 | `normalize_ko_annotations` | No | No | No | No |
 | KEGG retrieval and analysis tools | No | No | No | Yes |
 | `probe_kegg_connectivity` | No | No | No | Yes |
@@ -187,13 +193,20 @@ bundle manifest records the renderer schema and MIME type.
 pathway parameters, the distinct automatic-discovery policy and evidence mode when applicable,
 pathway coverage limits, and report limits.
 
-Direct tool responses are bounded previews. A Top-N response contains record/status counts,
-selected unique-KO count, candidate count, bounded selected-pathway summaries, logical/network/cache
-request counts, six fixed execution-stage metrics, warnings, and bundle metadata. It does not
-contain complete relationship rows or detected-KO lists. Bundle artifact metadata includes MIME
-type, exact byte size, and controlled path. Complete immutable evidence, ranking, relationships,
-and per-batch provenance stay in retained resources and output files. A K number is an annotation,
-MODULE exact completion is distinct from
+The three analysis tools use separate concise output models. Their shared `summary` contains only
+record/status counts, selected unique-KO count, aggregate logical/network/cache request counts,
+response bytes, warnings, and interpretation caveats. `analyze_modules` returns MODULE previews
+only, `analyze_pathways` returns pathway previews only, and `analyze_ko_annotations` may return both
+plus a bounded `automatic_pathway_selection` summary and output-bundle metadata. Direct responses
+do not expose import structures, annotation or KEGG batch provenance, execution parameters, stage
+metrics, complete relationship rows, or detected-KO lists.
+
+The high-level retained `structured` JSON is the authoritative detail artifact and contains the
+complete normalized dataset, analyses, execution parameters, mapping provenance, and six canonical
+stage-metric rows. The narrower MODULE and pathway tools retain the same classes of provenance,
+parameters, metrics, and full evaluations in their `detail` JSON. Bundle artifact metadata includes
+MIME type, exact byte size, and controlled path. A K number is an annotation, MODULE exact
+completion is distinct from
 the project block-coverage metric, and pathway coverage does not establish pathway presence,
 activity, flux, phenotype, or statistical significance.
 
@@ -223,6 +236,7 @@ primitive tools retain `detail`.
 
 `delete_analysis_result` removes one active result only when it belongs to the current scope.
 Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.
+`list_analysis_results` returns at most 100 metadata rows per page from only the current scope.
 Operators can remove TTL-expired rows without starting the stdio server by running
 `kegg-mcp cleanup --expired [--json]`. This command does not remove unexpired results or KEGG cache
 entries. Durable delivery uses a non-overwriting output bundle controlled by the operator.
@@ -243,12 +257,13 @@ result. It returns a bounded parsed preview rather than the raw cached payload.
 
 ## Independent renderer MCP
 
-`kegg-render-mcp` accepts one controlled absolute version 2 handoff path. It renders regular
+`kegg-render-mcp` accepts exactly one version 2 handoff as a controlled absolute path or bounded
+inline JSON. It renders regular
 reference-pathway evidence overlays and project-owned MODULE logic diagrams as canonical static
 SVG and optional bounded PNG. It never imports annotation tables, normalizes evidence, evaluates
 MODULEs, recomputes pathway coverage, or starts either other process.
 
-The renderer declares `kegg-mcp>=0.3,<0.4`; incompatible core packages fail dependency
+The renderer declares `kegg-mcp>=0.4,<0.5`; incompatible core packages fail dependency
 resolution.
 
 Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and
