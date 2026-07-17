@@ -9,6 +9,7 @@ from anyio import to_thread
 from kegg_mcp.domain import ErrorCode as CoreErrorCode
 from kegg_mcp.domain import KeggMcpError as CoreKeggMcpError
 from kegg_mcp.kegg import (
+    AccessMode,
     InfoRequest,
     KeggClient,
     KeggInfoDatabase,
@@ -55,8 +56,9 @@ class PathwayAssetProvider(Protocol):
 class CorePathwayAssetProvider:
     """Thin async adapter around the core public KEGG asset client."""
 
-    def __init__(self, client: KeggClient) -> None:
+    def __init__(self, client: KeggClient, *, allow_stale: bool = False) -> None:
         self._client = client
+        self._allow_stale = allow_stale
 
     @property
     def configured(self) -> bool:
@@ -72,17 +74,24 @@ class CorePathwayAssetProvider:
         """Expose the effective wire-response bound for capability tests."""
         return self._client.config.limits.max_response_bytes
 
+    @property
+    def network_enabled(self) -> bool:
+        """Report whether an explicit probe may perform one live request."""
+        return self._client.config.access.mode is not AccessMode.OFFLINE_CACHE
+
     async def get_asset(self, pathway_id: str, kind: str) -> RetrievedAsset:
         selected = PathwayAssetKind(kind)
 
         def retrieve() -> PathwayAssetResult:
             return self._client.get_pathway_asset(
                 PathwayAssetRequest(pathway_id=pathway_id, kind=selected),
-                options=KeggRequestOptions(refresh=False),
+                options=KeggRequestOptions(refresh=False, allow_stale=self._allow_stale),
             )
 
         try:
             result = await to_thread.run_sync(retrieve)
+        except CoreKeggMcpError as error:
+            raise _translate_core_asset_error(error, kind=kind) from error
         except Exception as error:
             raise RenderMcpError(
                 ErrorDetail(
@@ -105,6 +114,9 @@ class CorePathwayAssetProvider:
         )
 
     async def probe(self) -> ConnectivityStatus:
+        if not self.network_enabled:
+            return ConnectivityStatus.OFFLINE_CACHE
+
         def request() -> object:
             return self._client.info(
                 InfoRequest(database=KeggInfoDatabase.PATHWAY),
@@ -213,7 +225,12 @@ async def construct_pathway_scene(
     name = target.pathway_name
     namespace = target.reference_namespace.value
     analysis_unit = render_input.document.dataset.analysis_unit.value
-    warnings = tuple(item.message[:1000] for item in target.warnings)
+    warnings: list[str] = []
+    if any(bool(asset.provenance.get("is_stale")) for asset in (image, kgml_asset)):
+        warnings.append(
+            "One or more KEGG pathway assets were served from stale offline cache entries."
+        )
+    warnings.extend(item.message[:1000] for item in target.warnings)
     community_limit = (
         " Community-level evidence represents pooled encoded potential, not a complete pathway "
         "in one organism."
@@ -242,7 +259,7 @@ async def construct_pathway_scene(
         reference_namespace=namespace,
         evidence_mode=evidence_mode,
         asset_provenance=(image.provenance, kgml_asset.provenance),
-        warnings=warnings,
+        warnings=tuple(dict.fromkeys(warnings)),
     )
 
 
@@ -315,6 +332,60 @@ def _classify_probe_error(error: CoreKeggMcpError) -> ConnectivityStatus:
         "response_too_large": ConnectivityStatus.ENDPOINT_REJECTED,
     }
     return classifications.get(transport, ConnectivityStatus.UNKNOWN_FAILURE)
+
+
+def _translate_core_asset_error(error: CoreKeggMcpError, *, kind: str) -> RenderMcpError:
+    core_code = error.detail.code
+    details = {item.name: item.value for item in error.detail.safe_details}
+    safe_details = [
+        SafeDetail(name="asset_kind", value=kind),
+        SafeDetail(name="core_error_code", value=core_code.value),
+    ]
+    for name in ("cache_state", "stage", "transport_kind", "status_code", "operation"):
+        if value := details.get(name):
+            safe_details.append(SafeDetail(name=name, value=value[:160]))
+
+    if core_code is CoreErrorCode.CACHE_ENTRY_NOT_FOUND:
+        renderer_code = ErrorCode.ASSET_UNAVAILABLE
+        message = "The matching KEGG pathway asset is unavailable in the selected cache namespace."
+        action = "Populate the selected cache namespace through authorized live access, then retry."
+    elif core_code is CoreErrorCode.CACHE_FAILED:
+        if details.get("stage") == "pathway_asset_validation":
+            renderer_code = ErrorCode.ASSET_INVALID
+            message = "A cached KEGG pathway asset failed bounded content validation."
+            action = "Refresh or replace the affected cache entry through authorized access."
+        else:
+            renderer_code = ErrorCode.ASSET_UNAVAILABLE
+            message = "The configured KEGG cache could not provide the pathway asset safely."
+            action = "Inspect or replace the configured local KEGG cache, then retry."
+    elif core_code is CoreErrorCode.KEGG_PARSE_FAILED:
+        renderer_code = ErrorCode.ASSET_INVALID
+        message = "The KEGG pathway asset failed bounded content validation."
+        action = "Refresh the matching asset through an authorized endpoint, then retry."
+    elif core_code is CoreErrorCode.INPUT_LIMIT_EXCEEDED:
+        renderer_code = ErrorCode.INPUT_LIMIT_EXCEEDED
+        message = "The KEGG pathway asset exceeded the active request or response limits."
+        action = "Review the renderer asset bounds or select a supported pathway target."
+    elif core_code is CoreErrorCode.KEGG_RATE_LIMITED:
+        renderer_code = ErrorCode.ASSET_UNAVAILABLE
+        message = "The configured KEGG endpoint rate-limited the pathway asset request."
+        action = "Retry later while preserving the deployment-wide no-burst rate policy."
+    elif core_code is CoreErrorCode.KEGG_REQUEST_FAILED:
+        renderer_code = ErrorCode.ASSET_UNAVAILABLE
+        message = "The configured KEGG endpoint did not return the pathway asset safely."
+        action = "Run the bounded connectivity probe and retry after resolving the failure."
+    else:
+        renderer_code = ErrorCode.ASSET_UNAVAILABLE
+        message = "The core KEGG client could not provide the matching pathway asset."
+        action = "Check renderer access status and retry the bounded target."
+    return RenderMcpError(
+        ErrorDetail(
+            code=renderer_code,
+            message=message,
+            suggested_action=action,
+            safe_details=tuple(safe_details),
+        )
+    )
 
 
 def _asset_invalid(message: str) -> RenderMcpError:

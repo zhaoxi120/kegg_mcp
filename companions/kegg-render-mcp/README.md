@@ -58,13 +58,55 @@ export KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true
 export KEGG_RENDER_MCP_LICENSED_ENDPOINT=https://licensed.example.invalid
 ```
 
-Set `KEGG_RENDER_MCP_ACCESS_MODE=unconfigured` for MODULE-only rendering. Status never returns
-endpoint URLs, credentials, environment values, usernames, or local paths. Pathway assets use the
-core client's HTTPS validation, cache, retry policy, and deployment-wide no-burst rate limit of no
-more than three requests per second. Core and Renderer use the same
-`KEGG_MCP_RATE_LIMIT_ROOT`, which defaults to an owner-only user cache directory. Raw KEGG PNG and
-KGML payloads remain local and must not be uploaded or redistributed without a specific rights
-review.
+For cache-only pathway rendering, select an existing Core-compatible cache explicitly:
+
+```bash
+export KEGG_RENDER_MCP_ACCESS_MODE=offline_cache
+export KEGG_RENDER_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
+```
+
+The default offline namespace is the public-academic namespace. To select assets previously cached
+through an appropriately licensed endpoint, confirm that namespace and provide its canonical
+endpoint:
+
+```bash
+export KEGG_RENDER_MCP_ACCESS_MODE=offline_cache
+export KEGG_RENDER_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
+export KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true
+export KEGG_RENDER_MCP_LICENSED_ENDPOINT=https://licensed.example.invalid
+```
+
+In offline mode the endpoint is used only to calculate the existing cache namespace fingerprint.
+It is never contacted or returned in status, errors, manifests, or provenance. The cache is opened
+with SQLite read-only and query-only enforcement after owner, mode `0600`, parent-directory,
+symlink, schema, parser-version, and physical/logical size checks. A missing cache or entry returns
+a typed asset-unavailable result without creating a database, initializing a schema, cleaning
+expired entries, or falling back to HTTP.
+
+Stale offline assets are rejected by default. An operator may enable them for the whole renderer
+deployment, not per request:
+
+```bash
+export KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true
+```
+
+When enabled, stale state and separate PNG/KGML retrieval timestamps remain visible in artifact
+provenance, and the result and manifest include a stale-cache warning.
+
+The access modes are:
+
+- `unconfigured`: MODULE-only rendering with no pathway asset access;
+- `offline_cache`: read-only pathway assets from the configured existing cache;
+- `public_academic`: live public KEGG access for eligible academic use; and
+- `licensed`: live access through an explicitly confirmed authorized endpoint.
+
+`KEGG_RENDER_MCP_CACHE_PATH` may also select the local Core-compatible cache used by a live access
+mode. Status never returns endpoint URLs, credentials, environment values, usernames, cache
+fingerprints, request keys, or local paths. Pathway assets use the core client's HTTPS validation,
+cache, retry policy, and deployment-wide no-burst rate limit of no more than three requests per
+second. Core and Renderer use the same `KEGG_MCP_RATE_LIMIT_ROOT`, which defaults to an owner-only
+user cache directory. Raw KEGG PNG and KGML payloads remain local and must not be uploaded or
+redistributed without a specific rights review.
 
 Optional bounded deployment settings are:
 
@@ -89,11 +131,13 @@ Tools:
 - `render_module`
 - `delete_render_result`
 
-The probe performs exactly one explicit KEGG `INFO` request when access is configured and zero
-requests in `unconfigured` mode. Its bounded classification distinguishes configuration, DNS,
-connection, timeout, TLS, permission, rate-limit, endpoint, and unknown failures. Ordinary MODULE
-rendering is closed-world. Pathway rendering may retrieve one image and one KGML document through
-the typed core client.
+The probe performs exactly one explicit KEGG `INFO` request in a live access mode and zero requests
+in `unconfigured` or `offline_cache` mode. Offline mode returns the stable `offline_cache`
+classification and explains that deployment policy prohibits network access; it is not reported as
+a DNS, timeout, or connection failure. The remaining bounded classifications distinguish
+configuration, DNS, connection, timeout, TLS, permission, rate-limit, endpoint, and unknown
+failures. Ordinary MODULE rendering is closed-world. Pathway rendering may retrieve one image and
+one KGML document through the typed core client or read the matching pair from the selected cache.
 
 Example high-level input:
 
@@ -106,8 +150,9 @@ Example high-level input:
 }
 ```
 
-Every successful call returns an opaque process-scoped `render_id`, bounded metadata, warnings,
-provenance, and server-generated resource URIs:
+Every successful render call returns an opaque process-scoped `render_id`, bounded metadata,
+warnings, and server-generated resource URIs. The published `render_manifest.json` artifact
+carries the rendering provenance:
 
 ```text
 kegg-render://results/{render_id}

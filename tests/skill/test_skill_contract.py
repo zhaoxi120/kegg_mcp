@@ -117,3 +117,15 @@ def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
     skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     for reference in EXPECTED_FILES - {"SKILL.md", "agents/openai.yaml"}:
         assert f"({reference})" in skill
+
+
+def test_ko_analysis_skill_allows_stable_cross_skill_continuation() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "immediately preceding `deepkoala-annotation`",
+        "automatically continue with the installed",
+        "`kegg-pathway-rendering` Skill",
+        "Pass the unchanged `render_input.json` path",
+        "do not repeat analysis",
+    ):
+        assert fragment in corpus

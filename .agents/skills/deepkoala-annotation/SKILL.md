@@ -25,6 +25,23 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.
 
+## Continue the original request across focused Skills
+
+- If the original request ends at protein annotation, return the stable CSV, run report, and
+  source provenance, then stop.
+- If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
+  reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
+  annotation job succeeds. Pass the returned `annotations_path`,
+  `input_format="deepkoala_detailed"`, and `source` object unchanged. Do not ask the user to copy
+  the path, send another prompt, restate the analysis goal, or confirm continuation. Do not read,
+  parse, or rewrite the CSV during the transition.
+- If the original request also asks for graphics, preserve its requested formats and target scope
+  as a downstream goal. The KO-analysis stage can then continue to the installed
+  `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must
+  not call either downstream MCP itself.
+- Continue only from a successful stable handoff. If a downstream Skill or its one declared MCP
+  dependency is unavailable, report that specific stage state without rerunning DeepKOALA.
+
 Read [deployment-and-handoff.md](references/deployment-and-handoff.md) when status is unready, a
 policy check fails, or another MCP client must consume the output.
 

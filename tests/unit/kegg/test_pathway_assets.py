@@ -13,10 +13,12 @@ from pydantic import ValidationError
 import kegg_mcp.kegg.client as client_module
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg import (
+    AccessMode,
     CachePolicy,
     KeggClient,
     KeggClientConfig,
     KeggRequestOptions,
+    OfflineCacheAccess,
     PathwayAssetKind,
     PathwayAssetRequest,
     PathwayAssetResult,
@@ -255,6 +257,35 @@ def test_client_retrieves_validates_and_reuses_one_png_asset(tmp_path: Path) -> 
     assert PathwayAssetResult.model_validate_json(network.model_dump_json()) == network
     assert cached.content == network.content
     assert cached.provenance.origin is ResponseOrigin.CACHE
+
+
+def test_offline_client_forces_refresh_requests_to_the_read_only_asset_cache(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.IMAGE)
+    KeggClient(
+        _config(cache_path),
+        transport=_QueueTransport(
+            TransportResponse(
+                status_code=200,
+                body=_png(),
+                http_metadata=(HttpMetadata(name="content-type", value="image/png"),),
+            )
+        ),
+        clock=lambda: _NOW,
+    ).get_pathway_asset(request)
+    live_config = _config(cache_path)
+    offline_config = live_config.model_copy(update={"access": OfflineCacheAccess()})
+
+    result = KeggClient(
+        offline_config,
+        transport=_BombTransport(),
+        clock=lambda: _NOW + timedelta(seconds=1),
+    ).get_pathway_asset(request, options=KeggRequestOptions(refresh=True))
+
+    assert result.provenance.access_mode is AccessMode.OFFLINE_CACHE
+    assert result.provenance.origin is ResponseOrigin.CACHE
 
 
 def test_client_rejects_active_kgml_declarations_before_caching(tmp_path: Path) -> None:

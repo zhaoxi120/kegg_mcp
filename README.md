@@ -43,6 +43,20 @@ codex mcp add kegg-mcp \
 codex mcp list
 ```
 
+MCP registration does not install the repository Skills. When Codex runs at this checkout root,
+its `.agents/skills` is already on the discovery path; do not run the managed-copy installer back
+into the same checkout. When the reviewed checkout is nested below or separate from the workspace
+where Codex will run, copy the three version-matched Skills into that distinct workspace:
+
+```bash
+python3 scripts/install-skills.py --workspace /absolute/path/to/workspace
+```
+
+This managed copy is required when the checkout is nested below the workspace, for example under
+`.mcp/kegg_mcp`. Codex detects newly installed Skills automatically; restart only if the three names
+do not appear in the client's discovered Skill list or selector. See the installation guide for
+tag-archive content binding, wheel version guards, and separate MCP and Skill discovery checks.
+
 The default access profile is confirmed `public_academic`. Before making live requests, confirm
 that both the user and the work qualify for public academic KEGG access. A useful first request is:
 
@@ -101,17 +115,15 @@ The repository-scoped Skills are:
   core handoff.
 
 Each Skill declares exactly one MCP dependency. Stable output-directory files connect stages; no
-Skill owns the complete annotation-to-rendering workflow.
+Skill owns the complete annotation-to-rendering workflow. When one original user request spans
+annotation, KEGG analysis, and rendering, Codex automatically continues across the matching focused
+Skills and passes the stable files forward without asking the user to copy paths into new prompts.
 
-For a protein FASTA workflow, create separate private output directories and proceed through the
-three Skills explicitly:
-
-1. Ask `deepkoala-annotation` to run the allowed FASTA into a new annotation directory. It returns
-   `deepkoala_annotations.csv` and `deepkoala_run_report.md`.
-2. Give that CSV and its returned source provenance to `kegg-ko-analysis`, with a new analysis
-   directory. It writes the report tables and `render_input.json`.
-3. If graphics are needed, give that unchanged renderer handoff to
-   `kegg-pathway-rendering`, with a new image directory.
+For a protein FASTA-to-image workflow, make one request that names separate private annotation,
+analysis, and rendering output directories. `deepkoala-annotation` produces
+`deepkoala_annotations.csv` and its source provenance, `kegg-ko-analysis` consumes that stable file
+and produces `render_input.json`, and `kegg-pathway-rendering` consumes the unchanged renderer
+handoff when graphics were requested. A request that asks for only one stage stops after that stage.
 
 The default handoff is the named file in each output directory. Opaque job and result identifiers
 are useful only while the originating stdio process remains active.
@@ -138,9 +150,9 @@ status responses.
 ## Installation and distribution boundary
 
 The core Python wheel contains the MCP server and required notices. It does not contain either
-optional companion or any repository-scoped Skill. Use a tag source archive or an exact GitHub
-checkout when the Skills are required; installing the wheel alone does not make the Skills
-available.
+optional companion or any repository-scoped Skill. Obtain a version-matched tag source archive or
+exact GitHub checkout and run `scripts/install-skills.py` when the Skills are required; installing
+the wheel alone does not make the Skills available.
 
 For deployment instructions, see:
 

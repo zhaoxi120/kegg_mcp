@@ -31,3 +31,16 @@ Skill must not parse, transform, or validate CSV rows itself.
 
 Treat private job identifiers and resource URIs as process-scoped. Stable output-directory files,
 not a private identifier, are the cross-MCP handoff.
+
+## Automatic cross-Skill continuation
+
+When the original user request includes downstream KEGG analysis, a successful annotation stage
+continues with the installed `kegg-ko-analysis` Skill using the returned `annotations_path`,
+`input_format`, and `source` values unchanged. The transition uses the stable CSV rather than the
+job identifier and does not require the user to copy a path, repeat the request, or approve an
+already requested analysis stage.
+
+When the original request also includes graphics, retain that goal for the later
+`kegg-pathway-rendering` stage. Do not interpret that goal here, and do not call a core or renderer
+MCP from this Skill. A failed or unready annotation stage has no valid downstream handoff, so stop
+with its specific route state instead of continuing or substituting another annotator.

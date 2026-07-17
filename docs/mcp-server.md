@@ -269,8 +269,16 @@ resolution.
 Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and
 `KEGG_RENDER_MCP_ALLOWED_ROOTS`. The state root must be private and must not overlap a renderer
 allowed root. Pathway access uses the separate `KEGG_RENDER_MCP_ACCESS_MODE` contract with
-`public_academic` as the eligible academic default, `licensed` for an authorized endpoint, or
-`unconfigured` for MODULE-only rendering.
+`public_academic` as the eligible academic default, `licensed` for an authorized endpoint,
+`offline_cache` for read-only, network-disabled pathway assets, or `unconfigured` for MODULE-only
+rendering. Offline mode requires a configured absolute `KEGG_RENDER_MCP_CACHE_PATH`; only an
+existing safe database with matching entries can satisfy a pathway render, while a missing path is
+a typed miss and is never created. It defaults to the public-academic cache namespace and can
+select a confirmed licensed namespace by supplying the licensed endpoint only for canonical
+fingerprinting. It rejects stale entries unless
+`KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true`; accepted stale use remains explicit in warnings and
+asset provenance. The offline connectivity probe performs zero requests and status never returns
+the cache path, endpoint, or fingerprint.
 
 The renderer exposes six tools:
 

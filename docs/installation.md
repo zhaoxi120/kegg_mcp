@@ -29,6 +29,11 @@ The guarded filesystem and process implementations use POSIX controls and fail c
 controls are unavailable. Python 3.12 and 3.13 are excluded by package metadata until a separate
 compatibility campaign is completed.
 
+The Skill installer additionally requires Linux `/proc/self/fd`, `O_DIRECTORY`, `O_NOFOLLOW`, and
+libc and kernel support for `renameat2(RENAME_NOREPLACE)`. It fails closed instead of falling back
+to path-following or overwriting moves when any of these controls is unavailable, including in a
+restricted Linux chroot without `/proc`.
+
 The source development workflow uses [uv](https://docs.astral.sh/uv/). GPU access, PyTorch,
 DeepKOALA, model weights, and KOfam profiles are not server dependencies.
 
@@ -79,10 +84,113 @@ kegg-mcp
 Do not install an artifact solely because its filename matches this example. Verify its source,
 version, and published SHA-256 digest first.
 
-The Python wheel and Python source distribution install the MCP Python server only. They do not
-install repository-scoped Codex Skills or include the complete repository documentation and
-examples. Obtain an exact GitHub repository checkout or tag source archive separately when the
-Skills and their references are required.
+The Python wheel and Python package source distribution install the MCP Python server only. They do
+not install repository-scoped Codex Skills or include the complete repository documentation and
+examples. Obtain an exact GitHub repository checkout or GitHub tag source archive separately when
+the Skills, their references, and the Skill installer are required.
+
+## Install the repository Skills into a Codex workspace
+
+MCP registration and Skill installation are separate operations. Registering `kegg-mcp`,
+`deepkoala-mcp`, or `kegg-render-mcp` does not copy or register a Skill. The formally supported
+local Skill installation method for this release is a managed copy made by
+`scripts/install-skills.py` from a reviewed repository checkout or GitHub tag source archive.
+
+If Codex runs from the reviewed checkout root, that checkout's `.agents/skills` is already a
+repository discovery location. Do not set `--workspace` to the same checkout: those source Skill
+directories intentionally have no managed-install marker, so the installer will refuse to overwrite
+them. Use the installer only when the destination is a distinct workspace, including an outer
+workspace that contains the source checkout below it.
+
+Codex scans repository Skill directories from its current working directory upward to the
+repository root. A nested checkout below that working directory is not on that scan path. For
+example, launching Codex at `/project/workspace` does not discover Skills solely because they are
+stored at `/project/workspace/.mcp/kegg_mcp/.agents/skills`. This behavior follows the official
+[Codex Skill location documentation](https://learn.chatgpt.com/docs/build-skills#where-to-save-skills),
+reviewed on 2026-07-18.
+
+From an exact Git checkout, run the installer by absolute path and name the existing absolute
+workspace root where Codex will be launched:
+
+```bash
+python3 /absolute/path/to/kegg_mcp/scripts/install-skills.py \
+  --workspace /absolute/path/to/workspace
+```
+
+The installer derives the full source commit from that checkout only after verifying that all three
+Skill trees, all three version-bearing `pyproject.toml` files, and the installer itself match
+`HEAD`. A staged, unstaged, untracked, ignored, missing, or extra entry in those paths returns
+`skill_source_modified` before installation. The installed bytes come from a bounded snapshot
+materialized from that immutable Git commit rather than from the working tree, and each staged Skill
+is hashed again before commit. This closes the copy-time race as well as the nested checkout case:
+when the repository is under `/absolute/path/to/workspace/.mcp/kegg_mcp`, managed copies are written
+to `/absolute/path/to/workspace/.agents/skills`, which is on the Codex scan path.
+
+A GitHub tag source archive has no `.git` identity. Supply both the full commit and the source-tree
+SHA-256 published with that release. A commit string alone is not a content binding, and calculating
+a digest from an untrusted downloaded archive does not make that digest trusted:
+
+```bash
+python3 /absolute/path/to/tag-archive/scripts/install-skills.py \
+  --workspace /absolute/path/to/workspace \
+  --source-commit VERIFIED_FULL_COMMIT \
+  --source-tree-sha256 PUBLISHED_SOURCE_TREE_SHA256
+```
+
+For a wheel deployment, first compare `kegg-mcp --version` with the reviewed release, obtain the
+GitHub tag source archive for that same release, and add the version guard:
+
+```bash
+python3 /absolute/path/to/tag-archive/scripts/install-skills.py \
+  --workspace /absolute/path/to/workspace \
+  --source-commit VERIFIED_FULL_COMMIT \
+  --source-tree-sha256 PUBLISHED_SOURCE_TREE_SHA256 \
+  --expected-core-version INSTALLED_VERSION
+```
+
+The `kegg-mcp-tree-sha256-v2:source` digest covers all three Skill trees, all three version-bearing
+project files, and the installer. It records regular files with canonical Git modes (`100644` or
+`100755`) and records every directory entry, including an archive's empty directories.
+Non-executable permission-bit differences introduced by extraction do not change the digest;
+changing executability does. The installer rejects a missing or mismatched published digest before
+writing the workspace. Archive snapshots and staged Skills copy file bytes with only canonical
+directory and Git file modes; they do not inherit ACLs, extended attributes, or other unbound
+filesystem metadata. The version guard then fails if the archive's core version differs from the
+installed wheel version.
+
+The installer copies all three Skills together and writes
+`.kegg-mcp-skill-install.json` inside each installed Skill. That non-sensitive marker records the
+full source commit, source kind, actual aggregate source-tree digest, installed Skill content
+digest, and these distribution versions:
+
+```json
+{
+  "source_commit": "<full-verified-commit>",
+  "source_tree_sha256": "<published-and-verified-source-tree-sha256>",
+  "versions": {
+    "kegg-mcp": "<core-version>",
+    "deepkoala-mcp": "<companion-version>",
+    "kegg-render-mcp": "<renderer-version>"
+  }
+}
+```
+
+The complete marker has an exact schema and also contains its schema version, installer identity,
+Skill name, source kind, and per-Skill content digest. Unknown keys, wrong JSON types, invalid digest
+or commit formats, and incomplete version maps are rejected.
+It never records a username, source or workspace path, endpoint, credential, FASTA path, cache
+path, or model path. The installer does not download dependencies, models, weights, or KEGG data,
+does not configure an MCP server, and does not modify a Python environment. It refuses symlinked
+install roots, unknown existing Skill directories, invalid markers, and locally modified managed
+copies. It anchors the destination with no-follow directory descriptors, revalidates the binding
+before replacement, and uses non-overwriting atomic renames. Rerunning it updates only unchanged
+directories carrying its valid marker. If replacement fails, it rolls back; if rollback itself
+fails, it preserves the private `.agents/skills/.kegg-mcp-skill-install-*` transaction and reports a
+relative recovery location so the operator can inspect `backup/` and restore by Skill name. Codex
+supports manually symlinked Skill folders, but the release-supported procedure uses managed copies
+so version and content checks remain deterministic. A failure while deleting a completed
+transaction returns `installation_cleanup_failed`, does not print a successful-install message,
+and reports only the remaining relative transaction location.
 
 ## Choose one KEGG access mode
 
@@ -294,18 +402,21 @@ Poll the returned `job_id` until it is terminal. On success, use the returned
 new analysis output directory. This is the default FASTA-to-report route and does not repeat
 normalization.
 
-In a Codex checkout with the Skills installed, use two explicit prompts rather than an umbrella
-workflow:
+With all three focused Skills installed, one original prompt may span annotation, analysis, and
+graphics:
 
-> Use `$deepkoala-annotation` to annotate
-> `/absolute/private/input/proteins.faa` into the new directory
-> `/absolute/private/handoff/deepkoala-run-001`. Return the stable CSV path and source provenance.
+> Annotate `/absolute/private/input/proteins.faa` into the new directory
+> `/absolute/private/handoff/deepkoala-run-001`, analyze the requested KEGG MODULEs and pathways
+> into `/absolute/private/results/analysis-001`, and render the selected pathway overlays as SVG
+> into `/absolute/private/results/render-001`.
 
-After that task succeeds:
-
-> Use `$kegg-ko-analysis` with the returned `deepkoala_annotations.csv` and source provenance.
-> Analyze the requested MODULEs/pathways once and write the report bundle to the new directory
-> `/absolute/private/results/analysis-001`.
+Codex begins with `deepkoala-annotation`, passes the returned stable CSV path, declared
+`input_format`, and source provenance unchanged to `kegg-ko-analysis`, then passes the compatible
+`render_input.json` path unchanged to `kegg-pathway-rendering`. The original prompt authorizes
+those requested stages, so successful handoffs do not require a second prompt, repeated
+confirmation, or manual path copy. Each Skill still calls only its own MCP dependency. A failed or
+unready stage stops the chain, preserves completed upstream outputs, and must not be treated as an
+empty annotation or silently replaced.
 
 ## Optional renderer companion
 
@@ -343,6 +454,16 @@ academic work. Licensed deployments instead set `KEGG_RENDER_MCP_ACCESS_MODE=lic
 authorized HTTPS `KEGG_RENDER_MCP_LICENSED_ENDPOINT`, and
 `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true`. Set the renderer mode to `unconfigured` only for
 MODULE-only rendering; pathway rendering then returns an actionable access error.
+
+For network-disabled pathway rendering from an existing Core-compatible cache, use
+`KEGG_RENDER_MCP_ACCESS_MODE=offline_cache` and an absolute
+`KEGG_RENDER_MCP_CACHE_PATH`. The renderer opens that database read-only, does not create a missing
+database or parent, and performs zero HTTP requests. It selects the public-academic cache namespace
+by default. To select an existing licensed namespace, also provide the canonical licensed endpoint
+and `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true`; the endpoint is used only to derive the same
+opaque cache identity and is never returned by status. Stale assets are rejected unless the
+operator explicitly sets `KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true`, in which case stale use is
+recorded in output warnings and `render_manifest.json` provenance.
 
 The renderer accepts exactly one validated schema-version-2 handoff, either as a path below an
 allowed root or as bounded inline JSON. Incompatible handoffs must be regenerated by the core
@@ -445,18 +566,59 @@ or set the command to the absolute `uv` executable with arguments equivalent to
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
-Codex discovers three repository-scoped Skills from an exact checkout or tag source archive:
+After installation into a scanned location, Codex can discover three repository-scoped Skills:
 `deepkoala-annotation` depends only on `deepkoala-mcp`, `kegg-ko-analysis` depends only on
-`kegg-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`. Invoke the Skill that
-owns the current stage and pass the named versioned output file to the next stage. No Skill depends
-on multiple MCP servers or contains subprocess, HTTP, parsing, normalization, or rendering logic.
-A wheel installs its server command only; it does not install repository-scoped Skills or another
+`kegg-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`. No Skill depends on
+multiple MCP servers or contains subprocess, HTTP, parsing, normalization, or rendering logic. A
+wheel installs its server command only; it does not install repository-scoped Skills or another
 distribution.
 
 ## Verify discovery and status
 
-Restart the MCP client after changing server configuration. Confirm that discovery shows these
-eleven tools:
+Codex detects installed or updated Skills automatically. For the first discovery check, launch a
+new task from the exact workspace passed to `--workspace`; this avoids placing a nested repository
+boundary between the current working directory and the installed Skill root. If the three names do
+not appear in the client's discovered Skill list or selector, restart Codex and check again.
+
+### Verify Skill discovery
+
+Use the client's discovered Skill list or selector and confirm these exact names independently of
+MCP registration:
+
+```text
+deepkoala-annotation
+kegg-ko-analysis
+kegg-pathway-rendering
+```
+
+Then exercise the documented `$skill-name` explicit invocation with one bounded status-only prompt
+per installed dependency:
+
+```text
+Use $deepkoala-annotation to report its companion readiness only; do not submit a job.
+Use $kegg-ko-analysis to report core server status only; do not retrieve KEGG data.
+Use $kegg-pathway-rendering to report renderer status only; do not render an artifact.
+```
+
+Finally, confirm implicit selection with controlled local fixtures and no `$skill-name` in the
+prompt. Each prompt should select only the matching focused Skill:
+
+```text
+Annotate this allowlisted protein FASTA with the configured local DeepKOALA setup.
+Analyze this existing KO table for KEGG MODULEs and pathway KO coverage.
+Render this validated render_input.json as SVG.
+```
+
+Implicit selection verifies the Skill description and invocation policy; it does not prove that
+the corresponding MCP runtime is registered or ready.
+
+### Verify MCP discovery
+
+Run `codex mcp list` or the client-equivalent command. A complete FASTA-to-image deployment lists
+`deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`; a deployment may intentionally omit companions
+that its workflows do not use. MCP discovery is not evidence of Skill discovery.
+
+For the core server, confirm that tool discovery shows these eleven tools:
 
 ```text
 analyze_ko_annotations
@@ -632,8 +794,9 @@ the authoritative targets.
 
 First call `get_renderer_status` and verify that schema version 2 is supported. For pathway
 targets, call `probe_renderer_kegg_connectivity` only when an explicit live preflight is needed;
-the probe makes exactly one INFO request. Then pass the controlled absolute handoff path to
-`render_analysis_bundle`:
+the probe makes exactly one INFO request in a live mode and zero requests in `offline_cache` or
+`unconfigured` mode. An offline probe confirms the network-disabled policy, not cache-entry
+availability. Then pass the controlled absolute handoff path to `render_analysis_bundle`:
 
 ```json
 {
@@ -644,11 +807,12 @@ the probe makes exactly one INFO request. Then pass the controlled absolute hand
 }
 ```
 
-The renderer returns an opaque process-scoped `render_id`, artifact metadata, warnings,
-provenance, and validated `kegg-render://results/...` resource URIs. Use those URIs rather than
-constructing them. SVG is canonical; PNG is an optional bounded derivative. Global and overview
-pathways are rejected in this release. MODULE diagrams use only the authoritative AST and states
-in the handoff and display exact completion separately from project block coverage.
+The renderer returns an opaque process-scoped `render_id`, artifact metadata, warnings, and
+validated `kegg-render://results/...` resource URIs. Complete rendering and source-asset provenance
+is in the published `render_manifest.json` artifact. Use returned URIs rather than constructing
+them. SVG is canonical; PNG is an optional bounded derivative. Global and overview pathways are
+rejected in this release. MODULE diagrams use only the authoritative AST and states in the handoff
+and display exact completion separately from project block coverage.
 
 Graphics visualize annotation evidence. Accepted and policy-defined uncertain annotations have
 distinct states; rejected predictions are not colored and unchanged graphics are not labelled as

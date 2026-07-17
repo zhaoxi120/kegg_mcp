@@ -315,15 +315,31 @@ def test_offline_profile_reuses_public_cache_and_never_calls_injected_transport(
 
 
 def test_offline_profile_cache_miss_never_calls_injected_transport(tmp_path: Path) -> None:
+    cache_path = tmp_path / "missing.sqlite3"
     with pytest.raises(KeggMcpError) as caught:
         KeggClient(
-            _offline_config(tmp_path / "missing.sqlite3"),
+            _offline_config(cache_path),
             transport=BombTransport(),
             clock=_clock(_NOW),
         ).info(InfoRequest(database=KeggInfoDatabase.KO))
 
     assert caught.value.detail.code is ErrorCode.CACHE_ENTRY_NOT_FOUND
     assert _NoWaitMandatoryLimiter.instances[-1].acquire_count == 0
+    assert not cache_path.exists()
+
+
+def test_offline_profile_rejects_an_injected_writable_cache(tmp_path: Path) -> None:
+    cache_path = tmp_path / "injected.sqlite3"
+
+    with pytest.raises(ValueError, match="read-only cache adapter"):
+        KeggClient(
+            _offline_config(cache_path),
+            cache=SQLiteKeggCache(cache_path),
+            transport=BombTransport(),
+            clock=_clock(_NOW),
+        )
+
+    assert not cache_path.exists()
 
 
 def test_same_licensed_endpoint_uses_one_cache_and_rate_scope_across_labels(
@@ -954,7 +970,7 @@ def test_transient_transport_error_is_retried(tmp_path: Path) -> None:
         ),
         transport=transport,
         rate_limiter=limiter,
-        sleeper=lambda delay: None,
+        sleeper=lambda _delay: None,
         clock=_clock(_NOW),
     )
 
@@ -1026,7 +1042,7 @@ def test_exhausted_429_responses_return_rate_limited_error(tmp_path: Path) -> No
         ),
         transport=transport,
         rate_limiter=limiter,
-        sleeper=lambda delay: None,
+        sleeper=lambda _delay: None,
         clock=_clock(_NOW),
     )
 
