@@ -452,7 +452,6 @@ class DeepKoalaJobManager:
                 stage = "output_validation"
                 output_path = record.directory / OUTPUT_FILENAME
                 output_bytes = validate_output(output_path)
-                os.chmod(output_path, 0o600, follow_symlinks=False)
                 stage = "private_input_cleanup"
                 (record.directory / INPUT_FILENAME).unlink()
                 state = JobState.SUCCEEDED

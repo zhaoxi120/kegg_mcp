@@ -23,10 +23,6 @@ def validate_output(path: Path) -> int:
         raise RuntimeError("DeepKOALA output is unavailable") from error
     if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
         raise RuntimeError("DeepKOALA output is not a direct regular file")
-    if named.st_size < 1:
-        raise RuntimeError("DeepKOALA output is empty")
-    if named.st_size > MAX_OUTPUT_BYTES:
-        raise RuntimeError("DeepKOALA output exceeds the handoff limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     descriptor = os.open(path, flags)
     try:
@@ -37,9 +33,14 @@ def validate_output(path: Path) -> int:
             or opened.st_size != named.st_size
         ):
             raise RuntimeError("DeepKOALA output changed during validation")
+        os.fchmod(descriptor, 0o600)
+        if opened.st_size < 1:
+            raise RuntimeError("DeepKOALA output is empty")
+        if opened.st_size > MAX_OUTPUT_BYTES:
+            raise RuntimeError("DeepKOALA output exceeds the handoff limit")
     finally:
         os.close(descriptor)
-    return named.st_size
+    return opened.st_size
 
 
 def _prepare_state_root(path: Path) -> Path:

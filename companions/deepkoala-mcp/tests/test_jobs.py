@@ -42,6 +42,7 @@ class ExitRunner:
 class EmptyRunner:
     async def run(self, plan: RunnerPlan) -> ProcessOutcome:
         plan.output_path.write_bytes(b"")
+        plan.output_path.chmod(0o644)
         return ProcessOutcome(return_code=0)
 
 
