@@ -47,13 +47,18 @@ default stdio command.
 | `KEGG_MCP_LICENSED_ENDPOINT` | Authorized HTTPS endpoint for licensed access |
 | `KEGG_MCP_LICENSED_USE_CONFIRMED` | Must equal `true` before licensed access is enabled |
 | `KEGG_MCP_CACHE_PATH` | Optional absolute path to the user-local KEGG cache |
+| `KEGG_MCP_CACHE_MAX_ENTRIES` | Optional positive cache-row limit; default 10,000 |
+| `KEGG_MCP_CACHE_MAX_PAYLOAD_BYTES` | Optional positive cache-payload limit; default 512 MiB |
+| `KEGG_MCP_CACHE_MAX_DATABASE_BYTES` | Optional positive SQLite main-database limit; default 640 MiB |
+| `KEGG_MCP_RATE_LIMIT_ROOT` | Optional owner-only state root shared by Core and Renderer |
 | `KEGG_MCP_RESULT_STORE_PATH` | Optional absolute path to the user-local retained-result database |
 | `KEGG_MCP_ALLOWED_ROOTS` | Path-separated existing directories allowed for file input and output bundles |
 
 The public KEGG REST service is limited to academic use by academic users. Other deployments must
-use an appropriately licensed endpoint. The live client defaults to
-two requests per second with no burst, enforces a hard process-wide maximum no greater than three
-requests per second, and batches `get` requests at no more than ten entries.
+use an appropriately licensed endpoint. The live client defaults to two requests per second with
+no burst, enforces a hard deployment-wide maximum no greater than three requests per second for
+one canonical endpoint, and batches `get` requests at no more than ten entries. Core and Renderer
+coordinate through the same owner-only rate-limit root.
 
 Cache payloads and retained results are local data and must not be committed, packaged, or attached
 to CI artifacts. The low-level client keeps explicit refresh semantics, while high-level MCP
@@ -64,7 +69,9 @@ back to the network.
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
 surfaces do not probe connectivity or enumerate cache contents. Use the explicit connectivity
-tool when a live-access preflight is required.
+tool when a live-access preflight is required. Operators can inspect bounded cache counts with
+`kegg-mcp cache status --json` and remove only expired rows with
+`kegg-mcp cache cleanup --expired --json`.
 
 The MCP initialization response guides clients toward the high-level analysis tool and records
 the connectivity, file-handoff, result-scope, stable-bundle, and biological interpretation
@@ -76,13 +83,19 @@ The server exposes ten tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no target is supplied, accepted K numbers are
-  mapped to canonical reference pathways within deployment bounds. To select only the most
-  detected pathways, supply `pathway_selection.mode="top_detected"`, `top_n` from 1 through 25,
-  and `metric="unique_selected_ko_count"`; ranking occurs before reference loading.
+  mapped to canonical reference pathways within deployment bounds. This automatic discovery is
+  always `accepted_only` with strict evidence, while coverage still uses the request's strict or
+  lenient evidence mode. Both choices are recorded in execution provenance, the report, and the
+  bundle manifest. To select only the most detected pathways, supply
+  `pathway_selection.mode="top_detected"`, `top_n` from 1 through 25, and
+  `metric="unique_selected_ko_count"`; ranking occurs before reference loading.
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries. It is not an arbitrary URL proxy.
 - `map_ko_ids`: map selected K numbers to pathways, modules, reactions, EC numbers, or BRITE.
+  Pathway summaries distinguish `unique_reference_pathway_number_count` from the paired
+  `available_ko_reference_view_count` and `available_map_reference_view_count`; these view counts
+  do not claim that LINK returned both namespaces.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
@@ -171,7 +184,8 @@ marker and represents source paths with redacted labels by default. The explicit
 `manifest_path_mode="absolute"` option includes absolute paths in the manifest when required. The
 bundle manifest records the renderer schema and MIME type.
 `AnalysisExecutionProvenance` version 2 also records the applicable MODULE analysis limits,
-pathway parameters, pathway coverage limits, and report limits.
+pathway parameters, the distinct automatic-discovery policy and evidence mode when applicable,
+pathway coverage limits, and report limits.
 
 Direct tool responses are bounded previews. A Top-N response contains record/status counts,
 selected unique-KO count, candidate count, bounded selected-pathway summaries, logical/network/cache

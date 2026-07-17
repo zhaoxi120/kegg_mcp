@@ -14,22 +14,22 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+OWNED_RELEASE_DOCUMENTS = tuple(
+    sorted(
+        {
+            PROJECT_ROOT / "README.md",
+            PROJECT_ROOT / "SECURITY.md",
+            PROJECT_ROOT / "CONTRIBUTING.md",
+            PROJECT_ROOT / "tests" / "live" / "README.md",
+            PROJECT_ROOT / "examples" / "README.md",
+            *(PROJECT_ROOT / "docs").rglob("*.md"),
+            *(PROJECT_ROOT / "companions").glob("*/README.md"),
+        }
+        - set((PROJECT_ROOT / "docs").rglob("*.zh-CN.md"))
+    )
+)
 OWNED_RELEASE_FILES = (
-    PROJECT_ROOT / "README.md",
-    PROJECT_ROOT / "SECURITY.md",
-    PROJECT_ROOT / "docs" / "development-plan.md",
-    PROJECT_ROOT / "docs" / "mcp-benchmark-review.md",
-    PROJECT_ROOT / "docs" / "installation.md",
-    PROJECT_ROOT / "docs" / "mcp-server.md",
-    PROJECT_ROOT / "docs" / "release-readiness.md",
-    PROJECT_ROOT / "docs" / "services-results-reporting.md",
-    PROJECT_ROOT / "docs" / "skill-evaluation.md",
-    PROJECT_ROOT / "docs" / "troubleshooting.md",
-    PROJECT_ROOT / "docs" / "visualization-extension-plan.md",
-    PROJECT_ROOT / "companions" / "deepkoala-mcp" / "README.md",
-    PROJECT_ROOT / "companions" / "kegg-render-mcp" / "README.md",
-    PROJECT_ROOT / "tests" / "live" / "README.md",
-    PROJECT_ROOT / "examples" / "README.md",
+    *OWNED_RELEASE_DOCUMENTS,
     PROJECT_ROOT / "examples" / "plain-ko" / "ko-list.txt",
     PROJECT_ROOT / "examples" / "plain-ko" / "clean-ko-list.txt",
     PROJECT_ROOT / "examples" / "config" / "public-academic.env.example",
@@ -107,6 +107,10 @@ def _assert_safe_archive_name(name: str) -> None:
     assert path.suffix.lower() not in FORBIDDEN_DISTRIBUTION_SUFFIXES
 
 
+def _private_workspace_marker() -> bytes:
+    return os.fsencode(PROJECT_ROOT.parent) + b"/"
+
+
 def test_project_metadata_declares_buildable_stdio_package() -> None:
     project = _project_table()
     scripts = cast(dict[str, str], project["scripts"])
@@ -164,6 +168,21 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
         assert not CJK_CHARACTER.search(content), path
         assert path.stat().st_size <= 128 * 1024, path
         assert "SQLite format 3" not in content
+
+    document_corpus = "\n".join(
+        path.read_text(encoding="utf-8") for path in OWNED_RELEASE_DOCUMENTS
+    )
+    for stale_contract in (
+        "CPU-only",
+        "acknowledged=true",
+        "five real requests",
+        "for 20 total",
+        "prior `v1` rows",
+        "process-wide request rate",
+        "process-wide rate limiter",
+        "process-wide no-burst rate limit",
+    ):
+        assert stale_contract not in document_corpus
 
 
 def test_access_examples_record_rights_and_use_no_secrets() -> None:
@@ -225,6 +244,8 @@ def test_release_tree_contains_no_tracked_release_blocking_binary() -> None:
 
 def test_orchestration_hotspots_remain_bounded() -> None:
     limits = {
+        "src/kegg_mcp/analysis/comparison.py": 550,
+        "src/kegg_mcp/analysis/comparison_contracts.py": 450,
         "src/kegg_mcp/mcp/server.py": 250,
         "src/kegg_mcp/services/__init__.py": 20,
         "src/kegg_mcp/kegg/client.py": 500,
@@ -242,6 +263,7 @@ def test_python_identifiers_do_not_embed_contract_versions() -> None:
     for path in _release_files():
         if path.suffix != ".py":
             continue
+        assert not VERSION_SUFFIXED_IDENTIFIER.search(path.stem), path.relative_to(PROJECT_ROOT)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         identifiers: set[str] = set()
         for node in ast.walk(tree):
@@ -312,6 +334,33 @@ def test_visualization_extension_has_an_independent_synthetic_release_boundary()
     assert "no live kegg requests" in normalized_readiness
     assert "no kegg payload" in normalized_renderer
     assert "global and overview" in normalized_renderer
+
+
+def test_deepkoala_companion_has_an_independent_build_gate() -> None:
+    project_path = PROJECT_ROOT / "companions/deepkoala-mcp/pyproject.toml"
+    lock_path = PROJECT_ROOT / "companions/deepkoala-mcp/uv.lock"
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert project_path.is_file()
+    assert lock_path.is_file()
+    project = tomllib.loads(project_path.read_text(encoding="utf-8"))["project"]
+    assert project["name"] == "deepkoala-mcp"
+    assert project["scripts"] == {"deepkoala-mcp": "deepkoala_mcp.cli:main"}
+
+    companion_job = ci.split("validate-deepkoala-companion:", maxsplit=1)[1].split(
+        "validate-renderer-companion:", maxsplit=1
+    )[0]
+    for command in (
+        "uv sync --frozen",
+        "uv run --frozen ruff check .",
+        "uv run --frozen ruff format --check .",
+        "uv run --frozen pyright",
+        "uv run --frozen pytest",
+        "uv build --no-sources",
+    ):
+        assert command in companion_job
+    assert "companions/deepkoala-mcp/uv.lock" in companion_job
+    assert "KEGG_MCP_RUN_LIVE_TESTS" not in companion_job
 
 
 def test_rights_and_release_status_are_prominent() -> None:
@@ -446,7 +495,7 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
         assert all("examples" not in PurePosixPath(name).parts for name in names)
         assert all("companions" not in PurePosixPath(name).parts for name in names)
         assert all("deepkoala_mcp" not in PurePosixPath(name).parts for name in names)
-        assert all(b"/lab/zhaoxi/" not in wheel.read(name) for name in names)
+        assert all(_private_workspace_marker() not in wheel.read(name) for name in names)
 
     with tarfile.open(sdists[0], mode="r:gz") as sdist:
         members = tuple(sdist.getmembers())
@@ -466,4 +515,4 @@ def test_offline_build_produces_auditable_safe_archives(tmp_path: Path) -> None:
             assert "deepkoala_mcp" not in PurePosixPath(member.name).parts
             extracted = sdist.extractfile(member)
             assert extracted is not None
-            assert b"/lab/zhaoxi/" not in extracted.read()
+            assert _private_workspace_marker() not in extracted.read()

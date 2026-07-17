@@ -14,7 +14,7 @@ The core server accepts plain K-number lists and generic CSV/TSV annotation tabl
 - preserve source decisions, scores, thresholds, multiple assignments, and provenance;
 - derive strict accepted-only and lenient accepted-plus-uncertain KO views;
 - retrieve typed `INFO`, `GET`, `LINK`, and `CONV` references through a local cache and a
-  process-wide no-burst rate limit;
+  deployment-wide no-burst rate limit shared with the renderer;
 - report exact MODULE completion separately from project-defined block coverage;
 - calculate descriptive pathway KO coverage with an explicit reference denominator;
 - compare KO sets and shared-reference outcomes without statistical change claims; and
@@ -77,7 +77,8 @@ Companion details:
 ## MCP surface
 
 The `kegg-mcp` entry point starts stdio by default. It also supports `serve`, redacted
-`doctor [--json]`, and operator-only `cleanup --expired [--json]` commands.
+`doctor [--json]`, retained-result `cleanup --expired [--json]`, and KEGG-cache
+`cache status [--json]` or `cache cleanup --expired [--json]` commands.
 
 Core tools:
 
@@ -98,7 +99,8 @@ The repository-scoped Skills are:
 ## KEGG access and local-data boundary
 
 The public KEGG REST service is for academic use by academic users. This project enforces at most
-three requests per second and uses a safer no-burst default. Non-academic deployments must use an
+three requests per second across local Core and Renderer processes sharing the configured
+rate-limit root, and uses a safer no-burst default. Non-academic deployments must use an
 appropriately licensed endpoint. The MIT license for this source code grants no rights to KEGG
 content.
 

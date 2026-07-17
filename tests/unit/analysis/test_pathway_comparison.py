@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from kegg_mcp.analysis.comparison import ComparisonDatasetInput
+from kegg_mcp.analysis.comparison_contracts import ComparisonDatasetInput
 from kegg_mcp.analysis.functional_comparison import (
     FunctionalComparisonLimits,
     PathwayComparisonOrganismContext,

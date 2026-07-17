@@ -37,6 +37,10 @@ The project defaults to public-academic live access:
 - `licensed` requires `authorized_use_confirmed=True`, a caller-supplied authorized HTTPS endpoint,
   and a non-sensitive logical endpoint label.
 
+The readable label is used only in status and provenance. Cache and rate-limit isolation use an
+opaque SHA-256 fingerprint of the canonical endpoint; the licensed URL and its fingerprint are not
+returned to MCP callers.
+
 These fields record an operator assertion. The project does not determine whether an organization
 or activity is academic, does not inspect a license, and does not validate that a caller is legally
 authorized to use an endpoint. This documentation is not legal advice.
@@ -82,10 +86,10 @@ config = KeggClientConfig(
 )
 ```
 
-Endpoint authorities are canonicalized before validation and rate-limit scoping: hostnames are
-lowercased, a DNS terminal dot and the default HTTPS port are removed, IP literals are normalized,
-and invalid ports are rejected. Equivalent spellings therefore cannot create independent rate
-limit scopes. A licensed endpoint is trusted operator-controlled startup configuration, not a
+Endpoint authorities are canonicalized before fingerprinting: hostnames are lowercased, a DNS
+terminal dot and the default HTTPS port are removed, IP literals are normalized, and invalid ports
+are rejected. Equivalent spellings therefore cannot create independent cache or rate-limit
+namespaces. A licensed endpoint is trusted operator-controlled startup configuration, not a
 per-request value and not a future MCP tool argument. Private or loopback licensed endpoints are
 permitted only because this configuration boundary is trusted; callers remain responsible for
 authorizing the configured service.
@@ -104,25 +108,28 @@ authorizing the configured service.
 | `link_batch_size` | `100` | Maximum LINK identifiers per prepared batch; URL packing may lower it |
 | `max_url_bytes` | `8_192` | Bound on each prepared path and complete request URL |
 
-Rate limiting is process-wide for one endpoint namespace. Request starts are spaced uniformly and
-idle time does not accumulate burst capacity. If clients in the same process configure different
-rates for one namespace, the slowest configured rate remains in force. The configuration cannot
-exceed the official maximum of three requests per second; the safer project default is two.
-The client always applies this limiter for live access. An optional injected limiter may add a
-stricter policy but cannot replace the mandatory process-wide limiter.
+Rate limiting is deployment-wide for one endpoint fingerprint. Core and Renderer use the same
+owner-only state root, `${XDG_CACHE_HOME:-~/.cache}/kegg-mcp/rate-limit`, unless
+`KEGG_MCP_RATE_LIMIT_ROOT` selects another shared absolute root. Advisory file locks serialize
+request starts across processes, starts are spaced uniformly, and idle time does not accumulate
+burst capacity. If clients configure different rates for one endpoint and state root, the strictest
+observed rate remains in force. The configuration cannot exceed the official maximum of three
+requests per second; the safer project default is two. The client always applies this limiter for
+live access. An optional injected limiter may add stricter spacing but cannot replace the mandatory
+deployment-wide limiter.
 
 `RetryPolicy` defaults to two retries after the initial attempt, exponential backoff beginning at
 0.5 seconds, an 8-second backoff cap, and up to 0.25 seconds of jitter. Retries remain bounded and
-every attempt passes through the process-wide rate limiter. Deterministic HTTP 400 and 404 responses
+every attempt passes through the deployment-wide rate limiter. Deterministic HTTP 400 and 404 responses
 are not retried. Transport timeouts and connection failures may be retried. DNS, permission, TLS,
 and other fixed configuration failures are terminal; terminal rate-limit and request failures
 remain structured errors.
 
 The HTTPS transport is GET-only. It does not read process proxy settings or follow redirects, asks
 for identity content encoding, applies the response-size bound, and retains only `content-type`,
-`date`, `etag`, and `last-modified` response headers. Its stable User-Agent contains the project
-version and project documentation location, never a username, hostname, email address, or other
-personal value.
+`date`, `etag`, and `last-modified` response headers. Its stable User-Agent is only
+`kegg-mcp/<package-version>`; it contains no project URL, username, hostname, email address, path,
+or environment value.
 
 ## Typed operations
 
@@ -257,7 +264,12 @@ Each cache key includes:
 - operation;
 - normalized request key;
 - retrieval endpoint class; and
-- endpoint label.
+- the SHA-256 fingerprint of the canonical endpoint.
+
+The readable endpoint label is not a cache identity. Therefore equivalent canonical endpoints
+share a cache namespace even when their labels differ, while distinct licensed endpoints remain
+isolated even when an operator gives them the same label. Neither the endpoint nor its label is
+stored in a cache key.
 
 Each stored successful response includes its raw bytes, retrieval and expiry times, parser version,
 KEGG release when known, and allowlisted HTTP metadata. Reads verify the schema, timestamp ordering,
@@ -269,15 +281,25 @@ parsing and identifier reconciliation. A later single-entry GET or any fully cac
 reconstructed from those records without a network call. The live request still obeys KEGG's
 maximum of ten GET entries.
 
-The current response parser contract version is `4`. LINK request preparation and cache keys use
-version `2` after adaptive packing; prior `v1` rows remain isolated in the local cache and expire
-under their existing TTL rather than being partially reused for a new batch. The parser records
-nested flat-file field indentation, accepts both legacy BRITE root lines and the current compact BRITE root only within a complete
-htext metadata envelope, and applies the current identifier reconciliation rules before cache
-use. Cache rows produced under an incompatible parser version fail closed instead of being
-silently reinterpreted.
+The response parser contract version is `4`. LINK request keys are canonical unprefixed request
+paths produced after adaptive packing. The parser records nested flat-file field indentation,
+accepts documented BRITE root forms only within a complete htext metadata envelope, and applies
+the current identifier reconciliation rules before cache use. Cache rows produced under an
+incompatible parser version fail closed instead of being silently reinterpreted. A cache created
+for a different schema is incompatible and should be replaced rather than migrated implicitly.
 
-`CachePolicy.ttl_seconds` defaults to 604,800 seconds (seven days). At lookup time:
+`CachePolicy` defaults to a seven-day TTL, 10,000 rows, 512 MiB of response payloads, and a
+640 MiB SQLite main-database limit. Before each write, expired rows are removed. Fresh rows are
+never silently evicted to satisfy a quota; a write fails safely when active content would exceed a
+logical or physical bound. The database uses bounded page allocation and controlled vacuuming.
+Operators can inspect or remove expired cache rows without exposing paths, endpoints, or payloads:
+
+```bash
+kegg-mcp cache status --json
+kegg-mcp cache cleanup --expired --json
+```
+
+At lookup time:
 
 - a response is fresh only while `now < expires_at`;
 - `refresh=False` permits a fresh cache hit;
@@ -372,7 +394,7 @@ behavior.
 ## Test policy
 
 Local pytest skips the live compatibility campaign by default. Pull-request CI explicitly runs
-five real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, for 20 total, using one request
+30 real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, for 120 total, using one request
 per second, zero retries, a temporary cache, and no uploaded KEGG payloads. Authorized manual runs
 may configure 1 through 30 requests per operation. Other unit and integration network behavior
 uses injected transports or local mock servers.

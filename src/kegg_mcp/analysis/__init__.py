@@ -1,6 +1,7 @@
 """Public pure-analysis interfaces for KEGG-aware KO analysis."""
 
-from kegg_mcp.analysis.comparison import (
+from kegg_mcp.analysis.comparison import compare_ko_datasets, summarize_ko_comparison
+from kegg_mcp.analysis.comparison_contracts import (
     KO_COMPARISON_METHOD,
     KO_COMPARISON_VERSION,
     ComparedKoClass,
@@ -19,8 +20,6 @@ from kegg_mcp.analysis.comparison import (
     KoPreview,
     KoSetComparisonDetail,
     KoSetComparisonSummary,
-    compare_ko_datasets,
-    summarize_ko_comparison,
 )
 from kegg_mcp.analysis.contracts import (
     MODULE_CALCULATION_METHOD,

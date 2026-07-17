@@ -3,9 +3,9 @@
 KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs deterministic local
 analysis, and retrieves KEGG references through public-academic access by default. The core
 server does not run DeepKOALA or another sequence annotator. An optional independently installed
-CPU-only companion can run an existing local DeepKOALA installation and hand detailed CSV to the
-core importer. A second independent companion can turn the core's complete renderer handoff into
-bounded static pathway overlays and MODULE logic diagrams.
+companion can run an existing local DeepKOALA installation with its fixed automatic device policy
+and hand detailed CSV to the core importer. A second independent companion can turn the core's
+complete renderer handoff into bounded static pathway overlays and MODULE logic diagrams.
 
 Release evidence and archive checks belong in the
 [release-readiness checklist](release-readiness.md). Install from an exact reviewed commit, tag,
@@ -116,8 +116,10 @@ KEGG_MCP_ACADEMIC_USE_CONFIRMED=true
 
 The public endpoint is fixed to `https://rest.kegg.jp`; it cannot be replaced in this mode. The
 client defaults to two requests per second without burst and cannot be configured above three
-requests per second. KEGG GET requests contain at most ten entries. One MCP analysis call may
-need several rate-limited KEGG requests, depending on its targets and batching.
+requests per second. Core and Renderer coordinate starts across processes through the same
+owner-only `KEGG_MCP_RATE_LIMIT_ROOT`; its default is in the user cache directory. KEGG GET
+requests contain at most ten entries. One MCP analysis call may need several rate-limited KEGG
+requests, depending on its targets and batching.
 
 ### Licensed access
 
@@ -146,6 +148,16 @@ These variables select local SQLite files:
 ```text
 KEGG_MCP_CACHE_PATH=/absolute/private/path/kegg.sqlite3
 KEGG_MCP_RESULT_STORE_PATH=/absolute/private/path/results.sqlite3
+```
+
+The KEGG cache defaults to 10,000 rows, 512 MiB of response payloads, and a 640 MiB main database.
+Deployments can set positive values with `KEGG_MCP_CACHE_MAX_ENTRIES`,
+`KEGG_MCP_CACHE_MAX_PAYLOAD_BYTES`, and `KEGG_MCP_CACHE_MAX_DATABASE_BYTES`. Inspect only redacted
+counts and capacity, or delete only expired rows, with:
+
+```bash
+kegg-mcp cache status --json
+kegg-mcp cache cleanup --expired --json
 ```
 
 Omit them to use the user-local defaults. Create private parent directories owned by the server
@@ -208,6 +220,7 @@ Install and validate the lightweight companion separately:
 cd companions/deepkoala-mcp
 uv sync --frozen
 uv run pytest
+uv run deepkoala-mcp doctor --json
 ```
 
 On a module-based host, resolve the external interpreter before configuring the MCP client:
@@ -219,9 +232,10 @@ command -v python
 
 Set the resulting absolute interpreter path in the companion configuration. Do not use `module
 load`, a shell wrapper, or an activation command as the MCP executable. The companion uses the
-configured interpreter directly, forces CPU execution, fixes data-loader workers at zero, limits
-CPU threads, and allows one running job. It never selects a GPU and never downloads or replaces a
-weight.
+configured interpreter directly, fixes `--device auto` and data-loader workers at zero, inherits
+the MCP process's existing accelerator visibility, limits CPU thread pools, and allows one running
+job. Callers cannot select a device. The companion never claims which device was resolved unless
+the external runtime reports it reliably, and it never downloads or replaces a weight.
 
 Register `deepkoala-mcp` as a second local server using the configuration contract in the
 [companion README](../companions/deepkoala-mcp/README.md). The companion writes successful output
@@ -229,8 +243,8 @@ beneath `DEEPKOALA_MCP_STATE_ROOT`; configure the core server to allow that same
 `DEEPKOALA_MCP_ALLOWED_ROOTS` is separate and controls only caller-supplied FASTA intake. A
 successful path-input handoff identifies that original FASTA as `source.input_path`, while inline
 input leaves it null; neither form exposes the private staged FASTA. The repository Skill can then
-prepare a job, present the execution notice for explicit confirmation, submit the opaque job
-identifier, and pass the successful `output_path` to the core importer as
+prepare a job, retain the non-blocking execution notice as provenance, submit only the opaque job
+identifier without a per-job confirmation field, poll it, and pass the successful `output_path` to the core importer as
 `input_format="deepkoala_detailed"`. No digest or cross-server private result identifier is part
 of this handoff.
 
@@ -375,12 +389,14 @@ Do not configure a remote URL. The MVP supports local stdio transport only. Keep
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
 Codex discovers the repository-scoped Skill at `.agents/skills/kegg-ko-analysis/` while working in
-an exact repository checkout or tag source archive. Its core MCP dependency value is `kegg-mcp`.
-The Skill can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is enabled for
-KO/KEGG evidence and an explicitly requested companion route. The Skill chooses workflows and
-explains results, while deterministic normalization and analysis remain in the core server.
-Protein annotation remains outside that server; the Skill may orchestrate the explicitly
-available local companion described above. Codex discovers the separate
+an exact repository checkout or tag source archive. Its MCP dependencies are `kegg-mcp` and
+`deepkoala-mcp`. The Skill can be invoked explicitly as `$kegg-ko-analysis`; implicit invocation is
+enabled for KO/KEGG evidence and clear protein FASTA requests. Existing KO evidence routes directly
+to the core. Protein FASTA without KO evidence checks `get_deepkoala_runner_status` first and uses
+the ready companion automatically; an absent or unready companion produces a specific deployment
+state and requests authorization only for installation, downloads, directory changes, or MCP
+registration. The Skill chooses workflows and explains results, while deterministic normalization
+and analysis remain in the core server. Codex discovers the separate
 `.agents/skills/kegg-visualization/` Skill for pathway and MODULE graphics; it requires the core and
 renderer stdio dependencies and contains no rendering code. A wheel installation supplies the
 core server command but does not install either repository-scoped Skill or either companion.
@@ -639,8 +655,8 @@ uses a non-overwriting output bundle, which remains until the operator deletes i
   state, and database release when available.
 
 Any additional manual live compatibility check should use the smallest target set, count requests,
-obey the process-wide limiter, and tolerate current database content rather than snapshotting full
-responses.
+obey the deployment-wide limiter, and tolerate current database content rather than snapshotting
+full responses.
 
 ## Troubleshooting
 

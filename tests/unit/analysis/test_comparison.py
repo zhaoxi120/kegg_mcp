@@ -2,7 +2,8 @@
 
 import pytest
 
-from kegg_mcp.analysis.comparison import (
+from kegg_mcp.analysis.comparison import compare_ko_datasets, summarize_ko_comparison
+from kegg_mcp.analysis.comparison_contracts import (
     ComparedKoClass,
     ComparisonDatasetInput,
     ComparisonLimits,
@@ -10,8 +11,6 @@ from kegg_mcp.analysis.comparison import (
     ComparisonWarningCode,
     KoSetComparisonDetail,
     KoSetComparisonSummary,
-    compare_ko_datasets,
-    summarize_ko_comparison,
 )
 from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,

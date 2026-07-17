@@ -66,11 +66,11 @@ The renderer does not support:
 
 ## 4. Implementation baseline and resolved contract gap
 
-Before this extension, the repository implemented the first two computational stages:
+The repository implements the first two computational stages as follows:
 
-1. `deepkoala-mcp` validates and stages protein FASTA, prepares a bounded CPU-only execution plan,
-   requires explicit acknowledgement, owns the subprocess lifecycle, and returns a controlled
-   detailed-CSV handoff after success.
+1. `deepkoala-mcp` validates and stages protein FASTA, prepares a bounded service-owned
+   `device=auto` execution plan, retains a non-blocking execution notice, owns the subprocess
+   lifecycle, and returns a controlled detailed-CSV handoff after success.
 2. `kegg-mcp` imports that detailed table through the source-agnostic importer boundary, applies a
    named decision policy, loads KEGG references, evaluates MODULEs and pathways, writes reports,
    and creates an output bundle.
@@ -99,18 +99,17 @@ MODULE-evaluation rules.
 2. Stop with a deployment explanation if the companion is absent or not ready. Do not install or
    download dependencies, model weights, or databases silently.
 3. Call `prepare_deepkoala_job` with exactly one inline FASTA or allowed absolute FASTA path.
-4. Present the execution notice, including model, installed resource date, top-k, timeout, input
-   summary, and output bounds.
-5. Obtain explicit user confirmation.
-6. Call `submit_deepkoala_job` with the opaque job identifier and `acknowledged=true`.
-7. Poll `get_deepkoala_job` with bounded status checks.
-8. After success, pass the controlled `output_path`, `input_format="deepkoala_detailed"`, and
+4. Retain the execution notice, including model, installed resource date, top-k, timeout, input
+   summary, device policy, and output bounds, as provenance rather than a confirmation gate.
+5. Call `submit_deepkoala_job` with only the opaque job identifier.
+6. Poll `get_deepkoala_job` with bounded status checks.
+7. After success, pass the controlled `output_path`, `input_format="deepkoala_detailed"`, and
    returned source provenance to `kegg-mcp`.
-9. Call `analyze_ko_annotations` with an allowed `output_directory` so that the stable analysis
+8. Call `analyze_ko_annotations` with an allowed `output_directory` so that the stable analysis
    bundle and `render_input.json` version 2 are written.
-10. Pass the absolute `render_input.json` path to `kegg-render-mcp`.
-11. Render selected supported targets and return bounded previews plus validated image resources.
-12. Delete the retained DeepKOALA job only after the core import and analysis bundle have
+9. Pass the absolute `render_input.json` path to `kegg-render-mcp`.
+10. Render selected supported targets and return bounded previews plus validated image resources.
+11. Delete the retained DeepKOALA job only after the core import and analysis bundle have
     succeeded and its private output is no longer required.
 
 ### 5.2 Existing KO evidence
@@ -241,7 +240,7 @@ PathwayAssetRequest    canonical pathway ID and requested kind
 PathwayAssetResult     bounded bytes, MIME type, and retrieval provenance
 ```
 
-The implementation should reuse the existing access gate, HTTPS validation, process-wide rate
+The implementation should reuse the existing access gate, HTTPS validation, deployment-wide rate
 limiter, retry policy, response-size bounds, local cache, and provenance contracts. It must not
 accept arbitrary URLs. PNG payloads require bounded structural, decompression, and scanline
 validation. The core applies only bounded UTF-8, DTD/entity declaration, and obvious `pathway`

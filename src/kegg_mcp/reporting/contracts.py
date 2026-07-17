@@ -7,7 +7,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from kegg_mcp.analysis.comparison import KoSetComparisonSummary
+from kegg_mcp.analysis.comparison_contracts import KoSetComparisonSummary
 from kegg_mcp.analysis.contracts import PairedModuleEvaluation
 from kegg_mcp.analysis.functional_comparison import (
     ModuleComparisonResult,

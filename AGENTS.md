@@ -100,7 +100,8 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 
 - Treat KEGG access rights as a release-blocking requirement, not a documentation footnote.
 - The public KEGG REST service is for academic use by academic users. Require non-academic deployments to configure an appropriately licensed endpoint.
-- Enforce a process-wide rate no greater than three KEGG API requests per second; use a safer default with no burst.
+- Enforce a deployment-wide rate no greater than three KEGG API requests per second across local
+  Core and Renderer processes; use a safer default with no burst.
 - Respect endpoint-specific limits, including the maximum of ten entries for `get` requests.
 - Keep cached KEGG payloads local and out of version control, packages, examples, CI artifacts, and releases.
 - Retrieve pathway PNG and KGML assets only through the typed single-pathway asset interface. Keep
