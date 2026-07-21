@@ -1,0 +1,46 @@
+# Copy this template to a private location, replace every absolute placeholder,
+# set its direct parent directory to mode 0700, and run
+# `chmod 600 /absolute/private/path/to/kegg-mcp-suite.toml` before use.
+# The installer rejects configuration files readable or writable by group or others.
+# Do not commit a completed configuration or add real private paths, credentials,
+# or licensed KEGG endpoints to this example.
+#
+# Every directory below must already exist, be owned by the current user, and
+# must not be a symlink. Private state directories must be owner-only. Shared
+# roots may be used for stable handoffs, but must not overlap private state.
+
+schema_version = 1
+
+[kegg]
+# Set this to true only after the user confirms that both the user and this work
+# qualify for public academic KEGG access. Otherwise configure licensed or
+# offline-cache access as documented in docs/installation.md.
+access_mode = "public_academic"
+academic_use_confirmed = false
+licensed_use_confirmed = false
+rate_limit_root = "/absolute/private/path/to/kegg-suite/rate-limit"
+
+[core]
+# The result database remains private. Core must allow every shared root used by
+# the DeepKOALA companion or Renderer.
+result_store_path = "/absolute/private/path/to/kegg-suite/core/results.sqlite3"
+allowed_roots = [
+  "/absolute/shared/path/to/kegg-suite/inputs",
+  "/absolute/shared/path/to/kegg-suite/analysis",
+]
+
+[deepkoala]
+# The suite installer creates a private DeepKOALA checkout and environment under
+# the installation root after --allow-deepkoala-install is explicitly supplied.
+state_root = "/absolute/private/path/to/kegg-suite/deepkoala-state"
+input_roots = ["/absolute/shared/path/to/kegg-suite/inputs"]
+output_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
+allowed_models = ["full", "frag"]
+cpu_threads = 2
+
+[renderer]
+# Renderer consumes only the shared analysis handoff in this example. Keeping
+# offline_allow_stale false rejects expired cached KEGG assets.
+state_root = "/absolute/private/path/to/kegg-suite/renderer-state"
+allowed_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
+offline_allow_stale = false

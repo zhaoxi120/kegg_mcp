@@ -29,14 +29,14 @@ def test_reporting_package_exports_contracts_and_renderer() -> None:
 
 def test_reporting_result_schemas_have_stable_identifiers() -> None:
     assert reporting.ReportInput.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:report-input:2"
+        "urn:kegg-mcp:schema:report-input:3"
     )
     assert reporting.StructuredReport.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:structured-report:2"
+        "urn:kegg-mcp:schema:structured-report:3"
     )
     assert reporting.ReportArtifact.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:report-artifact:1"
     )
     assert reporting.RenderedReport.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:rendered-report:1"
+        "urn:kegg-mcp:schema:rendered-report:2"
     )

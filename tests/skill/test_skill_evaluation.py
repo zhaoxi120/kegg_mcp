@@ -18,7 +18,11 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
         ),
         (
             "I have one column of K numbers; check pathway coverage.",
-            ("Prefer `analyze_ko_annotations`", "descriptive pathway coverage"),
+            (
+                "Prefer `analyze_ko_annotations`",
+                "Top-5 MODULEs and Top-5 canonical KO",
+                "descriptive pathway coverage",
+            ),
         ),
         (
             "Compare these two KO sets.",

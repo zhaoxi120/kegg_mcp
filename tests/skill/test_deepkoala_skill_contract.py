@@ -64,6 +64,8 @@ def test_deepkoala_skill_uses_only_companion_tools_and_stable_files() -> None:
         assert forbidden not in corpus
     assert "deepkoala_annotations.csv" in corpus
     assert "deepkoala_run_report.md" in corpus
+    assert "Omit `model_date` for the default call" in corpus
+    assert "resolved model name and model version" in corpus
     assert "not a private identifier" in corpus
 
 

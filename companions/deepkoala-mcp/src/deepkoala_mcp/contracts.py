@@ -151,7 +151,7 @@ class RunDeepKoalaInput(FrozenModel):
     fasta_path: str = Field(min_length=1, max_length=4_096)
     output_directory: str = Field(min_length=1, max_length=4_096)
     model: ModelName = "full"
-    model_date: ModelDate = "latest"
+    model_date: ModelDate = "202502"
     device: Literal["auto"] = "auto"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)

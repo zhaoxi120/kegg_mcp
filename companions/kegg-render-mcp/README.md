@@ -1,7 +1,7 @@
 # kegg-render-mcp
 
 `kegg-render-mcp` is an independently installed local stdio MCP companion for bounded KEGG
-annotation-evidence graphics. It accepts the complete `render_input.json` version 2 handoff
+annotation-evidence graphics. It accepts the complete `render_input.json` version 3 handoff
 written by `kegg-mcp`; it never imports annotation tables, assigns K numbers, evaluates MODULE
 completion, or recomputes pathway coverage.
 
@@ -177,9 +177,9 @@ reserves are checked before a result directory is created.
 
 ## Security boundary
 
-- Only schema version 2 is accepted; incompatible handoffs require a new core analysis bundle.
+- Only schema version 3 is accepted; incompatible handoffs require a new core analysis bundle.
 - Every render tool requires exactly one input source: a direct allowed-root `render_input_path` or
-  bounded inline `render_input_json`. Both sources use the same strict schema-version-2 parser.
+  bounded inline `render_input_json`. Both sources use the same strict schema-version-3 parser.
 - Input JSON, target counts, assets, XML structure, coordinates, pixels, SVG nodes, artifact bytes,
   retained result count, payload bytes, estimated allocated storage, and cleanup work are bounded.
 - KGML DTDs, entities, external resolution, excessive depth, and mismatched identities are

@@ -130,7 +130,7 @@ def test_render_input_strictly_validates_schema(
     render_input_file: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
-    assert loaded.document.schema_version == "2"
+    assert loaded.document.schema_version == "3"
     assert loaded.accepted_ko_ids == {"K00001"}
     assert loaded.uncertain_ko_ids == {"K00002"}
     assert loaded.target_ids == ("ko00010", "M00001")
@@ -143,7 +143,7 @@ def test_inline_render_input_uses_the_same_bounded_strict_parser(
     payload = render_input_file.read_text(encoding="utf-8")
     loaded = load_render_input(None, runtime_config, render_input_json=payload)
 
-    assert loaded.document.schema_version == "2"
+    assert loaded.document.schema_version == "3"
     assert loaded.target_ids == ("ko00010", "M00001")
     with pytest.raises(RenderMcpError) as ambiguous:
         load_render_input(
@@ -172,11 +172,11 @@ def test_handoff_schema_error_reports_only_bounded_field_path_and_stage(
     }
 
 
-def test_version_one_requests_new_core_analysis(
+def test_version_two_requests_new_core_analysis(
     allowed_root: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     path = allowed_root / "render_input.json"
-    path.write_text(json.dumps({"schema_version": "1"}), encoding="utf-8")
+    path.write_text(json.dumps({"schema_version": "2"}), encoding="utf-8")
     with pytest.raises(RenderMcpError) as raised:
         load_render_input(str(path), runtime_config)
     assert raised.value.detail.code is ErrorCode.INCOMPATIBLE_SCHEMA

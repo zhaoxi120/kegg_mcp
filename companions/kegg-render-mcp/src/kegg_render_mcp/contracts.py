@@ -186,7 +186,7 @@ class RendererStatus(_Model):
     server_name: Literal["kegg-render-mcp"] = "kegg-render-mcp"
     server_version: str = Field(min_length=1, max_length=32)
     ready: bool
-    compatible_schema_versions: tuple[Literal["2"], ...] = ("2",)
+    compatible_schema_versions: tuple[Literal["3"], ...] = ("3",)
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
     access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]

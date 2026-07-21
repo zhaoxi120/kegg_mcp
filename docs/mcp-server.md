@@ -6,7 +6,7 @@ capabilities are separate local stdio processes and independently reviewed distr
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 2 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
 ```
 
 See the [DeepKOALA companion README](../companions/deepkoala-mcp/README.md) and
@@ -82,13 +82,13 @@ boundaries. It does not replace the explicit input and output schemas.
 The server exposes eleven tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
-  `ko_text` or a nested `annotations` request. If no target is supplied, accepted K numbers are
-  mapped to canonical reference pathways within deployment bounds. This automatic discovery is
-  always `accepted_only` with strict evidence, while coverage still uses the request's strict or
-  lenient evidence mode. Both choices are recorded in execution provenance, the report, and the
-  bundle manifest. To select only the most detected pathways, supply
-  `pathway_selection.mode="top_detected"`, `top_n` from 1 through 25, and
-  `metric="unique_selected_ko_count"`; ranking occurs before reference loading.
+  `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
+  selection are supplied, the server independently selects the top five MODULEs and top five
+  canonical KO reference pathways by unique selected-KO overlap under the request's strict or
+  lenient evidence mode. MODULE ranking selects targets; it is not completion or enrichment, and
+  exact completion is evaluated separately. To override the pathway count, supply only
+  `pathway_selection.top_n` from 1 through 25. The server applies its versioned
+  `selected_unique_ko_count` ranking policy before reference loading.
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries. The direct response reports the
@@ -154,9 +154,7 @@ Minimal server-ranked Top-1 pathway input:
     "input_format": "deepkoala_detailed"
   },
   "pathway_selection": {
-    "mode": "top_detected",
-    "top_n": 1,
-    "metric": "unique_selected_ko_count"
+    "top_n": 1
   },
   "output_directory": "/absolute/private/results/top-pathway"
 }
@@ -180,26 +178,27 @@ causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation.
 normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds
 `pathway_coverage.tsv`, `module_completion.tsv`, `analysis_report.md`, and `render_input.json`.
-A Top-N analysis also adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
+Automatic MODULE selection also adds `module_ranking.tsv` and `ko_module_relationships.tsv`;
+server-ranked pathway selection adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
 The report records the original absolute input path when source provenance supplies it.
-`render_input.json` is an immutable renderer-specific version 2 contract: it distinguishes
+`render_input.json` is an immutable renderer-specific version 3 contract: it distinguishes
 accepted from policy-defined uncertain KOs, carries complete-within-limit pathway evidence and
 authoritative MODULE states, and records producer and calculation provenance. Version 1 previews
-cannot be upgraded losslessly. Bundle schema version 2 installs its manifest last as a commit
+cannot be upgraded losslessly. Bundle schema version 3 installs its manifest last as a commit
 marker and represents source paths with redacted labels by default. The explicit
 `manifest_path_mode="absolute"` option includes absolute paths in the manifest when required. The
 bundle manifest records the renderer schema and MIME type.
-`AnalysisExecutionProvenance` version 2 also records the applicable MODULE analysis limits,
-pathway parameters, the distinct automatic-discovery policy and evidence mode when applicable,
-pathway coverage limits, and report limits.
+`AnalysisExecutionProvenance` version 3 also records the applicable MODULE analysis limits,
+MODULE- and pathway-ranking parameters when applicable, pathway parameters, pathway coverage
+limits, and report limits.
 
 The three analysis tools use separate concise output models. Their shared `summary` contains only
 record/status counts, selected unique-KO count, aggregate logical/network/cache request counts,
 response bytes, warnings, and interpretation caveats. `analyze_modules` returns MODULE previews
 only, `analyze_pathways` returns pathway previews only, and `analyze_ko_annotations` may return both
-plus a bounded `automatic_pathway_selection` summary and output-bundle metadata. Direct responses
-do not expose import structures, annotation or KEGG batch provenance, execution parameters, stage
-metrics, complete relationship rows, or detected-KO lists.
+plus bounded `automatic_module_selection` and `automatic_pathway_selection` summaries and
+output-bundle metadata. Direct responses do not expose import structures, annotation or KEGG batch
+provenance, execution parameters, stage metrics, complete relationship rows, or detected-KO lists.
 
 The high-level retained `structured` JSON is the authoritative detail artifact and contains the
 complete normalized dataset, analyses, execution parameters, mapping provenance, and six canonical
@@ -230,9 +229,9 @@ both the active-result hard TTL and the eligibility threshold for cleaning orpha
 abnormal exit; it is not a cross-process persistence promise. `get_server_status` reports
 `result_scope="stdio_session"`, both TTL meanings, normal-exit cleanup, and
 `durable_output="output_bundle"` explicitly. The result index lists validated section URIs.
-High-level analysis normally retains `structured`, `summary`, and `annotations`; a Top-N workflow
-also retains `pathway_ranking` and `ko_pathway_relationships`. Normalization retains `dataset`, and
-primitive tools retain `detail`.
+High-level analysis normally retains `structured`, `summary`, and `annotations`; automatic target
+selection also retains the applicable MODULE and pathway ranking and relationship artifacts.
+Normalization retains `dataset`, and primitive tools retain `detail`.
 
 `delete_analysis_result` removes one active result only when it belongs to the current scope.
 Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.
@@ -257,13 +256,13 @@ result. It returns a bounded parsed preview rather than the raw cached payload.
 
 ## Independent renderer MCP
 
-`kegg-render-mcp` accepts exactly one version 2 handoff as a controlled absolute path or bounded
+`kegg-render-mcp` accepts exactly one version 3 handoff as a controlled absolute path or bounded
 inline JSON. It renders regular
 reference-pathway evidence overlays and project-owned MODULE logic diagrams as canonical static
 SVG and optional bounded PNG. It never imports annotation tables, normalizes evidence, evaluates
 MODULEs, recomputes pathway coverage, or starts either other process.
 
-The renderer declares `kegg-mcp>=0.4,<0.5`; incompatible core packages fail dependency
+The renderer declares `kegg-mcp>=0.5,<0.6`; incompatible core packages fail dependency
 resolution.
 
 Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and

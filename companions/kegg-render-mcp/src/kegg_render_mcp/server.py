@@ -154,7 +154,7 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Render compatible kegg-mcp render_input.json version 2 handoffs as bounded static "
+            "Render compatible kegg-mcp render_input.json version 3 handoffs as bounded static "
             "SVG and PNG artifacts. Pathway graphics visualize accepted and policy-defined "
             "uncertain annotations; MODULE diagrams preserve the authoritative core AST and "
             "completion results. Graphics do not prove biological activity or phenotype."

@@ -16,6 +16,7 @@ from kegg_mcp.analysis.functional_comparison import (
     PathwayTargetComparison,
 )
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageResult
+from kegg_mcp.analysis.pathway_ranking import PATHWAY_RANKING_METHOD
 from kegg_mcp.domain.annotations import AnalysisUnit, AnnotationRecord, NormalizedStatus
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.reporting.contracts import (
@@ -500,8 +501,7 @@ def _append_pathway_ranking(
     lines.extend(("", "## Pathway target selection", ""))
     selection = report.pathway_selection
     lines.append(
-        "Selection mode: "
-        f"`{selection.mode.value}`. Metric: `{selection.metric.value}`. Requested target count: "
+        f"Ranking method: `{PATHWAY_RANKING_METHOD}`. Requested target count: "
         f"{selection.top_n}. Candidate pathway count: {len(report.pathway_ranking)}."
     )
     if not report.pathway_ranking:
@@ -537,6 +537,30 @@ def _append_pathway_ranking(
         )
     )
     return truncated
+
+
+def _append_module_selection(lines: list[str], report: ReportInput) -> None:
+    """Append compact automatic MODULE-selection provenance."""
+    if report.execution is None or report.execution.module_ranking is None:
+        return
+    ranking = report.execution.module_ranking
+    lines.extend(("", "## MODULE target selection", ""))
+    lines.append(
+        f"Ranking method: `{ranking.method}` version `{ranking.method_version}` using "
+        f"`{ranking.evidence_mode.value}` evidence. Requested target count: "
+        f"{ranking.selection.top_n}. Candidate MODULE count: {ranking.candidate_module_count}."
+    )
+    selected = ", ".join(f"`{module_id}`" for module_id in ranking.selected_module_ids)
+    lines.extend(
+        (
+            f"Selected MODULE targets: {selected or 'none'}.",
+            "",
+            "This unique selected-KO overlap ranking chooses candidates only. It is not "
+            "MODULE completion, enrichment, activity, or validation; exact completion and "
+            "required-block coverage are evaluated separately below.",
+            "",
+        )
+    )
 
 
 def _module_comparison_outcomes(target: ModuleTargetComparison, strict: bool) -> str:
@@ -722,17 +746,6 @@ def _append_warnings_and_provenance(
             "and retrieval provenance is retained in the structured JSON artifact."
         )
     else:
-        discovery = report.execution.pathway_parameters
-        if (
-            discovery.pathway_discovery_policy is not None
-            and discovery.pathway_discovery_evidence_mode is not None
-        ):
-            lines.append(
-                "Automatic pathway discovery policy: "
-                f"`{discovery.pathway_discovery_policy}` using "
-                f"`{discovery.pathway_discovery_evidence_mode.value}` evidence. "
-                "Coverage still uses the separately recorded requested evidence mode."
-            )
         lines.append(
             "\nComplete one-call execution parameters plus serialized source, KEGG retrieval, "
             "algorithm, denominator, and retrieval provenance are retained in the "
@@ -797,6 +810,7 @@ def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bo
         + ".",
         "",
     ]
+    _append_module_selection(lines, report)
     preview_truncated = _append_primary_modules(lines, report, limits)
     preview_truncated |= _append_pathway_ranking(lines, report, limits)
     preview_truncated |= _append_primary_pathways(lines, report, limits)

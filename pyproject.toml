@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kegg-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "Local-first MCP server for KEGG-aware analysis of KO annotations"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -51,7 +51,7 @@ select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
 docstring-code-format = true
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts/install-suite.py", "scripts/run-installed-mcp.py"]
 extraPaths = ["src", "companions/deepkoala-mcp/src"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"

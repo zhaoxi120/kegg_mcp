@@ -7,7 +7,7 @@ model, or contacted KEGG.
 ## Method
 
 Independent forward/manual reviews covered the three repository Skills: seven core-analysis and
-annotation routes, plus focused rendering routes for the version 2 handoff. On 2026-07-18, two
+annotation routes, plus focused rendering routes for the version 3 handoff. On 2026-07-18, two
 fresh Codex reviews also exercised one combined FASTA-to-SVG request, once with the focused Skills
 named and once through implicit selection. The reviewers inspected route selection, necessary
 clarification, tool choice, refusal boundaries, interpretation language, single-MCP dependency
@@ -122,8 +122,8 @@ passed:
 | Prompt class | Expected route and boundary | Result |
 | --- | --- | --- |
 | Protein FASTA to pathway graphic | Route annotation, KO analysis, and rendering through three independent Skills and stable files; continue automatically after each successful handoff without creating an umbrella multi-server Skill. | Passed |
-| Existing K numbers | Route first to core analysis for a version 2 handoff, then continue with the rendering Skill when graphics were part of the original request. | Passed |
-| Existing version 2 handoff | Skip annotation and analysis; let the renderer validate and render the unchanged handoff. | Passed |
+| Existing K numbers | Route first to core analysis for a version 3 handoff, then continue with the rendering Skill when graphics were part of the original request. | Passed |
+| Existing version 3 handoff | Skip annotation and analysis; let the renderer validate and render the unchanged handoff. | Passed |
 | Renderer unavailable | Stop with the deployment result; do not synthesize a fallback image or install another tool. | Passed |
 | Version 1 handoff | Request a new core analysis bundle because preview-only input cannot be upgraded losslessly. | Passed |
 | Accepted and uncertain evidence | Preserve distinct renderer-owned visual states and redundant non-color cues. | Passed |
@@ -132,7 +132,7 @@ passed:
 | MODULE logic diagram | Preserve AND, OR, optional, grouping, and MODULE-reference semantics from the authoritative core AST. | Passed |
 
 The explicit and implicit combined-request reviews both selected the same order:
-`deepkoala-annotation` -> stable detailed CSV -> `kegg-ko-analysis` -> version 2
+`deepkoala-annotation` -> stable detailed CSV -> `kegg-ko-analysis` -> version 3
 `render_input.json` -> `kegg-pathway-rendering`. They requested no second prompt, stage-transition
 confirmation, or manual path copy. They also preserved stop conditions for an unavailable or
 failed upstream dependency and did not claim that any MCP call or biological analysis had actually

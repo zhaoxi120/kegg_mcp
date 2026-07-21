@@ -9,8 +9,9 @@ protein sequence, secret, or private biological data.
 - `plain-ko/ko-list.txt` demonstrates prefix normalization, duplicate reporting, and one invalid
   row without asserting biological meaning.
 - `plain-ko/clean-ko-list.txt` is a minimal syntactically valid input for an analysis request.
-- `config/` contains explicit public-academic and licensed environment templates. Public-academic
-  access is also the unconfigured default.
+- `config/` contains explicit public-academic and licensed environment templates plus the strict
+  placeholder-only `kegg-mcp-suite.toml` template for the unified Codex installer.
+  Public-academic access is also the unconfigured default for manual Core deployments.
 
 The K numbers are syntax examples. They are annotations supplied for analysis, not experimental
 validation, and the files do not claim that the identifiers belong to one real organism or

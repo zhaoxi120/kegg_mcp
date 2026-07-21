@@ -9,6 +9,10 @@
 - incompatible runtime, state root, output root, or device policy: return the companion's stable
   diagnostic and the named operator action. Do not work around policy in the Skill.
 
+Suite installation permission applies once to each new suite installation root. An installed
+`local_ready` deployment does not repeat that question for later FASTA jobs; a separate new root is
+a separate first installation.
+
 The companion must use an existing official checkout and existing local resources. It must not
 automate the GenomeNet web form, make network requests, or download models.
 

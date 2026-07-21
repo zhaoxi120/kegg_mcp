@@ -197,21 +197,21 @@ def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInput:
     )
 
 
-def test_version_2_schema_and_canonical_json_round_trip() -> None:
+def test_version_3_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
     schema = RenderInput.model_json_schema()
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:2"
+    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:3"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert "workflow_digest" not in json.dumps(schema)
-    assert value.schema_version == "2"
+    assert value.schema_version == "3"
     assert parse_render_input_json(serialized) == value
     assert serialize_render_input(parse_render_input_json(serialized)) == serialized
-    assert RENDER_INPUT_MIME_TYPE.endswith("version=2")
+    assert RENDER_INPUT_MIME_TYPE.endswith("version=3")
 
     payload = json.loads(serialized)
-    payload["schema_version"] = "1"
+    payload["schema_version"] = "2"
     with pytest.raises(ValidationError):
         RenderInput.model_validate(payload)
 

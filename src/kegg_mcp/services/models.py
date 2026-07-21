@@ -15,12 +15,13 @@ from kegg_mcp.analysis import (
     ComparisonWarning,
     ComparisonWarningCode,
     KoClassComparisonSummary,
+    ModuleSelection,
     PathwaySelection,
-    PathwaySelectionMode,
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     DecisionPolicyReference,
+    EvidenceMode,
     FrozenModel,
     ImportDiagnostic,
     NormalizedStatus,
@@ -58,6 +59,7 @@ MAX_DIRECT_REFERENCE_BATCHES = 100
 MAX_DIRECT_SOURCE_PREVIEWS = 8
 MAX_COMPARISON_INPUTS = 10
 MAX_COMPARISON_WARNINGS = len(ComparisonWarningCode)
+MAX_SELECTED_MODULE_SUMMARIES = 25
 MAX_SELECTED_PATHWAY_SUMMARIES = 25
 
 BoundedDirectText = Annotated[str, Field(min_length=1, max_length=MAX_DIRECT_WARNING_CHARACTERS)]
@@ -174,6 +176,13 @@ class SelectedPathwaySummary(FrozenModel):
     relationship_row_count: int = Field(strict=True, gt=0)
 
 
+class SelectedModuleSummary(FrozenModel):
+    rank: int = Field(strict=True, gt=0, le=25)
+    module_id: ModuleIdentifier
+    detected_unique_ko_count: int = Field(strict=True, gt=0)
+    relationship_row_count: int = Field(strict=True, gt=0)
+
+
 class NormalizeAnnotationsResult(FrozenModel):
     result: ResultMetadata
     artifact: ResultArtifactMetadata
@@ -248,8 +257,6 @@ class AutomaticPathwaySelectionSummary(FrozenModel):
 
     @model_validator(mode="after")
     def validate_selection_summary(self) -> Self:
-        if self.parameters.mode is not PathwaySelectionMode.TOP_DETECTED:
-            raise ValueError("automatic pathway selection requires top_detected mode")
         if len(self.selected_pathways) > self.parameters.top_n:
             raise ValueError("selected pathway summaries exceed top_n")
         if self.candidate_pathway_count < len(self.selected_pathways):
@@ -257,16 +264,36 @@ class AutomaticPathwaySelectionSummary(FrozenModel):
         return self
 
 
+class AutomaticModuleSelectionSummary(FrozenModel):
+    """Bounded direct summary of server-side Top-N MODULE selection."""
+
+    parameters: ModuleSelection
+    evidence_mode: EvidenceMode
+    candidate_module_count: int = Field(strict=True, ge=0)
+    selected_modules: Annotated[
+        tuple[SelectedModuleSummary, ...], Field(max_length=MAX_SELECTED_MODULE_SUMMARIES)
+    ]
+
+    @model_validator(mode="after")
+    def validate_selection_summary(self) -> Self:
+        if len(self.selected_modules) > self.parameters.top_n:
+            raise ValueError("selected MODULE summaries exceed top_n")
+        if self.candidate_module_count < len(self.selected_modules):
+            raise ValueError("candidate MODULE count is smaller than selected summaries")
+        return self
+
+
 class AnalyzeKoAnnotationsResult(FrozenModel):
     """Concise one-call result with both relevant target preview types."""
 
     result: ResultMetadata
-    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=5)]
+    artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=7)]
     summary: AnalysisResultSummary
     module_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
     module_previews: Annotated[
         tuple[ModuleAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
+    automatic_module_selection: AutomaticModuleSelectionSummary | None = None
     pathway_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
     pathway_previews: Annotated[
         tuple[PathwayAnalysisPreview, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
@@ -520,6 +547,7 @@ __all__ = [
     "MAX_MAPPING_PREVIEW_ROWS",
     "MAX_MAPPING_PROVENANCE_BATCHES",
     "MAX_NORMALIZATION_PREVIEW",
+    "MAX_SELECTED_MODULE_SUMMARIES",
     "MAX_SELECTED_PATHWAY_SUMMARIES",
     "AnalysisResultSummary",
     "AnalyzeKoAnnotationsResult",
@@ -529,6 +557,7 @@ __all__ = [
     "AnnotationProvenanceSummary",
     "AnnotationRecordPreview",
     "AnnotationSourceSummary",
+    "AutomaticModuleSelectionSummary",
     "AutomaticPathwaySelectionSummary",
     "CachedKeggEntryServiceResult",
     "CompareDatasetSource",
@@ -546,6 +575,7 @@ __all__ = [
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",
     "PathwayMappingRow",
+    "SelectedModuleSummary",
     "SelectedPathwaySummary",
     "ServerStatusResult",
 ]

@@ -129,3 +129,10 @@ def test_ko_analysis_skill_allows_stable_cross_skill_continuation() -> None:
         "do not repeat analysis",
     ):
         assert fragment in corpus
+
+
+def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
+    corpus = _corpus()
+    assert "no explicit selection are supplied" in corpus
+    assert "`pathway_selection`" in corpus
+    assert "Top-5 MODULEs and Top-5 canonical KO" in corpus

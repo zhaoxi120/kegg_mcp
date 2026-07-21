@@ -9,21 +9,23 @@ def test_analysis_public_api_exports_milestone_four_workflows_and_contracts() ->
         "ComparisonLimits",
         "KoSetComparisonDetail",
         "KoPathwayRelationship",
+        "KoModuleRelationship",
         "ModuleComparisonResult",
         "ModuleAnalysisLimits",
         "ModuleDefinition",
         "ModuleDefinitionCollection",
         "ModuleEvaluationResult",
         "ModuleParseResult",
+        "ModuleRankingResult",
+        "ModuleRankingRow",
+        "ModuleSelection",
         "PathwayCoverageParameters",
         "PathwayCoverageResult",
         "PathwayComparisonResult",
         "PathwayKoReference",
-        "PathwayRankingMetric",
         "PathwayRankingResult",
         "PathwayRankingRow",
         "PathwaySelection",
-        "PathwaySelectionMode",
         "PairedModuleEvaluation",
         "build_pathway_reference",
         "compare_ko_datasets",
@@ -34,6 +36,7 @@ def test_analysis_public_api_exports_milestone_four_workflows_and_contracts() ->
         "evaluate_pathway_coverage",
         "parse_module_definition",
         "rank_pathways",
+        "rank_modules",
         "resolve_module_definitions",
         "summarize_ko_comparison",
         "tokenize_module_definition",
@@ -57,8 +60,14 @@ def test_milestone_four_result_schemas_have_stable_identifiers() -> None:
         "urn:kegg-mcp:schema:pathway-comparison-result:1"
     )
     assert analysis.PathwaySelection.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:pathway-selection:1"
+        "urn:kegg-mcp:schema:pathway-selection:2"
     )
     assert analysis.PathwayRankingResult.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:pathway-ranking-result:1"
+    )
+    assert analysis.ModuleSelection.model_json_schema()["$id"] == (
+        "urn:kegg-mcp:schema:module-selection:2"
+    )
+    assert analysis.ModuleRankingResult.model_json_schema()["$id"] == (
+        "urn:kegg-mcp:schema:module-ranking-result:1"
     )

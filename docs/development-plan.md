@@ -3,8 +3,9 @@
 Status: approved development baseline.
 Implementation status: Milestones 0 through 8, the local companion workflow, and the assigned
 visualization extension are implemented and verified. The three distributions support Linux with
-Python 3.11.x only.
-Last reviewed: 2026-07-16.
+Python 3.11.x only. The assigned unified Codex installation extension is release-gated separately
+and must not be described as supported until its dedicated acceptance evidence passes.
+Last reviewed: 2026-07-19.
 
 ## Workflow contracts
 
@@ -26,6 +27,10 @@ remain unchanged.
   optional DeepKOALA companion for protein FASTA, and `kegg-pathway-rendering` uses the renderer.
   Stable versioned files are the default boundary between Skills; no umbrella Skill coordinates
   multiple servers or implements their domain logic.
+- The primary Codex deployment may provision the three independently locked runtimes in one
+  transaction and generate one local plugin containing version-matched copies of those Skills and
+  three absolute MCP launch registrations. This deployment convenience does not merge servers,
+  runtimes, state, or responsibilities.
 - The server includes `probe_kegg_connectivity`, returns field-level validation details, and can
   write a concise versioned output bundle beneath configured allowed roots.
 - Local tests skip live KEGG access by default. Pull-request CI runs one serialized 120-request live
@@ -37,14 +42,15 @@ The post-MVP visualization implementation is governed by
 [`visualization-extension-plan.md`](visualization-extension-plan.md). It does not change the core
 MCP process boundary:
 
-- `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently installed local stdio
-  processes;
-- the renderer requires `kegg-mcp>=0.4,<0.5`, and incompatible core packages must fail dependency
+- `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp` remain independently packaged and isolated
+  local stdio processes, including when one suite transaction provisions them together;
+- the renderer requires `kegg-mcp>=0.5,<0.6`, and incompatible core packages must fail dependency
   resolution;
-- the core produces the immutable, complete-within-limit `render_input.json` version 2 handoff and
+- the core produces the immutable, complete-within-limit `render_input.json` version 3 handoff and
   never parses KGML or renders an image;
-- `AnalysisExecutionProvenance` version 2 serializes the MODULE analysis limits, pathway
-  parameters, pathway coverage limits, and report limits used by that handoff;
+- `AnalysisExecutionProvenance` version 3 serializes the MODULE analysis and ranking parameters,
+  pathway parameters and ranking provenance, pathway coverage limits, and report limits used by
+  that handoff;
 - the renderer consumes authoritative evidence, MODULE states, and pathway coverage without
   normalizing annotations or recomputing analysis;
 - the renderer uses the core package's typed single-pathway PNG/KGML asset interface rather than
@@ -62,7 +68,7 @@ boundaries:
 
 - every tool annotation describes local cache, retained-result, output-bundle, deletion, and
   open-world effects under the MCP annotation semantics reviewed on 2026-07-16;
-- output-bundle schema version 2 accepts only a new or empty destination, never replaces existing
+- output-bundle schema version 3 accepts only a new or empty destination, never replaces existing
   entries, commits the manifest last, and redacts absolute source paths in that manifest by
   default;
 - `delete_analysis_result` deletes only one current-scope result and preserves the safe not-found
@@ -72,9 +78,11 @@ boundaries:
 - `kegg-mcp cleanup --expired` removes only TTL-expired result rows and does not clean the KEGG
   response cache or evict unexpired results; and
 - release metadata tests enforce package versions, renderer compatibility, platform range, and
-  tracked-document status.
+  tracked-document status; and
+- the suite installer consumes a strict owner-only deployment TOML, defaults every `uv` operation
+  to offline mode, and generates private runtime metadata separately from the Codex plugin copy.
 
-## Local annotation and Top-N pathway optimization
+## Local annotation and Top-N MODULE/pathway optimization
 
 The assigned post-MVP workflow optimization adds these compatible requirements:
 
@@ -82,9 +90,12 @@ The assigned post-MVP workflow optimization adds these compatible requirements:
   runtime requires explicit installation or repair permission, and the GenomeNet DeepKOALA web
   form is never an automation fallback. An explicit annotation request calls
   `run_deepkoala_job` once without a second confirmation and polls the returned job identifier;
-- `analyze_ko_annotations` accepts optional server-side `pathway_selection`, ranks canonical
-  pathways by unique K numbers selected under the requested evidence mode, uses pathway ID as the
-  stable tie-breaker, and loads denominator/metadata references only for the selected Top-N;
+- `analyze_ko_annotations` accepts optional server-side `pathway_selection`. When no MODULE or
+  pathway target and no explicit selection are supplied, it independently ranks and selects up to
+  five MODULEs and five canonical KO reference pathways by unique K numbers selected under the
+  requested evidence mode, uses the canonical target ID as the stable tie-breaker, and loads
+  references only for the selected targets. MODULE ranking is target selection rather than
+  completion or enrichment; exact completion and required-block coverage are evaluated separately;
 - duplicate annotation and LINK rows never inflate detected node counts, while complete ranking
   and relationship evidence remains in retained and output-bundle artifacts;
 - direct Top-N results contain bounded summaries, bundle metadata, and sanitized six-stage
@@ -282,7 +293,7 @@ Candidates require separate design decisions and must not leak into MVP interfac
 - enrichment with an explicit background universe;
 - additional KGML-based topology summaries, global/overview overlays, or organism-specific
   visual claims beyond the approved renderer contract;
-- plugin packaging for distribution;
+- public marketplace or remote plugin distribution beyond the assigned generated local plugin;
 - Streamable HTTP transport with authentication and access control; and
 - non-KEGG pathway backends.
 
@@ -296,7 +307,8 @@ Split only when one of these becomes true:
 
 - the Skill supports several independent servers;
 - the core server has a separate maintainer or release cycle;
-- distribution requires a standalone plugin;
+- public distribution requires a separately versioned standalone plugin rather than the generated
+  local deployment artifact;
 - different licenses are required; or
 - the Skill and server are independently versioned products.
 
@@ -331,6 +343,9 @@ kegg-mcp/
 │   └── kegg-render-mcp/     # Independently installed and released
 ├── examples/
 ├── docs/
+├── scripts/
+│   ├── install-suite.py     # Unified local Codex deployment
+│   └── run-installed-mcp.py
 └── .agents/
     └── skills/
         ├── kegg-ko-analysis/
@@ -712,7 +727,7 @@ Inputs:
 - dataset context;
 - requested modules and/or pathways;
 - evidence modes;
-- optional bounded automatic pathway selection; and
+- optional bounded automatic target selection; and
 - an optional allowed output directory.
 
 Output:
@@ -720,7 +735,7 @@ Output:
 - retained-result and artifact metadata;
 - a compact record, KO, request/cache, warning, and caveat summary;
 - bounded MODULE and pathway previews;
-- a bounded automatic-pathway-selection summary when applicable;
+- bounded automatic MODULE- and pathway-selection summaries when applicable;
 - optional output-bundle metadata; and
 - resource links for the full retained structured result.
 
@@ -847,16 +862,49 @@ Every `agents/openai.yaml` declares one matching local stdio dependency, a user-
 concise description, a default prompt, and explicit invocation policy. Generate and validate each
 Skill with the current official Skill tooling and retain deterministic routing/boundary tests.
 
+### 13.4 Unified local Codex installation
+
+`scripts/install-suite.py` is the primary Codex installation interface. It builds separate Core,
+DeepKOALA-companion, and Renderer runtimes from their respective checked-in lockfiles, then copies
+the canonical Skill trees into one generated local plugin. The plugin declares exactly three MCP
+servers through absolute launch commands; each copied Skill still declares only its matching
+server. The generated plugin is a deployment artifact, not tracked source or a fourth Python
+distribution.
+
+The installer requires explicit absolute CPython 3.11, compatible `uv`, Git, and Codex CLI paths;
+it does not select deployment tools from ambient `PATH`.
+
+The installer accepts a strict deployment TOML that must be a direct owner-owned regular file with
+no group or other permission bits inside a direct owner-only parent directory. Unknown keys,
+unsafe or overlapping roots, directory symlink aliases, unsafe executable targets, incompatible
+access profiles, and ambiguous ownership fail closed before publication. Private runtime
+configuration must remain outside any plugin directory that Codex may cache.
+
+All `uv` work is offline by default. Only an explicit `--allow-locked-dependency-downloads`
+invocation
+may allow `uv` network access while resolving or downloading artifacts required by the checked-in
+lockfiles and their declared build requirements. It never authorizes downloading Python, uv,
+Codex, repository source, DeepKOALA, model weights, KOfam profiles, or KEGG data. A separate
+`--allow-deepkoala-install` confirmation permits the initial official DeepKOALA clone and upstream
+requirements once for each new suite installation root. The same installed deployment does not ask
+again for later FASTA jobs. Neither switch updates models or installs multi-domain data.
+
+The generated-plugin path targets only the Codex app and Codex CLI; it must not be described as
+release-supported until the exact acceptance evidence is recorded. Other MCP clients use manual
+component configuration. A successful installation becomes discovery evidence only in a new
+Codex task. The suite installer is the only supported Codex installation path.
+
 ## 14. DeepKOALA guidance
 
-DeepKOALA remains an external optional annotator. Its interface is versioned independently, so
-commands and output fields must be checked against the official repository when the reference is
-written. The core package remains import-only. The optional `deepkoala-mcp` companion is a
+DeepKOALA remains an independently versioned optional annotator, so commands and output fields must
+be checked against the official repository when the reference is written. The core package remains
+import-only. The optional `deepkoala-mcp` companion is a
 separately installed stdio server and runner process with its own entry point, environment,
 lifecycle, tests, lock file, and release review.
 
-The companion never becomes a core dependency. It accepts an existing operator-configured
-DeepKOALA checkout and PyTorch interpreter, fixes `--device auto`, inherits the server's existing
+The companion never becomes a core dependency. The suite supplies a managed checkout and Python
+environment after first-install confirmation; manual deployments may still provide an existing
+checkout and PyTorch interpreter. The companion fixes `--device auto`, inherits the server's existing
 accelerator visibility, uses a small CPU thread-pool limit and zero data-loader workers, runs one
 job at a time with fixed arguments and bounded files, and never downloads or replaces code,
 weights, or databases. One atomic run request validates the allowed FASTA and new output directory,
@@ -1112,6 +1160,21 @@ Map this gene name to a KO for me.
 
 Success requires correct routing, minimal necessary clarification, no KO guessing, conservative interpretation, and use of the high-level tool for the common path.
 
+### 17.6 Unified installation tests
+
+Exercise the suite installer with isolated fake homes, private temporary roots, controlled command
+doubles, and release-source fixtures. Tests must cover strict TOML rejection, exact-source binding,
+three separate runtimes and launch targets, default offline `uv` arguments, the explicit locked
+download switch, plugin validation, conflicting registrations, interrupted publication, and
+rollback that removes only the new managed transaction while preserving unrelated installations.
+They must also prove that only the separately confirmed first-install path clones official
+DeepKOALA and installs its upstream requirements. No suite path installs Python, uv, or Codex, or
+downloads later model weights, KOfam profiles, or KEGG data.
+
+Release evidence additionally requires a bounded real-Codex smoke check of the generated plugin in
+a new task. Unit tests or a successful installer exit alone are not sufficient evidence that the
+app or CLI loaded all three Skills and MCP registrations.
+
 ## 18. Milestones
 
 ### Milestone 0: governance and project initialization
@@ -1332,7 +1395,7 @@ A new eligible user can install, configure, normalize a KO list, run module and 
 
 ### Post-MVP visualization extension
 
-The assigned visualization extension implements the core version 2 renderer handoff, typed
+The assigned visualization extension implements the core version 3 renderer handoff, typed
 single-pathway PNG/KGML retrieval, explicit DeepKOALA source provenance, the independently locked
 `kegg-render-mcp` stdio distribution, and instruction-only visualization orchestration. The
 detailed contract and acceptance criteria remain in
@@ -1342,7 +1405,7 @@ The original-FASTA/generated-CSV provenance fields are distinct and must not be 
 
 The supported release path is one bounded local workflow across three independent processes. The
 core remains the sole authority for evidence normalization, MODULE evaluation, and pathway
-coverage. The renderer accepts only version 2, supports regular reference pathways and
+coverage. The renderer accepts only version 3, supports regular reference pathways and
 project-owned MODULE diagrams, returns static scoped SVG/PNG resources, and rejects global or
 overview pathways. Its tests and package audits use only generated synthetic assets.
 
@@ -1356,6 +1419,37 @@ Acceptance additionally requires:
   and
 - the independently locked renderer job passes in pull-request CI without adding another live KEGG
   campaign or a second run after merge to `main`.
+
+### Post-MVP unified Codex installation
+
+The assigned unified installation extension provides one operator command for the complete local
+Codex workflow while preserving the existing distribution, process, state, and file-handoff
+boundaries. Its source of truth remains the three checked-in lockfiles, three canonical Skill
+trees, strict private deployment TOML, and exact reviewed repository source. The installer
+generates a local plugin and registers it through supported Codex app/CLI plugin mechanisms; it
+does not add plugin support for generic MCP clients.
+
+This extension is not release-supported until the exact installer revision has passed the suite
+tests, failure-injection campaign, artifact audit, and real-Codex new-task smoke check recorded in
+the release-readiness evidence. Documentation may describe the intended contract before that
+evidence exists, but must not imply that an unverified installation completed successfully.
+
+Acceptance additionally requires:
+
+- three version-bound, independently locked Python runtimes and three independent stdio processes;
+- a strict owner-only TOML and owner-only private installation state;
+- offline `uv` behavior by default, with one explicit switch limited to network access while
+  resolving or downloading artifacts required by checked-in lockfiles and declared build
+  requirements;
+- no acquisition of Python, uv, Codex, repository source, later DeepKOALA model weights, KOfam
+  profiles, or KEGG data; the separate confirmed first-install path may clone official DeepKOALA
+  and install its upstream requirements;
+- a generated, validated local plugin with version-matched Skills and absolute MCP launch commands;
+- fresh-install conflict checks plus transactional registration and rollback that preserve
+  unrelated deployments and never delete user biological inputs, outputs, caches, external tools,
+  or models; and
+- discovery verification in a new Codex task, with the plugin path documented as Codex app/CLI
+  only.
 
 ## 19. Initial issue backlog
 
@@ -1397,6 +1491,7 @@ Acceptance additionally requires:
 36. Implement the renderer MCP tools, resources, schemas, scope, and stdio contracts.
 37. Add `kegg-pathway-rendering` and cross-Skill file-handoff evaluation.
 38. Complete synthetic end-to-end, distribution, documentation, and release-readiness checks.
+39. Implement and verify the unified local Codex suite installer and generated-plugin transaction.
 
 Each issue should normally touch one layer or one contract. Cross-layer changes require an explicit integration issue.
 
@@ -1415,7 +1510,7 @@ A release is blocked until all of the following are true:
 - Large MCP results are bounded and retrievable safely.
 - Tool outputs conform to declared schemas and stdio stdout is clean.
 - Reports do not claim pathway activity, flux, phenotype, or statistical significance from KO presence alone.
-- The core version 2 renderer handoff is authoritative, bounded, typed, and complete within its
+- The core version 3 renderer handoff is authoritative, bounded, typed, and complete within its
   declared limits; the renderer does not normalize or recompute analysis.
 - Renderer artifacts and resources are bounded, static, scope-isolated, traversal- and symlink-safe,
   and contain no active or external content.
@@ -1425,6 +1520,12 @@ A release is blocked until all of the following are true:
   push do not repeat it.
 - A separate frozen renderer CI job runs synthetic offline tests and an independent distribution
   build audit without issuing another KEGG request.
+- The exact unified-installer source passes source-identity, strict-config, offline/default,
+  three-runtime, generated-plugin, conflict, failure-injection, rollback, and real-Codex new-task
+  checks. Its explicit download switch is limited to `uv` network access while resolving or
+  downloading artifacts required by checked-in lockfiles and declared build requirements. The
+  separate first-install confirmation may clone official DeepKOALA and install its upstream
+  requirements, but no path downloads Python, later model weights, KOfam profiles, or KEGG data.
 - All tracked repository content is in English.
 - Package metadata accepts Python 3.11.x only; wider Python support requires separate
   compatibility testing.
@@ -1452,8 +1553,10 @@ The implementation milestones resolved the original open decisions as follows:
    delivery uses output bundles.
 6. **Partial MODULE evaluation:** `partially_evaluable` and `not_evaluable` results expose no block
    coverage ratio. Coverage is reported only when every required top-level block is evaluable.
-7. **MODULE discovery:** the initial MVP requires explicit MODULE identifiers; automatic discovery
-   is deferred rather than introducing an unbounded or speculative strategy.
+7. **Automatic target selection:** when no explicit MODULE/pathway targets or selection are
+   supplied, the service independently selects up to five MODULEs and five canonical KO reference
+   pathways by unique selected-KO overlap. MODULE ranking selects targets and is neither completion
+   nor enrichment; exact completion remains a separate evaluation.
 8. **CSV delivery:** complete retained resources remain available, and a caller may request a
    concise output bundle beneath a deployment allowed root. The server never writes an
    unrestricted path or forces full tables into direct tool content.
@@ -1464,8 +1567,12 @@ The implementation milestones resolved the original open decisions as follows:
     `kegg-ko-analysis` depends only on that server. `deepkoala-annotation` depends only on
     `deepkoala-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`.
 11. **Visualization boundary:** the renderer command and MCP dependency value are
-    `kegg-render-mcp`; `kegg-pathway-rendering` consumes a compatible version 2 core handoff. The
+    `kegg-render-mcp`; `kegg-pathway-rendering` consumes a compatible version 3 core handoff. The
     three servers remain independent stdio processes and independently reviewed distributions.
+12. **Unified Codex installation:** one local installer may provision all three locked runtimes and
+    generate one version-matched Codex plugin without merging servers or adding a fourth Python
+    distribution. The plugin path is Codex app/CLI-only; manual component configuration remains the
+    route for other MCP clients.
 
 ## 22. Primary references
 
@@ -1482,3 +1589,5 @@ External behavior is time-sensitive. Recheck these primary sources during the re
 - [MCP resources specification](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
 - [OpenAI Codex Skill documentation](https://developers.openai.com/codex/skills)
 - [OpenAI Codex `AGENTS.md` documentation](https://developers.openai.com/codex/guides/agents-md)
+- [OpenAI Codex plugin documentation](https://learn.chatgpt.com/docs/build-plugins), reviewed
+  2026-07-19
