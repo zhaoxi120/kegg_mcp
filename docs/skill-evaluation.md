@@ -24,14 +24,15 @@ candidate:
 
 | Scenario | Expected behavior |
 | --- | --- |
-| Protein FASTA without KO assignments | Use `deepkoala-annotation`; do not send FASTA to the core server or use the GenomeNet form as an automation fallback. |
+| Protein FASTA without KO assignments | Use the user's explicitly selected annotator; otherwise prefer `deepkoala-annotation`. Do not send FASTA to the core server or use the GenomeNet form as an automation fallback. |
 | DeepKOALA detailed CSV | Use `kegg-ko-analysis` and preserve source evidence and model provenance. |
 | Plain K-number column | Normalize once, then run requested MODULE/pathway analysis through the core server. |
 | Two KO sets | Report deterministic set and shared-reference differences without statistical claims. |
 | Activity claim from one K number | Refuse the activity inference and explain the evidence boundary. |
 | Existing `render_input.json` | Use `kegg-pathway-rendering` without recomputing core analysis. |
 | Combined FASTA-to-graphics request | Continue across the three focused Skills using the stable CSV and renderer handoff files. |
-| Explicit multi-domain annotation request | Use `multi=true` with `batch_size=1` only when companion status reports the deployment capability ready; never download or accept HMMER/profile paths through the Skill. |
+| Combined FASTA-to-graphics request with only Core discovered | Stop before any core analysis call and ask once for explicit permission to install or repair the complete suite; after success, continue only in a new task where all stages are discovered. |
+| Explicit multi-domain annotation request | Use `multi=true` with `batch_size=1` only when companion status reports the deployment capability ready. The Skill does not accept dependency paths or manage their provisioning; separate provisioning requires explicit user authorization. |
 
 Reviewers should record the exact commit, Codex version, explicit or implicit Skill selection,
 observed route, any clarification, MCP calls, stable handoffs, final interpretation, and failures.

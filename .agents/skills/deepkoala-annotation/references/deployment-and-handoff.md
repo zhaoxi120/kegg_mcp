@@ -6,7 +6,11 @@
 - `multi_dependencies_unavailable`: ordinary annotation remains available, but do not pass
   `multi=true`; report the operator action needed to repair HMMER, profiles, or the supported
   upstream interface.
-- missing companion registration: explain how to register the existing executable, then stop.
+- missing declared MCP dependency or required tool in Codex: stop before annotation, report an
+  incomplete suite deployment, request explicit permission once to install or repair the complete
+  repository suite, and resume the original request in a new Codex task after discovery.
+- missing companion registration in another MCP client: explain how to register the existing
+  executable, then stop.
 - missing checkout, interpreter, or model resources: identify the missing deployment component and
   request permission before changing it.
 - incompatible runtime, state root, output root, or device policy: return the companion's stable
@@ -16,10 +20,17 @@ Suite installation permission applies once to each new suite installation root. 
 `local_ready` deployment does not repeat that question for later FASTA jobs; a separate new root is
 a separate first installation.
 
+DeepKOALA is the preferred first route for protein FASTA unless the user explicitly selected
+another annotator. In that case, this Skill stops and the independent core stage can resume only
+after the selected workflow supplies supported KO evidence. If the user instead declines a
+requested suite action, remain stopped until a user-selected route supplies that evidence.
+
 The companion must use an existing official checkout and existing local resources. Multi-domain
 execution additionally requires deployment `allow_multi`, a direct trusted profile directory, a
-direct trusted absolute `hmmsearch` executable, and `multi_ready=true`. It must not automate the
-GenomeNet web form, make network requests, install HMMER, or download models or profiles.
+direct trusted absolute `hmmsearch` executable, and `multi_ready=true`. These optional dependencies
+are operator-managed and may be provisioned separately after explicit user authorization; this
+Skill does not configure them. The companion must not automate the GenomeNet web form or make
+network requests.
 
 ## Stable file contract
 
@@ -56,4 +67,6 @@ already requested analysis stage.
 When the original request also includes graphics, retain that goal for the later
 `kegg-pathway-rendering` stage. Do not interpret that goal here, and do not call a core or renderer
 MCP from this Skill. A failed or unready annotation stage has no valid downstream handoff, so stop
-with its specific route state instead of continuing or substituting another annotator.
+with its specific route state instead of continuing. If a required downstream component is
+unavailable, preserve the requested formats and target scope for resumption after the suite is
+repaired and discovered in a new Codex task.

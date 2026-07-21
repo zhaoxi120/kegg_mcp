@@ -8,10 +8,15 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
 ## Select a core-only route
 
 1. Inspect the supplied KO list or annotation table and identify the analysis unit when possible.
-   If the only input is protein FASTA without KO evidence, route the annotation stage through the
-   installed `deepkoala-annotation` Skill. When the original request also includes KEGG analysis,
-   resume this Skill automatically after a successful stable handoff; never call `deepkoala-mcp`
-   here.
+   If the only input is protein FASTA without KO evidence and the user explicitly selected another
+   annotator, stop this Skill and return only after that route supplies supported KO evidence.
+   Otherwise prefer the installed `deepkoala-annotation` Skill as the first annotation route. If
+   that Skill or `deepkoala-mcp` is unavailable in Codex, stop before a core call, report an
+   incomplete suite deployment, and request explicit permission once to install or repair the
+   complete repository suite. If the user declines that action, remain stopped until a
+   user-selected route supplies supported KO evidence. After a successful suite action, resume the
+   original request in a new Codex task after discovery. Never call `deepkoala-mcp` or any annotator
+   MCP from this Skill.
 2. Read [workflow-selection.md](references/workflow-selection.md) and choose the smallest core
    workflow. Do not ask the user to restate readable input.
 3. For a shared annotation file, pass its controlled absolute path, declared format, source
@@ -36,6 +41,9 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
 4. If the original request asks only for a core report, return that report and stop without
    invoking the rendering stage. A failed core analysis has no renderer handoff and must not
    continue downstream.
+5. If the rendering Skill or its declared MCP dependency is unavailable, stop without repeating
+   core analysis, preserve the unfinished graphics goal, and request explicit permission once to
+   repair the complete suite. Resume in a new Codex task after the component is discovered.
 
 ## Call only core `kegg-mcp`
 

@@ -10,8 +10,14 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
 1. Accept a controlled `render_input.json` version 3 path or the renderer's bounded inline input
    transport. If the original request starts with only protein FASTA or KO evidence, route those
    earlier stages through the installed focused Skills and enter this Skill only after the core
-   returns a compatible stable handoff; never call those MCP servers here.
-2. Read [rendering-workflow.md](references/rendering-workflow.md), then call
+   returns a compatible stable handoff; never call those MCP servers here. Prefer DeepKOALA as the
+   first protein-FASTA annotation route. If a required focused Skill or declared MCP dependency is
+   unavailable in Codex, stop, preserve the original downstream goals, and request explicit
+   permission once to install or repair the complete repository suite. Resume in a new Codex task
+   after discovery.
+2. Require the declared `kegg-render-mcp` dependency and `get_renderer_status` tool to be exposed.
+   If they are unavailable in Codex, apply the same complete-suite repair route and stop before
+   rendering. Otherwise read [rendering-workflow.md](references/rendering-workflow.md), then call
    `get_renderer_status`. Require readiness, schema version 3, the requested static output format,
    and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, upgrade, or recompute its evidence

@@ -9,13 +9,21 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 
 1. Inspect the protein FASTA path and requested output location. Require controlled absolute paths;
    do not copy sequences into a prompt or send them to a remote service.
-2. Call `get_deepkoala_runner_status`. If the companion is absent or unready, report its stable
-   route state and ask permission only for the missing installation, registration, download, or
-   repair action. Suite installation permission is requested once for each new installation root;
-   an already installed `local_ready` deployment does not ask again for later FASTA jobs.
-   Inspect `allow_multi` and `multi_ready` separately. Never install, download, or replace
-   DeepKOALA, HMMER, model resources, or profiles silently.
-3. Treat an explicit request to annotate the FASTA as authorization to call
+2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
+   another annotator. In that case, stop this Skill and resume core analysis only after the selected
+   route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency
+   and its status and job tools to be exposed in the current task. If they are unavailable in a
+   Codex deployment, stop before annotation, preserve the original downstream goals, report an
+   incomplete suite deployment, and request explicit permission once to install or repair the
+   complete repository suite. If the user declines that action, remain stopped until a
+   user-selected route supplies supported KO evidence. After a successful suite action, resume the
+   original request in a new Codex task after the components are discovered.
+3. Call `get_deepkoala_runner_status`. If the companion is unready, report its stable route state
+   and ask permission only for the missing installation or repair action. Suite installation
+   permission is requested once for each new installation root; an already installed `local_ready`
+   deployment does not ask again for later FASTA jobs. Inspect `allow_multi` and `multi_ready`
+   separately. Never install, download, or replace required resources silently.
+4. Treat an explicit request to annotate the FASTA as authorization to call
    `run_deepkoala_job` once. Omit `model_date` for the default call; supply it only when the user
    explicitly requests a specific installed model version. Do not ask for an ACK, notice digest, or
    second confirmation. Let the companion enforce model, device, timeout, input, concurrency, and
@@ -23,14 +31,14 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    requests multi-domain annotation and status reports both `allow_multi=true` and
    `multi_ready=true`; keep `batch_size=1` because upstream multi-domain execution does not use
    configurable batching.
-4. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
+5. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
    `cancel_deepkoala_job` only for a user cancellation, an agreed deadline, or safe recovery from
    a lost client operation.
-5. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
+6. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
    `deepkoala_run_report.md` paths, schema/tool versions, original FASTA path, model parameters,
    timing, and caveats. Explicitly state the resolved model name and model version reported by the
    service, plus the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
-6. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
+7. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.
 
@@ -49,7 +57,9 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must
   not call either downstream MCP itself.
 - Continue only from a successful stable handoff. If a downstream Skill or its one declared MCP
-  dependency is unavailable, report that specific stage state without rerunning DeepKOALA.
+  dependency is unavailable, stop without rerunning DeepKOALA, retain the unfinished downstream
+  goal, and request explicit permission once to repair the complete suite. Resume in a new Codex
+  task after the component is discovered.
 
 Read [deployment-and-handoff.md](references/deployment-and-handoff.md) when status is unready, a
 policy check fails, or another MCP client must consume the output.

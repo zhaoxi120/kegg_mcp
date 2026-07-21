@@ -38,19 +38,27 @@ core MCP; the model changes focused Skills only at successful stable file bounda
 
 ## Missing earlier stages
 
-- Protein FASTA without KO evidence starts with `deepkoala-annotation`.
+- Protein FASTA without KO evidence preferably starts with `deepkoala-annotation`.
 - Existing K numbers or annotation tables start with `kegg-ko-analysis`.
 - This Skill starts only from the stable render handoff produced by a completed core analysis.
 
-An original request may continue automatically across those installed focused Skills.
+If a required focused Skill or declared MCP dependency is unavailable in Codex, stop, preserve the
+original analysis goal plus graphics formats and target scope, and request explicit permission once
+to install or repair the complete repository suite. Resume in a new Codex task after discovery. If
+the user explicitly selects another annotator, enter this Skill only after the independent core
+stage produces a compatible handoff from supported KO evidence.
+
+An original request may continue automatically across the installed focused Skills.
 Do not call either earlier MCP from this Skill, describe the full three-stage workflow as one
 Skill, or pass a private result identifier between MCP processes.
 
 ## Unavailable renderer and lifecycle
 
 If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
-diagnostic and suggested operator action. Do not install software, download assets, or invoke an
-unrelated image tool as a fallback.
+diagnostic and suggested operator action. For a missing MCP registration or unavailable renderer
+tool in Codex, stop before rendering and request explicit permission once to repair the complete
+suite; resume in a new Codex task after discovery. The Skill itself does not install software,
+download assets, or invoke an unrelated image tool. Preserve the requested formats and target scope.
 
 Return only renderer-provided `kegg-render://results/{render_id}` and
 `kegg-render://results/{render_id}/{artifact}` resource URIs; never construct one from an ID.

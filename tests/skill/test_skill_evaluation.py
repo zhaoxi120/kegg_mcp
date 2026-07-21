@@ -34,7 +34,7 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
         ),
         (
             "I only have protein FASTA.",
-            ("installed `deepkoala-annotation` Skill", "never call `deepkoala-mcp`"),
+            ("installed `deepkoala-annotation` Skill", "Never call `deepkoala-mcp`"),
         ),
         (
             "Render this completed render_input.json.",
@@ -87,3 +87,22 @@ def test_graphics_goal_continues_only_after_successful_core_analysis() -> None:
         "continue downstream",
     ):
         assert fragment in CORPUS
+
+
+def test_fasta_only_prefers_deepkoala_and_requests_suite_when_missing() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "installed `deepkoala-annotation` Skill",
+        "first annotation route",
+        "stop before a core call",
+        "incomplete suite",
+        "request explicit permission once",
+        "complete repository suite",
+        "new Codex task",
+        "explicitly selected another",
+        "only after that route supplies supported KO evidence",
+    ):
+        assert fragment in normalized
+    assert normalized.index("explicitly selected another") < normalized.index(
+        "Otherwise prefer the installed `deepkoala-annotation` Skill"
+    )
