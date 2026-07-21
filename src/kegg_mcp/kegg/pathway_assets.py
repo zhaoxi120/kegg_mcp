@@ -19,7 +19,7 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.kegg.operations import PreparedRequest, ResponseParser
 
-PATHWAY_ASSET_PARSER_VERSION = "2"
+PATHWAY_ASSET_PARSER_VERSION = "3"
 MAX_PATHWAY_ASSET_BYTES = 50_000_000
 MAX_PNG_DIMENSION = 20_000
 MAX_PNG_PIXELS = 40_000_000
@@ -28,11 +28,12 @@ MAX_PNG_DECOMPRESSED_BYTES = 128_000_000
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_CHUNK_TYPE = re.compile(rb"^[A-Za-z]{4}$")
-_ACTIVE_XML_DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
-_KGML_ROOT_PREFIX = re.compile(
-    r"\A\ufeff?\s*(?:(?:<\?[^?]*\?>|<!--.*?-->)\s*)*<pathway(?=[\s/>])",
-    re.DOTALL,
+_ACTIVE_XML_DECLARATION = re.compile(
+    r"<![ \t\r\n]*(?:DOCTYPE|ENTITY)\b",
+    re.IGNORECASE,
 )
+_XML_WHITESPACE = frozenset(" \t\r\n")
+_SUPPORTED_KGML_SYSTEM_ID = "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd"
 _PNG_DECOMPRESSION_CHUNK_BYTES = 64 * 1024
 _PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 _ADAM7_PASSES = (
@@ -401,10 +402,95 @@ def _validate_kgml_preflight(content: bytes) -> None:
         text = content.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         raise ValueError("KGML must be canonical UTF-8 XML") from exc
-    if _ACTIVE_XML_DECLARATION.search(text) is not None:
-        raise ValueError("KGML must not contain DTD or entity declarations")
-    if _KGML_ROOT_PREFIX.match(text) is None:
+    supported_start, has_pathway_root = _scan_kgml_prolog(text)
+    declarations = _ACTIVE_XML_DECLARATION.finditer(text)
+    first_declaration = next(declarations, None)
+    if first_declaration is not None and (
+        first_declaration.start() != supported_start or next(declarations, None) is not None
+    ):
+        raise ValueError("KGML contains an unsupported DTD or entity declaration")
+    if not has_pathway_root:
         raise ValueError("KGML must begin with an obvious pathway root tag")
+
+
+def _scan_kgml_prolog(text: str) -> tuple[int | None, bool]:
+    """Scan the bounded KGML prolog in linear time without resolving its DTD."""
+    position = 1 if text.startswith("\ufeff") else 0
+    position, misc_is_closed = _skip_kgml_misc(text, position)
+    if not misc_is_closed:
+        return None, False
+
+    doctype_start: int | None = None
+    doctype_end = _match_supported_kgml_doctype(text, position)
+    if doctype_end is not None:
+        doctype_start = position
+        position = doctype_end
+
+    position, misc_is_closed = _skip_kgml_misc(text, position)
+    if not misc_is_closed:
+        return None, False
+    root_is_present = text.startswith("<pathway", position)
+    boundary_position = position + len("<pathway")
+    root_is_bounded = boundary_position < len(text) and (
+        text[boundary_position] in _XML_WHITESPACE or text[boundary_position] in "/>"
+    )
+    if not (root_is_present and root_is_bounded):
+        return None, False
+    return doctype_start, True
+
+
+def _skip_kgml_misc(text: str, start: int) -> tuple[int, bool]:
+    """Skip XML whitespace, processing instructions, and comments once each is closed."""
+    position = start
+    while True:
+        position = _skip_xml_whitespace(text, position)
+        if text.startswith("<?", position):
+            end = text.find("?>", position + 2)
+            if end < 0:
+                return position, False
+            position = end + 2
+            continue
+        if text.startswith("<!--", position):
+            end = text.find("-->", position + 4)
+            if end < 0:
+                return position, False
+            position = end + 3
+            continue
+        return position, True
+
+
+def _match_supported_kgml_doctype(text: str, start: int) -> int | None:
+    """Return the end of the one inert canonical KEGG declaration, if present."""
+    position = start
+    for token in ("<!DOCTYPE", "pathway", "SYSTEM"):
+        if not text.startswith(token, position):
+            return None
+        position += len(token)
+        next_position = _skip_xml_whitespace(text, position)
+        if next_position == position:
+            return None
+        position = next_position
+
+    if position >= len(text) or text[position] not in "\"'":
+        return None
+    quote = text[position]
+    position += 1
+    if not text.startswith(_SUPPORTED_KGML_SYSTEM_ID, position):
+        return None
+    position += len(_SUPPORTED_KGML_SYSTEM_ID)
+    if position >= len(text) or text[position] != quote:
+        return None
+    position = _skip_xml_whitespace(text, position + 1)
+    if position >= len(text) or text[position] != ">":
+        return None
+    return position + 1
+
+
+def _skip_xml_whitespace(text: str, start: int) -> int:
+    position = start
+    while position < len(text) and text[position] in _XML_WHITESPACE:
+        position += 1
+    return position
 
 
 __all__ = [

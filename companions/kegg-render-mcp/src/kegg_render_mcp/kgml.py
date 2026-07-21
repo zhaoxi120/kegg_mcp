@@ -12,6 +12,7 @@ from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 
 _KO_RE = re.compile(r"ko:(K[0-9]{5})\Z")
 _PATH_RE = re.compile(r"(?:path:)?(ko[0-9]{5})\Z")
+_SUPPORTED_KGML_DTD_SYSTEM_ID = "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +33,7 @@ class KgmlDocument:
     title: str
     graphics: tuple[KgmlGraphic, ...]
     parser_name: str = "kegg_render_safe_kgml"
-    parser_version: str = "1.0"
+    parser_version: str = "1.1"
 
 
 class _KgmlAbort(Exception):
@@ -59,6 +60,7 @@ class _KgmlEventParser:
         self.title = ""
         self.entry: _EntryContext | None = None
         self.graphics: list[KgmlGraphic] = []
+        self.doctype_seen = False
 
     def start(self, name: str, attributes: dict[str, str]) -> None:
         self.depth += 1
@@ -139,9 +141,26 @@ class _KgmlEventParser:
         self.text_bytes += len(value.encode("utf-8"))
         self._check_limits()
 
+    def start_doctype(
+        self,
+        name: str,
+        system_id: str | None,
+        public_id: str | None,
+        has_internal_subset: int,
+    ) -> None:
+        if (
+            self.doctype_seen
+            or name != "pathway"
+            or system_id != _SUPPORTED_KGML_DTD_SYSTEM_ID
+            or public_id is not None
+            or has_internal_subset != 0
+        ):
+            raise _KgmlAbort("KGML contains an unsupported DTD declaration.")
+        self.doctype_seen = True
+
     def prohibited_declaration(self, *args: object) -> None:
         del args
-        raise _KgmlAbort("KGML DTD and entity declarations are prohibited.")
+        raise _KgmlAbort("KGML entity declarations are prohibited.")
 
     def external_entity(self, *args: object) -> int:
         del args
@@ -158,16 +177,17 @@ class _KgmlEventParser:
 
 
 def parse_kgml(payload: bytes, expected_pathway_id: str, limits: RendererLimits) -> KgmlDocument:
-    """Parse KGML incrementally while enforcing limits before tree allocation."""
+    """Parse KGML incrementally without resolving its inert canonical DTD reference."""
     if not payload or len(payload) > limits.max_asset_bytes:
         raise _asset_error("KGML bytes are empty or exceed the configured asset limit.")
     state = _KgmlEventParser(expected_pathway_id, limits)
     parser = expat.ParserCreate(encoding="UTF-8")
     parser.buffer_text = False
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
     parser.StartElementHandler = state.start
     parser.EndElementHandler = state.end
     parser.CharacterDataHandler = state.text
-    parser.StartDoctypeDeclHandler = state.prohibited_declaration
+    parser.StartDoctypeDeclHandler = state.start_doctype
     parser.EntityDeclHandler = state.prohibited_declaration
     parser.UnparsedEntityDeclHandler = state.prohibited_declaration
     parser.ExternalEntityRefHandler = state.external_entity

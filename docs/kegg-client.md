@@ -194,12 +194,15 @@ text operations.
 
 PNG responses require a valid signature, bounded dimensions, pixel and decompressed-scanline
 counts, canonical critical-chunk ordering, valid CRC values, and one complete zlib IDAT stream whose
-scanlines match the IHDR contract. The core applies only bounded UTF-8, DTD/entity declaration, and
+scanlines match the IHDR contract. The core applies only bounded UTF-8, declaration-policy, and
 obvious `pathway` root-prefix preflight checks to KGML bytes; it does not parse XML, require a
-well-formed complete document, or assert pathway identity. The independent renderer owns bounded
-XML structure parsing, pathway-identity checks, and PNG/KGML dimension compatibility. Cached assets
-are validator-versioned and revalidated before use. This public library interface supports the
-separately installed renderer and is intentionally not exposed as a core MCP tool.
+well-formed complete document, or assert pathway identity. KGML may omit a DOCTYPE or contain the
+single inert KEGG KGML v0.7.2 HTTPS `SYSTEM` declaration observed on 2026-07-21 in the XML prolog.
+Other DTD declarations and all entity declarations are rejected, and the accepted system identifier
+is never resolved or fetched. The independent renderer owns bounded XML structure parsing,
+pathway-identity checks, and PNG/KGML dimension compatibility. Cached assets are validator-versioned
+and revalidated before use. This public library interface supports the separately installed renderer
+and is intentionally not exposed as a core MCP tool.
 
 ### LINK
 
