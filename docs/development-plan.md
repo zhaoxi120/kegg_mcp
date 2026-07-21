@@ -268,9 +268,10 @@ previously generated detailed table and never loads its models or runs its CLI. 
 
 The companion validates one allowed protein FASTA and a new allowed output directory, performs
 runtime preflight, starts one service-owned job, and returns an opaque process-scoped job identifier
-for bounded polling. It runs one job per state root with fixed arguments, `device=auto`, inherited
-accelerator visibility, bounded CPU threads, zero data-loader workers, and process-group and Linux
-parent-death control.
+for bounded polling. It runs one job per state root with fixed arguments, defaults to `device=cpu`,
+accepts only an explicitly requested and deployment-allowed `device=cuda`, inherits accelerator
+visibility, bounds CPU threads, uses zero data-loader workers, and owns process-group and Linux
+parent-death control. It never uses automatic device selection.
 
 The stable handoff distinguishes the original FASTA path, `deepkoala_annotations.csv` as the core
 import input, `deepkoala_run_report.md` as the human-readable report, and the resolved DeepKOALA and
@@ -443,9 +444,10 @@ visualization-specific API and legal boundary reviewed again on 2026-07-16:
   [database entry format](https://www.kegg.jp/kegg/docs/dbentry.html), and
   [Pathway Map Viewer help](https://www.kegg.jp/kegg/document/help_pathway.html)
 
-DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14. The optional
-multi-domain CLI, HMMER invocation boundary, and short-sequence output were reviewed again on
-2026-07-21 against official commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
+DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14. The explicit CPU/CUDA
+device choices, optional multi-domain CLI, HMMER invocation boundary, and short-sequence output were
+reviewed again on 2026-07-21 against official commit
+`bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
 
 - [DeepKOALA GenomeNet page](https://www.genome.jp/tools/deepkoala/) and
   [official repository](https://github.com/zhaoxi120/deepkoala)

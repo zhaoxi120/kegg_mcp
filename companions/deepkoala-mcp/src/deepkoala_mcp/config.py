@@ -59,7 +59,7 @@ class DeepKoalaRuntimeConfig(BaseModel):
     input_roots: tuple[Path, ...]
     output_roots: tuple[Path, ...]
     allowed_models: tuple[ModelName, ...] = ("full", "frag")
-    allowed_devices: tuple[Literal["auto"], ...] = ("auto",)
+    allowed_devices: tuple[Literal["cpu", "cuda"], ...] = ("cpu", "cuda")
     cpu_threads: int = Field(default=DEFAULT_CPU_THREADS, strict=True, ge=1, le=4)
     max_fasta_bytes: int = Field(default=MAX_FASTA_BYTES, strict=True, ge=1, le=MAX_FASTA_BYTES)
     max_sequences: int = Field(
@@ -97,7 +97,7 @@ class DeepKoalaRuntimeConfig(BaseModel):
             fail(
                 ErrorCode.POLICY_DENIED,
                 "The requested device policy is not allowed.",
-                suggested_action="Use the deployment-approved auto device policy.",
+                suggested_action="Use a device reported by runner status.",
             )
         if request.multi and not self.allow_multi:
             fail(
@@ -151,8 +151,8 @@ class DeepKoalaRuntimeConfig(BaseModel):
             raise ValueError("allowed_models must be unique")
         if not self.allowed_models:
             raise ValueError("allowed_models must not be empty")
-        if self.allowed_devices != ("auto",):
-            raise ValueError("the supported device allowlist is exactly 'auto'")
+        if self.allowed_devices not in {("cpu",), ("cpu", "cuda")}:
+            raise ValueError("the device allowlist must be 'cpu' or 'cpu,cuda'")
         if self.allow_multi and (self.profiles_dir is None or self.hmmsearch_executable is None):
             raise ValueError(
                 "multi-domain execution requires profiles_dir and hmmsearch_executable"
@@ -186,7 +186,7 @@ def load_runtime_config(
         input_roots=_roots(_required(values, INPUT_ROOTS_ENV), INPUT_ROOTS_ENV),
         output_roots=_roots(_required(values, OUTPUT_ROOTS_ENV), OUTPUT_ROOTS_ENV),
         allowed_models=_models(values.get(ALLOWED_MODELS_ENV, "full,frag")),
-        allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, "auto")),
+        allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, "cpu,cuda")),
         cpu_threads=_integer(values, CPU_THREADS_ENV, DEFAULT_CPU_THREADS, 1, 4),
         max_fasta_bytes=_integer(
             values,
@@ -305,10 +305,11 @@ def _models(value: str) -> tuple[ModelName, ...]:
     return cast(tuple[ModelName, ...], values)
 
 
-def _devices(value: str) -> tuple[Literal["auto"], ...]:
-    if value != "auto":
-        raise ValueError(f"{ALLOWED_DEVICES_ENV} must be exactly auto")
-    return ("auto",)
+def _devices(value: str) -> tuple[Literal["cpu", "cuda"], ...]:
+    devices = tuple(value.split(","))
+    if devices not in {("cpu",), ("cpu", "cuda")}:
+        raise ValueError(f"{ALLOWED_DEVICES_ENV} must be exactly cpu or cpu,cuda")
+    return cast(tuple[Literal["cpu", "cuda"], ...], devices)
 
 
 def _integer(

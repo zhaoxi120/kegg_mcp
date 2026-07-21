@@ -239,9 +239,11 @@ Python requirements, run:
 ```
 
 The suite-managed DeepKOALA checkout uses its bundled `202502` resources by default. The companion
-keeps `device=auto`, allows only `full` and `frag` models configured by the deployment, and defaults
-every request to single-domain mode. Successful annotation output reports the resolved model, model
-date, and whether multi-domain mode was used.
+defaults to `device=cpu`, accepts `device=cuda` only when deployment policy allows it and the runtime
+probe reports CUDA available, and never uses `device=auto`. The companion allows only `full` and
+`frag` models configured by the deployment and defaults every request to single-domain mode.
+Successful annotation output reports the resolved model, model date, device, and whether
+multi-domain mode was used.
 
 #### Optional multi-domain capability
 

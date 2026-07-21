@@ -49,6 +49,7 @@ def _plan(checkout: Path, tmp_path: Path, **updates: object) -> RunnerPlan:
         "job_directory": job,
         "model": "full",
         "resolved_date": "202502",
+        "device": "cpu",
         "batch_size": 1,
         "topk": 1,
         "timeout_seconds": 5,
@@ -62,19 +63,35 @@ def _write_cli(checkout: Path, body: str) -> None:
     (checkout / "deepkoala" / "cli.py").write_text(_ARGPARSE + body, encoding="utf-8")
 
 
-def test_build_argv_is_fixed_auto_device_and_worker_free(checkout: Path, tmp_path: Path) -> None:
+def test_build_argv_is_fixed_cpu_device_and_worker_free(checkout: Path, tmp_path: Path) -> None:
     plan = _plan(checkout, tmp_path, model="frag", batch_size=4, topk=3)
     argv = build_argv(plan)
     assert argv[0] == str(plan.python_executable)
     assert argv[1] == "-c"
     assert argv[3] == str(os.getpid())
-    assert argv[argv.index("--device") + 1] == "auto"
+    assert argv[argv.index("--device") + 1] == "cpu"
     assert argv[argv.index("--num_workers") + 1] == "0"
     assert argv[argv.index("--model") + 1] == "frag"
     assert "--detail" in argv
     assert len(argv) == 27
     assert "--multi" not in argv
     assert "--profiles_dir" not in argv
+
+
+def test_build_argv_accepts_explicit_validated_cuda_device(
+    checkout: Path,
+    tmp_path: Path,
+) -> None:
+    plan = _plan(checkout, tmp_path, device="cuda")
+
+    argv = build_argv(plan)
+
+    assert argv[argv.index("--device") + 1] == "cuda"
+
+
+def test_runner_plan_rejects_automatic_device_selection(checkout: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="device"):
+        _plan(checkout, tmp_path, device="auto")
 
 
 def test_child_environment_inherits_gpu_visibility_and_bounds_threads(
@@ -236,7 +253,7 @@ Path(args.output_path).write_text('unexpected', encoding='utf-8')
 
 
 @pytest.mark.asyncio
-async def test_runner_executes_local_cli_with_auto_device_contract(
+async def test_runner_executes_local_cli_with_cpu_device_contract(
     checkout: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
@@ -258,7 +275,7 @@ Path(args.output_path).write_text(json.dumps({
     outcome = await DeepKoalaProcessRunner().run(plan)
     payload = json.loads(plan.output_path.read_text(encoding="utf-8"))
     assert outcome.return_code == 0
-    assert payload == {"device": "auto", "workers": 0, "threads": "2", "cuda": "0"}
+    assert payload == {"device": "cpu", "workers": 0, "threads": "2", "cuda": "0"}
 
 
 @pytest.mark.asyncio
@@ -392,6 +409,7 @@ plan = RunnerPlan(
     job_directory=Path(sys.argv[3]),
     model='full',
     resolved_date='202502',
+    device='cpu',
     batch_size=1,
     topk=1,
     timeout_seconds=30,

@@ -17,6 +17,24 @@ def test_explicit_request_runs_without_second_confirmation() -> None:
         assert fragment in CORPUS
 
 
+def test_first_run_discloses_cpu_and_gpu_requires_explicit_ready_request() -> None:
+    for fragment in (
+        "Before the first `run_deepkoala_job` call in the current Codex task",
+        "default job uses the `cpu` device",
+        "explicit request to the LLM",
+        "informational first-run notice, not a confirmation gate",
+        "repeat the notice in the same task",
+        "`cuda` in `allowed_devices`",
+        "`cuda_available=true`",
+        "never silently substitute CPU or `device=auto`",
+        "does not authorize installing or replacing",
+    ):
+        assert fragment in CORPUS
+    assert CORPUS.index("Before the first `run_deepkoala_job` call") < CORPUS.index(
+        "Treat an explicit request to annotate the FASTA as authorization"
+    )
+
+
 def test_unready_route_and_handoff_remain_bounded() -> None:
     for fragment in (
         "ask permission only for the missing installation",

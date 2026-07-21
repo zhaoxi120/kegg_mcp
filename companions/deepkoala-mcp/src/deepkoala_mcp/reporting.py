@@ -31,7 +31,7 @@ def build_handoff(
 ) -> ImportHandoff:
     """Build the versioned stable file handoff without a digest or private result ID."""
     metadata = (
-        SourceMetadataField(name="device_requested", value="auto"),
+        SourceMetadataField(name="device_requested", value=plan.device),
         SourceMetadataField(name="detail", value=True),
         SourceMetadataField(name="batch_size", value=plan.batch_size),
         SourceMetadataField(name="num_workers", value=0),
@@ -82,7 +82,7 @@ def build_run_report(
             f"- DeepKOALA version: `{source_version}`",
             f"- Model: `{plan.model}`",
             f"- Model date: `{plan.resolved_model_date}`",
-            "- Device policy: `auto`",
+            f"- Device policy: `{plan.device}`",
             f"- CUDA available at preflight: `{str(runtime.cuda_available).lower()}`",
             "- Detailed output: `true`",
             f"- Batch size: `{plan.batch_size}`",

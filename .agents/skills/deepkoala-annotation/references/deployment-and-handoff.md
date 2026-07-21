@@ -20,6 +20,10 @@ Suite installation permission applies once to each new suite installation root. 
 `local_ready` deployment does not repeat that question for later FASTA jobs; a separate new root is
 a separate first installation.
 
+A CUDA readiness or policy failure stops the requested GPU job; do not substitute CPU or automatic
+device selection. Installing or replacing PyTorch, CUDA, drivers, or other runtime resources still
+requires separate permission.
+
 DeepKOALA is the preferred first route for protein FASTA unless the user explicitly selected
 another annotator. In that case, this Skill stops and the independent core stage can resume only
 after the selected workflow supplies supported KO evidence. If the user instead declines a

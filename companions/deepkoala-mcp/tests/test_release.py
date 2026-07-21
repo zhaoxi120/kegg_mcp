@@ -67,13 +67,14 @@ def test_distribution_has_no_inference_or_download_dependency() -> None:
         assert forbidden not in dependencies
 
 
-def test_source_uses_fixed_auto_device_launch_without_a_network_client() -> None:
+def test_source_uses_validated_device_launch_without_a_network_client() -> None:
     corpus = "\n".join(path.read_text(encoding="utf-8") for path in SOURCE.glob("*.py"))
     lowered = corpus.lower()
     assert "shell=true" not in lowered
     assert re.search(r"\b(requests|httpx|aiohttp|urllib\.request)\b", lowered) is None
     assert "create_subprocess_exec" in corpus
-    assert '"--device",\n        "auto"' in corpus
+    assert '"--device",\n        plan.device' in corpus
+    assert '"--device",\n        "auto"' not in corpus
     assert '"--num_workers",\n        "0"' in corpus
     assert '"CUDA_VISIBLE_DEVICES": ""' not in corpus
     assert "PR_SET_PDEATHSIG" in corpus

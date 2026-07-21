@@ -328,6 +328,7 @@ def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path)
     assert config.deepkoala.allow_multi is False
     assert config.deepkoala.profiles_dir is None
     assert config.deepkoala.hmmsearch_executable is None
+    assert environment["DEEPKOALA_MCP_ALLOWED_DEVICES"] == "cpu,cuda"
     assert environment["DEEPKOALA_MCP_ALLOW_MULTI"] == "false"
     assert "DEEPKOALA_MCP_PROFILES_DIR" not in environment
     assert "DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE" not in environment

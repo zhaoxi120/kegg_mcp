@@ -13,6 +13,8 @@ The `tests/skill/` suite verifies that:
 - protein FASTA, existing KO evidence, and renderer handoffs route to the appropriate Skill;
 - no Skill implements inference, normalization, MODULE evaluation, KGML parsing, or rendering;
 - cross-stage continuation uses stable files rather than private process identifiers; and
+- the first annotation call discloses the CPU default without adding a confirmation gate, while
+  CUDA requires an explicit user request and compatible status; and
 - biological and data-rights language remains conservative.
 
 These checks run in the ordinary offline test suite.
@@ -25,6 +27,8 @@ candidate:
 | Scenario | Expected behavior |
 | --- | --- |
 | Protein FASTA without KO assignments | Use the user's explicitly selected annotator; otherwise prefer `deepkoala-annotation`. Do not send FASTA to the core server or use the GenomeNet form as an automation fallback. |
+| First DeepKOALA call in a Codex task | Tell the user that CPU is the default and that GPU requires an explicit request to the LLM. Continue the already authorized CPU job without waiting for confirmation. |
+| Explicit GPU annotation request | Use `device=cuda` only when status both allows CUDA and reports it available; otherwise stop instead of silently substituting CPU or automatic device selection. |
 | DeepKOALA detailed CSV | Use `kegg-ko-analysis` and preserve source evidence and model provenance. |
 | Plain K-number column | Normalize once, then run requested MODULE/pathway analysis through the core server. |
 | Two KO sets | Report deterministic set and shared-reference differences without statistical claims. |

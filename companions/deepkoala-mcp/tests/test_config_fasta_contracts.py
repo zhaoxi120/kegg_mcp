@@ -60,7 +60,7 @@ def test_load_runtime_config_has_bounded_single_runner_defaults(
 ) -> None:
     config = load_runtime_config(_environment(tmp_path, checkout))
     assert config.allowed_models == ("full", "frag")
-    assert config.allowed_devices == ("auto",)
+    assert config.allowed_devices == ("cpu", "cuda")
     assert config.max_concurrent_jobs == 1
     assert config.allow_multi is False
     assert config.profiles_dir is None
@@ -76,7 +76,9 @@ def test_load_runtime_config_has_bounded_single_runner_defaults(
         (MAX_TIMEOUT_SECONDS_ENV, "0"),
         (MAX_TIMEOUT_SECONDS_ENV, "1.5"),
         (ALLOWED_MODELS_ENV, "full,other"),
+        (ALLOWED_DEVICES_ENV, "auto"),
         (ALLOWED_DEVICES_ENV, "cuda"),
+        (ALLOWED_DEVICES_ENV, "cpu,auto"),
         (ALLOW_MULTI_ENV, "TRUE"),
     ],
 )
@@ -149,23 +151,30 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
         fasta_path="/allowed/proteins.faa",
         output_directory="/allowed/run-1",
     )
-    assert request.device == "auto"
+    assert request.device == "cpu"
     assert request.model_date == "202502"
     assert request.multi is False
+    cuda_request = RunDeepKoalaInput(
+        fasta_path="/allowed/proteins.faa",
+        output_directory="/allowed/run-2",
+        device="cuda",
+    )
+    assert cuda_request.device == "cuda"
     with pytest.raises(ValidationError):
         RunDeepKoalaInput(
             fasta_path="proteins.faa",
             output_directory="/allowed/run-1",
         )
-    with pytest.raises(ValidationError):
-        RunDeepKoalaInput.model_validate(
-            {
-                "fasta_path": "/allowed/proteins.faa",
-                "output_directory": "/allowed/run-1",
-                "device": "cuda",
-            },
-            strict=True,
-        )
+    for device in ("auto", "mps"):
+        with pytest.raises(ValidationError):
+            RunDeepKoalaInput.model_validate(
+                {
+                    "fasta_path": "/allowed/proteins.faa",
+                    "output_directory": "/allowed/run-1",
+                    "device": device,
+                },
+                strict=True,
+            )
     with pytest.raises(ValidationError):
         RunDeepKoalaInput.model_validate(
             {

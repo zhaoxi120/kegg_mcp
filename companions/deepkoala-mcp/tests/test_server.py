@@ -84,6 +84,9 @@ async def test_discovery_declares_five_compact_policy_bounded_tools(
         run = _tool(tools, "run_deepkoala_job")
         properties = cast(dict[str, object], run.inputSchema["properties"])
         assert {"fasta_path", "output_directory"}.issubset(properties)
+        device = cast(dict[str, object], properties["device"])
+        assert device["enum"] == ["cpu", "cuda"]
+        assert device["default"] == "cpu"
         assert "fasta_text" not in properties
         assert "acknowledged" not in properties
         assert run.annotations is not None
@@ -102,6 +105,8 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         status = await session.call_tool("get_deepkoala_runner_status", {})
         _validate(_tool(tools, "get_deepkoala_runner_status"), status)
         assert status.isError is False
+        assert _data(status)["device_policy"] == "cpu"
+        assert _data(status)["allowed_devices"] == ["cpu", "cuda"]
 
         arguments = _input(runtime_config)
         invalid = await session.call_tool(

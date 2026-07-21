@@ -112,6 +112,16 @@ def _request(
     return RunDeepKoalaInput(**values)  # pyright: ignore[reportArgumentType]
 
 
+def _cuda_ready_probe(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    del checkout, python_executable, cpu_threads
+    return RuntimeProbeResult(runtime_ready=True, cuda_available=True)
+
+
 async def _wait_terminal(manager: DeepKoalaJobManager, job_id: str) -> JobState:
     async with asyncio.timeout(5):
         while True:
@@ -130,7 +140,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
     async with _manager(runtime_config, runner) as manager:
         started = await manager.run(request)
         assert started.job.state is JobState.RUNNING
-        assert started.plan.device == "auto"
+        assert started.plan.device == "cpu"
         assert started.plan.num_workers == 0
         assert started.plan.multi is False
         assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
@@ -142,7 +152,9 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert annotations.name == ANNOTATIONS_FILENAME
         assert report.name == RUN_REPORT_FILENAME
         assert annotations.read_bytes() == DETAILED_CSV
-        assert str(Path(request.fasta_path).resolve()) in report.read_text(encoding="utf-8")
+        report_text = report.read_text(encoding="utf-8")
+        assert str(Path(request.fasta_path).resolve()) in report_text
+        assert "- Device policy: `cpu`" in report_text
         assert stat.S_IMODE(annotations.stat().st_mode) == 0o600
         assert handoff.schema_version == "1"
         assert handoff.tool_version == "0.4.0"
@@ -151,7 +163,67 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert handoff.source.model_name == "frag"
         assert handoff.source.model_version == "202401"
         assert handoff.source.annotation_date.utcoffset() is not None
+        metadata = {field.name: field.value for field in handoff.source.source_metadata}
+        assert metadata["device_requested"] == "cpu"
         assert "sha" not in handoff.model_dump_json().lower()
+
+
+@pytest.mark.asyncio
+async def test_explicit_cuda_request_reaches_the_execution_plan(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    runner = SuccessfulRunner()
+    async with _manager(runtime_config, runner, runtime_probe=_cuda_ready_probe) as manager:
+        started = await manager.run(_request(runtime_config, name="cuda", device="cuda"))
+        assert started.plan.device == "cuda"
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+        assert runner.calls[0].device == "cuda"
+        result = await manager.get_job(started.job.job_id)
+        assert result.handoff is not None
+        metadata = {field.name: field.value for field in result.handoff.source.source_metadata}
+        assert metadata["device_requested"] == "cuda"
+        assert "- Device policy: `cuda`" in Path(result.handoff.report_path).read_text(
+            encoding="utf-8"
+        )
+
+
+@pytest.mark.asyncio
+async def test_cuda_request_requires_available_runtime_without_staging(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    runner = SuccessfulRunner()
+    request = _request(runtime_config, name="cuda-unavailable", device="cuda")
+    async with _manager(runtime_config, runner) as manager:
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(request)
+
+    assert captured.value.detail.code is ErrorCode.RUNTIME_UNAVAILABLE
+    assert not Path(request.output_directory).exists()
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cuda_is_rechecked_before_runner_execution(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    runner = SuccessfulRunner()
+    probes = iter(
+        (
+            RuntimeProbeResult(runtime_ready=True, cuda_available=True),
+            RuntimeProbeResult(runtime_ready=True, cuda_available=False),
+        )
+    )
+
+    def changing_cuda_probe(**_: object) -> RuntimeProbeResult:
+        return next(probes)
+
+    async with _manager(runtime_config, runner, runtime_probe=changing_cuda_probe) as manager:
+        started = await manager.run(_request(runtime_config, name="cuda-disappears", device="cuda"))
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+        result = await manager.get_job(started.job.job_id)
+
+    assert result.job.failure_reason == "CUDA became unavailable before DeepKOALA started."
+    assert runner.calls == []
 
 
 @pytest.mark.asyncio
@@ -265,15 +337,18 @@ async def test_path_and_existing_output_fail_before_runner_start(
 
 
 @pytest.mark.asyncio
-async def test_model_and_timeout_policy_are_enforced_without_staging(
+async def test_model_timeout_and_device_policy_are_enforced_without_staging(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     runner = SuccessfulRunner()
-    config = runtime_config.model_copy(update={"allowed_models": ("frag",)})
+    config = runtime_config.model_copy(
+        update={"allowed_models": ("frag",), "allowed_devices": ("cpu",)}
+    )
     async with _manager(config, runner) as manager:
         for request in (
             _request(config, name="model", model="full"),
             _request(config, name="timeout", model="frag", timeout_seconds=31),
+            _request(config, name="device", model="frag", device="cuda"),
         ):
             with pytest.raises(DeepKoalaMcpError) as captured:
                 await manager.run(request)
@@ -326,6 +401,8 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.runtime_ready is True
         assert status.cuda_available is False
         assert status.allowed_models == ("full", "frag")
+        assert status.device_policy == "cpu"
+        assert status.allowed_devices == ("cpu", "cuda")
         assert status.max_concurrent_jobs == 1
         assert status.allow_multi is False
         assert status.multi_ready is False
