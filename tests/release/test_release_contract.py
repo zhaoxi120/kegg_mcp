@@ -416,15 +416,25 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "exact merged commit" in readiness
 
 
-def test_skill_evaluation_record_distinguishes_static_tests_from_forward_review() -> None:
+def test_skill_evaluation_separates_deterministic_checks_from_manual_release_review() -> None:
     record = (PROJECT_ROOT / "docs/skill-evaluation.md").read_text(encoding="utf-8")
 
     assert "not a runtime LLM evaluation" in record
     assert "Independent forward/manual reviews" in record
-    assert record.count("Observed route: passed.") == 6
+    assert "tests/skill/" in record
     normalized = re.sub(r"\s+", " ", record)
-    assert "current core, annotation, and rendering contracts" in normalized
-    assert "All focused routes passed" in normalized
+    assert "exact release candidate" in normalized
+    assert "All focused routes must pass before release" in normalized
+    for scenario in (
+        "Protein FASTA without KO assignments",
+        "DeepKOALA detailed CSV",
+        "Plain K-number column",
+        "Two KO sets",
+        "Activity claim from one K number",
+        "Existing `render_input.json`",
+        "Combined FASTA-to-graphics request",
+    ):
+        assert scenario in record
 
 
 def test_distribution_boundary_is_explicit() -> None:

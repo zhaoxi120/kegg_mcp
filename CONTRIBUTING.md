@@ -1,12 +1,12 @@
 # Contributing
 
-Thank you for contributing to KEGG MCP. The MVP is implemented; keep each subsequent change
-focused on one layer or one public contract.
+Thank you for contributing to KEGG MCP. Keep each change focused on one layer or one public
+contract.
 
 ## Development setup
 
 Install Python 3.11.x and [uv](https://docs.astral.sh/uv/), then create the project environment.
-Version 0.2.x does not claim support for Python 3.12 or later:
+The current distributions do not claim support for Python 3.12 or later:
 
 ```bash
 uv sync
@@ -24,7 +24,8 @@ uv run pytest
 
 ## Contribution rules
 
-- Read `AGENTS.md` and the relevant sections of `docs/development-plan.md` before editing.
+- Read `AGENTS.md`, the implemented public interfaces and tests, and the relevant current
+  architecture document before editing.
 - Use English for all tracked content, issue text, pull requests, and commit messages.
 - Preserve raw annotation evidence, provenance, ambiguity, and multiple KO assignments.
 - Keep local live KEGG tests opt-in. Pull-request CI may run the reviewed serialized compatibility

@@ -1,6 +1,6 @@
-# MCP server
+# Core MCP Server
 
-The core MVP runs as a local stdio server. It never launches DeepKOALA or another annotation tool,
+The core runs as a local stdio server. It never launches DeepKOALA or another annotation tool,
 parses KGML, renders images, or exposes remote HTTP transport. Optional annotation and rendering
 capabilities are separate local stdio processes and independently reviewed distributions:
 
@@ -83,7 +83,7 @@ The server exposes eleven tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
-  selection are supplied, the server independently selects the top five MODULEs and top five
+  selection are supplied, the server independently selects up to five MODULEs and up to five
   canonical KO reference pathways by unique selected-KO overlap under the request's strict or
   lenient evidence mode. MODULE ranking selects targets; it is not completion or enrichment, and
   exact completion is evaluated separately. To override the pathway count, supply only
@@ -256,49 +256,11 @@ result. It returns a bounded parsed preview rather than the raw cached payload.
 
 ## Independent renderer MCP
 
-`kegg-render-mcp` accepts exactly one version 3 handoff as a controlled absolute path or bounded
-inline JSON. It renders regular
-reference-pathway evidence overlays and project-owned MODULE logic diagrams as canonical static
-SVG and optional bounded PNG. It never imports annotation tables, normalizes evidence, evaluates
-MODULEs, recomputes pathway coverage, or starts either other process.
-
-The renderer declares `kegg-mcp>=0.5,<0.6`; incompatible core packages fail dependency
-resolution.
-
-Required deployment settings are `KEGG_RENDER_MCP_STATE_ROOT` and
-`KEGG_RENDER_MCP_ALLOWED_ROOTS`. The state root must be private and must not overlap a renderer
-allowed root. Pathway access uses the separate `KEGG_RENDER_MCP_ACCESS_MODE` contract with
-`public_academic` as the eligible academic default, `licensed` for an authorized endpoint,
-`offline_cache` for read-only, network-disabled pathway assets, or `unconfigured` for MODULE-only
-rendering. Offline mode requires a configured absolute `KEGG_RENDER_MCP_CACHE_PATH`; only an
-existing safe database with matching entries can satisfy a pathway render, while a missing path is
-a typed miss and is never created. It defaults to the public-academic cache namespace and can
-select a confirmed licensed namespace by supplying the licensed endpoint only for canonical
-fingerprinting. It rejects stale entries unless
-`KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true`; accepted stale use remains explicit in warnings and
-asset provenance. The offline connectivity probe performs zero requests and status never returns
-the cache path, endpoint, or fingerprint.
-
-The renderer exposes six tools:
-
-- `get_renderer_status`;
-- `probe_renderer_kegg_connectivity`;
-- `render_analysis_bundle`;
-- `render_pathway`;
-- `render_module`; and
-- `delete_render_result`.
-
-Its fixed status resource is `kegg-render://status`. Its validated templates are
-`kegg-render://results/{render_id}` and
-`kegg-render://results/{render_id}/{artifact}`. Result IDs are opaque and scoped to one renderer
-process. SVG resources are UTF-8 `image/svg+xml`; PNG resources are binary `image/png`. Unknown,
-expired, deleted, and cross-scope IDs share the same safe not-found result.
-
-Pathway rendering may retrieve one matching source PNG and one KGML document through the typed
-core asset interface. MODULE rendering is closed-world. Source assets, cache state, and renderer
-artifacts remain local. Global and overview maps are explicitly unsupported, and graphics describe
-annotation evidence rather than pathway presence, activity, flux, phenotype, or experimental
-validation.
+`kegg-render-mcp` is a separate distribution and process. It accepts the core's version 3 handoff,
+renders bounded static SVG or PNG, and never normalizes evidence or recomputes analysis. Its tools,
+resources, access modes, result lifecycle, and security contract are documented in the
+[renderer README](../companions/kegg-render-mcp/README.md) and
+[visualization architecture](visualization-extension-plan.md).
 
 ## Errors and testing
 
@@ -309,10 +271,5 @@ codes rather than `CACHE_FAILED`. Invalid or unauthorized resource URIs use MCP 
 Endpoint URLs, environment values, credentials, raw tables, and cache payloads are not included in
 status or error output.
 
-Pull-request CI runs one serialized campaign of 120 requests (30 for each supported operation)
-with zero retries and no uploaded KEGG payloads. Local live checks are opt-in and accept a bounded
-per-operation count from 1 through 30. Additional manual checks should use only the minimum
-explicit requests. A separate renderer CI job uses its frozen lock file and only generated
-synthetic KGML, PNG, MODULE contracts, and handoffs. It performs no live KEGG requests and uploads
-no source or rendered asset. The workflow is pull-request-only, so merging to `main` does not
-repeat either job.
+Default local tests are offline. The governed core live campaign and independent synthetic renderer
+job are defined in [the live-test guide](../tests/live/README.md) and the release checklist.

@@ -1,14 +1,14 @@
 # Pathway coverage and KO-set comparison contract
 
-This document specifies the Milestone 4 pathway and comparison analysis layer. It is a project
-contract for deterministic analysis, not an official KEGG pathway-completeness method or a
-statistical comparison method.
+This document specifies the current pathway and comparison analysis layer. It is a project contract
+for deterministic analysis, not an official KEGG pathway-completeness method or a statistical
+comparison method.
 
 The analysis layer is pure and local. It consumes immutable annotation datasets, typed KEGG
 results, resolved MODULE graphs, and pathway references that a caller has already obtained. It
 does not call KEGG, read or write the KEGG cache, execute an annotation tool, persist results, or
 perform MCP transport. Retrieval, licensing, rate limiting, and cache I/O remain responsibilities
-of the KEGG client layer. Result storage and resource retrieval begin in Milestone 5.
+of the KEGG client layer; persistence and presentation belong to the service and MCP layers.
 
 ## Pathway reference construction
 
@@ -186,7 +186,7 @@ functional reference and do not replace the complete KO membership partitions.
 
 ## Interpretation language
 
-All Milestone 4 outputs are descriptive. A K-number assignment remains annotation evidence, and a
+All outputs are descriptive. A K-number assignment remains annotation evidence, and a
 K number missing from one set can reflect sequencing, assembly, binning, gene calling, annotation,
 model, or database coverage.
 
@@ -197,17 +197,16 @@ and differing outcomes must not be labelled biological gain or loss. The compari
 produce p-values, fold changes, enrichment, significance, confidence intervals, or differential
 abundance claims.
 
-## Milestone boundary
+## Layer boundary
 
-Milestone 4 returns immutable, JSON-compatible analysis models in process. It provides bounded
-previews and full detail only where the configured in-memory hard limits permit it. It does not
-create a result store, `result_id`, resource URI, pagination endpoint, Markdown report, CSV export,
-or MCP resource template. Scoped persistence, retrieval, pagination, cleanup, and presentation are
-Milestone 5 responsibilities; MCP tools and resource templates begin later.
+The analysis layer returns immutable, JSON-compatible models in process. It provides bounded
+previews and full detail only where configured in-memory limits permit it. Result storage, resource
+URIs, pagination, reports, CSV export, cleanup, and transport presentation belong to the service and
+MCP layers.
 
 ## Public Python surface
 
-The Milestone 4 functions operate on typed objects and perform no hidden I/O:
+The public functions operate on typed objects and perform no hidden I/O:
 
 ```python
 from kegg_mcp.analysis import (
