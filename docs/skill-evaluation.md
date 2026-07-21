@@ -31,6 +31,7 @@ candidate:
 | Activity claim from one K number | Refuse the activity inference and explain the evidence boundary. |
 | Existing `render_input.json` | Use `kegg-pathway-rendering` without recomputing core analysis. |
 | Combined FASTA-to-graphics request | Continue across the three focused Skills using the stable CSV and renderer handoff files. |
+| Explicit multi-domain annotation request | Use `multi=true` with `batch_size=1` only when companion status reports the deployment capability ready; never download or accept HMMER/profile paths through the Skill. |
 
 Reviewers should record the exact commit, Codex version, explicit or implicit Skill selection,
 observed route, any clarification, MCP calls, stable handoffs, final interpretation, and failures.

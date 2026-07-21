@@ -51,3 +51,15 @@ def test_original_fasta_to_analysis_request_continues_without_reprompting() -> N
         "preserve its requested formats and target scope",
     ):
         assert fragment in CORPUS
+
+
+def test_multi_domain_mode_requires_explicit_ready_opt_in() -> None:
+    for fragment in (
+        "Omit `multi` by default",
+        "requests multi-domain annotation",
+        "`allow_multi=true`",
+        "`multi_ready=true`",
+        "keep `batch_size=1`",
+        "actual reported `multi` value",
+    ):
+        assert fragment in CORPUS

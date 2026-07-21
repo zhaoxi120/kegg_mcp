@@ -15,7 +15,10 @@ from deepkoala_mcp.contracts import (
     MAX_FASTA_BYTES,
     MAX_OUTPUT_BYTES,
     MAX_SEQUENCE_COUNT,
+    ErrorCode,
     ModelName,
+    RunDeepKoalaInput,
+    fail,
 )
 
 ENV_PREFIX = "DEEPKOALA_MCP_"
@@ -31,6 +34,9 @@ MAX_FASTA_BYTES_ENV = f"{ENV_PREFIX}MAX_FASTA_BYTES"
 MAX_SEQUENCES_ENV = f"{ENV_PREFIX}MAX_SEQUENCES"
 MAX_OUTPUT_BYTES_ENV = f"{ENV_PREFIX}MAX_OUTPUT_BYTES"
 MAX_TIMEOUT_SECONDS_ENV = f"{ENV_PREFIX}MAX_TIMEOUT_SECONDS"
+ALLOW_MULTI_ENV = f"{ENV_PREFIX}ALLOW_MULTI"
+PROFILES_DIR_ENV = f"{ENV_PREFIX}PROFILES_DIR"
+HMMSEARCH_EXECUTABLE_ENV = f"{ENV_PREFIX}HMMSEARCH_EXECUTABLE"
 
 DEFAULT_CPU_THREADS = 2
 DEFAULT_MAX_TIMEOUT_SECONDS = 3_600
@@ -74,8 +80,48 @@ class DeepKoalaRuntimeConfig(BaseModel):
         ge=1,
         le=86_400,
     )
-    allow_multi: Literal[False] = False
+    allow_multi: bool = Field(default=False, strict=True)
+    profiles_dir: Path | None = None
+    hmmsearch_executable: Path | None = None
     max_concurrent_jobs: Literal[1] = 1
+
+    def validate_run_request(self, request: RunDeepKoalaInput) -> None:
+        """Enforce deployment-owned request policy before staging input."""
+        if request.model not in self.allowed_models:
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "The requested model is outside the deployment allowlist.",
+                suggested_action="Choose a model reported by runner status.",
+            )
+        if request.device not in self.allowed_devices:
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "The requested device policy is not allowed.",
+                suggested_action="Use the deployment-approved auto device policy.",
+            )
+        if request.multi and not self.allow_multi:
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "Multi-domain execution is disabled by deployment policy.",
+                suggested_action=(
+                    "Use single-domain mode or ask the operator to configure local dependencies."
+                ),
+            )
+        if request.multi and request.batch_size != 1:
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "Multi-domain execution does not use configurable batching.",
+                suggested_action="Use batch_size=1 for multi-domain annotation.",
+            )
+        if (
+            request.timeout_seconds is not None
+            and request.timeout_seconds > self.max_timeout_seconds
+        ):
+            fail(
+                ErrorCode.POLICY_DENIED,
+                "The requested timeout exceeds the deployment policy.",
+                suggested_action="Use a timeout no greater than the status-reported maximum.",
+            )
 
     @model_validator(mode="after")
     def validate_paths_and_policy(self) -> Self:
@@ -107,6 +153,23 @@ class DeepKoalaRuntimeConfig(BaseModel):
             raise ValueError("allowed_models must not be empty")
         if self.allowed_devices != ("auto",):
             raise ValueError("the supported device allowlist is exactly 'auto'")
+        if self.allow_multi and (self.profiles_dir is None or self.hmmsearch_executable is None):
+            raise ValueError(
+                "multi-domain execution requires profiles_dir and hmmsearch_executable"
+            )
+        for name, path in (
+            ("profiles_dir", self.profiles_dir),
+            ("hmmsearch_executable", self.hmmsearch_executable),
+        ):
+            if path is None:
+                continue
+            if not path.is_absolute() or ".." in path.parts or path == Path(path.anchor):
+                raise ValueError(f"{name} must be an absolute traversal-free non-root path")
+            if any(
+                _overlap(path, root)
+                for root in (self.state_root, *self.input_roots, *self.output_roots)
+            ):
+                raise ValueError(f"{name} must not overlap mutable companion roots")
         return self
 
 
@@ -115,6 +178,7 @@ def load_runtime_config(
 ) -> DeepKoalaRuntimeConfig:
     """Load the explicit ``DEEPKOALA_MCP_*`` deployment policy."""
     values = os.environ if environment is None else environment
+    allow_multi = _boolean(values, ALLOW_MULTI_ENV, False)
     return DeepKoalaRuntimeConfig(
         checkout=_required_existing(values, CHECKOUT_ENV, directory=True),
         python_executable=_required_existing(values, PYTHON_ENV, directory=False),
@@ -152,6 +216,9 @@ def load_runtime_config(
             1,
             86_400,
         ),
+        allow_multi=allow_multi,
+        profiles_dir=_optional_path(values, PROFILES_DIR_ENV, required=allow_multi),
+        hmmsearch_executable=_optional_path(values, HMMSEARCH_EXECUTABLE_ENV, required=allow_multi),
     )
 
 
@@ -212,6 +279,15 @@ def _absolute(value: str, name: str) -> Path:
     return path
 
 
+def _optional_path(values: Mapping[str, str], name: str, *, required: bool) -> Path | None:
+    value = values.get(name)
+    if value is None or not value:
+        if required:
+            raise ValueError(f"{name} is required when {ALLOW_MULTI_ENV}=true")
+        return None
+    return _absolute(value, name)
+
+
 def _roots(value: str, name: str) -> tuple[Path, ...]:
     parts = value.split(os.pathsep)
     if any(not part for part in parts):
@@ -253,6 +329,15 @@ def _integer(
     return parsed
 
 
+def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
+    value = values.get(name)
+    if value is None:
+        return default
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} must be exactly true or false")
+    return value == "true"
+
+
 def _validate_roots(name: str, roots: tuple[Path, ...], *, writable: bool = False) -> None:
     if not roots:
         raise ValueError(f"{name} must not be empty")
@@ -277,14 +362,17 @@ def _overlap(left: Path, right: Path) -> bool:
 __all__ = [
     "ALLOWED_DEVICES_ENV",
     "ALLOWED_MODELS_ENV",
+    "ALLOW_MULTI_ENV",
     "CHECKOUT_ENV",
     "CPU_THREADS_ENV",
+    "HMMSEARCH_EXECUTABLE_ENV",
     "INPUT_ROOTS_ENV",
     "MAX_FASTA_BYTES_ENV",
     "MAX_OUTPUT_BYTES_ENV",
     "MAX_SEQUENCES_ENV",
     "MAX_TIMEOUT_SECONDS_ENV",
     "OUTPUT_ROOTS_ENV",
+    "PROFILES_DIR_ENV",
     "PYTHON_ENV",
     "STATE_ROOT_ENV",
     "DeepKoalaRuntimeConfig",

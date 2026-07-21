@@ -270,16 +270,25 @@ import input, `deepkoala_run_report.md` as the human-readable report, and the re
 model resource versions used by the job.
 
 The default managed installation uses the official DeepKOALA repository and its bundled `202502`
-resources. The suite does not pin a source revision, verify a source archive hash, install
-multi-domain dependencies, or provide an in-repository weight-update mechanism. A user may manage a
-newer external installation separately, but every result must report the resolved model version.
+resources. The suite does not pin a source revision, verify a source archive hash, download
+multi-domain dependencies, or provide an in-repository weight-update mechanism. Multi-domain
+capability is deployment opt-in: the operator must separately provide an absolute `hmmsearch`
+executable and a local KOfam profile directory. Individual requests still default to single-domain
+mode and may enable multi-domain execution only when the deployment reports it ready. A user may
+manage a newer external installation separately, but every result must report the resolved model
+version.
 
 Detailed output preserves `predict_label`, probability, threshold, and source annotation marker.
 The default importer accepts a verified source-positive marker or probability meeting its source
 threshold. A below-threshold prediction remains source-rejected, not uncertain. Missing predictions
-are unclassified and malformed K numbers are invalid. Multi-domain rows can be imported when an
-external table supplies paired coordinates, even though the managed suite does not install that
-mode.
+are unclassified and malformed K numbers are invalid. Multi-domain rows retain paired coordinates
+as independent evidence records. The companion records whether multi-domain mode was used without
+exposing local HMMER or profile paths.
+
+Companion status preserves the existing readiness fields and adds one stable redacted route state,
+fixed issue text, and a fixed next action. It reports structural multi-domain readiness separately
+from the default request mode without claiming that a local profile collection is complete. Invalid
+deployment configuration remains a doctor/startup failure rather than a fabricated MCP route.
 
 ## Renderer contract
 
@@ -427,10 +436,14 @@ visualization-specific API and legal boundary reviewed again on 2026-07-16:
   [database entry format](https://www.kegg.jp/kegg/docs/dbentry.html), and
   [Pathway Map Viewer help](https://www.kegg.jp/kegg/document/help_pathway.html)
 
-DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14:
+DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14. The optional
+multi-domain CLI, HMMER invocation boundary, and short-sequence output were reviewed again on
+2026-07-21 against official commit `bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
 
 - [DeepKOALA GenomeNet page](https://www.genome.jp/tools/deepkoala/) and
   [official repository](https://github.com/zhaoxi120/deepkoala)
+- [official CLI](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/cli.py) and
+  [multi-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer_multi.py)
 
 MCP tool and resource contracts were reviewed on 2026-07-16 against the 2025-06-18 specification:
 

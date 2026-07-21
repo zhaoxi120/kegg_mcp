@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from pathlib import Path
 
 import pytest
 
 from deepkoala_mcp import cli
 from deepkoala_mcp.config import (
+    ALLOW_MULTI_ENV,
     CHECKOUT_ENV,
+    HMMSEARCH_EXECUTABLE_ENV,
     INPUT_ROOTS_ENV,
     OUTPUT_ROOTS_ENV,
+    PROFILES_DIR_ENV,
     PYTHON_ENV,
     STATE_ROOT_ENV,
     DeepKoalaRuntimeConfig,
@@ -19,13 +23,24 @@ from deepkoala_mcp.config import (
 
 
 def _environment(config: DeepKoalaRuntimeConfig) -> dict[str, str]:
-    return {
+    environment = {
         CHECKOUT_ENV: str(config.checkout),
         PYTHON_ENV: str(config.python_executable),
         STATE_ROOT_ENV: str(config.state_root),
         INPUT_ROOTS_ENV: str(config.input_roots[0]),
         OUTPUT_ROOTS_ENV: str(config.output_roots[0]),
     }
+    if config.allow_multi:
+        assert config.profiles_dir is not None
+        assert config.hmmsearch_executable is not None
+        environment.update(
+            {
+                ALLOW_MULTI_ENV: "true",
+                PROFILES_DIR_ENV: str(config.profiles_dir),
+                HMMSEARCH_EXECUTABLE_ENV: str(config.hmmsearch_executable),
+            }
+        )
+    return environment
 
 
 def test_doctor_reports_ready_without_exposing_paths(
@@ -45,6 +60,8 @@ def test_doctor_reports_ready_without_exposing_paths(
     assert document["input_root_count"] == 1
     assert document["output_root_count"] == 1
     assert document["private_paths"] == "redacted"
+    assert document["allow_multi"] is False
+    assert document["multi_ready"] is False
     assert str(runtime_config.checkout) not in output.getvalue()
     assert str(runtime_config.state_root) not in output.getvalue()
 
@@ -93,6 +110,43 @@ def test_doctor_reports_missing_allowlisted_resources(
     assert document["route_state"] == "model_resources_unavailable"
     assert document["checkout_ready"] is True
     assert document["model_resources_ready"] is False
+
+
+def test_doctor_distinguishes_enabled_but_unavailable_multi_dependencies(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(mode=0o700)
+    (profiles / "K00001.hmm").write_text("HMMER3/f\n", encoding="ascii")
+    executable = tmp_path / "hmmsearch"
+    executable.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    executable.chmod(0o700)
+    config = runtime_config.model_copy(
+        update={
+            "allow_multi": True,
+            "profiles_dir": profiles,
+            "hmmsearch_executable": executable,
+        }
+    )
+    output = StringIO()
+
+    exit_code = cli.main(
+        ["doctor", "--json"],
+        environment=_environment(config),
+        stdout=output,
+    )
+    document = json.loads(output.getvalue())
+
+    assert exit_code == 2
+    assert document["route_state"] == "multi_dependencies_unavailable"
+    assert document["configuration_valid"] is True
+    assert document["runtime_ready"] is True
+    assert document["model_resources_ready"] is True
+    assert document["allow_multi"] is True
+    assert document["multi_ready"] is False
+    assert str(profiles) not in output.getvalue()
+    assert str(executable) not in output.getvalue()
 
 
 def test_default_and_serve_commands_dispatch_stdio(monkeypatch: pytest.MonkeyPatch) -> None:

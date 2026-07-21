@@ -58,6 +58,49 @@ def test_private_job_cleanup_accepts_regular_files_created_under_public_umask(
     assert not job.exists()
 
 
+def test_publish_accepts_fully_empty_multi_domain_unclassified_row(tmp_path: Path) -> None:
+    _, _, _, controlled = _controlled_output(tmp_path)
+    raw = tmp_path / "multi.csv"
+    raw.write_bytes(b"name,predict_label,probability,threshold,start,end,annotate\nshort,,,,,,\n")
+    try:
+        annotations, _, _ = publish_artifacts(
+            raw_output=raw,
+            output_directory=controlled,
+            report="report\n",
+            max_output_bytes=5_000_000,
+        )
+        assert annotations.read_bytes() == raw.read_bytes()
+    finally:
+        close_output_directory(controlled)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        b"short,,0.5,,,,\n",
+        b"protein,K00001,0.9,0.5,1,,*\n",
+        b"protein,K00001,0.9,0.5,start,10,*\n",
+    ],
+)
+def test_publish_rejects_partial_empty_or_malformed_multi_domain_rows(
+    tmp_path: Path,
+    row: bytes,
+) -> None:
+    _, _, _, controlled = _controlled_output(tmp_path)
+    raw = tmp_path / "multi.csv"
+    raw.write_bytes(b"name,predict_label,probability,threshold,start,end,annotate\n" + row)
+    try:
+        with pytest.raises(OutputValidationError):
+            publish_artifacts(
+                raw_output=raw,
+                output_directory=controlled,
+                report="report\n",
+                max_output_bytes=5_000_000,
+            )
+    finally:
+        close_output_directory(controlled)
+
+
 def test_publish_rejects_ancestor_symlink_substitution(tmp_path: Path) -> None:
     root, parent, _, controlled = _controlled_output(tmp_path)
     original_parent = root / "project-original"

@@ -13,19 +13,23 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    route state and ask permission only for the missing installation, registration, download, or
    repair action. Suite installation permission is requested once for each new installation root;
    an already installed `local_ready` deployment does not ask again for later FASTA jobs.
-   Never install, download, or replace DeepKOALA resources silently.
+   Inspect `allow_multi` and `multi_ready` separately. Never install, download, or replace
+   DeepKOALA, HMMER, model resources, or profiles silently.
 3. Treat an explicit request to annotate the FASTA as authorization to call
    `run_deepkoala_job` once. Omit `model_date` for the default call; supply it only when the user
    explicitly requests a specific installed model version. Do not ask for an ACK, notice digest, or
    second confirmation. Let the companion enforce model, device, timeout, input, concurrency, and
-   no-download policy.
+   no-download policy. Omit `multi` by default. Pass `multi=true` only when the user explicitly
+   requests multi-domain annotation and status reports both `allow_multi=true` and
+   `multi_ready=true`; keep `batch_size=1` because upstream multi-domain execution does not use
+   configurable batching.
 4. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
    `cancel_deepkoala_job` only for a user cancellation, an agreed deadline, or safe recovery from
    a lost client operation.
 5. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
    `deepkoala_run_report.md` paths, schema/tool versions, original FASTA path, model parameters,
    timing, and caveats. Explicitly state the resolved model name and model version reported by the
-   service. Never parse or normalize the CSV in this Skill.
+   service, plus the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
 6. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.

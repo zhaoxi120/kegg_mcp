@@ -36,7 +36,7 @@ def build_handoff(
         SourceMetadataField(name="batch_size", value=plan.batch_size),
         SourceMetadataField(name="num_workers", value=0),
         SourceMetadataField(name="topk", value=plan.topk),
-        SourceMetadataField(name="multi", value=False),
+        SourceMetadataField(name="multi", value=plan.multi),
     )
     source = SourceProvenance(
         source_version=source_version,
@@ -88,7 +88,7 @@ def build_run_report(
             f"- Batch size: `{plan.batch_size}`",
             "- Worker processes: `0`",
             f"- Top-k: `{plan.topk}`",
-            "- Multi-domain mode: `false`",
+            f"- Multi-domain mode: `{str(plan.multi).lower()}`",
             f"- Timeout seconds: `{plan.timeout_seconds}`",
             f"- Sequence count: `{fasta.sequence_count}`",
             f"- Started at: `{_iso(started_at)}`",
