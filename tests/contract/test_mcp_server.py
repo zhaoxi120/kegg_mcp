@@ -22,6 +22,7 @@ from kegg_mcp.kegg import (
     KeggClientConfig,
     KeggEntryRef,
     KeggGetDatabase,
+    KeggLinkRelationship,
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
@@ -103,7 +104,12 @@ class _FakeReferenceClient:
     ) -> GetResult:
         del options
         first = request.entries[0]
-        self.call_log.append(("get", first.identifier))
+        request_label = (
+            "+".join(entry.identifier for entry in request.entries)
+            if first.database is KeggGetDatabase.PATHWAY
+            else first.identifier
+        )
+        self.call_log.append(("get", request_label))
         if first.database is KeggGetDatabase.MODULE:
             body = b"".join(
                 (
@@ -116,13 +122,16 @@ class _FakeReferenceClient:
             )
             marker = "1"
         elif first.database is KeggGetDatabase.PATHWAY:
-            body = (
-                f"ENTRY       {first.identifier}                    Pathway\n"
-                "NAME        Synthetic pathway\n"
-                "CLASS       Metabolism; Carbohydrate metabolism\n"
-                "///\n"
-            ).encode("ascii")
-            marker = "2"
+            body = b"".join(
+                (
+                    f"ENTRY       {entry.identifier}                    Pathway\n"
+                    "NAME        Synthetic pathway\n"
+                    "CLASS       Metabolism; Carbohydrate metabolism\n"
+                    "///\n"
+                ).encode("ascii")
+                for entry in request.entries
+            )
+            marker = f"2-{len(request.entries)}"
         else:
             entries = b"".join(
                 (
@@ -208,6 +217,80 @@ class _LargeRankingReferenceClient(_FakeReferenceClient):
             request=request,
             rows=rows,
             batches=(_provenance(KeggOperation.LINK, "ranking-562"),),
+        )
+
+
+class _BroadFirstReferenceClient(_FakeReferenceClient):
+    def get(
+        self,
+        request: GetRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> GetResult:
+        if request.entries[0].database is not KeggGetDatabase.PATHWAY:
+            return super().get(request, options=options)
+        del options
+        self.call_log.append(("get", "+".join(item.identifier for item in request.entries)))
+        body = b"".join(
+            (
+                (
+                    f"ENTRY       {entry.identifier}           Global    Pathway\n"
+                    "NAME        Synthetic global pathway\n"
+                    "///\n"
+                )
+                if entry.identifier == "ko01100"
+                else (
+                    f"ENTRY       {entry.identifier}                    Pathway\n"
+                    "NAME        Synthetic standard pathway\n"
+                    "CLASS       Metabolism; Carbohydrate metabolism\n"
+                    "///\n"
+                )
+            ).encode("ascii")
+            for entry in request.entries
+        )
+        return GetResult(
+            request=request,
+            documents=(parse_flat_file_response(body),),
+            missing_entries=(),
+            batches=(
+                _provenance(
+                    KeggOperation.GET,
+                    f"scope-filter-{'-'.join(item.identifier for item in request.entries)}",
+                ),
+            ),
+        )
+
+    def link(
+        self,
+        request: LinkRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> LinkResult:
+        if request.relationship is not KeggLinkRelationship.KO_TO_PATHWAY:
+            return super().link(request, options=options)
+        del options
+        self.call_log.append(("link", request.relationship.value))
+        rows = (
+            KeggPairRow(
+                line_number=1,
+                source_id="ko:K00001",
+                target_id="path:ko01100",
+            ),
+            KeggPairRow(
+                line_number=2,
+                source_id="ko:K00002",
+                target_id="path:ko01100",
+            ),
+            KeggPairRow(
+                line_number=3,
+                source_id="ko:K00001",
+                target_id="path:ko00010",
+            ),
+        )
+        return LinkResult(
+            request=request,
+            rows=rows,
+            batches=(_provenance(KeggOperation.LINK, "broad-first-ranking"),),
         )
 
 
@@ -1179,11 +1262,15 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             }
         ]
         assert data["pathway_target_count"] == 1
-        assert summary["kegg_request_count"] == 3
-        assert summary["network_request_count"] == 3
+        assert summary["kegg_request_count"] == 4
+        assert summary["network_request_count"] == 4
         assert summary["cache_hit_count"] == 0
         assert client.call_log == [
             ("link", "ko_to_pathway"),
+            (
+                "get",
+                "+".join(f"ko{index:05d}" for index in range(1, 11)),
+            ),
             ("link", "pathway_to_ko"),
             ("get", "ko00001"),
         ]
@@ -1239,10 +1326,11 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             "bundle_write",
         ]
         assert retained_report["execution_metrics"][1]["request_count"] == 1
-        assert retained_report["execution_metrics"][3]["request_count"] == 2
+        assert retained_report["execution_metrics"][3]["request_count"] == 3
         assert len(retained_report["mapping_provenance"]) == 1
         assert len(retained_ranking["ranking"]["rows"]) == 115
         assert "relationships" not in retained_ranking["ranking"]
+        assert len(retained_ranking["scope_filter_provenance"]) == 1
         assert len(retained_relationships["relationships"]) == 562
         bundle = data["output_bundle"]
         ranking_lines = Path(bundle["pathway_ranking"]).read_text(encoding="utf-8").splitlines()
@@ -1261,6 +1349,64 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
         assert manifest["pathway_selection"]["candidate_pathway_count"] == 115
         assert manifest["pathway_selection"]["selected_pathway_ids"] == ["ko00001"]
+
+
+@pytest.mark.asyncio
+async def test_automatic_selection_skips_broad_metadata_before_loading_references(
+    tmp_path: Path,
+) -> None:
+    client = _BroadFirstReferenceClient()
+    runtime = McpRuntime(
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="broad-first-contract",
+        allowed_roots=(str(tmp_path.resolve()),),
+    )
+    server = create_server(runtime)
+    output = tmp_path / "broad-first"
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "K00001\nK00002",
+                "pathway_selection": {"top_n": 1},
+                "output_directory": str(output),
+            },
+        )
+
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["automatic_pathway_selection"]["selected_pathways"] == [
+            {
+                "rank": 2,
+                "pathway_id": "ko00010",
+                "pathway_number": "00010",
+                "detected_unique_ko_count": 1,
+                "relationship_row_count": 1,
+            }
+        ]
+        assert data["pathway_target_count"] == 1
+        assert data["pathway_previews"][0]["pathway_id"] == "ko00010"
+        assert data["summary"]["kegg_request_count"] == 4
+        assert client.call_log == [
+            ("link", "ko_to_pathway"),
+            ("get", "ko01100+ko00010"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00010"),
+        ]
+
+        render_input = RenderInput.model_validate_json(
+            Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+            strict=True,
+        )
+        assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
+        report = Path(data["output_bundle"]["analysis_report"]).read_text(encoding="utf-8")
+        assert "| 1 | `ko01100` | 2 | 2 | no |" in report
+        assert "| 2 | `ko00010` | 1 | 1 | yes |" in report
+        manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
+        assert manifest["pathway_selection"]["selected_pathway_ids"] == ["ko00010"]
 
 
 @pytest.mark.asyncio

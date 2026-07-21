@@ -162,8 +162,11 @@ Minimal server-ranked Top-1 pathway input:
 
 The server selects K numbers from the requested evidence mode, performs one logical KO-to-pathway
 mapping stage, de-duplicates each pathway's K numbers, sorts by descending unique selected-KO count
-and then canonical pathway ID, and loads pathway LINK/GET references only for the selected Top-N.
-Duplicate annotation records and duplicate LINK rows cannot increase the detected node count.
+and then canonical pathway ID. Unless broad references were explicitly enabled, a bounded typed GET
+metadata preflight skips `Global Pathway`, `Overview Pathway`, and `Global and overview maps`
+candidates before Top-N truncation; the complete overlap ranking remains retained. The server then
+loads pathway LINK/GET references only for the selected standard targets. Duplicate annotation
+records and duplicate LINK rows cannot increase the detected node count.
 
 Generic tables with unambiguous common headers are mapped automatically and the decision is
 reported; ambiguous or non-standard tables require an explicit mapping. When `annotations` is used

@@ -183,12 +183,13 @@ def _get_result(
     *,
     pathway_name: str = "Glycolysis / Gluconeogenesis",
     pathway_class: str = "Metabolism; Carbohydrate metabolism",
+    entry_type: str = "Pathway",
     include_class: bool = True,
     missing: bool = False,
 ) -> GetResult:
     entry = KeggEntryRef(database=KeggGetDatabase.PATHWAY, identifier=pathway_id)
     body = (
-        f"ENTRY       {pathway_id}                    Pathway\n"
+        f"ENTRY       {pathway_id}                    {entry_type}\n"
         f"NAME        {pathway_name}\n"
         + (f"CLASS       {pathway_class}\n" if include_class else "")
         + "///\n"
@@ -535,6 +536,55 @@ def test_builder_uses_exact_link_rows_and_get_class_metadata() -> None:
     )
     assert reference.link_provenance == link.batches
     assert reference.metadata_provenance == get.batches
+
+
+@pytest.mark.parametrize("entry_type", ["Global Pathway", "Overview Pathway"])
+def test_builder_accepts_current_broad_entry_metadata_without_class(
+    entry_type: str,
+) -> None:
+    reference = build_pathway_reference(
+        _link_result("ko01100", ("ko:K00001",)),
+        _get_result(
+            "ko01100",
+            pathway_name="Metabolic pathways",
+            entry_type=entry_type,
+            include_class=False,
+        ),
+        PathwayReferenceNamespace.KO,
+    )
+
+    assert reference.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+    assert reference.pathway_class == ("Metabolism; Global and overview maps",)
+
+
+def test_builder_rejects_conflicting_entry_and_class_scope_metadata() -> None:
+    with pytest.raises(KeggMcpError) as caught:
+        build_pathway_reference(
+            _link_result("ko01100", ("ko:K00001",)),
+            _get_result(
+                "ko01100",
+                entry_type="Global Pathway",
+                pathway_class="Metabolism; Carbohydrate metabolism",
+            ),
+            PathwayReferenceNamespace.KO,
+        )
+
+    _assert_error_code(caught, ErrorCode.KEGG_PARSE_FAILED)
+
+
+def test_builder_rejects_unknown_entry_qualifier_even_with_standard_class() -> None:
+    with pytest.raises(KeggMcpError) as caught:
+        build_pathway_reference(
+            _link_result("ko00010", ("ko:K00001",)),
+            _get_result(
+                "ko00010",
+                entry_type="Weird Pathway",
+                pathway_class="Metabolism; Carbohydrate metabolism",
+            ),
+            PathwayReferenceNamespace.KO,
+        )
+
+    _assert_error_code(caught, ErrorCode.KEGG_PARSE_FAILED)
 
 
 def test_builder_accepts_an_empty_link_result_without_fabricating_coverage() -> None:

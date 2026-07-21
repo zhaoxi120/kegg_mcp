@@ -515,12 +515,23 @@ def _append_pathway_ranking(
             "| ---: | --- | ---: | ---: | --- |",
         )
     )
+    ranking_execution = (
+        report.execution.pathway_parameters.ranking if report.execution is not None else None
+    )
+    selected_pathway_ids = (
+        frozenset(ranking_execution.selected_pathway_ids) if ranking_execution is not None else None
+    )
     selected = report.pathway_ranking[: limits.max_markdown_pathway_ranking_rows]
     for row in selected:
+        is_selected = (
+            row.pathway_id in selected_pathway_ids
+            if selected_pathway_ids is not None
+            else row.rank <= selection.top_n
+        )
         lines.append(
             f"| {row.rank} | `{row.pathway_id}` | {row.detected_unique_ko_count} | "
             f"{row.relationship_row_count} | "
-            f"{'yes' if row.rank <= selection.top_n else 'no'} |"
+            f"{'yes' if is_selected else 'no'} |"
         )
     truncated = len(selected) < len(report.pathway_ranking)
     if truncated:
