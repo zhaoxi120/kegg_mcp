@@ -311,6 +311,21 @@ def fail_multi_unavailable() -> NoReturn:
     )
 
 
+def fail_runtime_unavailable(*, cuda_requested: bool = False) -> NoReturn:
+    """Return a bounded repair route for the configured DeepKOALA runtime."""
+    message = (
+        "The requested CUDA device is unavailable in the configured runtime."
+        if cuda_requested
+        else "The configured Python cannot import the required DeepKOALA runtime."
+    )
+    action = (
+        "Use the default CPU device or explicitly repair and verify the CUDA runtime."
+        if cuda_requested
+        else "Run the redacted doctor command and repair the configured environment."
+    )
+    fail(ErrorCode.RUNTIME_UNAVAILABLE, message, suggested_action=action)
+
+
 def _read_source_version(path: Path) -> str:
     if not _direct_regular(path, nonempty=True):
         raise InstallationError(ErrorCode.DEEPKOALA_UNAVAILABLE)
@@ -471,6 +486,7 @@ __all__ = [
     "classify_readiness_route",
     "fail_installation",
     "fail_multi_unavailable",
+    "fail_runtime_unavailable",
     "inspect_installation",
     "probe_multi_dependencies",
     "probe_multi_dependencies_async",

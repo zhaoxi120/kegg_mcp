@@ -9,7 +9,7 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from deepkoala_mcp.contracts import MAX_OUTPUT_BYTES, ExecutionPlan
 
@@ -228,6 +228,7 @@ class RunnerPlan:
     job_directory: Path
     model: str
     resolved_date: str
+    device: Literal["cpu", "cuda"]
     batch_size: int
     topk: int
     timeout_seconds: int
@@ -259,6 +260,7 @@ class RunnerPlan:
             job_directory=job_directory,
             model=plan.model,
             resolved_date=plan.resolved_model_date,
+            device=plan.device,
             batch_size=plan.batch_size,
             topk=plan.topk,
             timeout_seconds=plan.timeout_seconds,
@@ -270,6 +272,8 @@ class RunnerPlan:
         )
 
     def __post_init__(self) -> None:
+        if self.device not in {"cpu", "cuda"}:
+            raise ValueError("runner device must be cpu or cuda")
         if self.multi and (self.profiles_dir is None or self.hmmsearch_executable is None):
             raise ValueError("multi-domain runner plan requires local dependencies")
         for path in (self.profiles_dir, self.hmmsearch_executable):
@@ -366,7 +370,7 @@ def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
         "--date",
         plan.resolved_date,
         "--device",
-        "auto",
+        plan.device,
         "--detail",
         "--batch_size",
         str(plan.batch_size),

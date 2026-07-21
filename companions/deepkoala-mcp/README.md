@@ -45,7 +45,7 @@ separator (`:` on Linux).
 | `DEEPKOALA_MCP_INPUT_ROOTS` | yes | Roots containing caller FASTA files |
 | `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories |
 | `DEEPKOALA_MCP_ALLOWED_MODELS` | no | Subset of `full,frag`; default `full,frag` |
-| `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Must be exactly `auto` |
+| `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu` or `cpu,cuda`; default `cpu,cuda` |
 | `DEEPKOALA_MCP_CPU_THREADS` | no | 1 through 4; default 2 |
 | `DEEPKOALA_MCP_MAX_FASTA_BYTES` | no | FASTA cap up to 5,000,000 bytes |
 | `DEEPKOALA_MCP_MAX_SEQUENCES` | no | Sequence cap up to 100,000 |
@@ -94,17 +94,20 @@ output directory, and process startup in one call. Required fields are:
 ```
 
 Optional fields are `model` (`full` by default, or `frag`), `model_date` (`202502` by default,
-`latest`, or an installed `YYYYMM`), `device` (`auto` only), `batch_size` (1-64), `topk` (1-10), and
-`timeout_seconds` within the deployment cap. `multi` is a strict boolean and defaults to `false`.
-Set it to `true` only when the user requests multi-domain annotation and status reports both
-`allow_multi=true` and `multi_ready=true`; multi-domain requests must keep `batch_size=1` because
-the upstream multi-domain path does not use configurable batching.
+`latest`, or an installed `YYYYMM`), `device` (`cpu` by default, or explicit `cuda` when allowed),
+`batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap. GPU execution
+requires an explicit user request and status with both `cuda` in `allowed_devices` and
+`cuda_available=true`. `multi` is a strict boolean and defaults to `false`. Set it to `true` only
+when the user requests multi-domain annotation and status reports both `allow_multi=true` and
+`multi_ready=true`; multi-domain requests must keep `batch_size=1` because the upstream
+multi-domain path does not use configurable batching.
 
-DeepKOALA always receives detailed-output, `device=auto`, and `num_workers=0`. A multi-domain job
-also receives `--multi --profiles_dir`; the handoff and report record the actual `multi` value. Only
-one job runs in a deployment; another request returns `RUNNER_BUSY` instead of entering a queue.
-Status lists installed resources. A successful handoff and report identify the DeepKOALA source and
-the actual resolved model resource version used by that job.
+DeepKOALA always receives detailed-output, an explicit `device=cpu|cuda`, and `num_workers=0`; it
+never receives `device=auto`. A multi-domain job also receives `--multi --profiles_dir`; the handoff
+and report record the actual device and `multi` value. Only one job runs in a deployment; another
+request returns `RUNNER_BUSY` instead of entering a queue. Status lists installed resources and the
+device allowlist. A successful handoff and report identify the DeepKOALA source and the actual
+resolved model resource version used by that job.
 
 ## Stable output and lifecycle
 
@@ -146,7 +149,8 @@ passed to another server as result identity.
 - Optional HMMER execution replaces only the supported upstream `_run_hmmsearch` hook. It uses the
   configured absolute executable, bounded CPU count, private scratch files, and rejects any other
   attempted shell execution.
-- The service inherits operator accelerator visibility and always requests `device=auto`.
+- The service may inherit operator accelerator visibility, defaults to `device=cpu`, and accepts
+  `device=cuda` only through its deployment allowlist; it never requests `device=auto`.
 - One job runs at a time with bounded CPU threads, input, output, sequences, and elapsed time.
 - Timeout, cancellation, process-group termination, descendant cleanup, and Linux parent-death
   control bound the external process lifecycle.

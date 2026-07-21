@@ -1160,7 +1160,7 @@ def _deployment_environments(
             str(root) for root in config.deepkoala.output_roots
         ),
         "DEEPKOALA_MCP_ALLOWED_MODELS": ",".join(config.deepkoala.allowed_models),
-        "DEEPKOALA_MCP_ALLOWED_DEVICES": "auto",
+        "DEEPKOALA_MCP_ALLOWED_DEVICES": "cpu,cuda",
         "DEEPKOALA_MCP_CPU_THREADS": str(config.deepkoala.cpu_threads),
         "DEEPKOALA_MCP_ALLOW_MULTI": str(config.deepkoala.allow_multi).lower(),
     }

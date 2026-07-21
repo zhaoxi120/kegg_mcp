@@ -53,10 +53,11 @@ The following remain unsupported:
 
 The annotation companion accepts one allowlisted absolute protein FASTA path and one new allowed
 output directory, validates and privately stages the FASTA, and owns bounded process lifecycle and
-cleanup. It defaults to the installed `202502` resources, keeps `device=auto`, detailed output, zero
-data-loader workers, and single-domain execution. A request may opt into multi-domain execution only
-when the deployment has separately configured and validated local HMMER/KOfam resources. The
-companion never downloads those resources, normalizes K numbers, or queries KEGG.
+cleanup. It defaults to the installed `202502` resources, `device=cpu`, detailed output, zero
+data-loader workers, and single-domain execution. It accepts `device=cuda` subject to deployment
+and runtime checks and never uses automatic device selection. A request may opt into multi-domain
+execution only when the deployment has separately configured and validated local HMMER/KOfam
+resources. The companion never downloads those resources, normalizes K numbers, or queries KEGG.
 
 The stable successful output is:
 

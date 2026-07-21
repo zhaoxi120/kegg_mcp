@@ -162,7 +162,7 @@ class RunDeepKoalaInput(FrozenModel):
     output_directory: str = Field(min_length=1, max_length=4_096)
     model: ModelName = "full"
     model_date: ModelDate = "202502"
-    device: Literal["auto"] = "auto"
+    device: Literal["cpu", "cuda"] = "cpu"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)
     multi: bool = Field(default=False, strict=True)
@@ -212,7 +212,7 @@ class ExecutionPlan(FrozenModel):
     model: ModelName
     requested_model_date: ModelDate
     resolved_model_date: ResolvedModelDate
-    device: Literal["auto"] = "auto"
+    device: Literal["cpu", "cuda"] = "cpu"
     detail: Literal[True] = True
     batch_size: int = Field(strict=True, ge=1, le=64)
     num_workers: Literal[0] = 0
@@ -382,7 +382,10 @@ class CompanionStatus(FrozenModel):
     deepkoala_version: str | None = Field(default=None, max_length=128)
     installed_resources: Annotated[tuple[InstalledResource, ...], Field(max_length=256)]
     allowed_models: Annotated[tuple[ModelName, ...], Field(min_length=1, max_length=2)]
-    device_policy: Literal["auto"] = "auto"
+    device_policy: Literal["cpu"] = "cpu"
+    allowed_devices: Annotated[
+        tuple[Literal["cpu", "cuda"], ...], Field(min_length=1, max_length=2)
+    ]
     gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
     companion_network_requests: Literal[False] = False
@@ -406,6 +409,8 @@ class CompanionStatus(FrozenModel):
 
     @model_validator(mode="after")
     def validate_readiness(self) -> Self:
+        if self.allowed_devices not in {("cpu",), ("cpu", "cuda")}:
+            raise ValueError("allowed_devices must preserve the CPU default")
         if self.ready != (self.runtime_ready and bool(self.installed_resources)):
             raise ValueError("ready must match runtime and resource availability")
         if self.multi_ready and not self.allow_multi:

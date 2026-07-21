@@ -78,8 +78,9 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         version=__version__,
         instructions=(
             "Run one bounded local DeepKOALA annotation job directly from an allowlisted protein "
-            "FASTA path into a new controlled output directory. The runner uses auto device, "
-            "detailed output, and no worker processes. Multi-domain mode defaults to false and is "
+            "FASTA path into a new controlled output directory. The runner defaults to CPU and "
+            "uses CUDA only after an explicit device request allowed by deployment policy. It uses "
+            "detailed output and no worker processes. Multi-domain mode defaults to false and is "
             "available only when the deployment reports it ready and a request explicitly enables "
             "it. The companion never downloads resources. Pass the successful stable CSV path and "
             "source object to core kegg-mcp."

@@ -43,6 +43,7 @@ from deepkoala_mcp.installation import (
     classify_readiness_route,
     fail_installation,
     fail_multi_unavailable,
+    fail_runtime_unavailable,
     inspect_installation,
     probe_multi_dependencies_async,
     probe_runtime_async,
@@ -211,7 +212,9 @@ class DeepKoalaJobManager:
             installation = self._select_installation(request.model, request.model_date)
             runtime = await self._probe_runtime()
             if not runtime.runtime_ready:
-                _fail_runtime_unavailable()
+                fail_runtime_unavailable()
+            if request.device == "cuda" and not runtime.cuda_available:
+                fail_runtime_unavailable(cuda_requested=True)
             if request.multi and not await self._multi_ready(runtime):
                 fail_multi_unavailable()
 
@@ -220,6 +223,7 @@ class DeepKoalaJobManager:
                 model=request.model,
                 requested_model_date=request.model_date,
                 resolved_model_date=installation.resource.model_date,
+                device=request.device,
                 batch_size=request.batch_size,
                 topk=request.topk,
                 multi=request.multi,
@@ -413,6 +417,7 @@ class DeepKoalaJobManager:
             deepkoala_version=version,
             installed_resources=resources,
             allowed_models=self.config.allowed_models,
+            allowed_devices=self.config.allowed_devices,
             allow_multi=self.config.allow_multi,
             multi_ready=multi_ready,
             route_state=route.route_state,
@@ -487,6 +492,8 @@ class DeepKoalaJobManager:
             runtime = await self._probe_runtime()
             if not runtime.runtime_ready:
                 reason = "The configured DeepKOALA runtime became unavailable."
+            elif record.plan.device == "cuda" and not runtime.cuda_available:
+                reason = "CUDA became unavailable before DeepKOALA started."
             elif record.plan.multi and not await self._multi_ready(runtime):
                 reason = "Configured multi-domain dependencies became unavailable."
             else:
@@ -644,14 +651,6 @@ class DeepKoalaJobManager:
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
-
-
-def _fail_runtime_unavailable() -> NoReturn:
-    fail(
-        ErrorCode.RUNTIME_UNAVAILABLE,
-        "The configured Python cannot import the required DeepKOALA runtime.",
-        suggested_action="Run the redacted doctor command and repair the configured environment.",
-    )
 
 
 def _fail_job_not_found() -> NoReturn:
