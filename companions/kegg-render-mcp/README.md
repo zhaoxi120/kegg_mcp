@@ -1,143 +1,96 @@
 # kegg-render-mcp
 
-`kegg-render-mcp` is an independently installed local stdio MCP companion for bounded KEGG
-annotation-evidence graphics. It accepts the complete `render_input.json` version 3 handoff
-written by `kegg-mcp`; it never imports annotation tables, assigns K numbers, evaluates MODULE
-completion, or recomputes pathway coverage.
+`kegg-render-mcp` is the independently packaged local stdio renderer for KEGG annotation-evidence
+graphics. It consumes the complete `render_input.json` schema version 3 handoff produced by a
+compatible `kegg-mcp` analysis. It never imports annotation tables, assigns K numbers, evaluates
+MODULE completion, or recomputes pathway coverage.
 
-The renderer handles:
+It supports regular canonical `koNNNNN` overlays from one matching KEGG PNG/KGML pair and
+project-owned MODULE logic diagrams from the authoritative core AST. SVG is canonical, PNG is an
+optional bounded derivative, and artifacts are available through local directories and scoped MCP
+resources.
 
-- regular reference-pathway overlays from one matching KEGG PNG and KGML document; and
-- project-owned MODULE logic diagrams from the authoritative core AST and complete render state.
-
-SVG is canonical. PNG is an optional bounded derivative. Global and overview pathways are rejected
-because their line-oriented graphics require a separately reviewed policy. `map` and
-organism-specific pathway targets remain explicit summary-only core results; the renderer accepts
-only regular `koNNNNN` reference targets. Graphics represent annotation evidence
-and do not establish pathway presence, activity, flux, phenotype, or experimental validation.
+Global and overview pathway overlays are unsupported because they require a separately reviewed
+line-overlay policy. `map` and organism-specific targets remain explicit summary-only core results;
+only regular KO reference pathways are renderable. Graphics describe annotation evidence and do not
+establish pathway presence, completeness, activity, flux, phenotype, or experimental validation.
 
 ## Installation
 
-Install this directory independently with Python 3.11. The companion depends on the compatible
-`kegg-mcp` range declared in its package metadata for the renderer contract and typed
-pathway-asset client.
+For Codex, use the repository suite installer described in
+[Installation and operation](../../docs/installation.md). It creates an isolated Renderer runtime
+and registers this server together with the matching Skill, Core, and DeepKOALA companion while
+preserving three independent stdio processes.
+
+For component development or manual registration by another MCP client, use Linux with Python 3.11
+and synchronize this directory independently:
 
 ```bash
 uv sync --frozen --all-groups
 ```
 
-No KEGG payload, model, weight, database, or font is bundled. Pillow performs bounded local PNG
-decoding and raster output; no browser, JavaScript, subprocess, or shell command is used.
+The package declares its compatible `kegg-mcp` range for the renderer contract and typed pathway
+asset client. It bundles no KEGG payload, database, model, weight, or font. Pillow performs bounded
+local PNG decoding and raster output; no browser, JavaScript, subprocess, or shell command is used.
 
 ## Configuration
 
-Two paths are required:
+The state root and at least one allowed file root are required:
 
 ```bash
 export KEGG_RENDER_MCP_STATE_ROOT=/absolute/private/renderer-state
 export KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/analysis-results
 ```
 
-`KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. File-based
-renderer input and optional output directories must be direct, traversal-free paths below one of
-these roots. Symlink escapes and unsafe writable intermediate directories are rejected.
+`KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. Renderer input and
+optional output directories must be direct, traversal-free paths below an allowed root. The private
+state root must not overlap an allowed root. Symlink escapes and unsafe writable ancestry are
+rejected.
 
-Pathway access defaults to `public_academic`, which is permitted only for eligible academic users
-and academic use. The explicit confirmation defaults to `true` in this academic repository:
+Pathway access uses one deployment-wide mode:
 
-```bash
-export KEGG_RENDER_MCP_ACCESS_MODE=public_academic
-export KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true
-```
+| Mode | Configuration and behavior |
+| --- | --- |
+| `public_academic` | Default live public KEGG access for eligible academic use; `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED` defaults to `true`. |
+| `licensed` | Set `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true` and `KEGG_RENDER_MCP_LICENSED_ENDPOINT` for an authorized HTTPS endpoint. |
+| `offline_cache` | Set `KEGG_RENDER_MCP_CACHE_PATH` to one existing Core-compatible cache; access is network-disabled and read-only. |
+| `unconfigured` | MODULE-only rendering with no pathway asset access. |
 
-For an appropriately licensed deployment:
+Select a non-default mode with `KEGG_RENDER_MCP_ACCESS_MODE`.
 
-```bash
-export KEGG_RENDER_MCP_ACCESS_MODE=licensed
-export KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true
-export KEGG_RENDER_MCP_LICENSED_ENDPOINT=https://licensed.example.invalid
-```
+Offline mode makes no HTTP request, creates or mutates no cache, and returns a typed unavailable
+result for a missing or unusable entry. It selects the public-academic cache namespace by default.
+To select a previously populated licensed namespace, also provide the licensed confirmation and
+canonical endpoint; the endpoint is used only for namespace identity and is never contacted or
+returned.
 
-For cache-only pathway rendering, select an existing Core-compatible cache explicitly:
+Stale offline assets are rejected by default. `KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true` permits
+them for the whole deployment.
 
-```bash
-export KEGG_RENDER_MCP_ACCESS_MODE=offline_cache
-export KEGG_RENDER_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
-```
+Accepted stale use remains explicit in warnings, timestamps, and artifact provenance. Core and
+Renderer share `KEGG_MCP_RATE_LIMIT_ROOT` and the same endpoint-scoped no-burst limit of at most
+three requests per second. Raw KEGG assets and cache payloads remain local.
 
-The default offline namespace is the public-academic namespace. To select assets previously cached
-through an appropriately licensed endpoint, confirm that namespace and provide its canonical
-endpoint:
-
-```bash
-export KEGG_RENDER_MCP_ACCESS_MODE=offline_cache
-export KEGG_RENDER_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
-export KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true
-export KEGG_RENDER_MCP_LICENSED_ENDPOINT=https://licensed.example.invalid
-```
-
-In offline mode the endpoint is used only to calculate the existing cache namespace fingerprint.
-It is never contacted or returned in status, errors, manifests, or provenance. The cache is opened
-with SQLite read-only and query-only enforcement after owner, mode `0600`, parent-directory,
-symlink, schema, parser-version, and physical/logical size checks. A missing cache or entry returns
-a typed asset-unavailable result without creating a database, initializing a schema, cleaning
-expired entries, or falling back to HTTP.
-
-Stale offline assets are rejected by default. An operator may enable them for the whole renderer
-deployment, not per request:
-
-```bash
-export KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true
-```
-
-When enabled, stale state and separate PNG/KGML retrieval timestamps remain visible in artifact
-provenance, and the result and manifest include a stale-cache warning.
-
-The access modes are:
-
-- `unconfigured`: MODULE-only rendering with no pathway asset access;
-- `offline_cache`: read-only pathway assets from the configured existing cache;
-- `public_academic`: live public KEGG access for eligible academic use; and
-- `licensed`: live access through an explicitly confirmed authorized endpoint.
-
-`KEGG_RENDER_MCP_CACHE_PATH` may also select the local Core-compatible cache used by a live access
-mode. Status never returns endpoint URLs, credentials, environment values, usernames, cache
-fingerprints, request keys, or local paths. Pathway assets use the core client's HTTPS validation,
-cache, retry policy, and deployment-wide no-burst rate limit of no more than three requests per
-second. Core and Renderer use the same `KEGG_MCP_RATE_LIMIT_ROOT`, which defaults to an owner-only
-user cache directory. Raw KEGG PNG and KGML payloads remain local and must not be uploaded or
-redistributed without a specific rights review.
-
-Optional bounded deployment settings are:
-
-- `KEGG_RENDER_MCP_RETENTION_SECONDS` (default `86400`, maximum 30 days);
-- `KEGG_RENDER_MCP_MAX_RESULTS` (default `128`, maximum `4096`); and
-- `KEGG_RENDER_MCP_MAX_DISK_BYTES` (default 256 MiB, maximum 2 GiB).
+Optional retention settings are `KEGG_RENDER_MCP_RETENTION_SECONDS` (default 86,400, maximum 30
+days), `KEGG_RENDER_MCP_MAX_RESULTS` (default 128, maximum 4,096), and
+`KEGG_RENDER_MCP_MAX_DISK_BYTES` (default 256 MiB, maximum 2 GiB).
 
 ## MCP surface
 
-Run the stdio server with:
+Run the manually configured stdio server with:
 
 ```bash
 uv run kegg-render-mcp
 ```
 
-Tools:
+The six tools are `get_renderer_status`, `probe_renderer_kegg_connectivity`,
+`render_analysis_bundle`, `render_pathway`, `render_module`, and `delete_render_result`.
 
-- `get_renderer_status`
-- `probe_renderer_kegg_connectivity`
-- `render_analysis_bundle`
-- `render_pathway`
-- `render_module`
-- `delete_render_result`
-
-The probe performs exactly one explicit KEGG `INFO` request in a live access mode and zero requests
-in `unconfigured` or `offline_cache` mode. Offline mode returns the stable `offline_cache`
-classification and explains that deployment policy prohibits network access; it is not reported as
-a DNS, timeout, or connection failure. The remaining bounded classifications distinguish
-configuration, DNS, connection, timeout, TLS, permission, rate-limit, endpoint, and unknown
-failures. Ordinary MODULE rendering is closed-world. Pathway rendering may retrieve one image and
-one KGML document through the typed core client or read the matching pair from the selected cache.
+`render_analysis_bundle` is the normal multi-target entry point. `render_pathway` and
+`render_module` render one canonical target. A live connectivity probe makes exactly one explicit
+KEGG `INFO` request; `offline_cache` and `unconfigured` probes make zero requests. MODULE rendering
+is closed-world. A pathway render may retrieve one image and one KGML document through the typed
+Core client.
 
 Example high-level input:
 
@@ -150,51 +103,48 @@ Example high-level input:
 }
 ```
 
-Every successful render call returns an opaque process-scoped `render_id`, bounded metadata,
-warnings, and server-generated resource URIs. The published `render_manifest.json` artifact
-carries the rendering provenance:
+Every render tool accepts exactly one handoff source: an allowed `render_input_path` or bounded
+`render_input_json`. Older or malformed schema versions return an actionable incompatible-input
+error; the renderer never repairs or upgrades a handoff.
+
+The fixed status resource is `kegg-render://status`. Result templates are:
 
 ```text
 kegg-render://results/{render_id}
 kegg-render://results/{render_id}/{artifact}
 ```
 
-An optional `output_directory` must be new or empty. Any existing entry causes
-`OUTPUT_ALREADY_EXISTS`; the renderer exposes no overwrite mode. It prepares the complete bundle,
-publishes image files without replacement, publishes `render_manifest.json` last, and removes only
-files installed by the failed operation if publication cannot complete.
+## Results and lifecycle
 
-SVG resources use `image/svg+xml`; PNG resources return binary `image/png`. Unknown, expired,
-deleted, and cross-process identifiers share the same safe not-found response. Explicit deletion
-removes all artifacts in the result. A repeated deletion may return not-found, but its filesystem
-effect is idempotent.
+A successful call returns an opaque process-scoped `render_id`, bounded metadata, warnings, and
+server-generated resource URIs. Image metadata includes MIME type, byte size, and dimensions. The
+published `render_manifest.json` records renderer, analysis, target, retrieval/cache, and artifact
+provenance without exposing private configuration.
 
-One state root is owned exclusively by one active renderer process. An owner-only advisory lock
-prevents concurrent processes from sharing a quota namespace. After a crashed process releases the
-lock, the next process removes only the bounded `scope_*` layout created by this companion before
-accepting work. Result count, payload bytes, estimated allocation blocks, and per-file metadata
-reserves are checked before a result directory is created.
+An optional output directory must be new or empty. Artifacts are published without replacement and
+the manifest is installed last. Failed publication removes only files created by that operation.
+SVG resources use `image/svg+xml`; PNG resources return binary `image/png`.
+
+Retained results have bounded count, lifetime, and disk use and belong to one active renderer
+process. Unknown, expired, deleted, and cross-process identifiers share the same safe not-found
+response. `delete_render_result` removes the retained result and its artifacts; a durable exported
+output directory remains operator-owned.
 
 ## Security boundary
 
-- Only schema version 3 is accepted; incompatible handoffs require a new core analysis bundle.
-- Every render tool requires exactly one input source: a direct allowed-root `render_input_path` or
-  bounded inline `render_input_json`. Both sources use the same strict schema-version-3 parser.
-- Input JSON, target counts, assets, XML structure, coordinates, pixels, SVG nodes, artifact bytes,
-  retained result count, payload bytes, estimated allocated storage, and cleanup work are bounded.
-- KGML DTDs, entities, external resolution, excessive depth, and mismatched identities are
-  rejected.
-- PNG signatures, chunks (in the core client), decoded dimensions, decompression limits, and total
-  pixels are validated before use.
-- Generated SVG contains no scripts, event handlers, active links, remote fonts, or external image
-  references. The matching source PNG is embedded as a static data URI.
-- Artifact names derive only from validated canonical identifiers and fixed suffixes. Writes are
-  atomic and owner-only.
-- The server never uses `shell=True` and launches no subprocess.
+Input JSON, targets, XML, coordinates, dimensions, pixels, SVG nodes, artifact bytes, retained
+results, storage, and cleanup are bounded. KGML DTDs, entities, external resolution, excessive
+depth, and mismatched identities are rejected. PNG structure, dimensions, decompression, and total
+pixels are validated before use.
 
-## Development
+Generated SVG has no scripts, event handlers, active links, remote fonts, or external resources;
+the validated source PNG is embedded as static data. Artifact names derive only from canonical
+identifiers and fixed suffixes, and writes use restrictive permissions. Status and errors redact
+credentials, environment values, usernames, endpoint URLs, cache identity, and full local paths.
 
-All tests are synthetic and offline:
+## Validation
+
+All component tests use synthetic assets and make no live KEGG requests:
 
 ```bash
 uv run ruff check .
@@ -203,5 +153,6 @@ uv run pyright
 uv run pytest
 ```
 
-Release tests build the independent wheel and source distribution and reject KEGG payloads,
-fixtures derived from KEGG, cache databases, and core or DeepKOALA implementation code.
+Release tests build and audit the independent wheel and source distribution. Packages and fixtures
+exclude KEGG payloads, KEGG-derived images or XML, cache databases, and Core or DeepKOALA
+implementation code.

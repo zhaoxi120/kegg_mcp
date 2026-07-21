@@ -9,7 +9,7 @@ Describe the focused change and the affected architectural layer or public contr
 
 ## Review checklist
 
-- [ ] The change stays within the assigned issue and MVP scope.
+- [ ] The change stays within the assigned issue and current product scope.
 - [ ] Tracked fixtures use synthetic or independently authored data; live checks stay within the
       reviewed request budget and do not upload KEGG responses.
 - [ ] Provenance, ambiguity, and multiple KO assignments are preserved where relevant.

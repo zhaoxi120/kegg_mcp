@@ -1,7 +1,7 @@
 # KEGG MODULE syntax and evaluation contract
 
-This document specifies the Milestone 3 parser and evaluator. It is an implementation contract,
-not an official KEGG grammar or an official KEGG completeness calculation.
+This document specifies the current parser and evaluator. It is an implementation contract, not an
+official KEGG grammar or an official KEGG completeness calculation.
 
 The analysis layer is pure and local. It accepts MODULE definitions that a caller has already
 obtained and does not call KEGG, read the project cache, or execute an annotation tool. Retrieval,
@@ -177,7 +177,7 @@ when available, and stale status. A stale definition produces an explicit warnin
 
 ## Public Python surface
 
-The stable Milestone 3 interface is exported from `kegg_mcp.analysis`:
+The stable interface is exported from `kegg_mcp.analysis`:
 
 ```python
 from kegg_mcp.analysis import (
@@ -201,7 +201,7 @@ paired_result = evaluate_module_pair(graph, annotation_dataset)
 ```
 
 `annotation_dataset` is an immutable `AnnotationDataset` produced by an importer or constructed
-against the Milestone 1 schema. Definition retrieval remains an explicit caller step; none of these
+against the annotation schema. Definition retrieval remains an explicit caller step; none of these
 functions performs network or filesystem I/O.
 
 ## Primary sources

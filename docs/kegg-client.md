@@ -1,8 +1,5 @@
 # KEGG Client and Cache Contract
 
-Status: Milestone 2 client-layer contract plus the post-MVP typed pathway-asset and read-only cache
-extensions as implemented on 2026-07-18.
-
 This document describes the typed KEGG request contracts, access eligibility gate, bounded request
 preparation, response parsing, local cache, and retrieval provenance, including the public library
 interface used by the independent renderer. It does not describe module evaluation, pathway
@@ -181,14 +178,14 @@ existence remains an endpoint response decision.
 Non-BRITE entries are sent in batches of at most ten, regardless of broader configuration. BRITE
 hierarchy htext entries are isolated into one request each because their response format differs.
 The caller must set `brite_kind=KeggBriteEntryKind.HIERARCHY`; BRITE HTML table files are not
-supported in Milestone 2 because their identifier syntax does not distinguish them safely from
+supported because their identifier syntax does not distinguish them safely from
 hierarchy files. Misclassified content fails parsing rather than being returned as hierarchy data.
 The result echoes the typed request; documents and provenance follow prepared batch order, while
 explicit missing entries follow caller request order.
 
 ### Pathway assets
 
-The post-MVP renderer extension adds a typed single-pathway asset interface reviewed against the
+The implemented renderer integration provides a typed single-pathway asset interface reviewed against the
 official KEGG API manual on 2026-07-16. `PathwayAssetRequest` accepts one canonical pathway
 identifier and exactly one fixed kind: `image`, `image2x`, or `kgml`. It cannot accept a URL.
 `KeggClient.get_pathway_asset` reuses the same access gate, endpoint-scoped no-burst limiter,
@@ -234,7 +231,7 @@ a three- or four-letter organism code, an official T number, or the bounded KEGG
 prefixes `ag`, `vg`, and `vp`. Response sources and target namespaces are reconciled before caching.
 Whole-database conversion and open-ended gene discovery are not exposed.
 
-`list`, `find`, arbitrary database pairs, and arbitrary endpoint paths are not public Milestone 2
+`list`, `find`, arbitrary database pairs, and arbitrary endpoint paths are not public client
 operations.
 
 ## Text parsing

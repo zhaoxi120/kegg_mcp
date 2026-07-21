@@ -1,8 +1,6 @@
 # Annotation Evidence and Import Contracts
 
-Status: implemented as Milestone 1 on 2026-07-14.
-
-This document records the first executable public contract in KEGG MCP. It covers immutable
+This document records the current annotation-import contract. It covers immutable
 annotation evidence, exact K-number normalization, three inline import formats, versioned decision
 policies, import diagnostics, and derived strict/lenient KO views. It does not cover KEGG access,
 module or pathway analysis, reporting services, MCP transport, or the repository-scoped Codex
@@ -22,8 +20,8 @@ import_generic_table(...)
 import_deepkoala_detailed(...)
 ```
 
-All importers accept only inline `str` or `bytes` payloads. Path resolution belongs to a later
-service/security milestone and is intentionally absent.
+All low-level importers accept only inline `str` or `bytes` payloads. The service/MCP layer owns
+allowed-root path resolution before passing bounded content to these functions.
 
 ## Input limits
 
@@ -41,7 +39,7 @@ limits = ImportLimits(
 ```
 
 These numbers are an application choice, not package defaults. Keeping limits caller-selected
-avoids silently resolving the high-level server limit policy before the service and MCP milestones.
+prevents the importer layer from duplicating deployment-owned service and MCP limits.
 Limits are enforced for bytes, logical rows, table columns, individual field lengths, and auxiliary
 metadata size. Dataset and source metadata each allow at most 128 immutable fields. Invalid Unicode
 in payloads is returned as a structured input error rather than a codec exception; invalid metadata
@@ -216,10 +214,9 @@ required sequence/sample identifier are retained under `ImportReport.unparsed_ro
 skipped. Missing mapped headers, duplicate headers, invalid CSV structure, and input-limit failures
 are recoverable structured errors.
 
-Milestone 1 intentionally has no generic column auto-detection entry point: `mapping` is required by
-the Python signature and its generated schema. High-level signature detection and the
-`AMBIGUOUS_COLUMN_MAPPING` workflow belong to the later service/MCP orchestration milestone; no
-ambiguous table is normalized by guessing in the meantime.
+The low-level generic importer requires an explicit `mapping` in its Python signature and generated
+schema. The service and MCP layer may perform bounded signature detection, but an ambiguous table
+returns `AMBIGUOUS_COLUMN_MAPPING`; no layer normalizes it by guessing.
 
 ## DeepKOALA detailed import
 
@@ -234,17 +231,10 @@ evidence. `score_type` is recorded as `probability`; a present threshold uses `t
 The importer accepts previously generated output only. It does not import DeepKOALA code, load a
 model, inspect a GPU, execute an annotation command, or infer a missing model version.
 
-The fixture contract was reviewed against the external documentation on 2026-07-14. A separate
-manual compatibility check was also performed on 2026-07-14 against official DeepKOALA commit
-`bebbe0c43f50a26488f7092f6b355aae870a4ed9`. The check used the repository-bundled `202502` full
-and fragment weights, the existing module-provided Python 3.11/PyTorch 2.9.1 environment, explicit
-CPU selection, two compute threads, and zero data-loader workers. Both bundled weight files loaded
-and completed inference, and a generated detailed top-k CSV imported without schema repair. This
-manual check did not add DeepKOALA code, weights, dependencies, or generated output to this
-repository and is not part of the default test suite.
-
-The optional companion's local detailed-handoff check is governed by
-[release readiness](release-readiness.md) and uses this same importer boundary.
+The detailed-output contract was reviewed against official DeepKOALA documentation on 2026-07-14.
+Release-candidate compatibility checks use an independently installed official DeepKOALA runtime
+and this same importer boundary. Their environment and result belong in release evidence rather
+than this long-lived interface contract.
 
 ## Duplicate and conflict reporting
 
