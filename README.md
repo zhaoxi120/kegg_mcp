@@ -53,8 +53,10 @@ lockfiles and declared build requirements.
 
 For a new suite root, `--allow-deepkoala-install` confirms one clone of the official DeepKOALA
 repository and installation of its upstream requirements. Later FASTA jobs do not ask again. The
-bundled `202502` model is the default, `device` remains `auto`, and multi-domain mode is disabled.
-This repository does not update DeepKOALA models.
+bundled `202502` model is the default and `device` remains `auto`. Multi-domain mode remains off for
+every request unless the operator has separately configured local HMMER/KOfam resources and the user
+explicitly requests it. This repository does not download those resources or update DeepKOALA
+models.
 
 Select KEGG access explicitly. Use confirmed `public_academic` only when both the user and the work
 qualify for public academic KEGG access. Non-academic deployments require an appropriately licensed

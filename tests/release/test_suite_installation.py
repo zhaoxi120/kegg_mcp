@@ -56,12 +56,17 @@ def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
     external_python = tmp_path / "deepkoala-python"
     external_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     external_python.chmod(0o700)
+    hmmsearch = tmp_path / "hmmsearch"
+    hmmsearch.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    hmmsearch.chmod(0o700)
     return {
         "private": private,
         "shared": shared,
         "input": input_root,
         "output": output_root,
         "python": external_python,
+        "profiles": _mkdir(tmp_path / "profiles"),
+        "hmmsearch": hmmsearch,
         "rate": _mkdir(private / "rate", private=True),
         "deep_state": _mkdir(private / "deep-state", private=True),
         "render_state": _mkdir(private / "render-state", private=True),
@@ -101,12 +106,29 @@ def _write_config(
     tmp_path: Path,
     *,
     extras: dict[str, str] | None = None,
+    enable_multi: bool = False,
 ) -> tuple[Path, dict[str, Path]]:
     paths = _deployment_paths(tmp_path)
+    selected_extras = dict(extras or {})
+    if enable_multi:
+        selected_extras["deepkoala"] = (
+            selected_extras.get("deepkoala", "")
+            + "allow_multi = true\n"
+            + f"profiles_dir = {json.dumps(str(paths['profiles']))}\n"
+            + f"hmmsearch_executable = {json.dumps(str(paths['hmmsearch']))}\n"
+        )
     config = paths["private"] / "deployment.toml"
-    config.write_text(_deployment_toml(paths, extras=extras), encoding="utf-8")
+    config.write_text(_deployment_toml(paths, extras=selected_extras), encoding="utf-8")
     config.chmod(0o600)
     return config, paths
+
+
+def _rewrite_deepkoala_config(config: Path, paths: dict[str, Path], deepkoala_extra: str) -> None:
+    config.write_text(
+        _deployment_toml(paths, extras={"deepkoala": deepkoala_extra}),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
 
 
 def _copy_suite_source(source: Path) -> None:
@@ -136,8 +158,10 @@ def _write_executable(path: Path) -> Path:
 
 def _materialize_suite_artifacts(
     tmp_path: Path,
+    *,
+    enable_multi: bool = False,
 ) -> tuple[Any, Any, Any, Path, Path, dict[str, Path]]:
-    config_path, paths = _write_config(tmp_path)
+    config_path, paths = _write_config(tmp_path, enable_multi=enable_multi)
     config = INSTALLER_MODULE._load_deployment_config(config_path)
     source = tmp_path / "snapshot"
     _copy_suite_source(source)
@@ -291,6 +315,128 @@ def test_deployment_config_rejects_nonwritable_private_state(tmp_path: Path) -> 
     assert raised.value.code == "deployment_path_invalid"
 
 
+def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path) -> None:
+    config_path, paths = _write_config(tmp_path)
+    paths["profiles"].rmdir()
+    paths["hmmsearch"].unlink()
+
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    environment = INSTALLER_MODULE._deployment_environments(config, tmp_path / "installed")[
+        "deepkoala-mcp"
+    ]
+
+    assert config.deepkoala.allow_multi is False
+    assert config.deepkoala.profiles_dir is None
+    assert config.deepkoala.hmmsearch_executable is None
+    assert environment["DEEPKOALA_MCP_ALLOW_MULTI"] == "false"
+    assert "DEEPKOALA_MCP_PROFILES_DIR" not in environment
+    assert "DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE" not in environment
+
+
+def test_deepkoala_multi_opt_in_emits_only_private_runtime_configuration(
+    tmp_path: Path,
+) -> None:
+    config_path, paths = _write_config(tmp_path, enable_multi=True)
+
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    environment = INSTALLER_MODULE._deployment_environments(config, tmp_path / "installed")[
+        "deepkoala-mcp"
+    ]
+
+    assert config.deepkoala.allow_multi is True
+    assert config.deepkoala.profiles_dir == paths["profiles"]
+    assert config.deepkoala.hmmsearch_executable == paths["hmmsearch"]
+    assert environment["DEEPKOALA_MCP_ALLOW_MULTI"] == "true"
+    assert environment["DEEPKOALA_MCP_PROFILES_DIR"] == str(paths["profiles"])
+    assert environment["DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE"] == str(paths["hmmsearch"])
+
+
+@pytest.mark.parametrize("present", ["neither", "profiles", "hmmsearch"])
+def test_deepkoala_multi_requires_both_external_paths(tmp_path: Path, present: str) -> None:
+    config_path, paths = _write_config(tmp_path)
+    fields = ["allow_multi = true"]
+    if present == "profiles":
+        fields.append(f"profiles_dir = {json.dumps(str(paths['profiles']))}")
+    elif present == "hmmsearch":
+        fields.append(f"hmmsearch_executable = {json.dumps(str(paths['hmmsearch']))}")
+    _rewrite_deepkoala_config(config_path, paths, "\n".join(fields))
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert raised.value.code == "deployment_config_invalid"
+
+
+def test_deepkoala_multi_paths_are_rejected_without_opt_in(tmp_path: Path) -> None:
+    config_path, paths = _write_config(tmp_path)
+    _rewrite_deepkoala_config(
+        config_path,
+        paths,
+        f"profiles_dir = {json.dumps(str(paths['profiles']))}\n"
+        f"hmmsearch_executable = {json.dumps(str(paths['hmmsearch']))}",
+    )
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert raised.value.code == "deployment_config_invalid"
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "profiles_symlink",
+        "profiles_permissions",
+        "hmmsearch_symlink",
+        "hmmsearch_permissions",
+        "hmmsearch_not_executable",
+    ],
+)
+def test_deepkoala_multi_rejects_unsafe_external_paths(tmp_path: Path, unsafe_path: str) -> None:
+    config_path, paths = _write_config(tmp_path, enable_multi=True)
+    if unsafe_path == "profiles_symlink":
+        paths["profiles"].rmdir()
+        paths["profiles"].symlink_to(paths["private"], target_is_directory=True)
+    elif unsafe_path == "profiles_permissions":
+        paths["profiles"].chmod(0o775)
+    elif unsafe_path == "hmmsearch_symlink":
+        paths["hmmsearch"].unlink()
+        paths["hmmsearch"].symlink_to(paths["python"])
+    elif unsafe_path == "hmmsearch_permissions":
+        paths["hmmsearch"].chmod(0o720)
+    else:
+        paths["hmmsearch"].chmod(0o600)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert raised.value.code == "deployment_path_invalid"
+
+
+@pytest.mark.parametrize("resource", ["profiles", "hmmsearch"])
+@pytest.mark.parametrize("overlap", ["deep_state", "input", "output"])
+def test_deepkoala_multi_resources_must_not_overlap_private_or_handoff_roots(
+    tmp_path: Path, resource: str, overlap: str
+) -> None:
+    config_path, paths = _write_config(tmp_path)
+    profiles = paths[overlap] if resource == "profiles" else paths["profiles"]
+    hmmsearch = paths["hmmsearch"]
+    if resource == "hmmsearch":
+        hmmsearch = _write_executable(paths[overlap] / "hmmsearch")
+    _rewrite_deepkoala_config(
+        config_path,
+        paths,
+        "allow_multi = true\n"
+        f"profiles_dir = {json.dumps(str(profiles))}\n"
+        f"hmmsearch_executable = {json.dumps(str(hmmsearch))}",
+    )
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert raised.value.code == "deployment_path_invalid"
+
+
 @pytest.mark.parametrize("section", ["root", "kegg", "core", "deepkoala", "renderer"])
 def test_deployment_config_rejects_unknown_fields(tmp_path: Path, section: str) -> None:
     config, _ = _write_config(tmp_path, extras={section: "unexpected = true"})
@@ -369,7 +515,9 @@ def test_generated_plugin_contains_exactly_three_skills_and_three_mcp_servers(
 def test_private_deployment_values_do_not_enter_generated_plugin_metadata(
     tmp_path: Path,
 ) -> None:
-    request, _, config, plugin_root, _, paths = _materialize_suite_artifacts(tmp_path)
+    request, _, config, plugin_root, _, paths = _materialize_suite_artifacts(
+        tmp_path, enable_multi=True
+    )
 
     public_metadata = "\n".join(
         (
@@ -389,10 +537,13 @@ def test_private_deployment_values_do_not_enter_generated_plugin_metadata(
         str(config.core.result_store_path),
         str(paths["input"]),
         str(paths["output"]),
+        str(paths["profiles"]),
+        str(paths["hmmsearch"]),
     }
 
     assert all(value not in public_metadata for value in private_values)
     assert all(value in private_manifest for value in private_values)
+    assert '"DEEPKOALA_MCP_ALLOW_MULTI": "true"' in private_manifest
     assert stat.S_IMODE(deployment_path.stat().st_mode) == 0o600
     assert (
         "environments"

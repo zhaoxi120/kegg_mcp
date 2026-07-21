@@ -54,7 +54,9 @@ The following remain unsupported:
 The annotation companion accepts one allowlisted absolute protein FASTA path and one new allowed
 output directory, validates and privately stages the FASTA, and owns bounded process lifecycle and
 cleanup. It defaults to the installed `202502` resources, keeps `device=auto`, detailed output, zero
-data-loader workers, and multi-domain mode disabled, and never normalizes K numbers or queries KEGG.
+data-loader workers, and single-domain execution. A request may opt into multi-domain execution only
+when the deployment has separately configured and validated local HMMER/KOfam resources. The
+companion never downloads those resources, normalizes K numbers, or queries KEGG.
 
 The stable successful output is:
 
@@ -312,22 +314,21 @@ Pull-request CI runs the governed core compatibility campaign once: 30 requests 
 `GET`, `LINK`, and `CONV`, serialized at one request per second with zero retries. Renderer CI uses
 only synthetic assets and performs no live KEGG request. CI does not upload KEGG payloads.
 
-Two exact-release gates are not established by repository unit tests alone:
+The automated synthetic composition gate is
+`companions/kegg-render-mcp/tests/test_synthetic_pipeline.py`. It carries a FASTA-derived companion
+handoff through core high-level analysis and into renderer output across three independent MCP
+sessions without rebuilding an intermediate contract or accessing the network.
 
-1. one fully synthetic integration run must carry a FASTA-derived companion handoff through core
-   high-level analysis and into renderer output without manually rebuilding an intermediate
-   contract; and
-2. an installation produced from the exact release candidate must be opened in a new Codex task and
-   prove discovery and invocation of all three Skills and all three MCP servers.
-
-The repository contains component and handoff coverage for both paths, but a generated plugin tree,
-mocked Codex output, or successful installer return is not the second gate. Record exact commit,
-package versions, Python, uv, Git, Codex version, CI result, access/rights review, and security review
-in release notes before calling that revision release-supported.
+One exact-release gate cannot be established by repository tests: an installation produced from the
+exact release candidate must be opened in a new Codex task and prove discovery and invocation of all
+three Skills and all three MCP servers. A generated plugin tree, mocked Codex output, or successful
+installer return is not that gate. Record exact commit, package versions, Python, uv, Git, Codex
+version, CI result, access/rights review, and security review in release notes before calling that
+revision release-supported.
 
 Global/overview overlays, renderer live-KEGG compatibility tests, automatic installation of later
 DeepKOALA models, and redistribution approval are outside the implemented release scope. They are
-not substitutes for the two release gates above.
+not substitutes for the automated composition gate or the real-Codex release gate above.
 
 ## Primary external sources
 

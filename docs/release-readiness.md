@@ -81,10 +81,10 @@ uv build --no-sources
 
 Renderer tests use generated synthetic assets and make no live KEGG requests.
 
-Record one synthetic integration run that carries a FASTA-derived companion handoff through the
-core high-level analysis and into renderer output without manually rebuilding an intermediate
-contract. This verifies composition of the three MCP boundaries without real inference or KEGG
-assets.
+Run `companions/kegg-render-mcp/tests/test_synthetic_pipeline.py` in the exact candidate. It carries
+a FASTA-derived companion handoff through core high-level analysis and into renderer output across
+three independent MCP sessions without manually rebuilding an intermediate contract. This verifies
+composition of the three MCP boundaries without real inference, network access, or KEGG assets.
 
 ## Suite installation evidence
 
@@ -101,6 +101,12 @@ Validate `scripts/install-suite.py` independently from the three Python distribu
 - [ ] confirm that the separate `--allow-deepkoala-install` path alone may clone the official
       repository and install its upstream requirements;
 - [ ] confirm the bundled `202502` resources are selected and reported by default;
+- [ ] confirm multi-domain capability defaults off, requires explicit deployment resources, and is
+      enabled per request only after status reports it ready;
+- [ ] confirm neither the default nor opt-in path downloads HMMER or KOfam profiles;
+- [ ] when publishing multi-domain support, use operator-provided HMMER, KOfam profiles, and a small
+      private FASTA for one real `multi=true` run; verify model and multi provenance without adding
+      inputs, profiles, or results to the repository or release artifacts;
 - [ ] verify generated launchers use validated absolute direct commands without a shell; and
 - [ ] verify rollback removes only state proven to belong to the failed transaction.
 
@@ -115,7 +121,8 @@ A successful installer exit or simulated Codex response is insufficient. From th
 2. verify the generated plugin through the supported Codex app or CLI;
 3. start a new Codex task outside the source checkout;
 4. confirm discovery of all three Skills and all three MCP servers;
-5. call the three status tools without live KEGG access or DeepKOALA inference; and
+5. call the three status tools without live KEGG access or DeepKOALA inference, requiring the
+   DeepKOALA structured status to return `route_state="local_ready"`; and
 6. record versions, failures, and redacted evidence in the release notes.
 
 Discovery, registration, rollback, or validator failures block release support for the suite path.

@@ -1,1 +1,2 @@
 recursive-include tests *.py
+exclude tests/test_synthetic_pipeline.py

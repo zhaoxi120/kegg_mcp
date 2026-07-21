@@ -112,6 +112,9 @@ class DeepKoalaConfig:
     output_roots: tuple[Path, ...]
     allowed_models: tuple[str, ...]
     cpu_threads: int
+    allow_multi: bool
+    profiles_dir: Path | None
+    hmmsearch_executable: Path | None
 
 
 @dataclass(frozen=True)
@@ -379,6 +382,17 @@ def _existing_regular_file(
     return checked
 
 
+def _existing_safe_executable(path: Path, label: str) -> Path:
+    checked = _existing_regular_file(path, label, executable=True)
+    try:
+        metadata = checked.lstat()
+    except OSError:
+        _error("deployment_path_invalid", f"{label} must remain an existing executable")
+    if metadata.st_uid not in {0, os.geteuid()} or stat.S_IMODE(metadata.st_mode) & 0o022:
+        _error("deployment_path_invalid", f"{label} has unsafe ownership or permissions")
+    return checked
+
+
 def _new_file_path(path: Path, label: str, *, writable: bool) -> Path:
     checked = _absolute_path(str(path), label)
     parent = _existing_directory(checked.parent, f"{label} parent", private=True, writable=writable)
@@ -513,6 +527,9 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
             "output_roots",
             "allowed_models",
             "cpu_threads",
+            "allow_multi",
+            "profiles_dir",
+            "hmmsearch_executable",
         },
         "deepkoala",
     )
@@ -542,6 +559,31 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
     ):
         _error("deployment_config_invalid", "deepkoala.allowed_models is invalid")
     cpu_threads = _integer(deepkoala, "cpu_threads", 2, 1, 4, "deepkoala")
+    allow_multi = _boolean(deepkoala, "allow_multi", False, "deepkoala")
+    raw_profiles_dir = _optional_string(deepkoala, "profiles_dir", "deepkoala")
+    raw_hmmsearch = _optional_string(deepkoala, "hmmsearch_executable", "deepkoala")
+    if allow_multi:
+        if raw_profiles_dir is None or raw_hmmsearch is None:
+            _error(
+                "deployment_config_invalid",
+                "deepkoala multi-domain mode requires profiles_dir and hmmsearch_executable",
+            )
+        profiles_dir = _existing_directory(
+            _absolute_path(raw_profiles_dir, "deepkoala.profiles_dir"),
+            "deepkoala.profiles_dir",
+        )
+        hmmsearch_executable = _existing_safe_executable(
+            _absolute_path(raw_hmmsearch, "deepkoala.hmmsearch_executable"),
+            "deepkoala.hmmsearch_executable",
+        )
+    else:
+        if raw_profiles_dir is not None or raw_hmmsearch is not None:
+            _error(
+                "deployment_config_invalid",
+                "deepkoala multi-domain paths require allow_multi=true",
+            )
+        profiles_dir = None
+        hmmsearch_executable = None
 
     renderer = _required_table(document, "renderer")
     _reject_unknown(renderer, {"state_root", "allowed_roots", "offline_allow_stale"}, "renderer")
@@ -575,6 +617,9 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
             output_roots=deepkoala_outputs,
             allowed_models=tuple(allowed_models),
             cpu_threads=cpu_threads,
+            allow_multi=allow_multi,
+            profiles_dir=profiles_dir,
+            hmmsearch_executable=hmmsearch_executable,
         ),
         renderer=RendererConfig(
             state_root=renderer_state,
@@ -632,6 +677,23 @@ def _validate_cross_component_paths(config: DeploymentConfig) -> None:
     private_files = (config.core.result_store_path,)
     if config.kegg.cache_path is not None:
         private_files = (*private_files, config.kegg.cache_path)
+    multi_resources = tuple(
+        path
+        for path in (
+            config.deepkoala.profiles_dir,
+            config.deepkoala.hmmsearch_executable,
+        )
+        if path is not None
+    )
+    if any(
+        _overlap(resource, path)
+        for resource in multi_resources
+        for path in (*states, *shared, *private_files)
+    ):
+        _error(
+            "deployment_path_invalid",
+            "DeepKOALA multi-domain resources must remain outside private and shared roots",
+        )
     if any(_overlap(path, state) for path in private_files for state in states) or (
         len(private_files) == 2 and _overlap(private_files[0], private_files[1])
     ):
@@ -846,6 +908,10 @@ def _validate_install_root(install_root: Path, config_path: Path, config: Deploy
     )
     if config.kegg.cache_path is not None:
         protected = (*protected, config.kegg.cache_path)
+    if config.deepkoala.profiles_dir is not None:
+        protected = (*protected, config.deepkoala.profiles_dir)
+    if config.deepkoala.hmmsearch_executable is not None:
+        protected = (*protected, config.deepkoala.hmmsearch_executable)
     if any(_overlap(checked, path) for path in protected):
         _error("deployment_path_invalid", "the install root overlaps source or deployment data")
     return checked
@@ -1096,7 +1162,16 @@ def _deployment_environments(
         "DEEPKOALA_MCP_ALLOWED_MODELS": ",".join(config.deepkoala.allowed_models),
         "DEEPKOALA_MCP_ALLOWED_DEVICES": "auto",
         "DEEPKOALA_MCP_CPU_THREADS": str(config.deepkoala.cpu_threads),
+        "DEEPKOALA_MCP_ALLOW_MULTI": str(config.deepkoala.allow_multi).lower(),
     }
+    if config.deepkoala.allow_multi:
+        if config.deepkoala.profiles_dir is None or config.deepkoala.hmmsearch_executable is None:
+            _error(
+                "deployment_config_invalid",
+                "deepkoala multi-domain deployment paths are unavailable",
+            )
+        deepkoala["DEEPKOALA_MCP_PROFILES_DIR"] = str(config.deepkoala.profiles_dir)
+        deepkoala["DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE"] = str(config.deepkoala.hmmsearch_executable)
     return {
         "deepkoala-mcp": deepkoala,
         "kegg-mcp": core,
