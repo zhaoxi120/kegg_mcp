@@ -21,6 +21,7 @@ from deepkoala_mcp.contracts import (
     JobState,
     RunDeepKoalaInput,
 )
+from deepkoala_mcp.installation import RuntimeProbeResult
 from deepkoala_mcp.job_storage import OutputValidationError
 from deepkoala_mcp.jobs import DeepKoalaJobManager
 from deepkoala_mcp.runner import ProcessOutcome, RunnerPlan, RunnerTimedOutError
@@ -79,11 +80,13 @@ class SymlinkOutputRunner:
 async def _manager(
     config: DeepKoalaRuntimeConfig,
     runner: object,
+    *,
+    runtime_probe: object = ready_probe,
 ) -> AsyncGenerator[DeepKoalaJobManager]:
     manager = DeepKoalaJobManager(
         config,
         runner=runner,  # pyright: ignore[reportArgumentType]
-        runtime_probe=ready_probe,
+        runtime_probe=runtime_probe,  # pyright: ignore[reportArgumentType]
     )
     await manager.open()
     try:
@@ -325,9 +328,129 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.allowed_models == ("full", "frag")
         assert status.max_concurrent_jobs == 1
         assert status.allow_multi is False
+        assert status.multi_ready is False
+        assert status.route_state == "local_ready"
+        assert status.issue is None
         serialized = status.model_dump_json()
         assert str(runtime_config.checkout) not in serialized
         assert str(runtime_config.state_root) not in serialized
+
+
+def _multi_ready_probe(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    del checkout, python_executable, cpu_threads
+    return RuntimeProbeResult(
+        runtime_ready=True,
+        cuda_available=False,
+        multi_adapter_compatible=True,
+    )
+
+
+def _multi_config(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+    *,
+    executable_body: str = "#!/bin/sh\nexit 0\n",
+) -> DeepKoalaRuntimeConfig:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(mode=0o700)
+    (profiles / "K00001.hmm").write_text("HMMER3/f\n", encoding="ascii")
+    executable = tmp_path / "hmmsearch"
+    executable.write_text(executable_body, encoding="utf-8")
+    executable.chmod(0o700)
+    return runtime_config.model_copy(
+        update={
+            "allow_multi": True,
+            "profiles_dir": profiles,
+            "hmmsearch_executable": executable,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_run_requires_ready_deployment_and_records_effective_mode(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    config = _multi_config(runtime_config, tmp_path)
+    payload = (
+        b"name,predict_label,probability,threshold,start,end,annotate\n"
+        b"protein-1,K00001,0.95,0.50,1,8,*\n"
+    )
+    runner = SuccessfulRunner(payload)
+    async with _manager(config, runner, runtime_probe=_multi_ready_probe) as manager:
+        status = await manager.status()
+        assert status.ready is True
+        assert status.allow_multi is True
+        assert status.multi_ready is True
+        assert status.route_state == "local_ready"
+
+        started = await manager.run(_request(config, name="multi", multi=True))
+        assert started.plan.multi is True
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+        result = await manager.get_job(started.job.job_id)
+        assert result.handoff is not None
+        metadata = {field.name: field.value for field in result.handoff.source.source_metadata}
+        assert metadata["multi"] is True
+        assert "Multi-domain mode: `true`" in Path(result.handoff.report_path).read_text(
+            encoding="utf-8"
+        )
+        assert runner.calls[0].multi is True
+        assert runner.calls[0].profiles_dir == config.profiles_dir
+        assert runner.calls[0].hmmsearch_executable == config.hmmsearch_executable
+
+
+@pytest.mark.asyncio
+async def test_enabled_but_unavailable_multi_has_distinct_route_and_keeps_base_ready(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    config = _multi_config(
+        runtime_config,
+        tmp_path,
+        executable_body="#!/bin/sh\nexit 1\n",
+    )
+    runner = SuccessfulRunner()
+    async with _manager(config, runner, runtime_probe=_multi_ready_probe) as manager:
+        status = await manager.status()
+        assert status.ready is True
+        assert status.allow_multi is True
+        assert status.multi_ready is False
+        assert status.route_state == "multi_dependencies_unavailable"
+        assert status.issue is not None
+
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(_request(config, name="unavailable-multi", multi=True))
+        assert captured.value.detail.code is ErrorCode.RUNTIME_UNAVAILABLE
+
+        normal = await manager.run(_request(config, name="normal-fallback"))
+        assert await _wait_terminal(manager, normal.job.job_id) is JobState.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_multi_request_is_denied_when_deployment_did_not_enable_it(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(_request(runtime_config, name="multi-denied", multi=True))
+        assert captured.value.detail.code is ErrorCode.POLICY_DENIED
+
+
+@pytest.mark.asyncio
+async def test_multi_request_rejects_an_ineffective_batch_size(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    config = _multi_config(runtime_config, tmp_path)
+    async with _manager(config, SuccessfulRunner(), runtime_probe=_multi_ready_probe) as manager:
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(_request(config, name="multi-batch", multi=True, batch_size=2))
+        assert captured.value.detail.code is ErrorCode.POLICY_DENIED
 
 
 @pytest.mark.asyncio

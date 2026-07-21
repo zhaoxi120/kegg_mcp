@@ -51,6 +51,9 @@ separator (`:` on Linux).
 | `DEEPKOALA_MCP_MAX_SEQUENCES` | no | Sequence cap up to 100,000 |
 | `DEEPKOALA_MCP_MAX_OUTPUT_BYTES` | no | Detailed CSV cap up to 5,000,000 bytes |
 | `DEEPKOALA_MCP_MAX_TIMEOUT_SECONDS` | no | Job cap up to 86,400 seconds; default 3,600 |
+| `DEEPKOALA_MCP_ALLOW_MULTI` | no | Exact `true` or `false`; default `false` |
+| `DEEPKOALA_MCP_PROFILES_DIR` | with multi | Direct directory of installed `Kxxxxx.hmm` profiles |
+| `DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE` | with multi | Direct absolute path to an installed `hmmsearch` executable |
 
 Example manual configuration:
 
@@ -70,7 +73,12 @@ same environment. The generated Codex plugin already provides this registration 
 
 `deepkoala-mcp doctor [--json]` performs bounded local structure and import checks without inference,
 network access, or downloads. It redacts private paths and environment values. The MCP
-`get_deepkoala_runner_status` tool exposes the same readiness boundary to a client.
+`get_deepkoala_runner_status` tool exposes the same readiness boundary to a client. Its
+`allow_multi` field reports deployment policy, while `multi_ready` reports structural readiness of
+the configured profile directory, HMMER executable, and supported upstream adapter. It does not
+certify that the directory contains every profile a future prediction may use. If multi-domain
+execution is enabled but unavailable, `route_state` is `multi_dependencies_unavailable`; ordinary
+annotation can still be ready.
 
 The five public tools are `get_deepkoala_runner_status`, `run_deepkoala_job`,
 `get_deepkoala_job`, `cancel_deepkoala_job`, and `delete_deepkoala_job`.
@@ -85,13 +93,18 @@ output directory, and process startup in one call. Required fields are:
 }
 ```
 
-Optional fields are `model` (`full` or `frag`), `model_date` (`202502` by default, `latest`, or an
-installed `YYYYMM`), `device` (`auto` only), `batch_size` (1-64), `topk` (1-10), and
-`timeout_seconds` within the deployment cap.
+Optional fields are `model` (`full` by default, or `frag`), `model_date` (`202502` by default,
+`latest`, or an installed `YYYYMM`), `device` (`auto` only), `batch_size` (1-64), `topk` (1-10), and
+`timeout_seconds` within the deployment cap. `multi` is a strict boolean and defaults to `false`.
+Set it to `true` only when the user requests multi-domain annotation and status reports both
+`allow_multi=true` and `multi_ready=true`; multi-domain requests must keep `batch_size=1` because
+the upstream multi-domain path does not use configurable batching.
 
-DeepKOALA always receives detailed-output, `device=auto`, `num_workers=0`, and `multi=false`.
-Only one job runs in a deployment; another request returns `RUNNER_BUSY` instead of entering a queue.
-Successful status and report output identify the resolved DeepKOALA and model resource versions.
+DeepKOALA always receives detailed-output, `device=auto`, and `num_workers=0`. A multi-domain job
+also receives `--multi --profiles_dir`; the handoff and report record the actual `multi` value. Only
+one job runs in a deployment; another request returns `RUNNER_BUSY` instead of entering a queue.
+Status lists installed resources. A successful handoff and report identify the DeepKOALA source and
+the actual resolved model resource version used by that job.
 
 ## Stable output and lifecycle
 
@@ -108,7 +121,9 @@ The annotation file is bounded UTF-8 detailed CSV containing at least:
 name,predict_label,probability,threshold,annotate
 ```
 
-Extra columns are preserved. `start` and `end` must occur together. The companion validates the
+Extra columns are preserved. `start` and `end` must occur together. A fully empty prediction,
+probability, threshold, annotation marker, and coordinate tuple is retained as an unclassified
+multi-domain row; partially empty or malformed evidence is rejected. The companion validates the
 shape and score evidence but does not normalize K numbers or decide which rows enter KEGG analysis.
 
 The Markdown report records the original FASTA path, companion and DeepKOALA versions, resolved model
@@ -128,6 +143,9 @@ passed to another server as result identity.
 ## Process and filesystem safety
 
 - Execution uses a fixed argument vector without a shell or `shell=True`.
+- Optional HMMER execution replaces only the supported upstream `_run_hmmsearch` hook. It uses the
+  configured absolute executable, bounded CPU count, private scratch files, and rejects any other
+  attempted shell execution.
 - The service inherits operator accelerator visibility and always requests `device=auto`.
 - One job runs at a time with bounded CPU threads, input, output, sequences, and elapsed time.
 - Timeout, cancellation, process-group termination, descendant cleanup, and Linux parent-death
@@ -137,6 +155,9 @@ passed to another server as result identity.
 - Temporary state and generated files use restrictive permissions and are never published by
   overwriting an existing path.
 - The companion server contains no network client, dependency installer, or model download path.
+
+Enabling multi-domain policy never installs HMMER, profiles, or a different DeepKOALA revision.
+Provision or repair those dependencies outside the serving companion, then rerun `doctor`.
 
 K number assignments are computational annotations, not experimental validation. A source-rejected
 prediction is not evidence that a function is biologically absent.

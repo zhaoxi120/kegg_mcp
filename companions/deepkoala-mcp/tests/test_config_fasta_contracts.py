@@ -11,13 +11,16 @@ import pytest
 from pydantic import ValidationError
 
 from deepkoala_mcp.config import (
+    ALLOW_MULTI_ENV,
     ALLOWED_DEVICES_ENV,
     ALLOWED_MODELS_ENV,
     CHECKOUT_ENV,
     CPU_THREADS_ENV,
+    HMMSEARCH_EXECUTABLE_ENV,
     INPUT_ROOTS_ENV,
     MAX_TIMEOUT_SECONDS_ENV,
     OUTPUT_ROOTS_ENV,
+    PROFILES_DIR_ENV,
     PYTHON_ENV,
     STATE_ROOT_ENV,
     DeepKoalaRuntimeConfig,
@@ -60,6 +63,8 @@ def test_load_runtime_config_has_bounded_single_runner_defaults(
     assert config.allowed_devices == ("auto",)
     assert config.max_concurrent_jobs == 1
     assert config.allow_multi is False
+    assert config.profiles_dir is None
+    assert config.hmmsearch_executable is None
     assert config.max_timeout_seconds == 3_600
 
 
@@ -72,6 +77,7 @@ def test_load_runtime_config_has_bounded_single_runner_defaults(
         (MAX_TIMEOUT_SECONDS_ENV, "1.5"),
         (ALLOWED_MODELS_ENV, "full,other"),
         (ALLOWED_DEVICES_ENV, "cuda"),
+        (ALLOW_MULTI_ENV, "TRUE"),
     ],
 )
 def test_load_runtime_config_rejects_out_of_policy_values(
@@ -84,6 +90,30 @@ def test_load_runtime_config_rejects_out_of_policy_values(
     environment[name] = value
     with pytest.raises(ValueError, match=name):
         load_runtime_config(environment)
+
+
+def test_load_runtime_config_requires_absolute_multi_dependencies_when_enabled(
+    tmp_path: Path,
+    checkout: Path,
+) -> None:
+    environment = _environment(tmp_path, checkout)
+    environment.update(
+        {
+            ALLOW_MULTI_ENV: "true",
+            PROFILES_DIR_ENV: str(tmp_path / "profiles"),
+            HMMSEARCH_EXECUTABLE_ENV: str(tmp_path / "bin" / "hmmsearch"),
+        }
+    )
+    config = load_runtime_config(environment)
+    assert config.allow_multi is True
+    assert config.profiles_dir == tmp_path / "profiles"
+    assert config.hmmsearch_executable == tmp_path / "bin" / "hmmsearch"
+
+    for missing in (PROFILES_DIR_ENV, HMMSEARCH_EXECUTABLE_ENV):
+        incomplete = dict(environment)
+        incomplete.pop(missing)
+        with pytest.raises(ValueError, match=missing):
+            load_runtime_config(incomplete)
 
 
 def test_load_runtime_config_requires_both_shared_root_sets(
@@ -121,6 +151,7 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
     )
     assert request.device == "auto"
     assert request.model_date == "202502"
+    assert request.multi is False
     with pytest.raises(ValidationError):
         RunDeepKoalaInput(
             fasta_path="proteins.faa",
@@ -132,6 +163,15 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
                 "fasta_path": "/allowed/proteins.faa",
                 "output_directory": "/allowed/run-1",
                 "device": "cuda",
+            },
+            strict=True,
+        )
+    with pytest.raises(ValidationError):
+        RunDeepKoalaInput.model_validate(
+            {
+                "fasta_path": "/allowed/proteins.faa",
+                "output_directory": "/allowed/run-1",
+                "multi": 1,
             },
             strict=True,
         )

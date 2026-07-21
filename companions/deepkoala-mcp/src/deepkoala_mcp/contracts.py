@@ -145,6 +145,16 @@ class JobState(StrEnum):
     TIMED_OUT = "timed_out"
 
 
+class CompanionRouteState(StrEnum):
+    """Stable redacted deployment routes reported by status and doctor."""
+
+    LOCAL_READY = "local_ready"
+    DEEPKOALA_CHECKOUT_UNAVAILABLE = "deepkoala_checkout_unavailable"
+    DEEPKOALA_RUNTIME_UNAVAILABLE = "deepkoala_runtime_unavailable"
+    MODEL_RESOURCES_UNAVAILABLE = "model_resources_unavailable"
+    MULTI_DEPENDENCIES_UNAVAILABLE = "multi_dependencies_unavailable"
+
+
 class RunDeepKoalaInput(FrozenModel):
     """One policy-bounded local run using explicit shared filesystem paths."""
 
@@ -155,6 +165,7 @@ class RunDeepKoalaInput(FrozenModel):
     device: Literal["auto"] = "auto"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)
+    multi: bool = Field(default=False, strict=True)
     timeout_seconds: int | None = Field(default=None, strict=True, ge=1, le=86_400)
 
     @field_validator("fasta_path", "output_directory")
@@ -206,7 +217,7 @@ class ExecutionPlan(FrozenModel):
     batch_size: int = Field(strict=True, ge=1, le=64)
     num_workers: Literal[0] = 0
     topk: int = Field(strict=True, ge=1, le=10)
-    multi: Literal[False] = False
+    multi: bool = Field(default=False, strict=True)
     cpu_threads: int = Field(strict=True, ge=1, le=4)
     timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
 
@@ -375,7 +386,11 @@ class CompanionStatus(FrozenModel):
     gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
     companion_network_requests: Literal[False] = False
-    allow_multi: Literal[False] = False
+    allow_multi: bool = Field(default=False, strict=True)
+    multi_ready: bool = Field(default=False, strict=True)
+    route_state: CompanionRouteState
+    issue: BoundedText | None
+    next_action: BoundedText
     cpu_threads: int = Field(strict=True, ge=1, le=4)
     max_concurrent_jobs: Literal[1] = 1
     running_jobs: int = Field(strict=True, ge=0, le=1)
@@ -393,6 +408,21 @@ class CompanionStatus(FrozenModel):
     def validate_readiness(self) -> Self:
         if self.ready != (self.runtime_ready and bool(self.installed_resources)):
             raise ValueError("ready must match runtime and resource availability")
+        if self.multi_ready and not self.allow_multi:
+            raise ValueError("multi_ready requires deployment authorization")
+        if self.route_state is CompanionRouteState.LOCAL_READY:
+            if (
+                not self.ready
+                or (self.allow_multi and not self.multi_ready)
+                or self.issue is not None
+            ):
+                raise ValueError("local_ready must match base and optional multi readiness")
+        elif self.issue is None:
+            raise ValueError("non-ready routes require one stable issue")
+        if self.route_state is CompanionRouteState.MULTI_DEPENDENCIES_UNAVAILABLE and not (
+            self.ready and self.allow_multi and not self.multi_ready
+        ):
+            raise ValueError("multi dependency route must match effective readiness")
         return self
 
 
@@ -408,6 +438,7 @@ __all__ = [
     "MAX_SEQUENCE_LENGTH",
     "RUN_REPORT_FILENAME",
     "CancelDeepKoalaJobInput",
+    "CompanionRouteState",
     "CompanionStatus",
     "DeepKoalaMcpError",
     "DeleteDeepKoalaJobInput",

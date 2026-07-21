@@ -3,6 +3,9 @@
 ## Readiness routing
 
 - `local_ready`: run the requested job directly.
+- `multi_dependencies_unavailable`: ordinary annotation remains available, but do not pass
+  `multi=true`; report the operator action needed to repair HMMER, profiles, or the supported
+  upstream interface.
 - missing companion registration: explain how to register the existing executable, then stop.
 - missing checkout, interpreter, or model resources: identify the missing deployment component and
   request permission before changing it.
@@ -13,8 +16,10 @@ Suite installation permission applies once to each new suite installation root. 
 `local_ready` deployment does not repeat that question for later FASTA jobs; a separate new root is
 a separate first installation.
 
-The companion must use an existing official checkout and existing local resources. It must not
-automate the GenomeNet web form, make network requests, or download models.
+The companion must use an existing official checkout and existing local resources. Multi-domain
+execution additionally requires deployment `allow_multi`, a direct trusted profile directory, a
+direct trusted absolute `hmmsearch` executable, and `multi_ready=true`. It must not automate the
+GenomeNet web form, make network requests, install HMMER, or download models or profiles.
 
 ## Stable file contract
 
@@ -27,6 +32,10 @@ A successful job provides:
 - `input_format="deepkoala_detailed"`;
 - source provenance without workflow digests; and
 - model, installed resource date, fixed execution parameters, and timestamps.
+
+The execution parameters include the actual boolean `multi` value. A fully empty prediction,
+score, annotation marker, and coordinate tuple is an unclassified row rather than a KO assignment;
+partially empty or malformed evidence is invalid.
 
 Pass the CSV path and provenance to the independent KO-analysis stage only when both servers allow
 the shared output root. If a client has no shared filesystem, read the companion's bounded resource

@@ -48,8 +48,21 @@ only artifacts required by checked-in lockfiles and declared build requirements.
 authorize Python, Codex, model updates, KOfam profiles, or KEGG data.
 
 `--allow-deepkoala-install` is separate: it confirms the initial official DeepKOALA clone and
-upstream requirements for one new suite root. It does not install later models or multi-domain
-resources.
+upstream requirements for one new suite root. It does not install later models, HMMER, or KOfam
+profiles.
+
+### Multi-domain mode is unavailable
+
+Multi-domain mode is disabled by default. A request with `multi=true` succeeds only when the private
+deployment enabled the capability and status reports both `allow_multi=true` and `multi_ready=true`.
+The operator must provide the configured absolute `hmmsearch` executable and local KOfam profile
+directory; the companion and suite installer never download them.
+
+Use the redacted `route_state`, `issue`, and `next_action` returned by
+`get_deepkoala_runner_status`. Repair or replace the configured external resource, restart the
+companion, and check status again. Do not pass a profile or executable path through an MCP request.
+Because the suite installer is fresh-install only, an existing default suite must be replaced by a
+new suite root or a separately managed companion deployment; it cannot be reconfigured in place.
 
 ### The deployment TOML is rejected
 

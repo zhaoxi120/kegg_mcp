@@ -37,6 +37,11 @@ input_roots = ["/absolute/shared/path/to/kegg-suite/inputs"]
 output_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2
+allow_multi = false
+# Multi-domain mode is an explicit opt-in. When enabled, both paths must already
+# exist and the suite installer does not download HMMER or profile resources.
+# profiles_dir = "/absolute/private/path/to/deepkoala-profiles"
+# hmmsearch_executable = "/absolute/path/to/hmmsearch"
 
 [renderer]
 # Renderer consumes only the shared analysis handoff in this example. Keeping

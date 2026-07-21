@@ -69,12 +69,15 @@ def test_wheel_and_sdist_audit_excludes_payloads_and_other_implementations(tmp_p
     with tarfile.open(sdist) as archive:
         sdist_names = archive.getnames()
     expected_sdist_tests = {
-        path.relative_to(PROJECT).as_posix() for path in (PROJECT / "tests").glob("*.py")
+        path.relative_to(PROJECT).as_posix()
+        for path in (PROJECT / "tests").glob("*.py")
+        if path.name != "test_synthetic_pipeline.py"
     }
     assert all(
         any(name.endswith(f"/{relative}") for name in sdist_names)
         for relative in expected_sdist_tests
     )
+    assert not any(name.endswith("/tests/test_synthetic_pipeline.py") for name in sdist_names)
     for names in (wheel_names, sdist_names):
         lowered = "\n".join(names).lower()
         assert "deepkoala_mcp" not in lowered

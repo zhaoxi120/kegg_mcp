@@ -125,6 +125,7 @@ input_roots = ["/absolute/project/inputs"]
 output_roots = ["/absolute/project/annotations"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2
+allow_multi = false
 
 [renderer]
 state_root = "/absolute/private/renderer-state"
@@ -238,9 +239,35 @@ Python requirements, run:
 ```
 
 The suite-managed DeepKOALA checkout uses its bundled `202502` resources by default. The companion
-keeps `device=auto`, allows only `full` and `frag` models configured by the deployment, and does not
-install multi-domain dependencies. Successful annotation output reports the resolved model and
-model date.
+keeps `device=auto`, allows only `full` and `frag` models configured by the deployment, and defaults
+every request to single-domain mode. Successful annotation output reports the resolved model, model
+date, and whether multi-domain mode was used.
+
+#### Optional multi-domain capability
+
+The suite never downloads HMMER or KOfam profiles. An operator who already has authorized local
+resources may make the capability available by setting all three fields before installing a new
+suite root:
+
+```toml
+[deepkoala]
+# Keep the other required DeepKOALA fields from the complete template.
+allow_multi = true
+profiles_dir = "/absolute/path/to/kofam/profiles"
+hmmsearch_executable = "/absolute/path/to/hmmsearch"
+```
+
+The profile directory and executable must be direct, non-symlink, safely permissioned paths and may
+not overlap suite state or biological input/output roots. Configuration preflight checks the local
+paths; post-install verification checks the executable, profiles, and supported upstream adapter
+interface without running inference. Enabling this deployment capability does not enable it for
+every job: `run_deepkoala_job` still uses `multi=false` unless the user explicitly requests
+multi-domain annotation. Multi-domain requests must keep `batch_size=1`. The companion never
+accepts either resource path from an MCP request.
+
+The suite installer is fresh-install only. To add this capability after a default suite install,
+either configure a manually managed companion deployment or install a new suite root with the
+three fields above; the installer does not mutate an existing deployment in place.
 
 Later FASTA jobs in the same installed deployment do not repeat the installation question. A
 different new installation root requires a new confirmation. This repository provides no model
@@ -316,8 +343,10 @@ Use $kegg-ko-analysis to report core server status only; do not retrieve KEGG da
 Use $kegg-pathway-rendering to report renderer status only; do not render an artifact.
 ```
 
-The DeepKOALA companion must report `local_ready`. Core and Renderer status must show the intended
-access mode without exposing credentials, endpoints, usernames, or full local paths.
+The DeepKOALA companion must return structured `route_state="local_ready"`. If multi-domain
+capability was configured, it must also report `allow_multi=true` and `multi_ready=true`. Core and
+Renderer status must show the intended access mode without exposing credentials, endpoints,
+usernames, or full local paths.
 
 For an eligible live acceptance check, ask:
 

@@ -353,19 +353,55 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
         ):
             raise OutputValidationError("DeepKOALA detailed CSV has an unsupported header")
         indexes = {name: header.index(name) for name in _REQUIRED_COLUMNS}
+        coordinate_indexes = (
+            (header.index("start"), header.index("end")) if "start" in header else None
+        )
         rows = 0
         for row in reader:
             if len(row) != len(header):
                 raise OutputValidationError("DeepKOALA detailed CSV has a malformed row")
             rows += 1
-            if not row[indexes["name"]] or not row[indexes["predict_label"]]:
+            if not row[indexes["name"]]:
                 raise OutputValidationError("DeepKOALA detailed CSV has a missing identifier")
+            prediction = row[indexes["predict_label"]]
+            if not prediction:
+                coordinates = (
+                    []
+                    if coordinate_indexes is None
+                    else [row[coordinate_indexes[0]], row[coordinate_indexes[1]]]
+                )
+                if any(
+                    (
+                        row[indexes["probability"]],
+                        row[indexes["threshold"]],
+                        row[indexes["annotate"]],
+                        *coordinates,
+                    )
+                ):
+                    raise OutputValidationError(
+                        "DeepKOALA unclassified rows must have empty evidence"
+                    )
+                continue
             probability = _bounded_probability(row[indexes["probability"]])
             threshold = _bounded_probability(row[indexes["threshold"]])
             if probability is None or threshold is None:
                 raise OutputValidationError("DeepKOALA detailed CSV has invalid score evidence")
             if row[indexes["annotate"]] not in {"", "*"}:
                 raise OutputValidationError("DeepKOALA detailed CSV has an invalid marker")
+            if coordinate_indexes is not None:
+                start_value = row[coordinate_indexes[0]]
+                end_value = row[coordinate_indexes[1]]
+                if bool(start_value) != bool(end_value):
+                    raise OutputValidationError(
+                        "DeepKOALA detailed CSV has incomplete domain coordinates"
+                    )
+                if start_value:
+                    start = _bounded_coordinate(start_value)
+                    end = _bounded_coordinate(end_value)
+                    if start is None or end is None or start > end:
+                        raise OutputValidationError(
+                            "DeepKOALA detailed CSV has invalid domain coordinates"
+                        )
         if rows == 0:
             raise OutputValidationError("DeepKOALA detailed CSV has no prediction rows")
     except (UnicodeError, csv.Error, StopIteration, ValueError) as error:
@@ -381,6 +417,13 @@ def _bounded_probability(value: str) -> float | None:
     except ValueError:
         return None
     return parsed if math.isfinite(parsed) and 0.0 <= parsed <= 1.0 else None
+
+
+def _bounded_coordinate(value: str) -> int | None:
+    if not value.isascii() or not value.isdigit():
+        return None
+    parsed = int(value)
+    return parsed if 1 <= parsed <= 100_000 else None
 
 
 def _write_noreplace(directory_fd: int, name: str, content: bytes) -> None:

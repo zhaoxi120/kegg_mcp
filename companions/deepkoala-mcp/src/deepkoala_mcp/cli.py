@@ -11,7 +11,14 @@ from typing import TextIO, TypedDict
 
 from deepkoala_mcp import __version__
 from deepkoala_mcp.config import load_runtime_config
-from deepkoala_mcp.installation import InstallationError, inspect_installation, probe_runtime
+from deepkoala_mcp.contracts import CompanionRouteState
+from deepkoala_mcp.installation import (
+    InstallationError,
+    classify_readiness_route,
+    inspect_installation,
+    probe_multi_dependencies,
+    probe_runtime,
+)
 from deepkoala_mcp.server import main as run_stdio
 
 
@@ -24,6 +31,8 @@ class _DoctorDocument(TypedDict):
     runtime_ready: bool
     cuda_available: bool
     model_resources_ready: bool
+    allow_multi: bool
+    multi_ready: bool
     state_root_ready: bool
     input_root_count: int | None
     output_root_count: int | None
@@ -75,36 +84,32 @@ def _doctor_document(environment: Mapping[str, str]) -> tuple[_DoctorDocument, i
         python_executable=config.python_executable,
         cpu_threads=config.cpu_threads,
     )
-
-    if not checkout_ready:
-        route_state = "deepkoala_checkout_unavailable"
-        issue = "The configured checkout is not a readable official DeepKOALA layout."
-        next_action = "Repair the configured checkout outside this serving companion."
-    elif not runtime.runtime_ready:
-        route_state = "deepkoala_runtime_unavailable"
-        issue = "The configured interpreter cannot import DeepKOALA and its runtime."
-        next_action = "Repair the configured Python environment and rerun doctor."
-    elif not resources_ready:
-        route_state = "model_resources_unavailable"
-        issue = "No readable model resource pair matches the deployment allowlist."
-        next_action = (
-            "Install local resources outside this serving companion or adjust the allowlist."
-        )
-    else:
-        route_state = "local_ready"
-        issue = None
-        next_action = "Call get_deepkoala_runner_status, then run_deepkoala_job."
-    ready = route_state == "local_ready"
+    multi_ready = probe_multi_dependencies(
+        allow_multi=config.allow_multi,
+        profiles_dir=config.profiles_dir,
+        hmmsearch_executable=config.hmmsearch_executable,
+        runtime=runtime,
+    )
+    route = classify_readiness_route(
+        checkout_ready=checkout_ready,
+        runtime_ready=runtime.runtime_ready,
+        model_resources_ready=resources_ready,
+        allow_multi=config.allow_multi,
+        multi_ready=multi_ready,
+    )
+    ready = route.route_state is CompanionRouteState.LOCAL_READY
     return (
         _document(
-            route_state=route_state,
-            issue=issue,
-            next_action=next_action,
+            route_state=route.route_state.value,
+            issue=route.issue,
+            next_action=route.next_action,
             configuration_valid=True,
             checkout_ready=checkout_ready,
             runtime_ready=runtime.runtime_ready,
             cuda_available=runtime.cuda_available,
             model_resources_ready=resources_ready,
+            allow_multi=config.allow_multi,
+            multi_ready=multi_ready,
             state_root_ready=True,
             input_root_count=len(config.input_roots),
             output_root_count=len(config.output_roots),
@@ -123,6 +128,8 @@ def _document(
     runtime_ready: bool = False,
     cuda_available: bool = False,
     model_resources_ready: bool = False,
+    allow_multi: bool = False,
+    multi_ready: bool = False,
     state_root_ready: bool = False,
     input_root_count: int | None = None,
     output_root_count: int | None = None,
@@ -136,6 +143,8 @@ def _document(
         "runtime_ready": runtime_ready,
         "cuda_available": cuda_available,
         "model_resources_ready": model_resources_ready,
+        "allow_multi": allow_multi,
+        "multi_ready": multi_ready,
         "state_root_ready": state_root_ready,
         "input_root_count": input_root_count,
         "output_root_count": output_root_count,

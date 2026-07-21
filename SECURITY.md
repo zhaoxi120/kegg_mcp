@@ -40,10 +40,12 @@ details, and biological data.
 - External annotation tools, model code, model weights, and databases are outside the core
   package runtime boundary. `deepkoala-mcp` is a separate process with deployment allowlists for
   the checkout, interpreter, models, device policy, input roots, output roots, and time/resource
-  limits. It uses fixed automatic-device arguments, inherits existing accelerator visibility,
-  enforces one running job per state root, terminates its process group and Linux child on parent
-  death, writes versioned stable artifacts atomically, and never downloads or updates dependencies
-  or weights.
+  limits. Multi-domain execution is disabled by default and requires an explicit request plus
+  deployment-owned direct HMMER and profile paths; the child adapter uses a fixed absolute argument
+  vector without a shell. The companion inherits existing accelerator visibility, enforces one
+  running job per state root, terminates its process group and Linux child on parent death, writes
+  versioned stable artifacts atomically, and never downloads or updates dependencies, profiles, or
+  weights.
 - `kegg-render-mcp` accepts exactly one bounded typed handoff by allowed path or inline JSON. It
   owns KGML parsing, image generation, retained-result quotas, and static SVG/PNG validation. It
   rejects active or external SVG content, unsafe output paths, excessive canvas/node/pixel counts,

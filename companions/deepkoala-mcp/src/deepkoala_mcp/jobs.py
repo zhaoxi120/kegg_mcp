@@ -40,8 +40,11 @@ from deepkoala_mcp.installation import (
     Installation,
     InstallationError,
     RuntimeProbeResult,
+    classify_readiness_route,
     fail_installation,
+    fail_multi_unavailable,
     inspect_installation,
+    probe_multi_dependencies_async,
     probe_runtime_async,
     select_installation,
 )
@@ -204,11 +207,13 @@ class DeepKoalaJobManager:
                         suggested_action="Wait for the running job to finish or cancel it.",
                     )
                 self._prune_terminal_locked()
-            self._validate_policy(request)
+            self.config.validate_run_request(request)
             installation = self._select_installation(request.model, request.model_date)
             runtime = await self._probe_runtime()
             if not runtime.runtime_ready:
                 _fail_runtime_unavailable()
+            if request.multi and not await self._multi_ready(runtime):
+                fail_multi_unavailable()
 
             timeout = request.timeout_seconds or self.config.max_timeout_seconds
             plan = ExecutionPlan(
@@ -217,6 +222,7 @@ class DeepKoalaJobManager:
                 resolved_model_date=installation.resource.model_date,
                 batch_size=request.batch_size,
                 topk=request.topk,
+                multi=request.multi,
                 cpu_threads=self.config.cpu_threads,
                 timeout_seconds=timeout,
             )
@@ -375,8 +381,10 @@ class DeepKoalaJobManager:
 
     async def status(self) -> CompanionStatus:
         self._require_open()
+        checkout_ready = False
         try:
             version, installed = inspect_installation(self.config.checkout)
+            checkout_ready = True
             resources = tuple(
                 item for item in installed if item.model in self.config.allowed_models
             )
@@ -386,6 +394,14 @@ class DeepKoalaJobManager:
             runtime = await self._probe_runtime()
         except Exception:
             runtime = RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+        multi_ready = await self._multi_ready(runtime)
+        route = classify_readiness_route(
+            checkout_ready=checkout_ready,
+            runtime_ready=runtime.runtime_ready,
+            model_resources_ready=bool(resources),
+            allow_multi=self.config.allow_multi,
+            multi_ready=multi_ready,
+        )
         async with self._lock:
             running = sum(record.state is JobState.RUNNING for record in self._jobs.values())
             terminal = sum(record.state in _TERMINAL for record in self._jobs.values())
@@ -397,6 +413,11 @@ class DeepKoalaJobManager:
             deepkoala_version=version,
             installed_resources=resources,
             allowed_models=self.config.allowed_models,
+            allow_multi=self.config.allow_multi,
+            multi_ready=multi_ready,
+            route_state=route.route_state,
+            issue=route.issue,
+            next_action=route.next_action,
             cpu_threads=self.config.cpu_threads,
             running_jobs=running,
             terminal_jobs=terminal,
@@ -466,10 +487,18 @@ class DeepKoalaJobManager:
             runtime = await self._probe_runtime()
             if not runtime.runtime_ready:
                 reason = "The configured DeepKOALA runtime became unavailable."
+            elif record.plan.multi and not await self._multi_ready(runtime):
+                reason = "Configured multi-domain dependencies became unavailable."
             else:
                 record.source_version = installation.source_version
                 stage = "runner_execution"
-                outcome = await self._runner.run(self._runner_plan(record))
+                outcome = await self._runner.run(
+                    RunnerPlan.from_execution_plan(
+                        config=self.config,
+                        job_directory=record.directory,
+                        plan=record.plan,
+                    )
+                )
                 record.exit_code = outcome.return_code
                 if outcome.return_code != 0:
                     reason = "DeepKOALA exited without a successful detailed result."
@@ -547,29 +576,6 @@ class DeepKoalaJobManager:
                 record.completed_at = completed_at
                 record.task = None
 
-    def _validate_policy(self, request: RunDeepKoalaInput) -> None:
-        if request.model not in self.config.allowed_models:
-            fail(
-                ErrorCode.POLICY_DENIED,
-                "The requested model is outside the deployment allowlist.",
-                suggested_action="Choose a model reported by runner status.",
-            )
-        if request.device not in self.config.allowed_devices:
-            fail(
-                ErrorCode.POLICY_DENIED,
-                "The requested device policy is not allowed.",
-                suggested_action="Use the deployment-approved auto device policy.",
-            )
-        if (
-            request.timeout_seconds is not None
-            and request.timeout_seconds > self.config.max_timeout_seconds
-        ):
-            fail(
-                ErrorCode.POLICY_DENIED,
-                "The requested timeout exceeds the deployment policy.",
-                suggested_action="Use a timeout no greater than the status-reported maximum.",
-            )
-
     def _select_installation(self, model: str, date: str) -> Installation:
         try:
             return select_installation(self.config.checkout, model, date)
@@ -589,18 +595,12 @@ class DeepKoalaJobManager:
             cpu_threads=self.config.cpu_threads,
         )
 
-    def _runner_plan(self, record: _JobRecord) -> RunnerPlan:
-        return RunnerPlan(
-            python_executable=self.config.python_executable,
-            checkout=self.config.checkout,
-            job_directory=record.directory,
-            model=record.plan.model,
-            resolved_date=record.plan.resolved_model_date,
-            batch_size=record.plan.batch_size,
-            topk=record.plan.topk,
-            timeout_seconds=record.plan.timeout_seconds,
-            cpu_threads=record.plan.cpu_threads,
-            max_output_bytes=self.config.max_output_bytes,
+    async def _multi_ready(self, runtime: RuntimeProbeResult) -> bool:
+        return await probe_multi_dependencies_async(
+            allow_multi=self.config.allow_multi,
+            profiles_dir=self.config.profiles_dir,
+            hmmsearch_executable=self.config.hmmsearch_executable,
+            runtime=runtime,
         )
 
     def _summary(self, record: _JobRecord) -> JobSummary:

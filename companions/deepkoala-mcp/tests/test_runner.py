@@ -32,13 +32,16 @@ p.add_argument('--detail', action='store_true')
 p.add_argument('--batch_size', type=int, required=True)
 p.add_argument('--num_workers', type=int, required=True)
 p.add_argument('--topk', type=int, required=True)
+p.add_argument('--multi', action='store_true')
+p.add_argument('--profiles_dir')
 args = p.parse_args()
 """
 
 
 def _plan(checkout: Path, tmp_path: Path, **updates: object) -> RunnerPlan:
     job = tmp_path / "job"
-    job.mkdir(exist_ok=True)
+    job.mkdir(mode=0o700, exist_ok=True)
+    job.chmod(0o700)
     (job / "input.fasta").write_text(">p\nM\n", encoding="ascii")
     values: dict[str, object] = {
         "python_executable": Path(sys.executable).resolve(),
@@ -69,7 +72,9 @@ def test_build_argv_is_fixed_auto_device_and_worker_free(checkout: Path, tmp_pat
     assert argv[argv.index("--num_workers") + 1] == "0"
     assert argv[argv.index("--model") + 1] == "frag"
     assert "--detail" in argv
-    assert len(argv) == 22
+    assert len(argv) == 27
+    assert "--multi" not in argv
+    assert "--profiles_dir" not in argv
 
 
 def test_child_environment_inherits_gpu_visibility_and_bounds_threads(
@@ -91,6 +96,143 @@ def test_child_environment_inherits_gpu_visibility_and_bounds_threads(
         "NUMEXPR_NUM_THREADS",
     ):
         assert environment[name] == "3"
+
+
+@pytest.mark.asyncio
+async def test_multi_adapter_uses_absolute_hmmsearch_and_cleans_private_scratch(
+    checkout: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (checkout / "deepkoala" / "infer_multi.py").write_text(
+        "def _run_hmmsearch(hmm_file, seq):\n    raise AssertionError('must be replaced')\n",
+        encoding="utf-8",
+    )
+    marker = tmp_path / "hmmsearch-argv.json"
+    executable = tmp_path / "hmmer-bin" / "hmmsearch"
+    executable.parent.mkdir(mode=0o700)
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n"
+        "target = Path(sys.argv[sys.argv.index('--domtblout') + 1])\n"
+        "target.write_text(' '.join(['x'] * 17 + ['5', '10']) + '\\n', encoding='ascii')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(mode=0o700)
+    (profiles / "K00001.hmm").write_text("HMMER3/f\n", encoding="ascii")
+    _write_cli(
+        checkout,
+        """
+import json
+from pathlib import Path
+from deepkoala import infer_multi
+start, end = infer_multi._run_hmmsearch(Path(args.profiles_dir) / 'K00001.hmm', 'M' * 60)
+Path(args.output_path).write_text(json.dumps({
+    'start': start,
+    'end': end,
+    'multi': args.multi,
+}), encoding='utf-8')
+""",
+    )
+    hijack = tmp_path / "ambient-bin"
+    hijack.mkdir()
+    (hijack / "hmmsearch").write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    (hijack / "hmmsearch").chmod(0o700)
+    monkeypatch.setenv("PATH", str(hijack))
+    plan = _plan(
+        checkout,
+        tmp_path,
+        multi=True,
+        profiles_dir=profiles.resolve(),
+        hmmsearch_executable=executable.resolve(),
+    )
+
+    argv = build_argv(plan)
+    environment = build_child_environment(plan)
+    outcome = await DeepKoalaProcessRunner().run(plan)
+
+    assert outcome.return_code == 0
+    assert "--multi" in argv
+    assert argv[argv.index("--profiles_dir") + 1] == str(profiles.resolve())
+    assert environment["PATH"] == str(executable.parent.resolve())
+    assert environment["TMPDIR"] == str(plan.job_directory.resolve())
+    assert json.loads(plan.output_path.read_text(encoding="utf-8")) == {
+        "start": 5,
+        "end": 10,
+        "multi": True,
+    }
+    hmmsearch_argv = json.loads(marker.read_text(encoding="utf-8"))
+    assert hmmsearch_argv[hmmsearch_argv.index("--cpu") + 1] == "2"
+    assert not tuple(plan.job_directory.glob(".hmm-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "launch",
+    (
+        "subprocess.run(['true'], shell=True, check=True)",
+        "subprocess.Popen(['true'], -1, None, None, None, None, None, True, True)",
+    ),
+)
+async def test_child_rejects_any_remaining_shell_execution(
+    checkout: Path,
+    tmp_path: Path,
+    launch: str,
+) -> None:
+    _write_cli(
+        checkout,
+        f"""
+import subprocess
+{launch}
+""",
+    )
+
+    outcome = await DeepKoalaProcessRunner().run(_plan(checkout, tmp_path))
+
+    assert outcome.return_code != 0
+
+
+@pytest.mark.asyncio
+async def test_multi_adapter_treats_every_nonzero_hmmsearch_exit_as_failure(
+    checkout: Path,
+    tmp_path: Path,
+) -> None:
+    (checkout / "deepkoala" / "infer_multi.py").write_text(
+        "def _run_hmmsearch(hmm_file, seq):\n    raise AssertionError('must be replaced')\n",
+        encoding="utf-8",
+    )
+    executable = tmp_path / "hmmsearch"
+    executable.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    executable.chmod(0o700)
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(mode=0o700)
+    (profiles / "K00001.hmm").write_text("HMMER3/f\n", encoding="ascii")
+    _write_cli(
+        checkout,
+        """
+from pathlib import Path
+from deepkoala import infer_multi
+infer_multi._run_hmmsearch(Path(args.profiles_dir) / 'K00001.hmm', 'M' * 60)
+Path(args.output_path).write_text('unexpected', encoding='utf-8')
+""",
+    )
+    plan = _plan(
+        checkout,
+        tmp_path,
+        multi=True,
+        profiles_dir=profiles.resolve(),
+        hmmsearch_executable=executable.resolve(),
+    )
+
+    outcome = await DeepKoalaProcessRunner().run(plan)
+
+    assert outcome.return_code != 0
+    assert not plan.output_path.exists()
+    assert not tuple(plan.job_directory.glob(".hmm-*"))
 
 
 @pytest.mark.asyncio

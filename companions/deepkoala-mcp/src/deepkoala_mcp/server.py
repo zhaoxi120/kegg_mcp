@@ -79,8 +79,10 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         instructions=(
             "Run one bounded local DeepKOALA annotation job directly from an allowlisted protein "
             "FASTA path into a new controlled output directory. The runner uses auto device, "
-            "detailed output, no worker processes, no multi-domain mode, and never downloads "
-            "resources. Pass the successful stable CSV path and source object to core kegg-mcp."
+            "detailed output, and no worker processes. Multi-domain mode defaults to false and is "
+            "available only when the deployment reports it ready and a request explicitly enables "
+            "it. The companion never downloads resources. Pass the successful stable CSV path and "
+            "source object to core kegg-mcp."
         ),
         lifespan=lifespan,
     )
@@ -287,7 +289,8 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "get_deepkoala_runner_status",
             "Get local DeepKOALA runner status",
-            "Return redacted runtime readiness, CUDA availability, policy, bounds, and job counts.",
+            "Return redacted base and optional multi-domain readiness, policy, bounds, and job "
+            "counts.",
             GetDeepKoalaStatusInput,
             CompanionStatus,
             read_only,
@@ -295,7 +298,8 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "run_deepkoala_job",
             "Run a local DeepKOALA job",
-            "Validate paths and policy, stage FASTA, and start detailed annotation atomically.",
+            "Validate paths and policy, stage FASTA, and start detailed annotation atomically; "
+            "multi-domain mode requires explicit request and deployment readiness.",
             RunDeepKoalaInput,
             RunDeepKoalaResult,
             run,
