@@ -238,7 +238,7 @@ async def construct_pathway_scene(
         else ""
     )
     caption = (
-        f"{target_id} — {name}. Core descriptive KO coverage: {numerator}/{denominator} "
+        f"{target_id} - {name}. Core descriptive KO coverage: {numerator}/{denominator} "
         f"({ratio:.1%}); reference namespace: {namespace}; evidence mode: {evidence_mode}; "
         f"analysis unit: {analysis_unit}.{community_limit} "
         "This visualization represents annotation evidence, not pathway presence, activity, "
