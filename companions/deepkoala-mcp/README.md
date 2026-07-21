@@ -1,8 +1,10 @@
 # deepkoala-mcp
 
-`deepkoala-mcp` is an optional local stdio MCP companion that runs an existing DeepKOALA
-installation. It accepts an allowlisted absolute protein FASTA path, starts one bounded detailed
-annotation job, and publishes stable files in a new caller-selected output directory.
+`deepkoala-mcp` is an optional local stdio MCP companion that runs a configured local DeepKOALA
+installation. The unified suite installer can create that installation after first-use
+confirmation; manual deployments can provide an existing installation. The companion accepts an
+allowlisted absolute protein FASTA path, starts one bounded detailed annotation job, and publishes
+stable files in a new caller-selected output directory.
 
 The companion does not normalize KO evidence, query KEGG, interpret pathways or MODULEs, download
 DeepKOALA source or model resources, or bundle PyTorch and DeepKOALA as package dependencies. Pass
@@ -11,8 +13,9 @@ the returned detailed CSV path and source provenance to the core `kegg-mcp` impo
 ## Runtime requirements
 
 - Linux with Python 3.11;
-- an external official DeepKOALA checkout;
-- an external Python environment that can import `deepkoala`, `deepkoala.utils`, and `torch`;
+- a suite-managed or manually supplied official DeepKOALA checkout;
+- a suite-managed or manually supplied Python environment that can import `deepkoala`,
+  `deepkoala.utils`, and `torch`;
 - at least one readable local `weights_{full|frag}.pt` and matching
   `ko_config_{full|frag}.json` pair under a dated `resources/YYYYMM` directory;
 - explicit input, output, and private state roots; and
@@ -33,8 +36,8 @@ path separator (`:` on Linux).
 
 | Variable | Required | Meaning |
 |---|---:|---|
-| `DEEPKOALA_MCP_CHECKOUT` | yes | Readable external DeepKOALA checkout |
-| `DEEPKOALA_MCP_PYTHON` | yes | Executable external DeepKOALA Python |
+| `DEEPKOALA_MCP_CHECKOUT` | yes | Readable configured DeepKOALA checkout |
+| `DEEPKOALA_MCP_PYTHON` | yes | Executable configured DeepKOALA Python |
 | `DEEPKOALA_MCP_STATE_ROOT` | yes | Private temporary state root, separate from inputs and outputs |
 | `DEEPKOALA_MCP_INPUT_ROOTS` | yes | Roots containing caller-supplied FASTA files |
 | `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories |
@@ -107,8 +110,9 @@ Required run fields:
 }
 ```
 
-Optional fields are `model` (`full` or `frag`), `model_date` (`latest` or `YYYYMM`), `device`
-(`auto` only), `batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap.
+Optional fields are `model` (`full` or `frag`), `model_date` (`202502` by default, or `latest` or
+an installed `YYYYMM` override), `device` (`auto` only), `batch_size` (1-64), `topk` (1-10), and
+`timeout_seconds` within the deployment cap.
 DeepKOALA always receives fixed detailed-output, `device=auto`, `num_workers=0`, and `multi=false`
 settings. Only one job can run in a deployment at a time; another run returns `RUNNER_BUSY` rather
 than entering a queue.
@@ -135,8 +139,9 @@ companion validates the detailed shape and bounded score evidence but does not n
 or decide which evidence enters a KEGG analysis.
 
 `deepkoala_run_report.md` records the absolute input FASTA path, companion and DeepKOALA versions,
-model/date, effective fixed parameters, sequence count, runtime readiness, and timezone-aware start
-and completion times. It contains no input, model, configuration, output, or dataset digest.
+the resolved model name and model date, effective fixed parameters, sequence count, runtime
+readiness, and timezone-aware start and completion times. It contains no input, model,
+configuration, output, or dataset digest.
 
 The successful `get_deepkoala_job` response returns handoff schema version `1`, companion tool
 version, absolute input/annotation/report paths, `input_format="deepkoala_detailed"`, and a source

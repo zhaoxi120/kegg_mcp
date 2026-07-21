@@ -5,9 +5,12 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 ## Plain K numbers
 
 - Preserve the analysis unit and context.
-- Prefer `analyze_ko_annotations`; provide named targets when requested, otherwise use bounded
-  automatic canonical pathway discovery.
+- Prefer `analyze_ko_annotations`; provide named targets when requested. Otherwise omit
+  `pathway_selection` and let the server independently choose the Top-5 MODULEs and Top-5 canonical
+  KO reference pathways by unique selected-KO overlap.
 - Use server-side Top-N selection instead of reading and ranking complete relationship rows.
+- Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
+  exact completion and required-block coverage separately from the selected MODULE definitions.
 - Do not recommend annotation software when usable KO evidence already exists.
 
 ## Annotation table or detailed CSV

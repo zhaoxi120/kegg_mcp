@@ -56,8 +56,8 @@ from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
 
-RENDER_INPUT_SCHEMA_VERSION = "2"
-RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=2"
+RENDER_INPUT_SCHEMA_VERSION = "3"
+RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=3"
 RENDER_INPUT_BUILDER_NAME = "kegg_render_handoff"
 RENDER_INPUT_BUILDER_VERSION = "1"
 MODULE_RENDER_MAX_CANVAS_DIMENSION = 20_000
@@ -134,7 +134,7 @@ def module_scene_fits_renderer(
 
 
 class RenderInputLimits(FrozenModel):
-    """Serialized renderer-handoff bounds recorded with every version 2 document."""
+    """Serialized renderer-handoff bounds recorded with every version 3 document."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -511,9 +511,9 @@ class PathwayRenderTarget(FrozenModel):
             if not self.detected_ko_ids_complete:
                 raise ValueError("renderable pathway targets require complete detected evidence")
             if self.reference_scope is not PathwayReferenceScope.STANDARD:
-                raise ValueError("global or overview pathways are not renderable in version 2")
+                raise ValueError("global or overview pathways are not renderable in version 3")
             if self.reference_namespace is not PathwayReferenceNamespace.KO:
-                raise ValueError("version 2 renders only KO-reference pathway targets")
+                raise ValueError("version 3 renders only KO-reference pathway targets")
             if self.evaluation_status is not PathwayCoverageStatus.EVALUATED:
                 raise ValueError("renderable pathway targets require an evaluated denominator")
         elif self.not_renderable_reason is None:
@@ -534,12 +534,12 @@ class RenderInput(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:render-input:2",
+            "$id": "urn:kegg-mcp:schema:render-input:3",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
-    schema_version: Literal["2"] = RENDER_INPUT_SCHEMA_VERSION
+    schema_version: Literal["3"] = RENDER_INPUT_SCHEMA_VERSION
     producer: RenderProducer
     dataset: RenderDataset
     decision_policy: DecisionPolicyReference
@@ -708,7 +708,7 @@ def serialize_render_input(value: RenderInput) -> str:
 
 
 def parse_render_input_json(payload: str | bytes) -> RenderInput:
-    """Strictly validate a version 2 handoff with pre- and post-parse byte bounds."""
+    """Strictly validate a version 3 handoff with pre- and post-parse byte bounds."""
     raw = payload.encode("utf-8") if isinstance(payload, str) else payload
     if len(raw) > 100_000_000:
         _fail_output_limit("render_input_bytes", len(raw), "hard_max_serialized_bytes", 100_000_000)

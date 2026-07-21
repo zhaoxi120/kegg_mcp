@@ -128,7 +128,7 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         assert cast(str, job["completed_at"]).endswith("Z")
         handoff = cast(dict[str, object], data["handoff"])
         assert handoff["schema_version"] == "1"
-        assert handoff["tool_version"] == "0.3.0"
+        assert handoff["tool_version"] == "0.4.0"
         assert Path(cast(str, handoff["annotations_path"])).read_bytes() == DETAILED_CSV
         assert Path(cast(str, handoff["report_path"])).is_file()
         source = cast(dict[str, object], handoff["source"])
@@ -235,7 +235,7 @@ async def test_stdio_process_initializes_without_stdout_noise(
         initialized = await _read(process, 1)
         result = cast(dict[str, object], initialized["result"])
         server_info = cast(dict[str, object], result["serverInfo"])
-        assert server_info == {"name": "deepkoala-mcp", "version": "0.3.0"}
+        assert server_info == {"name": "deepkoala-mcp", "version": "0.4.0"}
         await _write(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         await _write(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         listed = cast(dict[str, object], (await _read(process, 2))["result"])

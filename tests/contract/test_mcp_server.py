@@ -105,11 +105,14 @@ class _FakeReferenceClient:
         first = request.entries[0]
         self.call_log.append(("get", first.identifier))
         if first.database is KeggGetDatabase.MODULE:
-            body = (
-                b"ENTRY       M00001            Module\n"
-                b"NAME        Synthetic module\n"
-                b"DEFINITION  K00001 K00002\n"
-                b"///\n"
+            body = b"".join(
+                (
+                    f"ENTRY       {entry.identifier}            Module\n"
+                    "NAME        Synthetic module\n"
+                    "DEFINITION  K00001 K00002\n"
+                    "///\n"
+                ).encode("ascii")
+                for entry in request.entries
             )
             marker = "1"
         elif first.database is KeggGetDatabase.PATHWAY:
@@ -154,6 +157,15 @@ class _FakeReferenceClient:
             rows = (
                 KeggPairRow(line_number=1, source_id=f"path:{source}", target_id="ko:K00001"),
                 KeggPairRow(line_number=2, source_id=f"path:{source}", target_id="ko:K00003"),
+            )
+        elif request.relationship.value == "ko_to_module":
+            rows = tuple(
+                KeggPairRow(
+                    line_number=index,
+                    source_id=f"ko:{ko_id}",
+                    target_id=f"md:M{index:05d}",
+                )
+                for index, ko_id in enumerate(request.source_identifiers, start=1)
             )
         else:
             rows = tuple(
@@ -395,7 +407,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert error_properties["safe_details"]["maxItems"] == 32
 
         analysis_schema_limits = {
-            "analyze_ko_annotations": (15_000, 22),
+            "analyze_ko_annotations": (16_000, 24),
             "analyze_modules": (8_000, 11),
             "analyze_pathways": (8_500, 14),
         }
@@ -425,6 +437,10 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "properties"
         ]
         assert selection_properties["selected_pathways"]["maxItems"] == 25
+        module_selection_properties = high_level_output["$defs"]["AutomaticModuleSelectionSummary"][
+            "properties"
+        ]
+        assert module_selection_properties["selected_modules"]["maxItems"] == 25
 
         summary_properties = high_level_output["$defs"]["AnalysisResultSummary"]["properties"]
         assert summary_properties["caveats"]["maxItems"] == 3
@@ -832,7 +848,7 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
             {
                 "ko_text": "K00844",
                 "pathways": [{"pathway_id": "ko00010"}],
-                "pathway_selection": {"mode": "top_detected", "top_n": 1},
+                "pathway_selection": {"top_n": 1},
             },
         )
         assert mixed_selection.isError is True
@@ -896,7 +912,7 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         manifest_path = Path(bundle["manifest"])
         manifest_text = manifest_path.read_text(encoding="utf-8")
         manifest = json.loads(manifest_text)
-        assert manifest["schema_version"] == "2"
+        assert manifest["schema_version"] == "3"
         assert manifest["input_path_provenance"] == {
             "mode": "redacted",
             "source_count": 1,
@@ -983,7 +999,7 @@ async def test_explicit_inline_source_keeps_null_original_input_path(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
+async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_report(
     tmp_path: Path,
 ) -> None:
     fasta = tmp_path / "proteins.faa"
@@ -1017,13 +1033,17 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert result.isError is False
         assert result.structuredContent is not None
         data = result.structuredContent["result"]["data"]
+        assert data["module_target_count"] == 1
+        assert data["module_previews"][0]["module_id"] == "M00001"
         assert data["pathway_target_count"] == 1
         assert data["pathway_previews"][0]["pathway_id"] == "ko00001"
         report_path = Path(data["output_bundle"]["analysis_report"])
         report_text = report_path.read_text(encoding="utf-8")
         assert str(fasta) in report_text
-        assert "Automatic pathway discovery policy" in report_text
-        assert "`accepted_only` using `strict` evidence" in report_text
+        assert "MODULE target selection" in report_text
+        assert "not MODULE completion, enrichment, activity, or validation" in report_text
+        assert "Pathway target selection" in report_text
+        assert "Requested target count: 5" in report_text
         render_input_path = Path(data["output_bundle"]["render_input"])
         assert render_input_path.is_file()
         render_input = RenderInput.model_validate_json(
@@ -1031,23 +1051,30 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
             strict=True,
         )
         assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION
+        assert render_input.modules[0].module_id == "M00001"
         assert render_input.pathways[0].detected_ko_ids == ("K00001",)
         pathway_parameters = render_input.execution.analysis.pathway_parameters
         assert pathway_parameters.evidence_mode.value == "lenient"
-        assert pathway_parameters.pathway_discovery_policy == "accepted_only"
-        discovery_mode = pathway_parameters.pathway_discovery_evidence_mode
-        assert discovery_mode is not None
-        assert discovery_mode.value == "strict"
+        assert pathway_parameters.ranking is not None
+        assert pathway_parameters.ranking.selection.top_n == 5
+        module_ranking = render_input.execution.analysis.module_ranking
+        assert module_ranking is not None
+        assert module_ranking.selection.top_n == 5
+        assert module_ranking.evidence_mode.value == "lenient"
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == "2"
+        assert manifest["schema_version"] == "3"
         assert manifest["render_input"] == {
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
         }
-        assert manifest["pathway_discovery"] == {
-            "policy": "accepted_only",
-            "evidence_mode": "strict",
-        }
+        assert manifest["module_selection"]["selection"]["top_n"] == 5
+        assert manifest["pathway_selection"]["selection"]["top_n"] == 5
+        assert data["automatic_module_selection"]["parameters"]["top_n"] == 5
+        assert data["automatic_module_selection"]["evidence_mode"] == "lenient"
+        assert data["automatic_pathway_selection"]["parameters"]["top_n"] == 5
+        bundle = data["output_bundle"]
+        assert Path(bundle["module_ranking"]).is_file()
+        assert Path(bundle["ko_module_relationships"]).is_file()
         assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
 
         repeated = await session.call_tool(
@@ -1064,6 +1091,46 @@ async def test_high_level_file_workflow_discovers_pathway_and_writes_report(
         assert repeated.structuredContent is not None
         assert repeated.structuredContent["error"]["code"] == "OUTPUT_ALREADY_EXISTS"
         assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
+
+
+@pytest.mark.asyncio
+async def test_default_workflow_caps_both_automatic_target_types_at_five(
+    tmp_path: Path,
+) -> None:
+    runtime = _fake_runtime(tmp_path)
+    server = create_server(runtime)
+    output = tmp_path / "top-five-both"
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "\n".join(f"K{index:05d}" for index in range(1, 7)),
+                "output_directory": str(output),
+            },
+        )
+
+        assert result.isError is False
+        assert result.structuredContent is not None
+        data = result.structuredContent["result"]["data"]
+        assert data["module_target_count"] == 5
+        assert data["pathway_target_count"] == 5
+        assert [
+            item["module_id"] for item in data["automatic_module_selection"]["selected_modules"]
+        ] == [f"M{index:05d}" for index in range(1, 6)]
+        assert [
+            item["pathway_id"] for item in data["automatic_pathway_selection"]["selected_pathways"]
+        ] == [f"ko{index:05d}" for index in range(1, 6)]
+        render_input = RenderInput.model_validate_json(
+            Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+            strict=True,
+        )
+        assert [item.module_id for item in render_input.modules] == [
+            f"M{index:05d}" for index in range(1, 6)
+        ]
+        assert [item.pathway_id for item in render_input.pathways] == [
+            f"ko{index:05d}" for index in range(1, 6)
+        ]
 
 
 @pytest.mark.asyncio
@@ -1087,11 +1154,7 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             "analyze_ko_annotations",
             {
                 "ko_text": ko_text,
-                "pathway_selection": {
-                    "mode": "top_detected",
-                    "top_n": 1,
-                    "metric": "unique_selected_ko_count",
-                },
+                "pathway_selection": {"top_n": 1},
                 "output_directory": str(output),
             },
         )
@@ -1169,8 +1232,8 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         retained_report = retained_structured["report"]
         assert [item["stage"] for item in retained_report["execution_metrics"]] == [
             "annotation_import",
-            "ko_pathway_mapping",
-            "pathway_ranking",
+            "ko_target_mapping",
+            "target_ranking",
             "reference_loading",
             "analysis",
             "bundle_write",

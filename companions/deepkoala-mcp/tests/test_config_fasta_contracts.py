@@ -120,6 +120,7 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
         output_directory="/allowed/run-1",
     )
     assert request.device == "auto"
+    assert request.model_date == "202502"
     with pytest.raises(ValidationError):
         RunDeepKoalaInput(
             fasta_path="proteins.faa",
@@ -148,7 +149,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     )
     handoff = ImportHandoff(
         schema_version="1",
-        tool_version="0.3.0",
+        tool_version="0.4.0",
         input_path="/allowed/original.faa",
         annotations_path="/outputs/run/deepkoala_annotations.csv",
         report_path="/outputs/run/deepkoala_run_report.md",

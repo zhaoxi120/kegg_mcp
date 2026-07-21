@@ -8,10 +8,12 @@ from pydantic import ConfigDict, Field, model_validator
 from kegg_mcp.analysis.contracts import ModuleAnalysisLimits
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageLimits
 from kegg_mcp.analysis.pathway_ranking import (
+    MODULE_RANKING_METHOD,
+    MODULE_RANKING_VERSION,
     PATHWAY_RANKING_METHOD,
     PATHWAY_RANKING_VERSION,
+    ModuleSelection,
     PathwaySelection,
-    PathwaySelectionMode,
 )
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
@@ -24,15 +26,15 @@ from kegg_mcp.kegg.contracts import KeggRequestOptions
 from kegg_mcp.report_limits import ReportLimits
 
 ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
-ANALYSIS_SERVICE_VERSION = "2"
+ANALYSIS_SERVICE_VERSION = "3"
 
 
 class ExecutionStage(StrEnum):
     """Stable high-level stages used by compact performance summaries."""
 
     ANNOTATION_IMPORT = "annotation_import"
-    KO_PATHWAY_MAPPING = "ko_pathway_mapping"
-    PATHWAY_RANKING = "pathway_ranking"
+    KO_TARGET_MAPPING = "ko_target_mapping"
+    TARGET_RANKING = "target_ranking"
     REFERENCE_LOADING = "reference_loading"
     ANALYSIS = "analysis"
     BUNDLE_WRITE = "bundle_write"
@@ -70,12 +72,40 @@ class PathwayRankingExecution(FrozenModel):
 
     @model_validator(mode="after")
     def validate_ranking_summary(self) -> Self:
-        if self.selection.mode is not PathwaySelectionMode.TOP_DETECTED:
-            raise ValueError("pathway ranking execution requires top_detected selection")
         if len(self.selected_pathway_ids) > self.selection.top_n:
             raise ValueError("selected pathway identifiers exceed the requested top_n")
         if self.candidate_pathway_count < len(self.selected_pathway_ids):
             raise ValueError("candidate pathway count cannot be smaller than selected targets")
+        if self.mapping_cache_hit_count > self.mapping_request_count:
+            raise ValueError("mapping cache hits cannot exceed logical requests")
+        return self
+
+
+class ModuleRankingExecution(FrozenModel):
+    """Compact, reproducible provenance for one automatic MODULE selection."""
+
+    method: Literal["selected_unique_ko_count"] = MODULE_RANKING_METHOD
+    method_version: Literal["1"] = MODULE_RANKING_VERSION
+    selection: ModuleSelection
+    evidence_mode: EvidenceMode
+    decision_policy: DecisionPolicyReference
+    selected_unique_ko_count: int = Field(strict=True, gt=0)
+    candidate_module_count: int = Field(strict=True, ge=0)
+    selected_module_ids: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^M[0-9]{5}$")], ...],
+        Field(max_length=25),
+    ]
+    mapping_request_count: int = Field(strict=True, gt=0)
+    mapping_network_request_count: int = Field(strict=True, ge=0)
+    mapping_cache_hit_count: int = Field(strict=True, ge=0)
+    mapping_response_bytes: int = Field(strict=True, ge=0)
+
+    @model_validator(mode="after")
+    def validate_ranking_summary(self) -> Self:
+        if len(self.selected_module_ids) > self.selection.top_n:
+            raise ValueError("selected MODULE identifiers exceed the requested top_n")
+        if self.candidate_module_count < len(self.selected_module_ids):
+            raise ValueError("candidate MODULE count cannot be smaller than selected targets")
         if self.mapping_cache_hit_count > self.mapping_request_count:
             raise ValueError("mapping cache hits cannot exceed logical requests")
         return self
@@ -142,7 +172,7 @@ class AnalysisServiceLimits(FrozenModel):
 
 
 class PathwayExecutionParameters(FrozenModel):
-    """Pathway semantics and any conservative automatic-discovery policy."""
+    """Pathway semantics and optional deterministic target-ranking provenance."""
 
     evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
@@ -150,27 +180,6 @@ class PathwayExecutionParameters(FrozenModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
-    pathway_discovery_policy: Literal["accepted_only"] | None = Field(
-        default=None,
-        exclude_if=lambda value: value is None,
-    )
-    pathway_discovery_evidence_mode: EvidenceMode | None = Field(
-        default=None,
-        exclude_if=lambda value: value is None,
-    )
-
-    @model_validator(mode="after")
-    def validate_discovery_policy(self) -> Self:
-        if (self.pathway_discovery_policy is None) != (
-            self.pathway_discovery_evidence_mode is None
-        ):
-            raise ValueError("pathway discovery policy and evidence mode must be recorded together")
-        if (
-            self.pathway_discovery_evidence_mode is not None
-            and self.pathway_discovery_evidence_mode is not EvidenceMode.STRICT
-        ):
-            raise ValueError("accepted-only pathway discovery uses strict evidence semantics")
-        return self
 
 
 class AnalysisExecutionProvenance(FrozenModel):
@@ -178,17 +187,21 @@ class AnalysisExecutionProvenance(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:2",
+            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:3",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     service_name: Literal["kegg_mcp_annotation_analysis"] = ANALYSIS_SERVICE_NAME
-    service_version: Literal["2"] = ANALYSIS_SERVICE_VERSION
+    service_version: Literal["3"] = ANALYSIS_SERVICE_VERSION
     import_limits: ImportLimits
     kegg_request_options: KeggRequestOptions
     reference_loading_limits: ReferenceLoadingLimits
     module_analysis_limits: ModuleAnalysisLimits = Field(default_factory=ModuleAnalysisLimits)
+    module_ranking: ModuleRankingExecution | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     pathway_parameters: PathwayExecutionParameters = Field(
         default_factory=PathwayExecutionParameters
     )
@@ -203,6 +216,7 @@ __all__ = [
     "AnalysisExecutionProvenance",
     "AnalysisServiceLimits",
     "ExecutionStage",
+    "ModuleRankingExecution",
     "PathwayExecutionParameters",
     "PathwayRankingExecution",
     "ReferenceLoadingLimits",

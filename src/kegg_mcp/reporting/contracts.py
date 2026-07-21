@@ -30,9 +30,9 @@ from kegg_mcp.kegg.contracts import KeggBatchProvenance
 from kegg_mcp.report_limits import ReportLimits
 
 REPORT_FORMAT_NAME = "kegg_mcp_analysis_report"
-REPORT_FORMAT_VERSION = "2"
+REPORT_FORMAT_VERSION = "3"
 REPORT_RENDERER_NAME = "kegg_mcp_reporting"
-REPORT_RENDERER_VERSION = "1"
+REPORT_RENDERER_VERSION = "2"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 
@@ -50,7 +50,7 @@ class ReportInput(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:report-input:2",
+            "$id": "urn:kegg-mcp:schema:report-input:3",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -103,15 +103,15 @@ class StructuredReport(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:structured-report:2",
+            "$id": "urn:kegg-mcp:schema:structured-report:3",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
 
     format_name: Literal["kegg_mcp_analysis_report"] = REPORT_FORMAT_NAME
-    format_version: Literal["2"] = REPORT_FORMAT_VERSION
+    format_version: Literal["3"] = REPORT_FORMAT_VERSION
     renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
-    renderer_version: Literal["1"] = REPORT_RENDERER_VERSION
+    renderer_version: Literal["2"] = REPORT_RENDERER_VERSION
     limits: ReportLimits
     report: ReportInput
 
@@ -159,13 +159,13 @@ class RenderedReport(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:rendered-report:1",
+            "$id": "urn:kegg-mcp:schema:rendered-report:2",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
 
     renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
-    renderer_version: Literal["1"] = REPORT_RENDERER_VERSION
+    renderer_version: Literal["2"] = REPORT_RENDERER_VERSION
     limits: ReportLimits
     artifacts: Annotated[tuple[ReportArtifact, ...], Field(min_length=3, max_length=3)]
 

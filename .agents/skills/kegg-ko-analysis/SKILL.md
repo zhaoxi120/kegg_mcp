@@ -41,9 +41,11 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
 
 - Prefer `analyze_ko_annotations` for a complete normalization-to-MODULE/pathway workflow. It
   normalizes evidence once and writes the stable bundle used by later stages.
-- For Top-N detected pathways, supply
-  `pathway_selection={"mode":"top_detected","top_n":N,"metric":"unique_selected_ko_count"}`.
-  Let the server map, canonicalize `ko`/`map` views, rank, batch, and summarize.
+- When no MODULE or pathway target and no explicit selection are supplied, omit
+  `pathway_selection`. Let the server independently select the Top-5 MODULEs and Top-5 canonical KO
+  reference pathways by unique selected-KO overlap.
+- For Top-N detected pathways, supply `pathway_selection={"top_n":N}`. Let the server map,
+  canonicalize `ko`/`map` views, rank, batch, and summarize.
 - Use `normalize_ko_annotations`, `get_kegg_entries`, `map_ko_ids`, `analyze_modules`,
   `analyze_pathways`, or `compare_ko_sets` only for the corresponding narrower request.
 - Call `get_server_status` when deployment state matters. If live access is enabled and
@@ -64,7 +66,8 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
 1. Read [confidence-policy.md](references/confidence-policy.md) before discussing accepted,
    uncertain, rejected, strict, or lenient evidence.
 2. Read [module-interpretation.md](references/module-interpretation.md) for MODULE or pathway
-   output. Keep exact completion separate from block coverage and descriptive pathway coverage.
+   output. Treat automatic MODULE ranking only as target selection, never as completion or
+   enrichment. Keep exact completion separate from block coverage and descriptive pathway coverage.
 3. Apply [reporting-policy.md](references/reporting-policy.md) to the user-facing result.
 4. Surface the analysis unit, original input path, normalization policy, retrieval/cache
    provenance, unsupported content, warnings, and truncation.

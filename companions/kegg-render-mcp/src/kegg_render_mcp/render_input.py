@@ -98,11 +98,11 @@ def _parse_payload(payload: bytes) -> ValidatedRenderInput:
         raise _invalid_input("The renderer input root must be a JSON object.")
     raw = cast(dict[str, Any], parsed)
     version: object = raw.get("schema_version")
-    if version != "2":
+    if version != "3":
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.INCOMPATIBLE_SCHEMA,
-                message="Only renderer handoff schema version 2 is compatible.",
+                message="Only renderer handoff schema version 3 is compatible.",
                 suggested_action="Rerun analysis with a compatible kegg-mcp version.",
                 safe_details=(SafeDetail(name="received_version", value=str(version)[:32]),),
             )

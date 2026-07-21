@@ -34,6 +34,7 @@ OWNED_RELEASE_FILES = (
     PROJECT_ROOT / "examples" / "plain-ko" / "clean-ko-list.txt",
     PROJECT_ROOT / "examples" / "config" / "public-academic.env.example",
     PROJECT_ROOT / "examples" / "config" / "licensed.env.example",
+    PROJECT_ROOT / "examples" / "config" / "kegg-mcp-suite.toml",
 )
 FORBIDDEN_DISTRIBUTION_SUFFIXES = {
     ".bin",
@@ -116,7 +117,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.4.0"
+    assert project["version"] == "0.5.0"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
     assert scripts == {"kegg-mcp": "kegg_mcp.mcp.cli:main"}
@@ -155,7 +156,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.4,<0.5" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.6" in renderer_project["dependencies"]
     assert "latest GitHub release and the current `main` branch" in security
     assert "Distribution boundary" in readiness
 
@@ -298,7 +299,7 @@ def test_visualization_extension_has_an_independent_synthetic_release_boundary()
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.4,<0.5" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.6" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -312,10 +313,10 @@ def test_visualization_extension_has_an_independent_synthetic_release_boundary()
     for document in (readme, installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 2" in normalized
+        assert "version 3" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (readme, installation, server_doc, readiness):
-        assert "AnalysisExecutionProvenance` version 2" in re.sub(r"\s+", " ", document)
+        assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
 
     renderer_job = ci.split("validate-renderer-companion:", maxsplit=1)[1]
     for command in (
@@ -374,9 +375,9 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert smoke_path.is_file()
     assert ci.count("tests/release/smoke_wheel.py") == 3
     for distribution, version in (
-        ("kegg-mcp", "0.4.0"),
-        ("deepkoala-mcp", "0.3.0"),
-        ("kegg-render-mcp", "0.2.0"),
+        ("kegg-mcp", "0.5.0"),
+        ("deepkoala-mcp", "0.4.0"),
+        ("kegg-render-mcp", "0.3.0"),
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci
@@ -434,11 +435,13 @@ def test_distribution_boundary_is_explicit() -> None:
     for document in (readme, installation, readiness):
         assert "Python wheel" in document
         assert "repository-scoped Skill" in document
-        assert "tag source archive" in document
+        assert "suite installer" in document
     normalized_readme = re.sub(r"\s+", " ", readme)
     normalized_installation = re.sub(r"\s+", " ", installation)
     normalized_readiness = re.sub(r"\s+", " ", readiness)
-    assert "installing the wheel alone does not make the Skills available" in normalized_readme
+    assert "Installing a wheel alone does not make repository-scoped Skills available" in (
+        normalized_readme
+    )
     assert "does not install repository-scoped Skills" in normalized_installation
     assert "does not install either companion or any repository-scoped Skill" in (
         normalized_readiness

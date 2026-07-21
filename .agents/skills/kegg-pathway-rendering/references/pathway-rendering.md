@@ -1,6 +1,6 @@
 # Pathway rendering
 
-Render a regular reference pathway only from its compatible version 2 handoff. Use
+Render a regular reference pathway only from its compatible version 3 handoff. Use
 `render_pathway` for one canonical `koNNNNN` target and `render_analysis_bundle` for a bounded
 selection. The renderer owns KEGG PNG/KGML retrieval, validation, mapping, scene creation, SVG,
 and optional bounded PNG rasterization.

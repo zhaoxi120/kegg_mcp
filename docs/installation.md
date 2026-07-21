@@ -2,7 +2,7 @@
 
 KEGG MCP is a local stdio server. It accepts KO annotation evidence, performs deterministic local
 analysis, and retrieves KEGG references through public-academic access by default. The core
-server does not run DeepKOALA or another sequence annotator. An optional independently installed
+server does not run DeepKOALA or another sequence annotator. An optional independently packaged
 companion can run an existing local DeepKOALA installation with its fixed automatic device policy
 and hand a stable detailed CSV to the core importer. A second independent companion can turn the core's
 complete renderer handoff into bounded static pathway overlays and MODULE logic diagrams.
@@ -29,26 +29,238 @@ The guarded filesystem and process implementations use POSIX controls and fail c
 controls are unavailable. Python 3.12 and 3.13 are excluded by package metadata until a separate
 compatibility campaign is completed.
 
-The Skill installer additionally requires Linux `/proc/self/fd`, `O_DIRECTORY`, `O_NOFOLLOW`, and
-libc and kernel support for `renameat2(RENAME_NOREPLACE)`. It fails closed instead of falling back
-to path-following or overwriting moves when any of these controls is unavailable, including in a
-restricted Linux chroot without `/proc`.
+The suite installer additionally requires an existing CPython 3.11 executable, `uv` 0.11.16 or
+later with the required locked-sync controls, a Git CLI, and a Codex CLI with local plugin
+commands. Pass all four as direct absolute paths.
+The installer does not bootstrap, update, or search the network for these tools. The generated
+plugin installation path targets the Codex app and Codex CLI only; its release support remains
+gated on the exact acceptance evidence in the release-readiness checklist. Generic MCP clients and
+other assistants must use the manual stdio configuration later in this guide.
 
 The source development workflow uses [uv](https://docs.astral.sh/uv/). GPU access, PyTorch,
 DeepKOALA, model weights, and KOfam profiles are not server dependencies.
 
-The complete FASTA-to-image workflow uses three separately installed stdio processes. They may
-share controlled handoff roots, but not private state:
+The complete FASTA-to-image workflow uses three separately packaged stdio processes in isolated
+runtimes. They may share controlled handoff roots, but not private state:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 2 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
 ```
 
 The core never starts either companion. The renderer never imports annotation evidence, runs an
 annotator, or recomputes MODULE completion or pathway coverage.
 
-## Install from a source checkout
+## Install the complete Codex suite
+
+`scripts/install-suite.py` is the primary Codex deployment interface. One successful invocation
+must:
+
+- install `kegg-mcp`, `deepkoala-mcp`, and `kegg-render-mcp` from their separate checked-in lock
+  files into separate version-bound Python runtimes;
+- preserve three independent stdio processes and the existing stable-file handoffs;
+- copy the three canonical `.agents/skills` trees into one generated local Codex plugin;
+- generate three absolute MCP launch registrations inside that plugin; and
+- add the dedicated local marketplace and plugin through Codex commands rather than editing the
+  user's Codex configuration by hand.
+
+The plugin is a generated local deployment artifact. It is not tracked source, a fourth Python
+distribution, or permission to merge service responsibilities. Each Skill retains exactly one MCP
+dependency.
+
+### Prepare the source and private paths
+
+Run the suite installer from a reviewed release checkout or source archive. It consumes the three
+lockfiles, three Skill trees, installer, and launcher directly from that source tree and verifies
+that installed distribution versions match its project metadata. It does not require a clean Git
+worktree, pin a source revision, or calculate installer integrity digests.
+
+Create the private state roots and shared input/output roots deliberately before installation.
+The deployment TOML must be a direct regular file owned by the invoking user with no group or
+other permission bits; mode `0600` is the recommended writable form. Its direct parent directory
+must also be owned by the invoking user with no group or other permission bits; use mode `0700`.
+All paths in it are absolute. Private state roots must be owner-only, must not overlap each other, and
+must not overlap shared input or output roots. The Core allowlist must cover the DeepKOALA input and
+output roots and every renderer handoff root.
+
+The installation root must be a new absolute private directory below an existing owner-only
+parent. Do not place it inside an input, output, cache, or repository source tree. The installer
+must reject traversal, directory symlink aliases, unsafe executable targets, unsafe ownership, and
+group- or world-writable private locations.
+
+### Write the strict deployment TOML
+
+The parser rejects unknown fields, wrong types, relative paths, missing required tables, and
+inconsistent cross-component roots. Copy the placeholder-only
+[`examples/config/kegg-mcp-suite.toml`](../examples/config/kegg-mcp-suite.toml) into a private
+location, set mode `0600`, and replace every path before use; the tracked template itself is not a
+deployment configuration. The following public-academic example assumes the user has already
+confirmed that both the user and work qualify and that every listed directory exists:
+
+```toml
+schema_version = 1
+
+[kegg]
+access_mode = "public_academic"
+academic_use_confirmed = true
+licensed_use_confirmed = false
+rate_limit_root = "/absolute/private/kegg-rate-limit"
+
+[core]
+result_store_path = "/absolute/private/core/results.sqlite3"
+allowed_roots = [
+  "/absolute/project/inputs",
+  "/absolute/project/annotations",
+  "/absolute/project/analysis",
+]
+
+[deepkoala]
+state_root = "/absolute/private/deepkoala-state"
+input_roots = ["/absolute/project/inputs"]
+output_roots = ["/absolute/project/annotations"]
+allowed_models = ["full", "frag"]
+cpu_threads = 2
+
+[renderer]
+state_root = "/absolute/private/renderer-state"
+allowed_roots = ["/absolute/project/analysis"]
+offline_allow_stale = false
+```
+
+For `public_academic`, set `academic_use_confirmed=true`, omit the cache if the local default is
+intended, and do not provide licensed fields. Use that mode only when both the user and work are
+eligible. For `licensed`, provide the authorized HTTPS base endpoint and
+`licensed_use_confirmed=true`; do not put credentials in the URL. In `offline_cache`, provide an
+existing Core-compatible cache file owned by the invoking user with exact mode `0600`. A licensed
+offline namespace requires both its
+canonical endpoint and licensed-use confirmation, but the endpoint is never contacted in that
+mode.
+
+The suite owns a private DeepKOALA checkout and Python environment below the installation root.
+The TOML does not authorize creating them: each new suite installation root additionally requires
+one user confirmation before `--allow-deepkoala-install` authorizes the initial clone and upstream
+dependency installation. The same installed deployment does not ask again for later FASTA jobs.
+The official repository's bundled `202502` resources are required and become the default model.
+The suite does not install later weights, HMMER, KOfam profiles, or KEGG data. This repository
+intentionally provides no model updater. A later user request may be handled by an LLM or operator
+as a separately confirmed external installation, after which the installed model date can be
+selected explicitly; the Skill and serving companion do not perform the update.
+
+### Run preflight and installation
+
+First run the non-publishing preflight with absolute executable paths. It validates the source tree
+but does not create the installation root or change Codex registration:
+
+```bash
+/absolute/path/to/python3.11 \
+  /absolute/path/to/kegg_mcp/scripts/install-suite.py \
+  --config /absolute/private/kegg-mcp-deployment.toml \
+  --install-root /absolute/private/kegg-mcp-install \
+  --python /absolute/path/to/python3.11 \
+  --uv /absolute/path/to/uv \
+  --git /absolute/path/to/git \
+  --codex /absolute/path/to/codex \
+  --dry-run
+```
+
+Then omit `--dry-run` to perform the installation:
+
+```bash
+/absolute/path/to/python3.11 \
+  /absolute/path/to/kegg_mcp/scripts/install-suite.py \
+  --config /absolute/private/kegg-mcp-deployment.toml \
+  --install-root /absolute/private/kegg-mcp-install \
+  --python /absolute/path/to/python3.11 \
+  --uv /absolute/path/to/uv \
+  --git /absolute/path/to/git \
+  --codex /absolute/path/to/codex \
+  --allow-deepkoala-install
+```
+
+`uv` dependency resolution is offline by default. If an artifact needed to satisfy a checked-in
+lockfile or one of its declared build requirements is not already cached, installation fails
+without registering the plugin. After reviewing that exact failure, the operator may explicitly
+authorize `uv` network access only while resolving or downloading artifacts required by those
+lockfiles and declared build requirements:
+
+```bash
+/absolute/path/to/python3.11 \
+  /absolute/path/to/kegg_mcp/scripts/install-suite.py \
+  --config /absolute/private/kegg-mcp-deployment.toml \
+  --install-root /absolute/private/kegg-mcp-install \
+  --python /absolute/path/to/python3.11 \
+  --uv /absolute/path/to/uv \
+  --git /absolute/path/to/git \
+  --codex /absolute/path/to/codex \
+  --allow-locked-dependency-downloads \
+  --allow-deepkoala-install
+```
+
+That flag does not authorize downloading Python, uv, Codex, repository source, DeepKOALA, model
+weights, KOfam profiles, or KEGG payloads. `--allow-deepkoala-install` is the separate one-time
+authorization for the initial official DeepKOALA clone and upstream requirements in this new suite
+installation root. A different new installation root requires its own confirmation; later FASTA
+jobs in the same installed deployment do not. Neither flag authorizes model updates or multi-domain
+dependencies.
+
+Do not infer success from a partially populated installation root. A successful exit, generated
+plugin verification, and the post-install checks below are all required. Until the suite installer
+passes the failure-injection and real Codex checks in
+[release readiness](release-readiness.md), do not cite an unverified run as supported release
+evidence.
+
+### Generated runtime and plugin boundary
+
+The private installation contains separate Core, DeepKOALA companion, and Renderer runtimes plus
+an owner-only deployment manifest. The generated `.mcp.json` contains only absolute launch
+commands. A small installed launcher reads the private manifest and uses direct process execution
+to replace itself with exactly one server; it does not use a shell and does not start another MCP
+server. This keeps private endpoints, configured checkout and interpreter paths, and state roots out
+of the plugin copy that Codex caches. The suite-managed DeepKOALA source and environment remain
+below the private installation root.
+
+The generated plugin contains `.codex-plugin/plugin.json`, `.mcp.json`, and copied
+`skills/<skill-name>/` trees. Its local marketplace entry uses a path relative to the dedicated
+marketplace root, while every MCP executable path is absolute. Do not use bare executable names,
+activation commands, `module load`, shell wrappers, or undocumented `${PLUGIN_ROOT}` substitution
+for MCP commands.
+
+The suite path is a fresh-install transaction. An existing marketplace name, plugin selection, or
+installation root is a preflight conflict rather than an update target. The same is true when
+`codex mcp list --json` already contains `deepkoala-mcp`, `kegg-mcp`, or `kegg-render-mcp`, including
+a legacy direct registration. Review and explicitly remove or rename a registration only when it
+belongs to the deployment being replaced; the installer never overwrites it automatically.
+Runtime publication, generated-plugin validation, Codex registration, and rollback are separate
+stages. On a caught failure or keyboard interruption, rollback removes only registration that can
+be proven to belong to this transaction and then removes the installation root. An incomplete
+rollback preserves the private root for recovery. A process kill, host crash, or power loss can
+leave an `.incomplete` root and Codex state that requires the manual inspection documented in
+[Troubleshooting](troubleshooting.md). It must never delete
+unrelated deployments, biological inputs, output bundles, caches, or manually managed external
+DeepKOALA files. The suite-managed checkout, environment, and bundled model are part of the new
+installation root and are removed when that transaction rolls back successfully.
+
+The current suite interface is fresh-install only: it does not update, resume, or uninstall a
+deployment. The installation root is embedded in absolute launcher paths and must not be moved.
+Remove or replace a deployment only through an explicitly reviewed operator procedure after
+confirming that no Codex plugin or marketplace entry still references that root.
+
+After installation, start a new Codex task. For an unambiguous plugin smoke check, use a workspace
+outside this source checkout and outside any legacy workspace containing standalone copies of the
+same three Skills. Existing tasks are not evidence that newly installed Skills or MCP servers were
+loaded. The official Codex plugin structure, bundled MCP configuration, local marketplace,
+cached-install, and new-task behavior used by this contract were reviewed on 2026-07-19 against the
+official
+[Codex plugin documentation](https://learn.chatgpt.com/docs/build-plugins).
+
+## Manual component installation
+
+The remaining installation methods are for development, non-Codex MCP clients, or explicit
+component-level troubleshooting. They do not provide the all-in-one Codex deployment and must not
+be layered on top of the generated plugin unless a maintainer is intentionally testing duplicate
+discovery behavior.
+
+### Manual core development environment
 
 From the repository root, create the locked environment. Local validation is optional before a
 commit, and the default test command does not contact KEGG:
@@ -69,7 +281,7 @@ The diagnostic validates deployment configuration without contacting KEGG or ope
 databases. Bare `uv run --frozen kegg-mcp` starts the stdio server and waits for MCP JSON-RPC
 messages on stdin; it is not a terminal user interface.
 
-## Install a reviewed wheel
+### Manual reviewed core wheel
 
 Build and inspect the distribution by following `docs/release-readiness.md`. Install the exact wheel
 in an isolated environment:
@@ -81,126 +293,27 @@ python -m pip install /path/to/kegg_mcp-*.whl
 kegg-mcp
 ```
 
-Do not install an artifact solely because its filename matches this example. Verify its source,
-version, and published SHA-256 digest first.
+Do not install an artifact solely because its filename matches this example. Verify its source and
+version first.
 
 The Python wheel and Python package source distribution install the MCP Python server only. They do
 not install repository-scoped Codex Skills or include the complete repository documentation and
-examples. Obtain an exact GitHub repository checkout or GitHub tag source archive separately when
-the Skills, their references, and the Skill installer are required.
-
-## Install the repository Skills into a Codex workspace
-
-MCP registration and Skill installation are separate operations. Registering `kegg-mcp`,
-`deepkoala-mcp`, or `kegg-render-mcp` does not copy or register a Skill. The formally supported
-local Skill installation method for this release is a managed copy made by
-`scripts/install-skills.py` from a reviewed repository checkout or GitHub tag source archive.
-
-If Codex runs from the reviewed checkout root, that checkout's `.agents/skills` is already a
-repository discovery location. Do not set `--workspace` to the same checkout: those source Skill
-directories intentionally have no managed-install marker, so the installer will refuse to overwrite
-them. Use the installer only when the destination is a distinct workspace, including an outer
-workspace that contains the source checkout below it.
-
-Codex scans repository Skill directories from its current working directory upward to the
-repository root. A nested checkout below that working directory is not on that scan path. For
-example, launching Codex at `/project/workspace` does not discover Skills solely because they are
-stored at `/project/workspace/.mcp/kegg_mcp/.agents/skills`. This behavior follows the official
-[Codex Skill location documentation](https://learn.chatgpt.com/docs/build-skills#where-to-save-skills),
-reviewed on 2026-07-18.
-
-From an exact Git checkout, run the installer by absolute path and name the existing absolute
-workspace root where Codex will be launched:
-
-```bash
-python3 /absolute/path/to/kegg_mcp/scripts/install-skills.py \
-  --workspace /absolute/path/to/workspace
-```
-
-The installer derives the full source commit from that checkout only after verifying that all three
-Skill trees, all three version-bearing `pyproject.toml` files, and the installer itself match
-`HEAD`. A staged, unstaged, untracked, ignored, missing, or extra entry in those paths returns
-`skill_source_modified` before installation. The installed bytes come from a bounded snapshot
-materialized from that immutable Git commit rather than from the working tree, and each staged Skill
-is hashed again before commit. This closes the copy-time race as well as the nested checkout case:
-when the repository is under `/absolute/path/to/workspace/.mcp/kegg_mcp`, managed copies are written
-to `/absolute/path/to/workspace/.agents/skills`, which is on the Codex scan path.
-
-A GitHub tag source archive has no `.git` identity. Supply both the full commit and the source-tree
-SHA-256 published with that release. A commit string alone is not a content binding, and calculating
-a digest from an untrusted downloaded archive does not make that digest trusted:
-
-```bash
-python3 /absolute/path/to/tag-archive/scripts/install-skills.py \
-  --workspace /absolute/path/to/workspace \
-  --source-commit VERIFIED_FULL_COMMIT \
-  --source-tree-sha256 PUBLISHED_SOURCE_TREE_SHA256
-```
-
-For a wheel deployment, first compare `kegg-mcp --version` with the reviewed release, obtain the
-GitHub tag source archive for that same release, and add the version guard:
-
-```bash
-python3 /absolute/path/to/tag-archive/scripts/install-skills.py \
-  --workspace /absolute/path/to/workspace \
-  --source-commit VERIFIED_FULL_COMMIT \
-  --source-tree-sha256 PUBLISHED_SOURCE_TREE_SHA256 \
-  --expected-core-version INSTALLED_VERSION
-```
-
-The `kegg-mcp-tree-sha256-v2:source` digest covers all three Skill trees, all three version-bearing
-project files, and the installer. It records regular files with canonical Git modes (`100644` or
-`100755`) and records every directory entry, including an archive's empty directories.
-Non-executable permission-bit differences introduced by extraction do not change the digest;
-changing executability does. The installer rejects a missing or mismatched published digest before
-writing the workspace. Archive snapshots and staged Skills copy file bytes with only canonical
-directory and Git file modes; they do not inherit ACLs, extended attributes, or other unbound
-filesystem metadata. The version guard then fails if the archive's core version differs from the
-installed wheel version.
-
-The installer copies all three Skills together and writes
-`.kegg-mcp-skill-install.json` inside each installed Skill. That non-sensitive marker records the
-full source commit, source kind, actual aggregate source-tree digest, installed Skill content
-digest, and these distribution versions:
-
-```json
-{
-  "source_commit": "<full-verified-commit>",
-  "source_tree_sha256": "<published-and-verified-source-tree-sha256>",
-  "versions": {
-    "kegg-mcp": "<core-version>",
-    "deepkoala-mcp": "<companion-version>",
-    "kegg-render-mcp": "<renderer-version>"
-  }
-}
-```
-
-The complete marker has an exact schema and also contains its schema version, installer identity,
-Skill name, source kind, and per-Skill content digest. Unknown keys, wrong JSON types, invalid digest
-or commit formats, and incomplete version maps are rejected.
-It never records a username, source or workspace path, endpoint, credential, FASTA path, cache
-path, or model path. The installer does not download dependencies, models, weights, or KEGG data,
-does not configure an MCP server, and does not modify a Python environment. It refuses symlinked
-install roots, unknown existing Skill directories, invalid markers, and locally modified managed
-copies. It anchors the destination with no-follow directory descriptors, revalidates the binding
-before replacement, and uses non-overwriting atomic renames. Rerunning it updates only unchanged
-directories carrying its valid marker. If replacement fails, it rolls back; if rollback itself
-fails, it preserves the private `.agents/skills/.kegg-mcp-skill-install-*` transaction and reports a
-relative recovery location so the operator can inspect `backup/` and restore by Skill name. Codex
-supports manually symlinked Skill folders, but the release-supported procedure uses managed copies
-so version and content checks remain deterministic. A failure while deleting a completed
-transaction returns `installation_cleanup_failed`, does not print a successful-install message,
-and reports only the remaining relative transaction location.
+examples. Use the suite installer when Codex Skills are required. Manual component installation is
+supported only for MCP clients that do not consume the generated Codex plugin.
 
 ## Choose one KEGG access mode
 
-The server reads configuration from its process environment. The files under `examples/config/`
-are reviewable templates; the server does not automatically load `.env` files. Put only the
-selected variables in the MCP client's environment configuration.
+The suite installer requires an explicit access mode in its private deployment TOML and records
+the corresponding process configuration in owner-only installation metadata. The raw servers read
+their configuration from the process environment. The files under `examples/config/` are
+reviewable templates; the servers do not automatically load `.env` files. Use the environment
+variables below only for a manual component deployment or to understand the generated runtime
+contract.
 
 The supported operating profiles are:
 
-- unconfigured operation defaults to `public_academic` with academic use confirmed;
+- an unconfigured raw Core process defaults to `public_academic` with academic use confirmed,
+  while the suite TOML must select a mode explicitly;
 - licensed operation configures the operator's authorized endpoint;
 - internal iteration can explicitly select network-disabled `offline_cache`;
 - local pytest skips live KEGG tests unless explicitly enabled; and
@@ -323,12 +436,12 @@ making a private `result_id` a cross-process contract.
 
 The optional package under `companions/deepkoala-mcp/` is an independent stdio server. Installing
 the core wheel does not install it. The companion also does not install DeepKOALA, PyTorch, model
-weights, HMMER, KOfam profiles, or KEGG data. It requires an operator-reviewed official checkout,
-an existing Python interpreter where that checkout already runs, a private temporary state root,
-and separate input and output root allowlists. For file handoff, add the DeepKOALA output root and
-the original FASTA root to the core server's `KEGG_MCP_ALLOWED_ROOTS`; never expose the companion's
-private state root. Create all configured roots as owner-only directories before either server
-starts.
+weights, HMMER, KOfam profiles, or KEGG data while serving. The suite installer supplies its private
+checkout and Python environment after explicit first-install permission. A manual component
+deployment instead requires an existing official checkout and Python interpreter. Both routes use a
+private temporary state root and separate input and output root allowlists. For file handoff, add
+the DeepKOALA output root and original FASTA root to the core server's
+`KEGG_MCP_ALLOWED_ROOTS`; never expose the companion's private state root.
 
 The local-only routing policy was reviewed on 2026-07-16 against the official
 [GenomeNet DeepKOALA page](https://www.genome.jp/tools/deepkoala/), the linked official
@@ -340,18 +453,15 @@ treats the absence of a documented remote API as a deployment boundary: MCP auto
 opens, submits to, or simulates the web form and uses only the configured local runtime through
 `deepkoala-mcp`.
 
-For protein FASTA without KO evidence, `deepkoala-annotation` first discovers `deepkoala-mcp` and makes
-`get_deepkoala_runner_status` its first annotation-tool call. If the runtime, model resources,
-companion installation, state root, or MCP registration is missing, it reports that local state and
-asks permission before making any deployment change. That deployment request states which local checkout,
-environment, resources, state, and registration would change; whether dependencies or models must
-be downloaded; expected disk and compute requirements; and that FASTA remains local with no remote
-upload branch. Declining preserves the FASTA and stops annotation. No package install, environment
-change, checkout or model download, directory creation, or MCP configuration write occurs before
-permission. Once status is ready, the user's explicit annotation request authorizes the single
-`run_deepkoala_job` call; no second confirmation is required.
+During setup of each new suite installation root, the LLM asks whether the user and work qualify for
+public academic KEGG access and whether the official DeepKOALA checkout and upstream requirements
+may be installed. A confirmed academic deployment records `academic_use_confirmed=true`, and the
+installation command adds `--allow-deepkoala-install`. Declining either choice stops that route
+before a persistent write or download. Installation must finish with DeepKOALA doctor reporting
+`local_ready` before the plugin is registered. Once ready, later FASTA jobs in that installed
+deployment use the user's explicit annotation request and do not repeat the installation question.
 
-Install and validate the lightweight companion separately:
+For a manual component deployment, install and validate the lightweight companion separately:
 
 ```bash
 cd companions/deepkoala-mcp
@@ -393,11 +503,12 @@ An output-directory-driven annotation call is:
   "fasta_path": "/absolute/private/input/proteins.faa",
   "output_directory": "/absolute/private/handoff/deepkoala-run-001",
   "model": "full",
-  "model_date": "latest"
+  "model_date": "202502"
 }
 ```
 
-Poll the returned `job_id` until it is terminal. On success, use the returned
+Poll the returned `job_id` until it is terminal. On success, report the resolved model name and
+version from the handoff, then use the returned
 `annotations_path` and `source` object unchanged in the high-level core request shown below; use a
 new analysis output directory. This is the default FASTA-to-report route and does not repeat
 normalization.
@@ -418,12 +529,17 @@ confirmation, or manual path copy. Each Skill still calls only its own MCP depen
 unready stage stops the chain, preserves completed upstream outputs, and must not be treated as an
 empty annotation or silently replaced.
 
+When no MODULE or pathway target and no explicit selection are supplied, the high-level Core
+workflow independently selects the top five MODULEs and top five canonical KO reference pathways
+by unique selected-KO overlap. MODULE ranking is target selection, not completion or enrichment;
+completion is calculated separately.
+
 ## Optional renderer companion
 
 `companions/kegg-render-mcp/` is an independent Python 3.11 stdio distribution. It depends on a
 compatible `kegg-mcp` package for the public renderer contract and typed pathway-asset client, but
-it does not add tools to the core server or import the DeepKOALA companion. Install it separately
-from the same reviewed checkout:
+it does not add tools to the core server or import the DeepKOALA companion. For a manual component
+deployment, install it separately from the same reviewed checkout:
 
 ```bash
 cd companions/kegg-render-mcp
@@ -465,7 +581,7 @@ opaque cache identity and is never returned by status. Stale assets are rejected
 operator explicitly sets `KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE=true`, in which case stale use is
 recorded in output warnings and `render_manifest.json` provenance.
 
-The renderer accepts exactly one validated schema-version-2 handoff, either as a path below an
+The renderer accepts exactly one validated schema-version-3 handoff, either as a path below an
 allowed root or as bounded inline JSON. Incompatible handoffs must be regenerated by the core
 analysis. Source pathway PNG and KGML
 are fetched one asset at a time through the typed core client, remain local, and are not
@@ -473,16 +589,28 @@ distributable under the project's MIT license. See the
 [renderer README](../companions/kegg-render-mcp/README.md) for its six tools, resource templates,
 retention settings, and exact bounds.
 
-The renderer dependency must remain `kegg-mcp>=0.4,<0.5`, and both distributions must come from
+The renderer dependency must remain `kegg-mcp>=0.5,<0.6`, and both distributions must come from
 one compatible reviewed source baseline.
 
 ## Configure an MCP client
 
-Register the server under the exact name `kegg-mcp`.
+### Codex suite plugin
 
-### Codex CLI academic user-test profile
+The suite installer owns Codex registration for its deployment. It creates a dedicated local
+marketplace, generates one `kegg-mcp` plugin, and invokes the Codex plugin commands. Do not add the
+same three commands again with `codex mcp add`, copy the Skills separately, or hand-edit the
+generated `.mcp.json`. A manual duplicate can shadow the version-bound plugin registration and
+make discovery results ambiguous.
 
-For an academic user performing academic work, create the allowed root, validate the same live
+After a successful install, close the installation task and start a new Codex task. Check the
+plugin inventory with the Codex app or `codex plugin list --json`, then perform the status-only
+checks below. Plugin installation is currently a Codex app and Codex CLI path; it is not a generic
+MCP client packaging standard.
+
+### Legacy manual Codex CLI academic profile
+
+Use this component-level profile only when deliberately not using `scripts/install-suite.py`. For
+an academic user performing academic work, create the allowed root, validate the same live
 configuration outside the protocol, and register the absolute executable:
 
 ```bash
@@ -500,7 +628,8 @@ codex mcp add kegg-mcp \
 codex mcp list
 ```
 
-Restart Codex after changing MCP configuration. Bare `kegg-mcp` remains the stdio command;
+Start a new Codex task after changing MCP configuration. If the new task still exposes the prior
+configuration, restart Codex and check again. Bare `kegg-mcp` remains the stdio command;
 `kegg-mcp serve` is an explicit equivalent, and `kegg-mcp doctor [--json]` is the out-of-band
 diagnostic.
 
@@ -566,7 +695,7 @@ or set the command to the absolute `uv` executable with arguments equivalent to
 Do not configure a remote URL. The MVP supports local stdio transport only. Keep stdout attached
 to the MCP client because it carries protocol messages; diagnostics use stderr.
 
-After installation into a scanned location, Codex can discover three repository-scoped Skills:
+Through the generated plugin, Codex can discover three focused Skills:
 `deepkoala-annotation` depends only on `deepkoala-mcp`, `kegg-ko-analysis` depends only on
 `kegg-mcp`, and `kegg-pathway-rendering` depends only on `kegg-render-mcp`. No Skill depends on
 multiple MCP servers or contains subprocess, HTTP, parsing, normalization, or rendering logic. A
@@ -575,15 +704,16 @@ distribution.
 
 ## Verify discovery and status
 
-Codex detects installed or updated Skills automatically. For the first discovery check, launch a
-new task from the exact workspace passed to `--workspace`; this avoids placing a nested repository
-boundary between the current working directory and the installed Skill root. If the three names do
-not appear in the client's discovered Skill list or selector, restart Codex and check again.
+For a suite installation, first confirm that the generated `kegg-mcp` plugin is installed and
+enabled, then launch a new task. Do not use the installation task as discovery evidence. If the
+three Skill components or MCP servers do not appear in the new task, restart Codex once and check
+the plugin inventory and marketplace source before changing runtime files.
 
 ### Verify Skill discovery
 
-Use the client's discovered Skill list or selector and confirm these exact names independently of
-MCP registration:
+Use the client's plugin details, discovered Skill list, or selector and confirm these three
+component names independently of MCP runtime readiness. A plugin-aware client may display the
+plugin namespace together with the component name:
 
 ```text
 deepkoala-annotation
@@ -614,9 +744,11 @@ the corresponding MCP runtime is registered or ready.
 
 ### Verify MCP discovery
 
-Run `codex mcp list` or the client-equivalent command. A complete FASTA-to-image deployment lists
-`deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`; a deployment may intentionally omit companions
-that its workflows do not use. MCP discovery is not evidence of Skill discovery.
+For a suite installation, inspect the installed plugin and the new task's MCP server status. The
+plugin must contribute `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`. Do not assume that a
+pre-existing task refreshed its MCP inventory. For a legacy direct registration, run
+`codex mcp list` or the client-equivalent command. MCP discovery is not evidence of Skill
+  discovery, and plugin presence alone is not evidence that the configured DeepKOALA runtime is ready.
 
 For the core server, confirm that tool discovery shows these eleven tools:
 
@@ -654,7 +786,7 @@ For a first live user-acceptance prompt, ask the client:
 > Use kegg-mcp in a bounded acceptance check. First confirm that server status is
 > `public_academic`, then probe connectivity once. Retrieve only KO entry `K00844` and report its
 > identifier, name, database release when available, and whether it came from network or cache.
-> Stop after this single entry and do not run pathway discovery.
+> Stop after this single entry and do not run an analysis or automatic target ranking.
 
 This verifies discovery, one explicit connectivity request, and one bounded content lookup. The
 entry lookup uses the normal local cache and may not require a second network request on later
@@ -726,11 +858,13 @@ original FASTA under `KEGG_MCP_ALLOWED_ROOTS` and use one high-level call:
 }
 ```
 
-When targets are omitted, accepted K numbers are used to discover bounded canonical reference
-pathways. The independent annotation service owns FASTA execution and its run report; this core
+When targets and explicit selection are omitted, the selected unique K numbers are used to rank
+and independently select up to five MODULEs and five canonical KO reference pathways. MODULE
+ranking selects targets only; exact completion and required-block coverage are evaluated
+separately. The independent annotation service owns FASTA execution and its run report; this core
 server only validates and analyzes the resulting annotation evidence.
 
-For a most-detected or Top-N pathway request, prefer server-side selection:
+For a Top-N pathway request, prefer server-side selection:
 
 ```json
 {
@@ -740,9 +874,7 @@ For a most-detected or Top-N pathway request, prefer server-side selection:
     "analysis_unit": "isolate_proteome"
   },
   "pathway_selection": {
-    "mode": "top_detected",
-    "top_n": 1,
-    "metric": "unique_selected_ko_count"
+    "top_n": 1
   },
   "output_directory": "/absolute/private/results/top-pathway"
 }
@@ -766,8 +898,10 @@ The requested output directory receives stable handoff files:
 ```text
 normalized_annotations.tsv
 protein_ko_mapping.tsv
-pathway_ranking.tsv              # Top-N workflows
-ko_pathway_relationships.tsv     # Top-N workflows
+module_ranking.tsv               # Automatic MODULE selection
+ko_module_relationships.tsv      # Automatic MODULE selection
+pathway_ranking.tsv              # Server-ranked pathway selection
+ko_pathway_relationships.tsv     # Server-ranked pathway selection
 pathway_coverage.tsv
 module_completion.tsv
 analysis_report.md
@@ -776,7 +910,7 @@ bundle_manifest.json
 ```
 
 The direct `output_bundle.artifacts` entries report each file's MIME type, exact byte size, and
-controlled absolute path. Bundle schema version 2 requires the directory to be new or empty and
+controlled absolute path. Bundle schema version 3 requires the directory to be new or empty and
 installs the manifest last as the commit marker; an existing file causes
 `OUTPUT_ALREADY_EXISTS`, and no overwrite mode is exposed. Complete ranking and relationship
 tables remain local artifacts rather than default model-context content.
@@ -785,14 +919,14 @@ Use these files between MCP stages. The report records the original absolute inp
 provided as source provenance and does not display workflow digests. By default,
 `bundle_manifest.json` represents source paths as stable redacted labels. Set
 `manifest_path_mode="absolute"` only when the operator explicitly wants absolute source paths in
-that manifest. `render_input.json` uses the renderer-specific version 2 schema, and the manifest
-records that schema and MIME type. Its `AnalysisExecutionProvenance` version 2 records the MODULE
-analysis limits, pathway parameters, pathway coverage limits, and report limits used to produce
-the authoritative targets.
+that manifest. `render_input.json` uses the renderer-specific version 3 schema, and the manifest
+records that schema and MIME type. Its `AnalysisExecutionProvenance` version 3 records the MODULE
+analysis and ranking parameters, pathway parameters and ranking provenance, pathway coverage
+limits, and report limits used to produce the authoritative targets.
 
 ## Render a compatible analysis bundle
 
-First call `get_renderer_status` and verify that schema version 2 is supported. For pathway
+First call `get_renderer_status` and verify that schema version 3 is supported. For pathway
 targets, call `probe_renderer_kegg_connectivity` only when an explicit live preflight is needed;
 the probe makes exactly one INFO request in a live mode and zero requests in `offline_cache` or
 `unconfigured` mode. An offline probe confirms the network-disabled policy, not cache-entry

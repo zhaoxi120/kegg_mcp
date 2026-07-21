@@ -79,15 +79,17 @@ def _doctor_document(environment: Mapping[str, str]) -> tuple[_DoctorDocument, i
     if not checkout_ready:
         route_state = "deepkoala_checkout_unavailable"
         issue = "The configured checkout is not a readable official DeepKOALA layout."
-        next_action = "Repair the external checkout without asking this companion to download it."
+        next_action = "Repair the configured checkout outside this serving companion."
     elif not runtime.runtime_ready:
         route_state = "deepkoala_runtime_unavailable"
         issue = "The configured interpreter cannot import DeepKOALA and its runtime."
-        next_action = "Repair the external Python environment and rerun doctor."
+        next_action = "Repair the configured Python environment and rerun doctor."
     elif not resources_ready:
         route_state = "model_resources_unavailable"
         issue = "No readable model resource pair matches the deployment allowlist."
-        next_action = "Install local resources externally or adjust the deployment allowlist."
+        next_action = (
+            "Install local resources outside this serving companion or adjust the allowlist."
+        )
     else:
         route_state = "local_ready"
         issue = None

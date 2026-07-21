@@ -1,4 +1,4 @@
-"""Bounded inspection and runtime probing of an external DeepKOALA installation."""
+"""Bounded inspection and runtime probing of a configured DeepKOALA installation."""
 
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ def fail_installation(error: InstallationError) -> NoReturn:
     fail(
         ErrorCode.DEEPKOALA_UNAVAILABLE,
         "The configured directory is not an available official DeepKOALA checkout.",
-        suggested_action="Check the configured checkout and external Python environment.",
+        suggested_action="Check the configured checkout and Python environment.",
     )
 
 

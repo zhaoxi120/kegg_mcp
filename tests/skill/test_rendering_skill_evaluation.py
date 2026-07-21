@@ -13,7 +13,7 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
     ("prompt", "required"),
     [
         (
-            "Render this existing render_input.json version 2 bundle.",
+            "Render this existing render_input.json version 3 bundle.",
             ("Require readiness", "Let the renderer validate the handoff"),
         ),
         (

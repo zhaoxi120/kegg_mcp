@@ -21,10 +21,11 @@ client and calls the public Milestone 1 through 4 interfaces.
 ## High-level annotation analysis
 
 `analyze_ko_annotations` is the supported one-call workflow for a KO list or annotation table. It
-normalizes evidence once, optionally discovers canonical pathways, loads requested references,
-evaluates MODULE and pathway targets, and writes one transactional output bundle when an output
-directory is supplied. The narrower normalization, mapping, MODULE, pathway, and comparison tools
-reuse the same public service functions without a second legacy orchestration layer.
+normalizes evidence once, optionally selects bounded MODULE and canonical pathway targets, loads
+requested references, evaluates MODULE and pathway targets, and writes one transactional output
+bundle when an output directory is supplied. The narrower normalization, mapping, MODULE, pathway,
+and comparison tools reuse the same public service functions without a second legacy orchestration
+layer.
 
 Ordinary MCP inputs expose only choices that change the requested analysis. Cache policy,
 reference budgets, result retention, and report bounds remain deployment-owned. An opaque result
@@ -55,42 +56,43 @@ The injected client preserves the Milestone 2 access gate, deployment-wide reque
 cache-only behavior, and retrieval provenance. Milestone 5 tests use synthetic in-process clients;
 the opt-in live suite is enabled by pull-request CI for the bounded compatibility campaign.
 
-## Server-side pathway ranking and Top-N selection
+## Server-side MODULE and pathway ranking and Top-N selection
 
-The high-level annotation service accepts an optional `PathwaySelection`. In `top_detected` mode it
-derives the strict or lenient selected KO set once, maps those canonical unique K numbers to
+When no MODULE or pathway target and no explicit selection are supplied, the high-level service
+independently selects the Top-5 MODULEs and Top-5 canonical KO reference pathways. Both ranking
+policies use the unique K numbers selected by the strict or lenient evidence mode, sort by
+descending selected-KO overlap, and use the canonical target identifier as the stable tie-breaker.
+MODULE ranking selects which definitions to load. It is not MODULE completion or enrichment;
+exact completion and required-block coverage are evaluated separately after reference loading.
+
+The high-level annotation service accepts an optional `PathwaySelection` containing only `top_n`.
+It derives the strict or lenient selected KO set once, maps those canonical unique K numbers to
 pathways, and applies the versioned `selected_unique_ko_count` ranking policy. A K number contributes
 at most one detected node to one canonical pathway number, regardless of duplicate annotation
 records, duplicate LINK rows, or paired `ko`/`map` relationships. Candidates sort by descending
 detected unique-KO count and then ascending canonical `koNNNNN` identifier.
 
-Ranking occurs before `load_pathway_references`. `top_n` is bounded from 1 through 25 and must not
+Pathway ranking occurs before `load_pathway_references`. `top_n` is bounded from 1 through 25 and must not
 exceed the deployment-owned `max_pathway_specs`; a large candidate set therefore does not trigger
 the pathway-reference target limit when only Top-N references are requested. Explicit pathways
 retain their previous behavior when no selection is supplied.
 
-When the request supplies neither pathway targets nor `PathwaySelection`, automatic pathway
-discovery uses accepted K numbers only and records
-`pathway_discovery_policy="accepted_only"` with
-`pathway_discovery_evidence_mode="strict"`. The subsequent coverage calculation still uses the
-requested strict or lenient evidence mode. This distinction is serialized in execution
-provenance, the Markdown report, the renderer handoff, and the output-bundle manifest.
-
-The complete ranking and normalized KO-to-pathway relationships are retained in scoped JSON
-artifacts and, when an output directory is supplied, in `pathway_ranking.tsv` and
-`ko_pathway_relationships.tsv`. The report and manifest record the evidence mode, decision policy,
-ranking method/version, candidate count, selected identifiers, and compact request/cache summary.
-The direct response returns only aggregate counts and bounded selected-pathway rows without
-complete detected-KO lists.
+The complete rankings and normalized KO-to-target relationships are retained in scoped JSON
+artifacts and, when an output directory is supplied, in `module_ranking.tsv`,
+`ko_module_relationships.tsv`, `pathway_ranking.tsv`, and `ko_pathway_relationships.tsv` as
+applicable. The report and manifest record the evidence mode, decision policy, ranking
+method/version, candidate count, selected identifiers, and compact request/cache summary. The
+direct response returns only aggregate counts and bounded selected-target rows without complete
+detected-KO lists.
 
 Analysis tools no longer share one provenance-heavy direct-result model. A small shared summary
 holds record, KO, request/cache, warning, and caveat fields, while three tool-specific result models
-expose only their relevant MODULE and/or pathway previews. Automatic Top-N selection and output
-bundle metadata occur only on the high-level model. Full annotation provenance, KEGG batch
+expose only their relevant MODULE and/or pathway previews. Automatic MODULE/pathway selection and
+output bundle metadata occur only on the high-level model. Full annotation provenance, KEGG batch
 provenance, execution parameters, and stage metrics are retained rather than repeated directly.
 
 The authoritative high-level `structured` artifact contains six fixed `StageMetric` rows:
-`annotation_import`, `ko_pathway_mapping`, `pathway_ranking`, `reference_loading`, `analysis`, and
+`annotation_import`, `ko_target_mapping`, `target_ranking`, `reference_loading`, `analysis`, and
 `bundle_write`, together with complete mapping provenance. Each row uses integer elapsed
 milliseconds and sanitized logical request, actual network-attempt, cache-hit, and response-byte
 counts. Narrow MODULE and pathway services retain the same execution and provenance classes in
@@ -121,18 +123,19 @@ currently supplies its primary dataset, MODULE evaluations, and pathway coverage
 
 Reports are rendered in memory. The MCP high-level workflow may additionally write a concise bundle
 to an allowed-root `output_directory`: normalized annotations, protein-to-KO mapping, MODULE and
-pathway tables, optional full pathway-ranking and relationship tables, Markdown report, canonical
-renderer input, and a versioned manifest. Every returned bundle file carries MIME type, exact byte
-size, and controlled absolute path. Bundle schema version `2` requires a new or empty directory,
+pathway tables, optional full MODULE/pathway ranking and relationship tables, Markdown report,
+canonical renderer input, and a versioned manifest. Every returned bundle file carries MIME type,
+exact byte size, and controlled absolute path. Bundle schema version `3` requires a new or empty
+directory,
 never replaces an existing entry, and installs the manifest last as the commit marker. Safe atomic
 file writes reject symlinks and report dedicated already-exists or output-write errors. The
 manifest uses redacted source labels by default; absolute source paths require an explicit
 `manifest_path_mode="absolute"` request.
 
 `render_input.json` now uses the public, transport-independent `RenderInput` contract. Renderer
-schema version `2` is independent of output-bundle schema version `2`; the bundle manifest records
+schema version `3` is independent of output-bundle schema version `3`; the bundle manifest records
 the renderer schema version and
-`application/vnd.kegg-mcp.render-input+json;version=2` MIME type explicitly. The handoff contains
+`application/vnd.kegg-mcp.render-input+json;version=3` MIME type explicitly. The handoff contains
 separate accepted and policy-defined uncertain KO sets, complete pathway detected-KO evidence when
 it fits the renderer limit, resolved MODULE definitions and ASTs, exact strict and lenient
 completion summaries, and complete required-block and optional-component states when renderable.
@@ -147,10 +150,11 @@ evidence identifiers, and canonical serialized bytes are bounded. A total render
 failure raises `OUTPUT_LIMIT_EXCEEDED` before the output directory is created, so it cannot leave a
 partial renderer handoff.
 
-Analysis execution provenance uses schema and service version `2`. In addition to import, KEGG
+Analysis execution provenance uses schema and service version `3`. In addition to import, KEGG
 request, reference-loading, and direct-result limits, it records the effective MODULE analysis
-limits, pathway evidence mode and global/overview opt-in, pathway coverage limits, and report
-limits. The renderer carries this provenance forward but does not reinterpret or recompute it.
+limits, MODULE-ranking provenance when applicable, pathway evidence and ranking parameters,
+pathway coverage limits, and report limits. The renderer carries this provenance forward but does
+not reinterpret or recompute it.
 
 ## Scoped SQLite result store
 

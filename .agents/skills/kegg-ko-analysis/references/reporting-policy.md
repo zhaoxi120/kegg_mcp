@@ -22,12 +22,20 @@ Prefer the concise output bundle for delivery:
 ```text
 normalized_annotations.tsv
 protein_ko_mapping.tsv
+module_ranking.tsv
+ko_module_relationships.tsv
+pathway_ranking.tsv
+ko_pathway_relationships.tsv
 pathway_coverage.tsv
 module_completion.tsv
 analysis_report.md
 render_input.json
 bundle_manifest.json
 ```
+
+The four ranking and relationship tables are present only when the corresponding automatic target
+selection runs. MODULE ranking reports selected-KO overlap for target selection; it is not a
+completion or enrichment result.
 
 Treat the bundle as the durable cross-process artifact. The manifest redacts absolute source paths
 by default, while retained result IDs are valid only in the current stdio session and are removed

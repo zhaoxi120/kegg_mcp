@@ -111,7 +111,7 @@ class RendererService:
             artifacts=tuple(artifacts),
             warnings=safe_warnings,
             manifest_context={
-                "render_input_schema_version": "2",
+                "render_input_schema_version": "3",
                 "producer": source.document.producer.model_dump(mode="json"),
                 "dataset_id": source.document.dataset.dataset_id,
                 "analysis_unit": source.document.dataset.analysis_unit.value,

@@ -21,25 +21,14 @@ def _request() -> NormalizeAnnotationsRequest:
     return NormalizeAnnotationsRequest(text="K00001\n")
 
 
-def _analyze_without_targets(
+def _analyze_with_pathway(
     store: SQLiteResultStore,
     output: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def discover(
-        *args: object,
-        **kwargs: object,
-    ) -> tuple[tuple[PathwaySpec, ...], tuple[()]]:
-        return (PathwaySpec(pathway_id="map00010"),), ()
-
     def load_references(*args: object, **kwargs: object) -> tuple[()]:
         return ()
 
-    monkeypatch.setattr(
-        annotation_analysis,
-        "_discover_reference_pathways",
-        discover,
-    )
     monkeypatch.setattr(
         annotation_analysis,
         "load_pathway_references",
@@ -48,7 +37,7 @@ def _analyze_without_targets(
     analyze_annotation_targets(
         _request(),
         module_ids=(),
-        pathways=(),
+        pathways=(PathwaySpec(pathway_id="map00010"),),
         client=cast(KeggPrimitiveClient, object()),
         result_store=store,
         scope_id="scope",
@@ -142,7 +131,7 @@ def test_analysis_result_create_failure_occurs_before_bundle_write(
     monkeypatch.setattr(annotation_analysis, "write_analysis_bundle", record_bundle)
 
     with pytest.raises(ResultStoreError):
-        _analyze_without_targets(store, output, monkeypatch)
+        _analyze_with_pathway(store, output, monkeypatch)
 
     assert not bundle_called
     assert not output.exists()
@@ -159,7 +148,7 @@ def test_analysis_bundle_failure_compensates_the_retained_result(
     manifest.write_text("occupied", encoding="utf-8")
 
     with pytest.raises(KeggMcpError) as caught:
-        _analyze_without_targets(store, output, monkeypatch)
+        _analyze_with_pathway(store, output, monkeypatch)
 
     assert caught.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
     assert store.list_results("scope").total_items == 0

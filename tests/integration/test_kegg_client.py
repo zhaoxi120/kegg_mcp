@@ -12,7 +12,7 @@ import pytest
 
 import kegg_mcp.kegg.client as client_module
 import kegg_mcp.services.kegg_mapping as kegg_mapping_module
-from kegg_mcp.analysis import PathwaySelection, PathwaySelectionMode
+from kegg_mcp.analysis import PathwaySelection
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
 from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.client import KeggClient
@@ -758,7 +758,7 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
     )
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     request = NormalizeAnnotationsRequest(text="\n".join(ko_ids))
-    selection = PathwaySelection(mode=PathwaySelectionMode.TOP_DETECTED, top_n=1)
+    selection = PathwaySelection(top_n=1)
 
     first = analyze_annotation_targets(
         request,

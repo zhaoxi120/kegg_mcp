@@ -11,61 +11,85 @@ Start with the redacted local diagnostic:
 cache or result database, enumerate stored entries, or reveal configured paths and endpoint
 values. A successful diagnostic does not prove that live KEGG access is authorized or reachable.
 
-## Classify Skill, MCP, and runtime failures separately
+## Classify suite, plugin, Skill, MCP, and runtime failures separately
 
 Use the following deployment diagnosis labels in support notes. They identify different layers;
 they are not interchangeable descriptions of a generic "DeepKOALA unavailable" state.
 
 | Diagnosis | Evidence | Next check |
 | --- | --- | --- |
-| `skill_not_installed` | One or more managed Skill directories are absent from the workspace `.agents/skills`. | Run the reviewed `scripts/install-skills.py` command from the matching checkout or tag archive. |
-| `skill_not_discovered` | `SKILL.md` exists in a scanned workspace location, but the client's discovered Skill list or selector omits it. | Confirm the Codex working directory, check whether the Skill is disabled in Codex configuration, and restart Codex. |
-| `mcp_not_registered` | The Skill is visible, but its one declared MCP dependency is absent from `codex mcp list`. | Register that exact stdio server name and restart the client. |
+| `suite_install_failed` | `scripts/install-suite.py` exits unsuccessfully or leaves a recovery transaction instead of publishing a complete deployment. | Preserve the reported private transaction, inspect the first structured failure, and do not infer success from partial runtime directories. |
+| `plugin_not_registered` | The three runtimes were prepared, but the dedicated marketplace or generated plugin is absent from the Codex plugin inventory. | Resolve the reported registration or rollback failure; do not add duplicate manual MCP entries. |
+| `plugin_not_loaded` | The plugin is installed and enabled, but the current task does not expose its three Skills or MCP servers. | Start a new Codex task, then check the app or `codex plugin list --json` before changing runtime files. |
+| `skill_not_discovered` | The installed plugin contains `SKILL.md`, but a new task's discovered Skill list or selector omits it. | Confirm the plugin is enabled, then restart Codex once if a new task is still stale. |
+| `mcp_not_registered` | The Skill is visible, but its one declared MCP dependency is absent from the new task. | For the suite, inspect the generated plugin; for a manual deployment, register only that exact stdio server name. |
 | `mcp_not_startable` | The dependency is registered, but MCP initialization cannot start its executable. | Verify the absolute executable and run its non-protocol diagnostic outside Codex. |
 | `mcp_runtime_unready` | MCP initialization and tool discovery succeed, but the server's status tool reports an unready configuration or runtime. | Follow the named status repair without reinstalling the Skill. |
 | `handoff_root_mismatch` | Both adjacent MCP servers are ready, but a stable handoff path is outside the producer or consumer allowlisted roots. | Align only the intended shared handoff root; keep private state roots separate. |
-| `model_resources_missing` | `deepkoala-mcp` is startable, but its status reports that the explicitly configured local DeepKOALA model resources are absent or invalid. | Have the operator repair the reviewed external DeepKOALA installation; the Skill and companion must not download it. |
+| `model_resources_missing` | `deepkoala-mcp` is startable, but its status reports that the configured local DeepKOALA model resources are absent or invalid. | For a suite install, verify the managed `202502` resources and rerun a fresh confirmed installation if needed; for a manual deployment, repair the external installation. The serving companion does not download weights. |
 
-Diagnose in this order: Skill installation, Skill discovery, MCP registration, MCP initialization,
-MCP status readiness, handoff-root alignment, then external runtime or model resources. Stop at the
-first failing layer. A later healthy layer cannot repair an earlier missing one, and reinstalling a
-Skill cannot make an MCP executable or model ready.
+Diagnose in this order: suite transaction, plugin registration, new-task plugin loading, Skill
+discovery, MCP registration, MCP initialization, MCP status readiness, handoff-root alignment,
+then external runtime or model resources. Stop at the first failing layer. A later healthy layer
+cannot repair an earlier missing one, and reinstalling a Skill cannot make an MCP executable or
+model ready.
 
-### The repository Skills are not visible
+### The generated suite plugin is absent or stale
 
-The Python wheel does not contain the repository Skills. Obtain the matching reviewed GitHub tag
-source archive or exact checkout, then use the managed installer documented in
-`docs/installation.md`. If the checkout is nested below the Codex workspace, its own
-`.agents/skills` is not on the upward scan path; install managed copies into the outer workspace.
-If Codex runs at the checkout root itself, its source Skills are already discoverable and the
-managed-copy installer must not target that same directory.
+The primary Codex deployment is the generated local plugin installed by
+`scripts/install-suite.py`. Check the Codex app or run `codex plugin list --json`. If the dedicated
+marketplace or plugin is absent, use the suite installer's reported transaction failure; do not
+repair it by copying Skills, hand-editing `.mcp.json`, or running three `codex mcp add` commands.
+Those changes can shadow the version-bound generated registration and make rollback ambiguous.
 
-If the installer reports `skill_target_conflict`, it found an existing directory that it does not
-own. It intentionally makes no partial installation and does not overwrite that content. Review
-the directory's ownership and contents before moving or renaming it; do not add a fake marker. If
-it reports `skill_target_modified`, preserve or reconcile the local edits before replacing the
-managed copy. `skill_source_modified` means a Git checkout's Skill, version, or installer source no
-longer matches `HEAD`; use a clean reviewed checkout instead of attributing modified content to that
-commit. `source_commit_unavailable` requires the verified full tag commit for an archive, while
-`source_tree_sha256_required` means the published archive digest was omitted and
-`source_tree_sha256_mismatch` means the selected archive does not match it. Never repair either
-condition by trusting a digest calculated only from the untrusted archive. `version_mismatch` means
-the selected Skill source does not match the expected core wheel.
+A successfully installed plugin is loaded for a new Codex task. Close the installation task,
+start a new task, and check the three Skill and MCP names there. Restart Codex once only if the
+plugin inventory is correct but a new task remains stale. An existing task is not discovery
+evidence for the new plugin.
 
-`installation_rollback_failed` means automatic recovery could not complete. Do not delete the
-reported `.agents/skills/.kegg-mcp-skill-install-*` transaction. Inspect its `backup/` directory
-locally and restore directories by exact Skill name; the diagnostic intentionally gives a relative
-location rather than exposing a private workspace path.
+If installation failed because a Python artifact was unavailable offline, verify that the exact
+checked-in lockfiles and declared build requirements are available to `uv`. The operator may rerun
+with `--allow-locked-dependency-downloads` only after reviewing that failure. The switch allows
+`uv`
+network access only while resolving or downloading artifacts required by those lockfiles and build
+requirements; it does not authorize downloading Python, uv, Codex, repository source, later model
+weights, KOfam profiles, or KEGG data. The separate `--allow-deepkoala-install` switch records one
+confirmation for the initial official DeepKOALA clone and upstream Python requirements in each new
+suite installation root. The same installed deployment does not ask again for later FASTA jobs. The
+switch does not authorize model updates or multi-domain resources.
 
-`installation_cleanup_failed` means the requested Skills were committed or a rollback completed,
-but the private transaction could not be removed completely. Treat the command as failed, inspect
-the reported relative transaction path, and do not infer success from the installed directories
-alone.
+### The suite deployment TOML is rejected
 
-Codex should detect a successful install automatically. Perform the first check from the exact
-installed workspace. If the three names do not appear in the client's discovered Skill list or
-selector, restart Codex and check again. Then run one bounded `$skill-name` smoke check before
-checking MCP discovery with `codex mcp list`.
+Use the exact field names and access-profile combinations documented in `docs/installation.md`.
+The file must be a direct, non-symlink regular file owned by the invoking user with mode `0600`,
+or another mode with no group or other permission bits. Its direct parent directory must likewise
+be owned by the invoking user with no group or other permission bits; mode `0700` is recommended.
+Configured paths must be absolute.
+Private state roots may not overlap each other, shared handoff roots, source trees, caches, or the
+install root. Core and Renderer allowlists must cover the intended stable-file handoffs. Fix the
+unsafe path or permission directly; do not relax the check with a group- or other-accessible parent, symlink
+alias, unknown TOML key, or duplicated environment override.
+
+### A suite transaction requires manual recovery
+
+For the suite installer, `installation_rollback_failed` means Codex or filesystem state could not
+be proved safe to remove. A process kill, host crash, or power loss can instead leave an
+`.incomplete` file without a final diagnostic. In either case, preserve the private installation
+root. Inspect `codex plugin list --json`, `codex plugin marketplace list --json`, and
+`codex mcp list --json` locally, and compare only the exact managed selector, marketplace name, and
+absolute launcher paths recorded under that root. Do not publish the command output because it may
+contain local paths.
+
+When `.rollback-required` exists, its safe `initial_failure_code` and `registration_stage` fields
+retain the first classified failure and the last installer-owned registration stage. A lone
+`.incomplete` marker after a hard crash records only that publication did not complete; it does not
+prove which external Codex operation finished.
+
+Do not delete or move the installation root while a plugin, marketplace, or MCP binding still
+references it. The suite installer currently has no automatic resume, update, uninstall, or
+hard-crash recovery command. Escalate an ambiguous or replaced registration to the maintainer;
+never infer ownership from a matching name alone, and never repair the state by adding duplicate
+manual MCP entries.
 
 ## Common startup and discovery problems
 
@@ -75,7 +99,8 @@ An MCP configuration object was pasted into a shell. JSON and TOML configuration
 content, not shell commands. Register the server with the client command shown in
 `docs/installation.md`, or place the configuration in the exact file required by the client.
 
-For an eligible academic user acceptance session, prefer:
+For an eligible academic user acceptance session using an intentional manual component
+deployment, use:
 
 ```bash
 codex mcp add kegg-mcp \
@@ -86,6 +111,9 @@ codex mcp list
 ```
 
 Those two variables may be omitted because they match the project defaults.
+
+Do not run that command for the generated suite plugin. Its `.mcp.json` already owns the
+version-bound registration.
 
 ### The executable is missing or the client cannot start it
 
@@ -102,10 +130,11 @@ stdin; `kegg-mcp doctor` is the human-facing check.
 
 ### The server is configured but tools are absent
 
-Run `codex mcp list` or the equivalent discovery command for the client, then restart the client
-after changing MCP configuration. Confirm that the configured name is exactly `kegg-mcp` and that
-the command is an absolute executable path. Check client-side MCP logs without publishing
-environment values or private paths.
+For the suite, confirm the generated plugin is installed and enabled, then inspect a new Codex
+task. Its MCP configuration must contain the exact server name and an absolute installed launcher
+path. For a manual client, run `codex mcp list` or the equivalent discovery command and start a new
+task after changing configuration. Check client-side MCP logs without publishing environment
+values or private paths.
 
 ### Configuration is invalid
 

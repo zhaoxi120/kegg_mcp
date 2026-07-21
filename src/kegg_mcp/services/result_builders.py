@@ -97,7 +97,7 @@ def _execution_metrics(
     """Build the fixed six-row direct metric summary."""
     values: list[StageMetric] = []
     for stage in ExecutionStage:
-        if stage is ExecutionStage.KO_PATHWAY_MAPPING:
+        if stage is ExecutionStage.KO_TARGET_MAPPING:
             batches = mapping_provenance
         elif stage is ExecutionStage.REFERENCE_LOADING:
             batches = reference_provenance

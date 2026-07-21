@@ -8,7 +8,7 @@ from typing import Annotated, Generic, Literal, Self, TypeVar, cast
 from pydantic import Field, field_validator, model_validator
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
-from kegg_mcp.analysis.pathway_ranking import PathwaySelection, PathwaySelectionMode
+from kegg_mcp.analysis.pathway_ranking import PathwaySelection
 from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
@@ -149,19 +149,8 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
         ):
             raise ValueError("conflicting output_directory values were supplied")
         _reject_organism_pathways(self.pathways)
-        if self.pathway_selection is not None:
-            if self.pathway_selection.mode is PathwaySelectionMode.TOP_DETECTED:
-                if self.pathways:
-                    raise ValueError(
-                        "top_detected pathway selection cannot include explicit pathways"
-                    )
-            elif self.pathway_selection.mode is PathwaySelectionMode.EXPLICIT:
-                if not self.pathways:
-                    raise ValueError("explicit pathway selection requires pathways")
-                if self.pathway_selection.top_n != len(self.pathways):
-                    raise ValueError(
-                        "explicit pathway selection top_n must match the pathway count"
-                    )
+        if self.pathway_selection is not None and self.pathways:
+            raise ValueError("automatic pathway selection cannot include explicit pathways")
         return self
 
 

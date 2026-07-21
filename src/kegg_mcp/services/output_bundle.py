@@ -17,7 +17,10 @@ from typing import Annotated
 from pydantic import Field
 
 from kegg_mcp.analysis import (
+    KoModuleRelationship,
     KoPathwayRelationship,
+    ModuleRankingResult,
+    ModuleRankingRow,
     PairedModuleEvaluation,
     PathwayCoverageResult,
     PathwayKoReference,
@@ -27,10 +30,7 @@ from kegg_mcp.analysis import (
 )
 from kegg_mcp.domain.annotations import AnnotationDataset, FrozenModel
 from kegg_mcp.domain.errors import ErrorCode, fail
-from kegg_mcp.execution import (
-    AnalysisExecutionProvenance,
-    PathwayExecutionParameters,
-)
+from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
@@ -39,7 +39,7 @@ from kegg_mcp.services.render_contracts import (
     serialize_render_input,
 )
 
-OUTPUT_BUNDLE_SCHEMA_VERSION = "2"
+OUTPUT_BUNDLE_SCHEMA_VERSION = "3"
 
 
 class ManifestPathMode(StrEnum):
@@ -55,6 +55,8 @@ class OutputBundle(FrozenModel):
     output_directory: str = Field(min_length=1, max_length=4_096)
     normalized_annotations: str = Field(min_length=1, max_length=4_096)
     protein_ko_mapping: str = Field(min_length=1, max_length=4_096)
+    module_ranking: str | None = Field(default=None, max_length=4_096)
+    ko_module_relationships: str | None = Field(default=None, max_length=4_096)
     pathway_ranking: str | None = Field(default=None, max_length=4_096)
     ko_pathway_relationships: str | None = Field(default=None, max_length=4_096)
     pathway_coverage: str | None = Field(default=None, max_length=4_096)
@@ -64,7 +66,7 @@ class OutputBundle(FrozenModel):
     manifest: str = Field(min_length=1, max_length=4_096)
     artifacts: Annotated[
         tuple[OutputBundleArtifact, ...],
-        Field(min_length=3, max_length=9),
+        Field(min_length=3, max_length=11),
     ]
 
 
@@ -112,6 +114,7 @@ def write_analysis_bundle(
     analysis_report: str,
     output_directory: Path,
     render_limits: RenderInputLimits | None = None,
+    module_ranking: ModuleRankingResult | None = None,
     pathway_ranking: PathwayRankingResult | None = None,
     manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED,
 ) -> OutputBundle:
@@ -138,19 +141,25 @@ def write_analysis_bundle(
         files["ko_pathway_relationships.tsv"] = _ko_pathway_relationships_tsv(
             pathway_ranking.relationships
         )
+    if module_ranking is not None:
+        files["module_ranking.tsv"] = _module_ranking_tsv(module_ranking.rows)
+        files["ko_module_relationships.tsv"] = _ko_module_relationships_tsv(
+            module_ranking.relationships
+        )
     files["bundle_manifest.json"] = _manifest(
         dataset,
         (*files, "bundle_manifest.json"),
         stage="analysis",
         manifest_path_mode=manifest_path_mode,
         render_input_schema=(RENDER_INPUT_SCHEMA_VERSION, RENDER_INPUT_MIME_TYPE),
-        pathway_execution=execution.pathway_parameters,
+        analysis_execution=execution,
     )
     _write_files(output_directory, files)
     return _bundle_paths(
         output_directory,
         files=files,
         include_analysis=True,
+        include_module_ranking=module_ranking is not None,
         include_pathway_ranking=pathway_ranking is not None,
     )
 
@@ -328,6 +337,50 @@ def _ko_pathway_relationships_tsv(rows: tuple[KoPathwayRelationship, ...]) -> st
     )
 
 
+def _module_ranking_tsv(rows: tuple[ModuleRankingRow, ...]) -> str:
+    return _tsv(
+        (
+            "rank",
+            "module_id",
+            "detected_unique_ko_count",
+            "detected_ko_ids",
+            "relationship_row_count",
+        ),
+        (
+            (
+                row.rank,
+                row.module_id,
+                row.detected_unique_ko_count,
+                ";".join(row.detected_ko_ids),
+                row.relationship_row_count,
+            )
+            for row in rows
+        ),
+    )
+
+
+def _ko_module_relationships_tsv(rows: tuple[KoModuleRelationship, ...]) -> str:
+    return _tsv(
+        (
+            "source_ko_id",
+            "module_id",
+            "target_namespace",
+            "batch_index",
+            "line_number",
+        ),
+        (
+            (
+                row.source_ko_id,
+                row.module_id,
+                row.target_namespace,
+                row.batch_index,
+                row.line_number,
+            )
+            for row in rows
+        ),
+    )
+
+
 def _manifest(
     dataset: AnnotationDataset,
     files: tuple[str, ...],
@@ -335,7 +388,7 @@ def _manifest(
     stage: str,
     manifest_path_mode: ManifestPathMode,
     render_input_schema: tuple[str, str] | None = None,
-    pathway_execution: PathwayExecutionParameters | None = None,
+    analysis_execution: AnalysisExecutionProvenance | None = None,
 ) -> str:
     input_paths = tuple(
         sorted({source.input_path for source in dataset.sources if source.input_path is not None})
@@ -362,17 +415,13 @@ def _manifest(
             "schema_version": schema_version,
             "mime_type": mime_type,
         }
+    if analysis_execution is not None and analysis_execution.module_ranking is not None:
+        value["module_selection"] = analysis_execution.module_ranking.model_dump(mode="json")
+    pathway_execution = (
+        None if analysis_execution is None else analysis_execution.pathway_parameters
+    )
     if pathway_execution is not None and pathway_execution.ranking is not None:
         value["pathway_selection"] = pathway_execution.ranking.model_dump(mode="json")
-    if (
-        pathway_execution is not None
-        and pathway_execution.pathway_discovery_policy is not None
-        and pathway_execution.pathway_discovery_evidence_mode is not None
-    ):
-        value["pathway_discovery"] = {
-            "policy": pathway_execution.pathway_discovery_policy,
-            "evidence_mode": pathway_execution.pathway_discovery_evidence_mode.value,
-        }
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
@@ -528,6 +577,7 @@ def _bundle_paths(
     *,
     files: dict[str, str],
     include_analysis: bool = False,
+    include_module_ranking: bool = False,
     include_pathway_ranking: bool = False,
 ) -> OutputBundle:
     directory = str(output_directory)
@@ -535,6 +585,14 @@ def _bundle_paths(
         output_directory=directory,
         normalized_annotations=str(output_directory / "normalized_annotations.tsv"),
         protein_ko_mapping=str(output_directory / "protein_ko_mapping.tsv"),
+        module_ranking=(
+            str(output_directory / "module_ranking.tsv") if include_module_ranking else None
+        ),
+        ko_module_relationships=(
+            str(output_directory / "ko_module_relationships.tsv")
+            if include_module_ranking
+            else None
+        ),
         pathway_ranking=(
             str(output_directory / "pathway_ranking.tsv") if include_pathway_ranking else None
         ),

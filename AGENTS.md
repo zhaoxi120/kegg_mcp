@@ -135,7 +135,39 @@ Record the retrieval date when an external fact affects a schema, parser, fixtur
 - Use small, reviewable commits and English commit messages.
 - Do not claim a milestone is complete until all listed acceptance criteria pass.
 
-Once the Python project exists, the default validation commands are expected to be:
+### Change scope and code growth
+
+- Change only the smallest affected closure: the implementation, directly related tests, and any
+  documentation required by a changed public contract. Do not broaden a task into adjacent cleanup.
+- Inspect and reuse existing service, schema, error, fixture, and configuration abstractions before
+  adding another implementation path.
+- Do not add a production module, dependency, public API, compatibility path, or top-level package
+  unless the assigned acceptance criteria require it.
+- Prefer replacing and deleting an obsolete path in the same change over retaining parallel old and
+  new implementations. Do not add speculative extension points for possible future work.
+- Treat changes spanning more than five production files or roughly 250 net new production lines as
+  a review signal, not a hard limit. Explain the size and split the task when the behaviors can be
+  reviewed independently.
+- At handoff, summarize production and test code growth, new dependencies or public symbols, reused
+  abstractions, and obsolete paths removed. State why any unavoidable parallel implementation remains.
+
+### Incremental validation
+
+- Batch coherent edits before validation; do not rerun checks after every patch.
+- During implementation, lint and format changed Python files and run the nearest directly affected
+  test file, node ID, or marker selection. Use quiet output and short tracebacks where supported.
+- Before handoff, run the affected component's relevant unit, contract, and integration tests once.
+  Do not rerun an unchanged passing suite unless later edits can affect its result.
+- Escalate to the full offline validation profile when a change affects a shared public schema,
+  cross-component handoff, packaging or installation, a lock file, CI configuration, MCP or Skill
+  binding, security boundary, KEGG access policy, or multiple components. Also run it when the
+  maintainer explicitly requests it.
+- Pure documentation changes do not require Python test suites unless they change executable examples,
+  commands, generated artifacts, or a documented public contract.
+- Report the exact checks run and the checks intentionally deferred to CI. A successful CI run needs
+  only a status summary; inspect detailed logs only for failed or inconclusive jobs.
+
+The full offline validation profile is:
 
 ```bash
 uv run ruff check .
@@ -144,9 +176,14 @@ uv run pyright
 uv run pytest
 ```
 
-These commands are maintainer tools, not a mandatory pre-commit gate. Routine commits may rely on
-the pull-request CI and address failures in a follow-up commit. The default local test command must
-not make live KEGG requests unless the maintainer explicitly opts in.
+These commands are maintainer and CI tools, not a mandatory edit-loop or pre-commit gate. Routine
+changes should use incremental validation and may rely on pull-request CI for the full profile. The
+default local test command must not make live KEGG requests unless the maintainer explicitly opts in.
+Expensive build, installation, discovery, live-service, and artifact checks beyond the full offline
+profile are normally deferred to pull-request CI or the release readiness workflow. Run a directly
+affected check once when it is needed to validate the assigned change, required by its acceptance
+criteria, or explicitly requested. The local live-test opt-in rule still applies, and this guidance
+does not change the required pull-request CI campaign.
 
 Keep the GitHub workflow aligned with these commands now that the corresponding tools and tests
 are configured. Local execution remains optional unless a release checklist explicitly requires

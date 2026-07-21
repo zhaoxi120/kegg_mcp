@@ -2,14 +2,15 @@
 
 ## Compatible handoff
 
-1. Call `get_renderer_status` and require readiness plus compatible schema version 2.
+1. Call `get_renderer_status` and require readiness plus compatible schema version 3.
 2. Pass exactly one controlled absolute `render_input.json` path or bounded inline handoff to
    `render_analysis_bundle`, `render_pathway`, or `render_module`.
 3. Let the renderer validate schema, targets, evidence states, paths, output limits, and assets.
 
-Version 1 cannot be upgraded losslessly because it contains previews rather than complete renderer
-evidence. Request a new bundle from the independent KO-analysis stage. Do not patch, expand, or
-reinterpret renderer input inside this Skill.
+Do not patch or reinterpret an earlier schema version. Version 1 cannot be upgraded losslessly
+because it contains previews rather than complete renderer evidence, and version 2 lacks the current
+version 3 execution and automatic-selection contract. Request a new bundle from the independent
+KO-analysis stage.
 
 ## Pathway access modes
 

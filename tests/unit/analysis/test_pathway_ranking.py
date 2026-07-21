@@ -1,6 +1,11 @@
-"""Tests for deterministic server-side pathway ranking."""
+"""Tests for deterministic server-side pathway and MODULE ranking."""
 
-from kegg_mcp.analysis import PathwaySelection, PathwaySelectionMode, rank_pathways
+from kegg_mcp.analysis import (
+    ModuleSelection,
+    PathwaySelection,
+    rank_modules,
+    rank_pathways,
+)
 from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -25,6 +30,21 @@ def _row(source: str, target: str, line: int) -> KeggPairRow:
         line_number=line,
         source_id=f"ko:{source}",
         target_id=f"path:{target}",
+    )
+
+
+def _module_row(
+    source: str,
+    target: str,
+    line: int,
+    *,
+    namespace: str = "md",
+) -> KeggPairRow:
+    return KeggPairRow(
+        batch_index=0,
+        line_number=line,
+        source_id=f"ko:{source}",
+        target_id=f"{namespace}:{target}",
     )
 
 
@@ -101,5 +121,58 @@ def test_ties_use_canonical_pathway_id_and_contracts_round_trip() -> None:
     assert [item.pathway_id for item in ranked.rows] == ["ko00010", "ko00020"]
     assert [item.rank for item in ranked.rows] == [1, 2]
     assert type(ranked).model_validate_json(ranked.model_dump_json()) == ranked
-    selection = PathwaySelection(mode=PathwaySelectionMode.TOP_DETECTED, top_n=1)
+    selection = PathwaySelection(top_n=1)
     assert PathwaySelection.model_validate_json(selection.model_dump_json()) == selection
+
+
+def test_automatic_selection_defaults_to_top_five_for_both_target_types() -> None:
+    assert PathwaySelection().top_n == 5
+    assert ModuleSelection().top_n == 5
+
+
+def test_module_ranking_reuses_unique_selected_ko_semantics() -> None:
+    dataset = import_plain_ko("K00001\nK00001\nK00002\n", limits=_LIMITS)
+
+    ranked = rank_modules(
+        dataset,
+        (
+            _module_row("K00001", "M00020", 1),
+            _module_row("K00001", "M00020", 2, namespace="module"),
+            _module_row("K00002", "M00010", 3),
+        ),
+        EvidenceMode.STRICT,
+    )
+
+    assert [item.module_id for item in ranked.rows] == ["M00010", "M00020"]
+    assert ranked.rows[1].detected_unique_ko_count == 1
+    assert ranked.rows[1].relationship_row_count == 2
+    assert {item.target_namespace for item in ranked.relationships} == {"md", "module"}
+
+
+def test_module_ranking_excludes_rejected_and_respects_lenient_evidence() -> None:
+    dataset = import_generic_table(
+        ("sequence,ko,decision\np1,K00001,accepted\np2,K00002,uncertain\np3,K00003,rejected\n"),
+        dialect=TableDialect.CSV,
+        mapping=GenericColumnMapping(
+            sequence_id="sequence",
+            ko_id="ko",
+            raw_decision="decision",
+        ),
+        policy=CANONICAL_SOURCE_STATUS,
+        limits=_LIMITS,
+    )
+    rows = (
+        _module_row("K00001", "M00030", 1),
+        _module_row("K00002", "M00020", 2),
+        _module_row("K00003", "M00010", 3),
+    )
+
+    strict = rank_modules(dataset, rows, EvidenceMode.STRICT)
+    lenient = rank_modules(dataset, rows, EvidenceMode.LENIENT)
+
+    assert [item.module_id for item in strict.rows] == ["M00030"]
+    assert [item.module_id for item in lenient.rows] == ["M00020", "M00030"]
+    assert all(item.module_id != "M00010" for item in (*strict.rows, *lenient.rows))
+    assert type(lenient).model_validate_json(lenient.model_dump_json()) == lenient
+    selection = ModuleSelection(top_n=5)
+    assert ModuleSelection.model_validate_json(selection.model_dump_json()) == selection
