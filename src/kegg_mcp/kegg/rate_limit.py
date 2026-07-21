@@ -85,9 +85,14 @@ class DeploymentRateLimiter:
             descriptor = _open_state_file(root_descriptor, self._scope)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX)
+                state, malformed = _read_state(descriptor)
+                if state is not None:
+                    # Persist the validated prior reservation before measuring
+                    # this schedule. Synchronization latency must lengthen,
+                    # never shorten, the interval between request starts.
+                    os.fsync(descriptor)
                 interval = self._configured_interval()
                 now = self._read_clock()
-                state, malformed = _read_state(descriptor)
                 target: float | None = None
                 if state is not None and state[0] == self._boot_id:
                     stored_interval, stored_target = state[1], state[2]
@@ -236,7 +241,6 @@ def _write_state(
     written = os.pwrite(descriptor, payload, 0)
     if written != len(payload):
         raise OSError("rate-limit state write was incomplete")
-    os.fsync(descriptor)
 
 
 def _boot_identifier() -> str:
