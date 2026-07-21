@@ -80,6 +80,31 @@ def test_rate_limiter_does_not_accumulate_burst_capacity_while_idle(tmp_path: Pa
     assert clock.sleeps == pytest.approx([0.5])
 
 
+def test_state_sync_latency_cannot_reduce_request_spacing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+    sync_calls = 0
+
+    def delayed_first_sync(_descriptor: int) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+        if sync_calls == 1:
+            clock.now += 0.2
+
+    monkeypatch.setattr(rate_limit_module.os, "fsync", delayed_first_sync)
+    limiter = _limiter(tmp_path, "rate-sync-latency", 1.0, clock)
+
+    starts: list[float] = []
+    for _ in range(2):
+        limiter.acquire()
+        starts.append(clock.now)
+
+    assert starts == pytest.approx([100.0, 101.0])
+    assert sync_calls == 1
+
+
 def test_instances_share_schedule_for_the_same_endpoint_fingerprint(tmp_path: Path) -> None:
     clock = FakeClock()
     first = _limiter(tmp_path, "rate-shared", 2.0, clock)

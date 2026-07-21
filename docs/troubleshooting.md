@@ -42,21 +42,33 @@ ambiguous.
 If the plugin inventory is correct, close the installation task and open a new task outside the
 source checkout. Restart Codex once only if the new task still uses stale discovery state.
 
+### Only the core server is discovered for a FASTA-to-graphic request
+
+`kegg-mcp` accepts existing K numbers and supported KO annotation evidence; it does not accept raw
+protein FASTA or render pathway graphics. If the user explicitly selected another annotator, wait
+for its supported KO evidence. Otherwise prefer `deepkoala-annotation`; when that Skill or
+`deepkoala-mcp` is unavailable, stop before any core analysis call and ask once for explicit
+permission to install or repair the complete suite. After that action succeeds, open a new Codex
+task and confirm all three Skills and MCP servers before continuing. If permission is declined,
+remain stopped until a selected route supplies supported KO evidence.
+
 If an offline installation lacks a Python artifact, review the failure and either provide the exact
 locked artifact locally or rerun with `--allow-locked-dependency-downloads`. That option authorizes
 only artifacts required by checked-in lockfiles and declared build requirements. It does not
-authorize Python, Codex, model updates, KOfam profiles, or KEGG data.
+authorize Python, Codex, model updates, optional multi-domain resources, or KEGG data. Optional
+resources may be provisioned separately after explicit user authorization.
 
 `--allow-deepkoala-install` is separate: it confirms the initial official DeepKOALA clone and
-upstream requirements for one new suite root. It does not install later models, HMMER, or KOfam
-profiles.
+upstream requirements for one new suite root. Later models and optional multi-domain dependencies
+remain operator-managed.
 
 ### Multi-domain mode is unavailable
 
 Multi-domain mode is disabled by default. A request with `multi=true` succeeds only when the private
 deployment enabled the capability and status reports both `allow_multi=true` and `multi_ready=true`.
 The operator must provide the configured absolute `hmmsearch` executable and local KOfam profile
-directory; the companion and suite installer never download them.
+directory. These optional dependencies may be provisioned separately after explicit user
+authorization; the companion and suite installer do not manage that provisioning.
 
 Use the redacted `route_state`, `issue`, and `next_action` returned by
 `get_deepkoala_runner_status`. Repair or replace the configured external resource, restart the
@@ -152,6 +164,10 @@ complete cache safety contract.
 separator. Inputs and output directories must remain beneath those roots. Relative paths, missing
 roots, traversal, symlink escapes, and unsafe output ancestry are rejected. `doctor` reports only
 whether handoff is enabled and the number of accepted roots.
+
+`allowed_root_count=0` with `file_handoff_enabled=false` means only that Core has no configured
+handoff root. It does not establish whether any Skill, companion, or complete suite is installed
+or discovered.
 
 ### `OUTPUT_ALREADY_EXISTS`
 

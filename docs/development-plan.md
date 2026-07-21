@@ -41,6 +41,13 @@ protein FASTA
   -> bounded static SVG or PNG artifacts
 ```
 
+Core initialization instructions fail closed when the only biological input is protein FASTA:
+they do not call a core analysis tool. A user-selected annotator takes precedence; otherwise Codex
+prefers `deepkoala-annotation`. If that Skill or `deepkoala-mcp` is unavailable, the task stops and
+asks once for explicit permission to install or repair the complete suite. After the required
+action succeeds, discovery and continuation occur in a new Codex task. If permission is declined,
+the core remains stopped until a selected route supplies supported KO evidence.
+
 The current product does not provide:
 
 - annotator execution, model loading, KGML parsing, or image generation inside the core server;

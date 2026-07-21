@@ -46,8 +46,12 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Out-of-scope starting points
 
-- Protein FASTA without KO evidence starts with the independent `deepkoala-annotation` Skill and
-  returns here automatically only when the original request includes KEGG analysis.
+- Protein FASTA without KO evidence starts with a user-selected annotator when one was explicit;
+  return only when it supplies supported KO evidence. Otherwise prefer the independent
+  `deepkoala-annotation` Skill. If that route is unavailable in Codex, stop and request explicit
+  permission once to install or repair the complete suite, then resume in a new Codex task after
+  discovery. If the user declines that action, remain stopped until a selected route supplies
+  supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
   `kegg-pathway-rendering` Skill without rerunning core analysis.
 - Statistical enrichment, abundance testing, nucleotide assembly, sequence alignment, and

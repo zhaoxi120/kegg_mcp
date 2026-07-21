@@ -63,3 +63,22 @@ def test_multi_domain_mode_requires_explicit_ready_opt_in() -> None:
         "actual reported `multi` value",
     ):
         assert fragment in CORPUS
+
+
+def test_missing_companion_requests_complete_suite_installation() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "declared `deepkoala-mcp` dependency",
+        "stop before annotation",
+        "incomplete suite deployment",
+        "request explicit permission once",
+        "complete repository suite",
+        "new Codex task",
+        "preferred first FASTA annotation route",
+        "explicitly selected another annotator",
+        "selected route supplies supported KO evidence",
+    ):
+        assert fragment in normalized
+    assert normalized.index("explicitly selected another annotator") < normalized.index(
+        "Otherwise require the declared `deepkoala-mcp` dependency"
+    )

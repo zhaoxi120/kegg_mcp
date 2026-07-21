@@ -75,3 +75,16 @@ def test_preceding_core_handoff_finishes_the_original_graphics_request() -> None
         "did not ask for graphics",
     ):
         assert fragment in CORPUS
+
+
+def test_missing_suite_stage_requests_installation_or_repair() -> None:
+    for fragment in (
+        "Prefer DeepKOALA as the",
+        "required focused Skill or declared MCP dependency",
+        "request explicit permission once",
+        "complete repository suite",
+        "new Codex task",
+        "declared `kegg-render-mcp` dependency",
+        "stop before rendering",
+    ):
+        assert fragment in CORPUS
