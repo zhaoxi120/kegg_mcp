@@ -133,6 +133,12 @@ allowed_roots = ["/absolute/project/analysis"]
 offline_allow_stale = false
 ```
 
+Root order defines service-managed defaults when a caller omits `output_directory`: Core uses the
+last `core.allowed_roots` entry, DeepKOALA uses the last `deepkoala.output_roots` entry, and the
+Renderer uses the last `renderer.allowed_roots` entry. In this example, annotation output goes
+beneath `/absolute/project/annotations`, while Core and Renderer output goes beneath
+`/absolute/project/analysis`. Explicit allowed output paths still take precedence.
+
 Protect the file and its direct parent:
 
 ```bash

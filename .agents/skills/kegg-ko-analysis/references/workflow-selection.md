@@ -20,8 +20,10 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Annotation table or detailed CSV
 
-1. Use a controlled absolute `file_path` and a new or empty `output_directory` for analysis. Use
-   `normalize_ko_annotations` alone only when the user wants a reusable normalized table.
+1. Use a controlled absolute `file_path`. Pass a user-specified new or empty `output_directory`
+   unchanged; otherwise omit it so Core allocates a fresh directory beneath its configured project
+   output root. Use `normalize_ko_annotations` alone only when the user wants a reusable normalized
+   table.
 2. Let the server infer unambiguous common columns and report the mapping. Supply an explicit
    column mapping only for ambiguous or non-standard tables.
 3. Preserve raw source decisions, scores, thresholds, ranks, domains, protein names, source/model

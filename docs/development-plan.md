@@ -270,13 +270,15 @@ DeepKOALA is an external, independently versioned annotation tool. The core serv
 previously generated detailed table and never loads its models or runs its CLI. Only
 `deepkoala-mcp` may launch the configured external checkout.
 
-The companion validates one allowed protein FASTA and a new allowed output directory, performs
-runtime preflight, starts one service-owned job, and returns an opaque process-scoped job identifier
-for bounded polling. Multiple companion processes may share one state root, but a deployment-wide
-runner lease permits only one job across those processes. Jobs use fixed arguments, default to
-`device=cpu`, accept only an explicitly requested and deployment-allowed `device=cuda`, inherit
-accelerator visibility, bound CPU threads, use zero data-loader workers, and own process-group and
-Linux parent-death control. The companion never uses automatic device selection.
+The companion validates one allowed protein FASTA and an optional allowed output directory that is
+new or empty. When omitted, it allocates a fresh child beneath the last configured output root. It
+performs runtime preflight, starts one service-owned job, and returns an opaque process-scoped job
+identifier for bounded polling. Multiple companion processes may share one state root, but a
+deployment-wide runner lease permits only one job across those processes. Jobs use fixed arguments,
+default to `device=cpu`, and accept only an explicitly requested and deployment-allowed
+`device=cuda`. They inherit accelerator visibility, bound CPU threads, use zero data-loader workers,
+and own process-group and Linux parent-death control. The companion never uses automatic device
+selection.
 
 The stable handoff distinguishes the original FASTA path, `deepkoala_annotations.csv` as the core
 import input, `deepkoala_run_report.md` as the human-readable report, and the resolved DeepKOALA and
@@ -292,6 +294,9 @@ manage a newer external installation separately, but every result must report th
 version.
 
 Detailed output preserves `predict_label`, probability, threshold, and source annotation marker.
+An exact plus-joined sequence of canonical K numbers is deterministically expanded into independent
+records that share the original row evidence and provenance; malformed or mixed labels are never
+partially inferred.
 The default importer accepts a verified source-positive marker or probability meeting its source
 threshold. A below-threshold prediction remains source-rejected, not uncertain. Missing predictions
 are unclassified and malformed K numbers are invalid. Multi-domain rows retain paired coordinates
@@ -459,6 +464,9 @@ reviewed again on 2026-07-21 against official commit
   [official repository](https://github.com/zhaoxi120/deepkoala)
 - [official CLI](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/cli.py) and
   [multi-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer_multi.py)
+
+The official `frag` versus `full` usage descriptions were reviewed again on 2026-07-22 against the
+[official repository README](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/README.md).
 
 MCP tool and resource contracts were reviewed on 2026-07-16 against the 2025-06-18 specification:
 

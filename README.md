@@ -76,13 +76,16 @@ only after the exact release candidate passes [release readiness](docs/release-r
 The installed Skills are designed to continue one original request across stable output files.
 For example:
 
-> Analyze `/absolute/project/proteins.faa` with the default DeepKOALA model, report up to five
-> MODULEs and up to five canonical KO pathways, and render SVG diagrams. Use separate annotation,
-> analysis, and rendering output directories beneath `/absolute/project/results`.
+> Analyze `/absolute/project/proteins.faa`, report up to five MODULEs and up to five canonical KO
+> pathways, and render SVG diagrams.
 
-The stages produce `deepkoala_annotations.csv`, `render_input.json`, and static renderer output.
-The final response reports the resolved DeepKOALA model version. Target ranking selects what to
-analyze; it is not enrichment, completion, or pathway-presence inference.
+Before annotation, the DeepKOALA Skill selects `frag` or `full` from the stated input provenance;
+an explicit user choice wins and ambiguous provenance defaults to `full`. Unless the user supplies
+output directories, each server allocates a fresh directory beneath its configured project output
+root; the Skills do not infer writable roots from input paths. The stages produce
+`deepkoala_annotations.csv`, `render_input.json`, and static renderer output. The final response
+reports the resolved DeepKOALA model version. Target ranking selects what to analyze; it is not
+enrichment, completion, or pathway-presence inference.
 
 Requests that already contain KO evidence start at `kegg-mcp`. Requests that provide a compatible
 `render_input.json` may start at `kegg-render-mcp`.
