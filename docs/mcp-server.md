@@ -77,6 +77,9 @@ The MCP initialization response guides clients toward the high-level analysis to
 the connectivity, file-handoff, result-scope, stable-bundle, and biological interpretation
 boundaries. It does not replace the explicit input and output schemas.
 
+Every advertised input schema is self-contained: local Pydantic references are inlined so clients
+can display nested object fields and enum values without resolving `$defs`.
+
 ## Tools
 
 The server exposes eleven tools:
@@ -160,13 +163,27 @@ Minimal server-ranked Top-1 pathway input:
 }
 ```
 
+Minimal explicit pathway input:
+
+```json
+{
+  "ko_text": "K00844\nK01810",
+  "analysis_unit": "isolate_proteome",
+  "pathways": [{"pathway_id": "ko00010"}]
+}
+```
+
 The server selects K numbers from the requested evidence mode, performs one logical KO-to-pathway
 mapping stage, de-duplicates each pathway's K numbers, sorts by descending unique selected-KO count
-and then canonical pathway ID. Unless broad references were explicitly enabled, a bounded typed GET
-metadata preflight skips `Global Pathway`, `Overview Pathway`, and `Global and overview maps`
-candidates before Top-N truncation; the complete overlap ranking remains retained. The server then
-loads pathway LINK/GET references only for the selected standard targets. Duplicate annotation
-records and duplicate LINK rows cannot increase the detected node count.
+and then canonical pathway ID. Automatic selection directly excludes the current KEGG Global,
+Overview, and higher-level Overview KO map identifiers before Top-N truncation and fills up to the
+requested count from subsequent regular references; the complete overlap ranking remains retained.
+The fixed identifier set was checked against the official KEGG PATHWAY identifier classes and map
+list on 2026-07-22. An explicitly requested `ko01100` graphic remains outside these three MCP
+servers; a client may create a separately labelled model-generated conceptual diagram, but must not
+present it as a KEGG-derived coverage overlay. The server loads pathway LINK/GET references only for
+the selected targets. Duplicate annotation records and duplicate LINK rows cannot increase the
+detected node count.
 
 Generic tables with unambiguous common headers are mapped automatically and the decision is
 reported; ambiguous or non-standard tables require an explicit mapping. When `annotations` is used
@@ -176,9 +193,12 @@ refresh flags, and internal limit models are deployment-owned rather than ordina
 
 File input and `output_directory` are disabled until `KEGG_MCP_ALLOWED_ROOTS` is configured. Paths
 must be absolute and resolve beneath an allowed root. Traversal, missing files, symlink escapes, and
-unsafe output ancestors are rejected. An output directory must be new or empty; any existing entry
-causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation. A successful
-normalization bundle contains
+unsafe output ancestors are rejected. Once an output path enters a directory owned by the service
+user, that directory and every descendant directory on the path must remain owned by the service
+user and must not be group- or world-writable; listing a path in `KEGG_MCP_ALLOWED_ROOTS` does not
+waive this rule. An output directory must be new or empty;
+any existing entry causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation.
+A successful normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds
 `pathway_coverage.tsv`, `module_completion.tsv`, `analysis_report.md`, and `render_input.json`.
 Automatic MODULE selection also adds `module_ranking.tsv` and `ko_module_relationships.tsv`;

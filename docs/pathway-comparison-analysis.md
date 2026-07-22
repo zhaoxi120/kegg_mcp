@@ -53,15 +53,11 @@ themselves.
 Pooled, MAG, mixed, and unknown analysis units must use a `ko` or `map` reference. This prevents a
 community KO union or other incompatible unit from being presented as one organism pathway.
 
-### Scope from PATHWAY metadata
+### Scope from PATHWAY CLASS
 
-Reference scope is derived from retained top-level metadata, never from a pathway-number range. A
-`CLASS` line containing `Global and overview maps` produces
-`PathwayReferenceScope.GLOBAL_OR_OVERVIEW`; other retained `CLASS` evidence produces `STANDARD`.
-Current special global and overview entries omit `CLASS`, so an exact top-level `ENTRY` qualifier of
-`Global Pathway` or `Overview Pathway` is normalized to the same broad scope. Other missing,
-duplicate, unknown, or conflicting scope metadata fails closed. The only accepted `ENTRY`
-qualifiers are exactly `Pathway`, `Global Pathway`, and `Overview Pathway`.
+Reference scope is derived from retained top-level `CLASS` text, not from a pathway-number range.
+A CLASS line containing `Global and overview maps` produces
+`PathwayReferenceScope.GLOBAL_OR_OVERVIEW`; other retained CLASS evidence produces `STANDARD`.
 Evaluating a global or overview reference requires
 `PathwayCoverageParameters.allow_global_or_overview=True`. The opt-in is serialized and the result
 always carries a broad-reference warning. This keeps a percentage over a large heterogeneous map
@@ -247,12 +243,11 @@ layer. `annotation_dataset`, `first_dataset`, and `second_dataset` are immutable
 
 ## Primary sources
 
-The namespace, LINK/GET, flat-file metadata, and interpretation contract was checked against these
-primary KEGG pages and live public-academic flat files on 2026-07-21:
+The namespace, LINK/GET, flat-file CLASS, and interpretation contract was checked against these
+primary KEGG pages on 2026-07-14:
 
 - [KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html), page updated 2026-06-17;
-- [KEGG PATHWAY Database](https://www.kegg.jp/kegg/pathway.html);
-- [KEGG Global/Overview maps](https://www.kegg.jp/kegg/document/help_global.html); and
+- [KEGG PATHWAY Database](https://www.kegg.jp/kegg/pathway.html); and
 - [KEGG database entry format](https://www.kegg.jp/kegg/docs/dbentry.html), page updated
   2026-06-12.
 

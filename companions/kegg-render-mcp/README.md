@@ -10,9 +10,9 @@ project-owned MODULE logic diagrams from the authoritative core AST. SVG is cano
 optional bounded derivative, and artifacts are available through local directories and scoped MCP
 resources.
 
-Accepted evidence uses a solid deep-red (`#D32F2F`) overlay so it remains distinct from the
-purple-toned KEGG reference artwork. Policy-defined uncertain evidence uses orange (`#E69F00`)
-plus a dashed border, and accepted evidence retains precedence on shared graphics.
+Accepted evidence uses a solid vivid-blue (`#0057FF`) overlay. Policy-defined uncertain evidence
+uses orange (`#E69F00`) plus a dashed border, and accepted evidence retains precedence on shared
+graphics.
 
 Global and overview pathway overlays are unsupported because they require a separately reviewed
 line-overlay policy. `map` and organism-specific targets remain explicit summary-only core results;

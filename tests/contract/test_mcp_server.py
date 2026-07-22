@@ -220,46 +220,24 @@ class _LargeRankingReferenceClient(_FakeReferenceClient):
         )
 
 
-class _BroadFirstReferenceClient(_FakeReferenceClient):
-    def get(
-        self,
-        request: GetRequest,
-        *,
-        options: KeggRequestOptions | None = None,
-    ) -> GetResult:
-        if request.entries[0].database is not KeggGetDatabase.PATHWAY:
-            return super().get(request, options=options)
-        del options
-        self.call_log.append(("get", "+".join(item.identifier for item in request.entries)))
-        body = b"".join(
-            (
-                (
-                    f"ENTRY       {entry.identifier}           Global    Pathway\n"
-                    "NAME        Synthetic global pathway\n"
-                    "///\n"
-                )
-                if entry.identifier == "ko01100"
-                else (
-                    f"ENTRY       {entry.identifier}                    Pathway\n"
-                    "NAME        Synthetic standard pathway\n"
-                    "CLASS       Metabolism; Carbohydrate metabolism\n"
-                    "///\n"
-                )
-            ).encode("ascii")
-            for entry in request.entries
-        )
-        return GetResult(
-            request=request,
-            documents=(parse_flat_file_response(body),),
-            missing_entries=(),
-            batches=(
-                _provenance(
-                    KeggOperation.GET,
-                    f"scope-filter-{'-'.join(item.identifier for item in request.entries)}",
-                ),
-            ),
-        )
+_SPECIAL_PATHWAY_IDS = (
+    "ko01100",
+    "ko01110",
+    "ko01120",
+    "ko01200",
+    "ko01210",
+    "ko01212",
+    "ko01220",
+    "ko01230",
+    "ko01232",
+    "ko01240",
+    "ko01250",
+    "ko01310",
+    "ko01320",
+)
 
+
+class _SpecialMapsFirstReferenceClient(_FakeReferenceClient):
     def link(
         self,
         request: LinkRequest,
@@ -270,27 +248,30 @@ class _BroadFirstReferenceClient(_FakeReferenceClient):
             return super().link(request, options=options)
         del options
         self.call_log.append(("link", request.relationship.value))
-        rows = (
+        special_rows = tuple(
             KeggPairRow(
-                line_number=1,
-                source_id="ko:K00001",
-                target_id="path:ko01100",
-            ),
+                line_number=(special_index * 10) + ko_index,
+                source_id=f"ko:K{ko_index:05d}",
+                target_id=f"path:{pathway_id}",
+            )
+            for special_index, pathway_id in enumerate(_SPECIAL_PATHWAY_IDS)
+            for ko_index in range(
+                1,
+                (6 if pathway_id == "ko01100" else 5 if pathway_id == "ko01110" else 2) + 1,
+            )
+        )
+        rows = special_rows + tuple(
             KeggPairRow(
-                line_number=2,
-                source_id="ko:K00002",
-                target_id="path:ko01100",
-            ),
-            KeggPairRow(
-                line_number=3,
-                source_id="ko:K00001",
-                target_id="path:ko00010",
-            ),
+                line_number=200 + index,
+                source_id=f"ko:K{index:05d}",
+                target_id=f"path:ko{index * 10:05d}",
+            )
+            for index in range(1, 6)
         )
         return LinkResult(
             request=request,
             rows=rows,
-            batches=(_provenance(KeggOperation.LINK, "broad-first-ranking"),),
+            batches=(_provenance(KeggOperation.LINK, "special-maps-first-ranking"),),
         )
 
 
@@ -385,6 +366,9 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert tool.title
             assert tool.description
             assert tool.inputSchema.get("additionalProperties") is False
+            Draft202012Validator.check_schema(tool.inputSchema)
+            assert "$defs" not in tool.inputSchema
+            assert '"$ref"' not in json.dumps(tool.inputSchema, separators=(",", ":"))
             assert tool.outputSchema is not None
             assert tool.annotations is not None
         status = _tool_by_name(tools, "get_server_status")
@@ -436,10 +420,24 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
         assert set(mapping_schema["properties"]) == {"ko_ids", "target"}
         analysis_schema = _tool_by_name(tools, "analyze_ko_annotations").inputSchema
-        assert "pathway_selection" in analysis_schema["properties"]
-        selection_schema = analysis_schema["$defs"]["PathwaySelection"]["properties"]
+        analysis_properties = analysis_schema["properties"]
+        assert "pathway_selection" in analysis_properties
+        assert analysis_properties["pathway_selection"]["type"] == "object"
+        selection_schema = analysis_properties["pathway_selection"]["properties"]
         assert selection_schema["top_n"]["minimum"] == 1
         assert selection_schema["top_n"]["maximum"] == 25
+        analysis_unit_schema = analysis_properties["analysis_unit"]
+        assert analysis_unit_schema["type"] == "string"
+        assert "isolate_proteome" in analysis_unit_schema["enum"]
+        annotations_schema = analysis_properties["annotations"]
+        assert annotations_schema["type"] == "object"
+        assert annotations_schema["properties"]["analysis_unit"]["type"] == "string"
+        pathway_items = analysis_properties["pathways"]["items"]
+        assert pathway_items["type"] == "object"
+        assert pathway_items["required"] == ["pathway_id"]
+        assert pathway_items["properties"]["pathway_id"]["examples"] == ["ko00010"]
+        assert "hsa" not in pathway_items["properties"]["pathway_id"]["description"]
+        assert "pathway objects" in analysis_properties["pathways"]["description"]
         delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
         assert set(delete_schema["properties"]) == {"result_id"}
         list_schema = _tool_by_name(tools, "list_analysis_results").inputSchema
@@ -1262,15 +1260,11 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             }
         ]
         assert data["pathway_target_count"] == 1
-        assert summary["kegg_request_count"] == 4
-        assert summary["network_request_count"] == 4
+        assert summary["kegg_request_count"] == 3
+        assert summary["network_request_count"] == 3
         assert summary["cache_hit_count"] == 0
         assert client.call_log == [
             ("link", "ko_to_pathway"),
-            (
-                "get",
-                "+".join(f"ko{index:05d}" for index in range(1, 11)),
-            ),
             ("link", "pathway_to_ko"),
             ("get", "ko00001"),
         ]
@@ -1326,11 +1320,11 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
             "bundle_write",
         ]
         assert retained_report["execution_metrics"][1]["request_count"] == 1
-        assert retained_report["execution_metrics"][3]["request_count"] == 3
+        assert retained_report["execution_metrics"][3]["request_count"] == 2
         assert len(retained_report["mapping_provenance"]) == 1
         assert len(retained_ranking["ranking"]["rows"]) == 115
         assert "relationships" not in retained_ranking["ranking"]
-        assert len(retained_ranking["scope_filter_provenance"]) == 1
+        assert "scope_filter_provenance" not in retained_ranking
         assert len(retained_relationships["relationships"]) == 562
         bundle = data["output_bundle"]
         ranking_lines = Path(bundle["pathway_ranking"]).read_text(encoding="utf-8").splitlines()
@@ -1352,25 +1346,25 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
 
 
 @pytest.mark.asyncio
-async def test_automatic_selection_skips_broad_metadata_before_loading_references(
+async def test_automatic_top_five_excludes_special_maps_and_fills_from_later_ranks(
     tmp_path: Path,
 ) -> None:
-    client = _BroadFirstReferenceClient()
+    client = _SpecialMapsFirstReferenceClient()
     runtime = McpRuntime(
         client=client,
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
-        scope_id="broad-first-contract",
+        scope_id="special-map-exclusion-contract",
         allowed_roots=(str(tmp_path.resolve()),),
     )
     server = create_server(runtime)
-    output = tmp_path / "broad-first"
+    output = tmp_path / "special-map-exclusion"
 
     async with create_connected_server_and_client_session(server) as session:
         result = await session.call_tool(
             "analyze_ko_annotations",
             {
-                "ko_text": "K00001\nK00002",
-                "pathway_selection": {"top_n": 1},
+                "ko_text": "\n".join(f"K{index:05d}" for index in range(1, 7)),
+                "pathway_selection": {"top_n": 5},
                 "output_directory": str(output),
             },
         )
@@ -1378,35 +1372,60 @@ async def test_automatic_selection_skips_broad_metadata_before_loading_reference
         assert result.isError is False
         assert result.structuredContent is not None
         data = result.structuredContent["result"]["data"]
-        assert data["automatic_pathway_selection"]["selected_pathways"] == [
-            {
-                "rank": 2,
-                "pathway_id": "ko00010",
-                "pathway_number": "00010",
-                "detected_unique_ko_count": 1,
-                "relationship_row_count": 1,
-            }
+        selected = data["automatic_pathway_selection"]["selected_pathways"]
+        assert [item["rank"] for item in selected] == [14, 15, 16, 17, 18]
+        assert [item["pathway_id"] for item in selected] == [
+            "ko00010",
+            "ko00020",
+            "ko00030",
+            "ko00040",
+            "ko00050",
         ]
-        assert data["pathway_target_count"] == 1
-        assert data["pathway_previews"][0]["pathway_id"] == "ko00010"
-        assert data["summary"]["kegg_request_count"] == 4
+        assert data["pathway_target_count"] == 5
+        assert [item["pathway_id"] for item in data["pathway_previews"]] == [
+            "ko00010",
+            "ko00020",
+            "ko00030",
+            "ko00040",
+            "ko00050",
+        ]
         assert client.call_log == [
             ("link", "ko_to_pathway"),
-            ("get", "ko01100+ko00010"),
             ("link", "pathway_to_ko"),
             ("get", "ko00010"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00020"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00030"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00040"),
+            ("link", "pathway_to_ko"),
+            ("get", "ko00050"),
         ]
 
         render_input = RenderInput.model_validate_json(
             Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
             strict=True,
         )
-        assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
+        assert [item.pathway_id for item in render_input.pathways] == [
+            "ko00010",
+            "ko00020",
+            "ko00030",
+            "ko00040",
+            "ko00050",
+        ]
         report = Path(data["output_bundle"]["analysis_report"]).read_text(encoding="utf-8")
-        assert "| 1 | `ko01100` | 2 | 2 | no |" in report
-        assert "| 2 | `ko00010` | 1 | 1 | yes |" in report
+        assert "| 1 | `ko01100` | 6 | 6 | no |" in report
+        assert "| 2 | `ko01110` | 5 | 5 | no |" in report
+        assert "| 14 | `ko00010` | 1 | 1 | yes |" in report
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["pathway_selection"]["selected_pathway_ids"] == ["ko00010"]
+        assert manifest["pathway_selection"]["selected_pathway_ids"] == [
+            "ko00010",
+            "ko00020",
+            "ko00030",
+            "ko00040",
+            "ko00050",
+        ]
 
 
 @pytest.mark.asyncio

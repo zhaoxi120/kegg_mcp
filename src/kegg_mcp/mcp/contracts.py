@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeVar, cast
 
 from pydantic import Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection
@@ -115,11 +116,36 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
     """Simple common-path KO analysis input."""
 
     ko_text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
-    annotations: NormalizeKoAnnotationsInput | None = None
+    annotations: NormalizeKoAnnotationsInput | SkipJsonSchema[None] = Field(
+        default=None,
+        description=(
+            "Nested annotation-table import. Put analysis_unit and sample_id inside this "
+            "object; do not combine it with ko_text."
+        ),
+    )
     module_ids: Annotated[tuple[ModuleId, ...], Field(max_length=25)] = ()
-    pathways: Annotated[tuple[PathwaySpec, ...], Field(max_length=25)] = ()
-    pathway_selection: PathwaySelection | None = None
-    analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
+    pathways: Annotated[
+        tuple[PathwaySpec, ...],
+        Field(
+            max_length=25,
+            description=(
+                'Explicit KO-reference pathway objects such as [{"pathway_id": "ko00010"}]. '
+                "This KO-only tool accepts koNNNNN identifiers, not organism pathway IDs. Do not "
+                "combine this field with pathway_selection."
+            ),
+        ),
+    ] = ()
+    pathway_selection: PathwaySelection | SkipJsonSchema[None] = Field(
+        default=None,
+        description="Automatic ranked pathway selection; mutually exclusive with pathways.",
+    )
+    analysis_unit: AnalysisUnit = Field(
+        default=AnalysisUnit.UNKNOWN,
+        description=(
+            "Biological unit for ko_text. When annotations is supplied, set this field inside "
+            "the annotations object instead."
+        ),
+    )
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
     pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False

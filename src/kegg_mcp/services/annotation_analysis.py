@@ -70,7 +70,6 @@ from kegg_mcp.services.reference_loading import (
     ReferenceLoadingLimits,
     load_module_graphs,
     load_pathway_references,
-    select_standard_pathway_specs,
 )
 from kegg_mcp.services.result_builders import (
     _analysis_warnings,
@@ -87,6 +86,28 @@ from kegg_mcp.services.result_store import (
     ResultArtifactMetadata,
     SQLiteResultStore,
     compensate_created_result,
+)
+
+# Current KEGG Global, Overview, and higher-level Overview KO reference maps.
+# Checked against https://www.kegg.jp/kegg/pathway.html on 2026-07-22. These
+# special line/arrow maps are outside the regular-reference automatic-selection
+# policy.
+_AUTOMATIC_PATHWAY_EXCLUSIONS = frozenset(
+    {
+        "ko01100",
+        "ko01110",
+        "ko01120",
+        "ko01200",
+        "ko01210",
+        "ko01212",
+        "ko01220",
+        "ko01230",
+        "ko01232",
+        "ko01240",
+        "ko01250",
+        "ko01310",
+        "ko01320",
+    }
 )
 
 
@@ -129,7 +150,6 @@ def analyze_annotation_targets(
     ranking: PathwayRankingResult | None = None
     ranking_execution: PathwayRankingExecution | None = None
     selected_pathway_rows: tuple[PathwayRankingRow, ...] = ()
-    pathway_scope_provenance: tuple[KeggBatchProvenance, ...] = ()
     if pathway_selection is None and not module_ids and not pathways:
         module_selection = ModuleSelection(top_n=5)
         pathway_selection = PathwaySelection(top_n=5)
@@ -189,6 +209,23 @@ def analyze_annotation_targets(
                 "No reference pathway could be ranked from the selected K numbers.",
                 suggested_action="Supply explicit pathway targets or different KO evidence.",
             )
+        selected_pathway_rows = tuple(
+            row for row in ranking.rows if row.pathway_id not in _AUTOMATIC_PATHWAY_EXCLUSIONS
+        )[: pathway_selection.top_n]
+        if not selected_pathway_rows:
+            fail(
+                ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+                "No supported reference pathway remained after automatic exclusions.",
+                suggested_action="Supply an explicit supported pathway target.",
+            )
+        pathways = tuple(PathwaySpec(pathway_id=row.pathway_id) for row in selected_pathway_rows)
+        ranking_execution = _pathway_ranking_execution(
+            ranking,
+            pathway_selection,
+            selected_rows=selected_pathway_rows,
+            dataset=dataset,
+            mapping_provenance=pathway_mapping_provenance,
+        )
     started = time.perf_counter_ns()
     graphs = (
         load_module_graphs(
@@ -201,44 +238,6 @@ def analyze_annotation_targets(
         if module_ids
         else ()
     )
-    if ranking is not None and pathway_selection is not None:
-        if allow_global_or_overview:
-            selected_pathway_rows = ranking.rows[: pathway_selection.top_n]
-            pathways = tuple(
-                PathwaySpec(pathway_id=row.pathway_id) for row in selected_pathway_rows
-            )
-        else:
-            candidate_rows = ranking.rows[: effective_reference_limits.max_pathway_specs]
-            candidate_specs = tuple(
-                PathwaySpec(pathway_id=row.pathway_id) for row in candidate_rows
-            )
-            pathways, pathway_scope_provenance = select_standard_pathway_specs(
-                budgeted_client,
-                candidate_specs,
-                top_n=pathway_selection.top_n,
-                options=effective_options,
-                limits=effective_reference_limits,
-            )
-            selected_ids = {spec.pathway_id for spec in pathways}
-            selected_pathway_rows = tuple(
-                row for row in candidate_rows if row.pathway_id in selected_ids
-            )
-            if not selected_pathway_rows:
-                fail(
-                    ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-                    "No standard reference pathway was found within the bounded ranked scan.",
-                    suggested_action=(
-                        "Supply an explicit standard pathway target or raise the deployment "
-                        "pathway bound."
-                    ),
-                )
-        ranking_execution = _pathway_ranking_execution(
-            ranking,
-            pathway_selection,
-            selected_rows=selected_pathway_rows,
-            dataset=dataset,
-            mapping_provenance=pathway_mapping_provenance,
-        )
     references = load_pathway_references(
         budgeted_client,
         pathways,
@@ -286,11 +285,7 @@ def analyze_annotation_targets(
     )
     stage_elapsed[ExecutionStage.ANALYSIS] = _elapsed_ms(started)
     mapping_provenance = (*module_mapping_provenance, *pathway_mapping_provenance)
-    reference_provenance = _reference_provenance(
-        modules,
-        coverages,
-        additional=pathway_scope_provenance,
-    )
+    reference_provenance = _reference_provenance(modules, coverages)
     metrics = _execution_metrics(
         stage_elapsed,
         mapping_provenance=mapping_provenance,
@@ -331,9 +326,6 @@ def analyze_annotation_targets(
                 "decision_policy": dataset.import_report.decision_policy.model_dump(mode="json"),
                 "mapping_provenance": [
                     batch.model_dump(mode="json") for batch in pathway_mapping_provenance
-                ],
-                "scope_filter_provenance": [
-                    batch.model_dump(mode="json") for batch in pathway_scope_provenance
                 ],
                 "ranking": ranking.model_dump(mode="json", exclude={"relationships"}),
             }

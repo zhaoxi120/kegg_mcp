@@ -107,10 +107,10 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
     )
     svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
     text = svg.content.decode()
-    assert ACCEPTED_COLOR == "#D32F2F"
+    assert ACCEPTED_COLOR == "#0057FF"
     assert ACCEPTED_COLOR in text
     assert UNCERTAIN_COLOR in text
-    assert "#0072B2" not in text
+    assert "#D32F2F" not in text
     assert "Accepted annotation" in text
     assert "Policy-defined uncertain annotation" in text
     assert "not evidence of biological absence" in text

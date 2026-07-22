@@ -9,6 +9,11 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
   `pathway_selection` and let the server independently choose the Top-5 MODULEs and Top-5 canonical
   KO reference pathways by unique selected-KO overlap.
 - Use server-side Top-N selection instead of reading and ranking complete relationship rows.
+- Automatic selection leaves current KEGG Global, Overview, and higher-level Overview maps in the
+  retained ranking but excludes them from the renderable Top-N targets. If the user explicitly
+  requests `ko01100`, do not send it through the regular-pathway Core/Renderer pipeline. Preserve
+  that target for a separate model-native drawing step outside this Skill, and label the result as
+  a model-generated conceptual diagram rather than a KEGG-derived coverage overlay.
 - Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
   exact completion and required-block coverage separately from the selected MODULE definitions.
 - Do not recommend annotation software when usable KO evidence already exists.

@@ -174,6 +174,14 @@ or discovered.
 Output bundles do not overwrite entries. Choose a new or empty directory; there is no overwrite
 flag.
 
+### `OUTPUT_WRITE_FAILED` with an allowed output root
+
+The bundle writer checks the complete ancestor chain, not only the configured allowed root. From
+the first ancestor owned by the service user onward, every directory must be owned by that user and
+must not be group- or world-writable. For example, an owner-owned `775` parent causes a safe failure
+even when the allowed root below it is `700`. Remove group write from that parent or choose a safe
+root with an owner-only ancestor chain; do not weaken the writer or change only the child mode.
+
 ### `RESULT_NOT_FOUND`
 
 A `result_id` belongs to one stdio process and may also have expired or been deleted. Do not copy it

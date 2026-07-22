@@ -21,9 +21,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayCoverageLimits,
     PathwayKoReference,
     PathwayReferenceNamespace,
-    PathwayReferenceScope,
     build_pathway_reference,
-    pathway_reference_scope_from_entry,
 )
 from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
@@ -49,7 +47,6 @@ from kegg_mcp.kegg.contracts import (
 
 ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 _MAX_MODULE_GET_ENTRIES = 10
-_MAX_PATHWAY_GET_ENTRIES = 10
 
 
 class KeggReferenceClient(Protocol):
@@ -84,8 +81,18 @@ class PathwaySpec(FrozenModel):
         }
     )
 
-    pathway_id: str = Field(min_length=7, max_length=9)
-    reference_namespace: PathwayReferenceNamespace = PathwayReferenceNamespace.KO
+    pathway_id: str = Field(
+        min_length=7,
+        max_length=9,
+        description="Canonical KEGG pathway identifier, for example ko00010.",
+        examples=["ko00010"],
+    )
+    reference_namespace: PathwayReferenceNamespace = Field(
+        default=PathwayReferenceNamespace.KO,
+        description=(
+            "Reference denominator namespace. It is inferred from pathway_id when omitted."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -361,94 +368,6 @@ def load_pathway_references(
     return tuple(references)
 
 
-def select_standard_pathway_specs(
-    client: KeggReferenceClient,
-    specs: tuple[PathwaySpec, ...],
-    *,
-    top_n: int,
-    options: KeggRequestOptions,
-    limits: ReferenceLoadingLimits | None = None,
-) -> tuple[tuple[PathwaySpec, ...], tuple[KeggBatchProvenance, ...]]:
-    """Select ranked standard references using bounded PATHWAY metadata requests."""
-    bounds = limits or ReferenceLoadingLimits()
-    specs = canonicalize_pathway_specs(specs)
-    _validate_pathway_specs(specs, bounds)
-    if top_n < 1 or top_n > bounds.max_pathway_specs:
-        _fail_configuration(
-            "The requested standard-pathway count is outside the deployment bound.",
-            "Lower top_n or raise the deployment-owned pathway limit.",
-        )
-
-    selected: list[PathwaySpec] = []
-    provenance: list[KeggBatchProvenance] = []
-    for start in range(0, len(specs), _MAX_PATHWAY_GET_ENTRIES):
-        chunk = specs[start : start + _MAX_PATHWAY_GET_ENTRIES]
-        request = GetRequest(
-            entries=tuple(
-                KeggEntryRef(database=KeggGetDatabase.PATHWAY, identifier=spec.pathway_id)
-                for spec in chunk
-            )
-        )
-        result = client.get(request, options=options)
-        provenance.extend(result.batches)
-        scopes = _pathway_scopes_from_result(result, request)
-        for spec in chunk:
-            if scopes[spec.pathway_id] is PathwayReferenceScope.STANDARD:
-                selected.append(spec)
-                if len(selected) == top_n:
-                    return tuple(selected), tuple(provenance)
-    return tuple(selected), tuple(provenance)
-
-
-def _pathway_scopes_from_result(
-    result: GetResult,
-    request: GetRequest,
-) -> dict[str, PathwayReferenceScope]:
-    if result.request != request:
-        _fail_parse("The PATHWAY metadata GET result does not match the typed request.")
-    if len(result.documents) != len(result.batches):
-        _fail_parse("PATHWAY metadata GET documents and provenance batches do not align.")
-    if any(batch.operation is not KeggOperation.GET for batch in result.batches):
-        _fail_parse("PATHWAY metadata GET results contain non-GET provenance.")
-
-    requested_ids = tuple(entry.identifier for entry in request.entries)
-    requested_set = set(requested_ids)
-    scopes: dict[str, PathwayReferenceScope] = {}
-    for document in result.documents:
-        if not isinstance(document, KeggFlatFileDocument):
-            _fail_parse("PATHWAY metadata GET must return flat-file documents.")
-        for entry in document.entries:
-            if entry.identifier not in requested_set or entry.identifier in scopes:
-                _fail_parse("PATHWAY metadata GET returned an unexpected or duplicate entry.")
-            scopes[entry.identifier] = pathway_reference_scope_from_entry(
-                entry,
-                entry.identifier,
-            )
-
-    missing_ids: list[str] = []
-    for entry in result.missing_entries:
-        if entry.database is not KeggGetDatabase.PATHWAY or entry.identifier not in requested_set:
-            _fail_parse("PATHWAY metadata GET reported an unexpected missing entry.")
-        if entry.identifier in missing_ids:
-            _fail_parse("PATHWAY metadata GET reported a duplicate missing entry.")
-        missing_ids.append(entry.identifier)
-    if set(scopes).intersection(missing_ids):
-        _fail_parse("PATHWAY metadata GET reported one entry as both returned and missing.")
-    if set(scopes).union(missing_ids) != requested_set:
-        _fail_parse("PATHWAY metadata GET did not account for every requested entry.")
-    if missing_ids:
-        fail(
-            ErrorCode.KEGG_ENTRY_NOT_FOUND,
-            "One or more ranked PATHWAY metadata entries are missing.",
-            suggested_action="Refresh KEGG data or supply explicit pathway targets.",
-            safe_details=(
-                SafeDetail(name="first_missing_pathway_id", value=missing_ids[0]),
-                SafeDetail(name="missing_pathway_count", value=str(len(missing_ids))),
-            ),
-        )
-    return scopes
-
-
 def _validate_module_roots(
     module_ids: tuple[ModuleId, ...],
     limits: ReferenceLoadingLimits,
@@ -703,5 +622,4 @@ __all__ = [
     "canonicalize_pathway_specs",
     "load_module_graphs",
     "load_pathway_references",
-    "select_standard_pathway_specs",
 ]

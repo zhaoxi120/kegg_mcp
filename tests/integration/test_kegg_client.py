@@ -746,8 +746,8 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
     transport = QueueTransport(
         [
             TransportResponse(status_code=200, body=mapping_body),
-            TransportResponse(status_code=200, body=metadata_body),
             TransportResponse(status_code=200, body=denominator_body),
+            TransportResponse(status_code=200, body=metadata_body),
         ]
     )
     client = KeggClient(
@@ -780,9 +780,9 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
     )
 
     assert len(transport.urls) == 3
-    assert first.summary.kegg_request_count == 4
+    assert first.summary.kegg_request_count == 3
     assert first.summary.network_request_count == 3
-    assert first.summary.cache_hit_count == 1
+    assert first.summary.cache_hit_count == 0
     assert second.summary.kegg_request_count == 3
     assert second.summary.network_request_count == 0
     assert second.summary.cache_hit_count == 3
