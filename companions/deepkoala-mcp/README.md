@@ -2,8 +2,8 @@
 
 `deepkoala-mcp` is the optional local stdio companion that runs a configured DeepKOALA installation.
 It accepts an allowlisted absolute protein FASTA path, starts one bounded detailed annotation job,
-and publishes stable files in a new caller-selected output directory. Pass the returned detailed CSV
-path and source provenance to the core `kegg-mcp` importer.
+and publishes stable files in a service-allocated or caller-selected output directory. Pass the
+returned detailed CSV path and source provenance to the core `kegg-mcp` importer.
 
 The companion does not normalize KO evidence, query KEGG, interpret pathways or MODULEs, or bundle
 PyTorch, DeepKOALA, model weights, or KOfam profiles as package dependencies.
@@ -43,7 +43,7 @@ separator (`:` on Linux).
 | `DEEPKOALA_MCP_PYTHON` | yes | Executable DeepKOALA Python |
 | `DEEPKOALA_MCP_STATE_ROOT` | yes | Private state root, separate from inputs and outputs |
 | `DEEPKOALA_MCP_INPUT_ROOTS` | yes | Roots containing caller FASTA files |
-| `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories |
+| `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories; the last is the default |
 | `DEEPKOALA_MCP_ALLOWED_MODELS` | no | Subset of `full,frag`; default `full,frag` |
 | `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu` or `cpu,cuda`; default `cpu,cuda` |
 | `DEEPKOALA_MCP_CPU_THREADS` | no | 1 through 4; default 2 |
@@ -83,17 +83,19 @@ annotation can still be ready.
 The five public tools are `get_deepkoala_runner_status`, `run_deepkoala_job`,
 `get_deepkoala_job`, `cancel_deepkoala_job`, and `delete_deepkoala_job`.
 
-`run_deepkoala_job` validates policy, runtime readiness, FASTA content, private staging, the new
-output directory, and process startup in one call. Required fields are:
+`run_deepkoala_job` validates policy, runtime readiness, FASTA content, private staging, the output
+directory, and process startup in one call. The only required field is:
 
 ```json
 {
-  "fasta_path": "/absolute/project/inputs/proteins.faa",
-  "output_directory": "/absolute/project/results/deepkoala-run-001"
+  "fasta_path": "/absolute/project/inputs/proteins.faa"
 }
 ```
 
-Optional fields are `model` (`full` by default, or `frag`), `model_date` (`202502` by default,
+Omitting `output_directory` allocates a fresh directory beneath the deployment's last configured
+output root; an explicit path may select a new or existing empty owner-only directory beneath an
+allowed output root. Other optional fields are `model` (`full` by default, or `frag`), `model_date`
+(`202502` by default,
 `latest`, or an installed `YYYYMM`), `device` (`cpu` by default, or explicit `cuda` when allowed),
 `batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap. GPU execution
 requires an explicit user request and status with both `cuda` in `allowed_devices` and
@@ -113,7 +115,9 @@ the DeepKOALA source and the actual resolved model resource version used by that
 
 ## Stable output and lifecycle
 
-The requested output directory must not already exist. A successful job publishes exactly:
+An explicit output directory must be new or an existing empty owner-only directory. When omitted,
+the service allocates a fresh child beneath the last configured output root. A successful job
+publishes exactly:
 
 ```text
 deepkoala_annotations.csv
@@ -157,8 +161,9 @@ passed to another server as result identity.
   bounded CPU threads, input, output, sequences, and elapsed time.
 - Timeout, cancellation, process-group termination, descendant cleanup, and Linux parent-death
   control bound the external process lifecycle.
-- Inputs must be direct files beneath allowed roots; output must be a new directory beneath an
-  allowed root. Traversal, unsafe ancestry, replacement, and symlink escape are rejected.
+- Inputs must be direct files beneath allowed roots; output must be a new or empty owner-only
+  directory beneath an allowed root. Traversal, unsafe ancestry, replacement, and symlink escape
+  are rejected.
 - Temporary state and generated files use restrictive permissions and are never published by
   overwriting an existing path.
 - The companion server contains no network client, dependency installer, or model download path.

@@ -147,6 +147,8 @@ def test_runtime_config_rejects_state_overlap(
 
 
 def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None:
+    allocated = RunDeepKoalaInput(fasta_path="/allowed/proteins.faa")
+    assert allocated.output_directory is None
     request = RunDeepKoalaInput(
         fasta_path="/allowed/proteins.faa",
         output_directory="/allowed/run-1",

@@ -35,6 +35,41 @@ def test_first_run_discloses_cpu_and_gpu_requires_explicit_ready_request() -> No
     )
 
 
+def test_model_is_selected_before_run_from_provenance_without_length_guessing() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "Before the first `run_deepkoala_job` call",
+        "small LLM routing decision between `frag` and `full`",
+        "explicit user model choice wins",
+        "fragment-prone metagenomic",
+        "complete, reference, or isolate proteins",
+        "conservative default when provenance is ambiguous",
+        "Do not invent a sequence-length cutoff",
+        "pass `model` explicitly",
+        "selected model to appear in `allowed_models`",
+        "rather than silently substituting another model",
+    ):
+        assert fragment in normalized
+    assert normalized.index("small LLM routing decision") < normalized.index(
+        "Treat an explicit request to annotate the FASTA as authorization"
+    )
+
+
+def test_default_output_is_fresh_project_local_and_explicit_path_wins() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "user-specified output directory always wins",
+        "omit `output_directory`",
+        "allocates a fresh directory beneath its configured project output root",
+        "Do not guess an output root from the FASTA path",
+        "new or empty and owner-only",
+        "never select an existing non-empty directory",
+        "let Core allocate its fresh project output directory",
+        "renderer allocate its fresh project output directory",
+    ):
+        assert fragment in normalized
+
+
 def test_unready_route_and_handoff_remain_bounded() -> None:
     for fragment in (
         "ask permission only for the missing installation",

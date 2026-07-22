@@ -159,7 +159,15 @@ class RunDeepKoalaInput(FrozenModel):
     """One policy-bounded local run using explicit shared filesystem paths."""
 
     fasta_path: str = Field(min_length=1, max_length=4_096)
-    output_directory: str = Field(min_length=1, max_length=4_096)
+    output_directory: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4_096,
+        description=(
+            "New or empty owner-only directory beneath an allowed output root. Omit to let the "
+            "companion allocate a fresh directory beneath its configured output root."
+        ),
+    )
     model: ModelName = "full"
     model_date: ModelDate = "202502"
     device: Literal["cpu", "cuda"] = "cpu"
@@ -170,7 +178,9 @@ class RunDeepKoalaInput(FrozenModel):
 
     @field_validator("fasta_path", "output_directory")
     @classmethod
-    def validate_path(cls, value: str) -> str:
+    def validate_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if "\x00" in value or any(ord(character) < 32 for character in value):
             raise ValueError("filesystem paths must not contain control characters")
         path = Path(value)

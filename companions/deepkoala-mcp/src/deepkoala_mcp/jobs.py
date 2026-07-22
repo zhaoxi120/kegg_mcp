@@ -208,8 +208,14 @@ class DeepKoalaJobManager:
                     max_bytes=self.config.max_fasta_bytes,
                     max_sequences=self.config.max_sequences,
                 )
+                requested_output = (
+                    Path(request.output_directory)
+                    if request.output_directory is not None
+                    else self.config.output_roots[-1] / f"deepkoala-{job_id.removeprefix('job_')}"
+                )
                 output_directory = create_output_directory(
-                    Path(request.output_directory), self.config.output_roots
+                    requested_output,
+                    self.config.output_roots,
                 )
                 record = _JobRecord(
                     job_id=job_id,
@@ -237,14 +243,18 @@ class DeepKoalaJobManager:
             except OutputAlreadyExistsError:
                 fail(
                     ErrorCode.OUTPUT_ALREADY_EXISTS,
-                    "The requested output directory already exists.",
-                    suggested_action="Choose a new empty output directory for this run.",
+                    "The requested output directory exists and is not empty.",
+                    suggested_action=(
+                        "Choose a new or empty owner-only output directory for this run."
+                    ),
                 )
             except OutputPathError:
                 fail(
                     ErrorCode.OUTPUT_NOT_ALLOWED,
                     "The requested output directory is outside the deployment policy.",
-                    suggested_action="Choose a new directory below a configured output root.",
+                    suggested_action=(
+                        "Choose a new or empty owner-only directory below a configured output root."
+                    ),
                 )
             except InputPathError:
                 fail(

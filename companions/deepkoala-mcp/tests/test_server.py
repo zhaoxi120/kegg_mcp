@@ -84,6 +84,7 @@ async def test_discovery_declares_five_compact_policy_bounded_tools(
         run = _tool(tools, "run_deepkoala_job")
         properties = cast(dict[str, object], run.inputSchema["properties"])
         assert {"fasta_path", "output_directory"}.issubset(properties)
+        assert run.inputSchema["required"] == ["fasta_path"]
         device = cast(dict[str, object], properties["device"])
         assert device["enum"] == ["cpu", "cuda"]
         assert device["default"] == "cpu"

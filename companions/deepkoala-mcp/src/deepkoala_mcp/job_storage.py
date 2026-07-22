@@ -23,7 +23,6 @@ from deepkoala_mcp.contracts import (
 
 _JOB = re.compile(r"^job_[a-f0-9]{32}$")
 _SESSION = re.compile(r"^session_[a-f0-9]{32}$")
-_TEMP = re.compile(r"^\.deepkoala-[a-f0-9]{32}\.tmp$")
 _COORDINATION_LOCK_NAME = ".deepkoala.lock"
 _RUNNER_LOCK_NAME = ".deepkoala.runner.lock"
 _SESSION_LOCK_NAME = ".session.lock"
@@ -44,7 +43,7 @@ class OutputPathError(ValueError):
 
 
 class OutputAlreadyExistsError(OutputPathError):
-    """The requested stable output directory already exists."""
+    """The requested stable output directory exists but is not empty."""
 
 
 class OutputValidationError(RuntimeError):
@@ -61,7 +60,7 @@ class ArtifactSlice:
 
 @dataclass(slots=True)
 class ControlledOutputDirectory:
-    """Pinned output root, stable relative name, and create-time directory identity."""
+    """Pinned output root, stable relative name, and open-time directory identity."""
 
     path: Path
     root_path: Path
@@ -70,6 +69,7 @@ class ControlledOutputDirectory:
     directory_fd: int
     relative_parts: tuple[str, ...]
     identity: tuple[int, int, int]
+    created_by_service: bool
     delivered_identities: tuple[tuple[str, tuple[int, int, int, int, int]], ...] = ()
 
 
@@ -90,7 +90,7 @@ def create_output_directory(
     path: Path,
     output_roots: tuple[Path, ...],
 ) -> ControlledOutputDirectory:
-    """Atomically create one owner-only new directory below an allowed output root."""
+    """Open or atomically create one owner-only empty directory below an allowed root."""
     if not path.is_absolute() or ".." in path.parts or not output_roots:
         raise OutputPathError("output directory is not allowed")
     parent = path.parent
@@ -126,6 +126,7 @@ def create_output_directory(
     parent_fd: int | None = None
     directory_fd: int | None = None
     created = False
+    created_identity: tuple[int, int, int] | None = None
     try:
         root_fd = _open_output_root(root)
         try:
@@ -135,23 +136,48 @@ def create_output_directory(
         try:
             os.stat(relative_parts[-1], dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
-            pass
-        else:
-            raise OutputAlreadyExistsError("output directory already exists")
+            try:
+                os.mkdir(relative_parts[-1], mode=0o700, dir_fd=parent_fd)
+                created = True
+                created_metadata = os.stat(
+                    relative_parts[-1],
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISDIR(created_metadata.st_mode):
+                    raise OutputPathError("created output entry is not a directory")
+                created_identity = _directory_identity(created_metadata)
+            except FileExistsError as error:
+                raise OutputAlreadyExistsError(
+                    "output directory was created concurrently"
+                ) from error
+            except OSError as error:
+                raise OutputPathError("output directory could not be created") from error
         try:
-            os.mkdir(relative_parts[-1], mode=0o700, dir_fd=parent_fd)
-            created = True
-        except FileExistsError as error:
-            raise OutputAlreadyExistsError("output directory already exists") from error
+            directory_fd = os.open(
+                relative_parts[-1],
+                _DIRECTORY_FLAGS,
+                dir_fd=parent_fd,
+            )
         except OSError as error:
-            raise OutputPathError("output directory could not be created") from error
-        directory_fd = os.open(
-            relative_parts[-1],
-            _DIRECTORY_FLAGS,
-            dir_fd=parent_fd,
-        )
-        os.fchmod(directory_fd, 0o700)
-        _validate_owner_only_directory(directory_fd)
+            raise OutputPathError("output directory could not be opened safely") from error
+        if created:
+            if (
+                created_identity is None
+                or _directory_identity(os.fstat(directory_fd)) != created_identity
+            ):
+                raise OutputPathError("created output directory was replaced before opening")
+            os.fchmod(directory_fd, 0o700)
+            _validate_owner_only_directory(directory_fd)
+        else:
+            try:
+                _validate_owner_only_directory(directory_fd)
+                if _directory_has_entry(directory_fd):
+                    raise OutputAlreadyExistsError("output directory is not empty")
+            except OutputAlreadyExistsError:
+                raise
+            except (OSError, ValueError) as error:
+                raise OutputPathError("existing output directory is unsafe") from error
         identity = _directory_identity(os.fstat(directory_fd))
         return ControlledOutputDirectory(
             path=path,
@@ -161,11 +187,15 @@ def create_output_directory(
             directory_fd=directory_fd,
             relative_parts=relative_parts,
             identity=identity,
+            created_by_service=created,
         )
     except (OSError, ValueError):
-        if created and parent_fd is not None:
-            with contextlib.suppress(OSError):
-                os.rmdir(relative_parts[-1], dir_fd=parent_fd)
+        if created and parent_fd is not None and created_identity is not None:
+            _remove_named_empty_directory_if_identity(
+                parent_fd,
+                relative_parts[-1],
+                created_identity,
+            )
         if directory_fd is not None:
             os.close(directory_fd)
         if root_fd is not None:
@@ -189,13 +219,26 @@ def publish_artifacts(
     if not report_bytes or len(report_bytes) > _MAX_REPORT_BYTES:
         raise OutputValidationError("run report exceeds the bounded size")
     directory_fd = _open_controlled_directory(output_directory)
+    installed_identities: list[tuple[str, tuple[int, int, int, int, int]]] = []
     try:
         if _directory_has_entry(directory_fd):
             raise OutputValidationError("stable output directory is no longer empty")
-        _write_noreplace(directory_fd, ANNOTATIONS_FILENAME, annotations)
-        _write_noreplace(directory_fd, RUN_REPORT_FILENAME, report_bytes)
+        installed_identities.append(
+            (
+                ANNOTATIONS_FILENAME,
+                _write_noreplace(directory_fd, ANNOTATIONS_FILENAME, annotations),
+            )
+        )
+        installed_identities.append(
+            (
+                RUN_REPORT_FILENAME,
+                _write_noreplace(directory_fd, RUN_REPORT_FILENAME, report_bytes),
+            )
+        )
         os.fsync(directory_fd)
         identities = _capture_delivered_identities(directory_fd, max_output_bytes)
+        if identities != tuple(installed_identities):
+            raise OutputValidationError("stable artifacts changed during publication")
         verification_fd = _open_controlled_directory(output_directory)
         try:
             if _capture_delivered_identities(verification_fd, max_output_bytes) != identities:
@@ -206,10 +249,10 @@ def publish_artifacts(
         os.close(postcondition_fd)
         output_directory.delivered_identities = identities
     except OutputValidationError:
-        _rollback_published_artifacts(directory_fd)
+        _rollback_published_artifacts(directory_fd, tuple(installed_identities))
         raise
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
-        _rollback_published_artifacts(directory_fd)
+        _rollback_published_artifacts(directory_fd, tuple(installed_identities))
         raise OutputValidationError("stable output publication failed") from error
     finally:
         os.close(directory_fd)
@@ -301,22 +344,27 @@ def artifact_size(
 
 
 def cleanup_output_directory(output_directory: ControlledOutputDirectory) -> None:
-    """Remove only companion-owned known files and the controlled output directory."""
+    """Remove known files and remove the directory only when the companion created it."""
     directory_fd = _open_controlled_directory(output_directory)
     parent_fd: int | None = None
     try:
-        parent_fd = _open_controlled_parent(output_directory)
+        if output_directory.created_by_service:
+            parent_fd = _open_controlled_parent(output_directory)
         names = _bounded_output_names(directory_fd)
-        allowed = {ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME}
-        if any(name not in allowed and _TEMP.fullmatch(name) is None for name in names):
-            raise ValueError("controlled output directory contains an unexpected entry")
-        for name in names:
-            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
-                raise ValueError("controlled output directory contains an unsafe entry")
-            os.unlink(name, dir_fd=directory_fd)
-        _require_named_directory_identity(parent_fd, output_directory)
-        os.rmdir(output_directory.relative_parts[-1], dir_fd=parent_fd)
+        if output_directory.delivered_identities:
+            _validate_delivered_directory(directory_fd, output_directory)
+            for name in _DELIVERED_ARTIFACTS:
+                if not _unlink_matching_identity(
+                    directory_fd,
+                    name,
+                    _expected_artifact_identity(output_directory, name),
+                ):
+                    raise OutputValidationError("delivered artifact changed during cleanup")
+        elif names:
+            raise ValueError("controlled output directory changed before publication")
+        if parent_fd is not None:
+            _require_named_directory_identity(parent_fd, output_directory)
+            os.rmdir(output_directory.relative_parts[-1], dir_fd=parent_fd)
     finally:
         if parent_fd is not None:
             os.close(parent_fd)
@@ -444,11 +492,19 @@ def _bounded_coordinate(value: str) -> int | None:
     return parsed if 1 <= parsed <= 100_000 else None
 
 
-def _write_noreplace(directory_fd: int, name: str, content: bytes) -> None:
+def _write_noreplace(
+    directory_fd: int,
+    name: str,
+    content: bytes,
+) -> tuple[int, int, int, int, int]:
     temporary = f".deepkoala-{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(temporary, flags, 0o600, dir_fd=directory_fd)
+    linked = False
+    temporary_exists = True
+    linked_inode: tuple[int, int] | None = None
+    identity: tuple[int, int, int, int, int] | None = None
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as stream:
             stream.write(content)
@@ -461,10 +517,28 @@ def _write_noreplace(directory_fd: int, name: str, content: bytes) -> None:
             dst_dir_fd=directory_fd,
             follow_symlinks=False,
         )
+        linked = True
+        linked_metadata = os.fstat(descriptor)
+        linked_inode = (linked_metadata.st_dev, linked_metadata.st_ino)
+        os.unlink(temporary, dir_fd=directory_fd)
+        temporary_exists = False
+        identity = _file_identity(os.fstat(descriptor))
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if _file_identity(named) != identity:
+            raise OutputValidationError("stable artifact changed during publication")
+        return identity
+    except BaseException:
+        if linked:
+            if identity is not None:
+                _unlink_matching_identity(directory_fd, name, identity)
+            elif linked_inode is not None:
+                _unlink_matching_inode(directory_fd, name, linked_inode)
+        raise
     finally:
         os.close(descriptor)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=directory_fd)
+        if temporary_exists:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary, dir_fd=directory_fd)
 
 
 def _artifact_metadata(path: Path, max_bytes: int) -> os.stat_result:
@@ -1053,10 +1127,42 @@ def _expected_artifact_identity(
     raise OutputValidationError("artifact has no retained publication identity")
 
 
-def _rollback_published_artifacts(directory_fd: int) -> None:
-    for name in _DELIVERED_ARTIFACTS:
-        with contextlib.suppress(OSError):
+def _rollback_published_artifacts(
+    directory_fd: int,
+    installed_identities: tuple[tuple[str, tuple[int, int, int, int, int]], ...],
+) -> None:
+    for name, identity in reversed(installed_identities):
+        _unlink_matching_identity(directory_fd, name, identity)
+
+
+def _unlink_matching_identity(
+    directory_fd: int,
+    name: str,
+    identity: tuple[int, int, int, int, int],
+) -> bool:
+    try:
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if _file_identity(named) == identity:
             os.unlink(name, dir_fd=directory_fd)
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def _unlink_matching_inode(
+    directory_fd: int,
+    name: str,
+    identity: tuple[int, int],
+) -> bool:
+    try:
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (named.st_dev, named.st_ino) == identity:
+            os.unlink(name, dir_fd=directory_fd)
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def _artifact_metadata_at(
@@ -1092,6 +1198,22 @@ def _validate_owner_only_directory(descriptor: int) -> None:
 
 def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
     return metadata.st_dev, metadata.st_ino, metadata.st_uid
+
+
+def _remove_named_empty_directory_if_identity(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> bool:
+    """Best-effort rmdir for an unchanged named directory; rmdir enforces emptiness."""
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(metadata.st_mode) or _directory_identity(metadata) != identity:
+            return False
+        os.rmdir(name, dir_fd=parent_fd)
+        return True
+    except OSError:
+        return False
 
 
 def _lock_identity(metadata: os.stat_result) -> tuple[int, int, int]:
