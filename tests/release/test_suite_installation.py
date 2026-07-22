@@ -1033,6 +1033,26 @@ def test_successful_transaction_publishes_complete_generated_suite(
     assert stat.S_IMODE((request.install_root / "installation.json").stat().st_mode) == 0o600
 
 
+def test_install_summary_requires_a_new_task_without_requesting_reinstallation(
+    tmp_path: Path,
+) -> None:
+    _, snapshot, _, _ = _suite_install_inputs(tmp_path)
+
+    installed = INSTALLER_MODULE._safe_summary(snapshot, dry_run=False)
+    validated = INSTALLER_MODULE._safe_summary(snapshot, dry_run=True)
+
+    assert installed["status"] == "installed"
+    assert installed["new_task_required"] is True
+    assert installed["current_task_reload_supported"] is False
+    assert installed["repeat_installation_required"] is False
+    assert installed["next_action"] == "open_new_codex_task"
+    assert validated["status"] == "validated"
+    assert validated["new_task_required"] is False
+    assert validated["current_task_reload_supported"] is False
+    assert validated["repeat_installation_required"] is False
+    assert validated["next_action"] == "run_confirmed_install"
+
+
 @pytest.mark.parametrize(
     ("concurrent_plugin_visible", "expected_code", "install_root_preserved"),
     [(False, "plugin_registration_failed", False), (True, "installation_rollback_failed", True)],

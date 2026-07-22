@@ -53,10 +53,11 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 - Protein FASTA without KO evidence starts with a user-selected annotator when one was explicit;
   return only when it supplies supported KO evidence. Otherwise prefer the independent
-  `deepkoala-annotation` Skill. If that route is unavailable in Codex, stop and request explicit
-  permission once to install or repair the complete suite, then resume in a new Codex task after
-  discovery. If the user declines that action, remain stopped until a selected route supplies
-  supported KO evidence.
+  `deepkoala-annotation` Skill. If that route is unavailable in the same task that just installed a
+  registered suite, classify `task_reload_required`, do not install again, and resume in one new
+  Codex task outside the source checkout. Only a fresh-task failure with incomplete plugin or MCP
+  inventory requests explicit permission once to install or repair the complete suite. If the user
+  declines that action, remain stopped until a selected route supplies supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
   `kegg-pathway-rendering` Skill without rerunning core analysis.
 - Statistical enrichment, abundance testing, nucleotide assembly, sequence alignment, and

@@ -39,8 +39,17 @@ The suite installer owns Codex registration. Do not copy Skills, hand-edit gener
 or add duplicate manual MCP entries; these can shadow the version-bound plugin and make rollback
 ambiguous.
 
-If the plugin inventory is correct, close the installation task and open a new task outside the
-source checkout. Restart Codex once only if the new task still uses stale discovery state.
+If both `codex plugin list --json` and `codex mcp list --json` show the enabled suite and all three
+exact MCP registrations while the installation task lacks their tools, classify the state as
+`task_reload_required`. The installer success summary makes this explicit with
+`new_task_required=true`, `current_task_reload_supported=false`, and
+`repeat_installation_required=false`. Do not reinstall, remove the plugin, add duplicate MCPs, or
+clear caches. Close the installation task and open one new task outside the source checkout.
+
+Restart Codex once only if that fresh task still uses stale discovery state. After the restart,
+repair is appropriate only when the CLI plugin or MCP inventory is incomplete or an exposed status
+tool reports a concrete deployment failure. Tool absence in the original installation task alone is
+never evidence that the installation failed.
 
 ### Only the core server is discovered for a FASTA-to-graphic request
 

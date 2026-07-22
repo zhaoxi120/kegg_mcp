@@ -12,10 +12,16 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency
-   and its status and job tools to be exposed in the current task. If they are unavailable in a
-   Codex deployment, stop before annotation, preserve the original downstream goals, report an
-   incomplete suite deployment, and request explicit permission once to install or repair the
-   complete repository suite. If the user declines that action, remain stopped until a
+   and its status and job tools to be exposed in the current task. If they are unavailable, first
+   distinguish `task_reload_required` from an incomplete deployment. A successful suite result with
+   `new_task_required=true`, `current_task_reload_supported=false`, and
+   `repeat_installation_required=false`, or equivalent inventory evidence that the enabled plugin
+   and all three MCP registrations already exist, means the current task has a stale tool snapshot.
+   Stop before annotation, preserve the original downstream goals, tell the user to open one new
+   Codex task outside the source checkout, and do not request or perform another installation. Only
+   when a fresh task and deployment inventory both fail to expose the suite should this be reported
+   as an incomplete suite deployment and explicit permission requested once to install or repair
+   the complete repository suite. If the user declines that action, remain stopped until a
    user-selected route supplies supported KO evidence. After a successful suite action, resume the
    original request in a new Codex task after the components are discovered.
 3. Call `get_deepkoala_runner_status`. If the companion is unready, report its stable route state

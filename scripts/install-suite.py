@@ -2002,6 +2002,9 @@ def _safe_summary(snapshot: SourceSnapshot, *, dry_run: bool) -> dict[str, objec
         "skill_count": len(SKILL_NAMES),
         "deepkoala_default_model_date": DEFAULT_DEEPKOALA_MODEL_DATE,
         "new_task_required": not dry_run,
+        "current_task_reload_supported": False,
+        "repeat_installation_required": False,
+        "next_action": "run_confirmed_install" if dry_run else "open_new_codex_task",
     }
 
 

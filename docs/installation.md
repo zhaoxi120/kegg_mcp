@@ -314,6 +314,23 @@ deployment. Existing marketplace, plugin, MCP names, or installation roots are c
 than update targets. Do not move an installed root because the launch commands contain absolute
 paths.
 
+The successful machine-readable summary includes:
+
+```json
+{
+  "status": "installed",
+  "new_task_required": true,
+  "current_task_reload_supported": false,
+  "repeat_installation_required": false,
+  "next_action": "open_new_codex_task"
+}
+```
+
+These fields describe Codex activation, not a partial installation. The task that ran the installer
+keeps its original tool snapshot and cannot call MCP servers registered later in that task. Do not
+run the installer again. Close the installation task and open one new task outside this checkout;
+only that fresh task is valid discovery evidence.
+
 If installation fails or is interrupted, follow the bounded recovery procedure in
 [Troubleshooting](troubleshooting.md). Do not delete a preserved installation root while Codex
 still references its marketplace or plugin.
@@ -329,13 +346,16 @@ After installation:
 
 1. Confirm that the generated `kegg-mcp` plugin is installed and enabled with the Codex app or
    `codex plugin list --json`.
-2. Close the installation task.
-3. Start a new Codex task in a workspace outside this source checkout.
-4. Confirm discovery of these three Skills:
+2. Confirm that `codex mcp list --json` contains enabled entries for all three exact server names.
+   If both inventories are complete but the installation task lacks the tools, classify
+   `task_reload_required`; do not reinstall.
+3. Close the installation task.
+4. Start one new Codex task in a workspace outside this source checkout.
+5. Confirm discovery of these three Skills:
    - `deepkoala-annotation`
    - `kegg-ko-analysis`
    - `kegg-pathway-rendering`
-5. Confirm that the plugin contributes `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`.
+6. Confirm that the plugin contributes `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`.
 
 Use one bounded status-only request for each dependency:
 
