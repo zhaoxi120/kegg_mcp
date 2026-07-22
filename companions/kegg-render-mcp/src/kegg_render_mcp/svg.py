@@ -11,7 +11,7 @@ from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayScene
 
-ACCEPTED_COLOR = "#0057FF"
+ACCEPTED_COLOR = "#FF0000"
 UNCERTAIN_COLOR = "#E69F00"
 UNSUPPORTED_COLOR = "#7F7F7F"
 TEXT_COLOR = "#1F2937"

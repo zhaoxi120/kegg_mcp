@@ -10,7 +10,7 @@ project-owned MODULE logic diagrams from the authoritative core AST. SVG is cano
 optional bounded derivative, and artifacts are available through local directories and scoped MCP
 resources.
 
-Accepted evidence uses a solid vivid-blue (`#0057FF`) overlay. Policy-defined uncertain evidence
+Accepted evidence uses a solid vivid-red (`#FF0000`) overlay. Policy-defined uncertain evidence
 uses orange (`#E69F00`) plus a dashed border, and accepted evidence retains precedence on shared
 graphics.
 

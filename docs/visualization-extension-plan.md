@@ -187,7 +187,7 @@ For a regular reference pathway, the renderer:
 6. adds a versioned legend, warnings, provenance, and conservative caption; and
 7. emits static SVG and any requested bounded PNG derivative.
 
-Accepted evidence uses a solid vivid-blue (`#0057FF`) overlay and has precedence when one graphic
+Accepted evidence uses a solid vivid-red (`#FF0000`) overlay and has precedence when one graphic
 maps to both accepted and uncertain KOs. Policy-defined uncertain evidence uses orange (`#E69F00`)
 and a dashed non-color cue. Unmatched graphics remain unchanged and are described as not detected
 in the supplied annotations, never biologically absent.
