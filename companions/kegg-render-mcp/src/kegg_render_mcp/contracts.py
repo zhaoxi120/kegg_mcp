@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Generic, Literal, Self, TypeVar
+from typing import Annotated, Generic, Literal, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -14,6 +14,8 @@ MAX_WARNINGS = 32
 MAX_ARTIFACTS = 97
 MAX_SAFE_DETAILS = 8
 MAX_INLINE_INPUT_CHARACTERS = 50_000_000
+
+_RenderTargetId = Annotated[str, Field(pattern=r"^(?:ko[0-9]{5}|M[0-9]{5})$")]
 
 
 class _Model(BaseModel):
@@ -102,12 +104,24 @@ class _RenderInputSource(_Model):
         }
     )
 
-    render_input_path: str | None = Field(default=None, min_length=1, max_length=4096)
+    render_input_path: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4096,
+        description=(
+            "Allowed local path to a compatible render_input.json handoff. Provide exactly one "
+            "of render_input_path or render_input_json."
+        ),
+    )
     render_input_json: str | None = Field(
         default=None,
         min_length=2,
         max_length=MAX_INLINE_INPUT_CHARACTERS,
         repr=False,
+        description=(
+            "Bounded inline contents of a compatible render_input.json handoff. Provide exactly "
+            "one of render_input_path or render_input_json."
+        ),
     )
 
     @model_validator(mode="after")
@@ -118,11 +132,32 @@ class _RenderInputSource(_Model):
 
 
 class RenderAnalysisBundleInput(_RenderInputSource):
-    output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
-    formats: tuple[RenderFormat, ...] = Field(
-        default=(RenderFormat.SVG,), min_length=1, max_length=MAX_FORMATS
+    output_directory: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4096,
+        description=(
+            "Allowed local directory for published render artifacts. Omit to allocate a fresh "
+            "directory beneath the deployment's default output root."
+        ),
     )
-    target_ids: tuple[str, ...] | None = Field(default=None, max_length=MAX_TARGETS)
+    formats: tuple[RenderFormat, ...] = Field(
+        default=(RenderFormat.SVG,),
+        min_length=1,
+        max_length=MAX_FORMATS,
+        description="One or two unique static output formats; defaults to SVG.",
+        json_schema_extra={"uniqueItems": True},
+    )
+    target_ids: tuple[_RenderTargetId, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_TARGETS,
+        description=(
+            "Optional unique canonical ko pathway or MODULE IDs; omit to render every target "
+            "from the handoff, up to the renderer limit."
+        ),
+        json_schema_extra={"uniqueItems": True},
+    )
 
     @field_validator("formats")
     @classmethod
@@ -145,10 +180,26 @@ class RenderAnalysisBundleInput(_RenderInputSource):
 
 
 class RenderOneInput(_RenderInputSource):
-    target_id: str = Field(min_length=6, max_length=7)
-    output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
+    target_id: str = Field(
+        min_length=6,
+        max_length=7,
+        description="One canonical ko pathway or MODULE identifier, as constrained by the tool.",
+    )
+    output_directory: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4096,
+        description=(
+            "Allowed local directory for published render artifacts. Omit to allocate a fresh "
+            "directory beneath the deployment's default output root."
+        ),
+    )
     formats: tuple[RenderFormat, ...] = Field(
-        default=(RenderFormat.SVG,), min_length=1, max_length=MAX_FORMATS
+        default=(RenderFormat.SVG,),
+        min_length=1,
+        max_length=MAX_FORMATS,
+        description="One or two unique static output formats; defaults to SVG.",
+        json_schema_extra={"uniqueItems": True},
     )
 
     @field_validator("formats")
@@ -227,6 +278,7 @@ class ArtifactMetadata(_Model):
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
     resource_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}/")
+    output_path: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @model_validator(mode="after")
     def dimensions_match_kind(self) -> ArtifactMetadata:
@@ -247,6 +299,14 @@ class RenderResult(_Model):
     artifacts: tuple[ArtifactMetadata, ...] = Field(min_length=1, max_length=MAX_ARTIFACTS)
     warnings: tuple[str, ...] = Field(default=(), max_length=MAX_WARNINGS)
     result_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}$")
+    output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def output_paths_match_directory(self) -> RenderResult:
+        exported = self.output_directory is not None
+        if any((item.output_path is not None) != exported for item in self.artifacts):
+            raise ValueError("artifact output paths must match output_directory availability")
+        return self
 
 
 class DeleteRenderResult(_Model):

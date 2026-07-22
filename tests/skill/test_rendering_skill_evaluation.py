@@ -77,6 +77,19 @@ def test_preceding_core_handoff_finishes_the_original_graphics_request() -> None
         assert fragment in CORPUS
 
 
+def test_renderer_output_defaults_to_a_fresh_configured_root_child() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "user-specified output directory wins",
+        "omit `output_directory`",
+        "renderer allocate a fresh directory beneath its configured project output root",
+        "Do not guess a root from the handoff path",
+        "reuse a non-empty directory",
+        "explicit or default output directory",
+    ):
+        assert fragment in normalized
+
+
 def test_missing_suite_stage_requests_installation_or_repair() -> None:
     for fragment in (
         "Prefer DeepKOALA as the",

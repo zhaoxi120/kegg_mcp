@@ -23,7 +23,11 @@ from kegg_render_mcp.config import (
     load_runtime_config,
 )
 from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
-from kegg_render_mcp.render_input import load_render_input, resolve_output_directory
+from kegg_render_mcp.render_input import (
+    load_render_input,
+    open_allowed_directory,
+    resolve_output_directory,
+)
 
 
 def test_config_requires_private_state_and_nonempty_allowed_roots(tmp_path: Path) -> None:
@@ -42,6 +46,81 @@ def test_config_requires_private_state_and_nonempty_allowed_roots(tmp_path: Path
     assert config.limits.max_results == 7
     with pytest.raises(ValueError, match=ALLOWED_ROOTS_ENV):
         load_runtime_config({STATE_ROOT_ENV: str(tmp_path / "state")})
+
+
+def test_omitted_output_selects_fresh_candidate_beneath_last_configured_root(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "inputs"
+    output_root = tmp_path / "renders"
+    input_root.mkdir(mode=0o700)
+    output_root.mkdir(mode=0o700)
+
+    output = resolve_output_directory(None, (input_root, output_root))
+
+    assert output is not None
+    assert output.parent == output_root
+    assert output.name.startswith("kegg-render-")
+    assert not output.exists()
+
+
+def test_final_output_open_failure_removes_just_created_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "render-output"
+    real_open = os.open
+
+    def fail_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            raise OSError("synthetic final open failure")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_output_open)
+    with pytest.raises(RenderMcpError):
+        open_allowed_directory(output, (root,))
+
+    assert not output.exists()
+
+
+def test_created_output_replacement_is_rejected_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "render-output"
+    displaced = root / "displaced-render-output"
+    real_open = os.open
+
+    def replace_before_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            output.rename(displaced)
+            output.mkdir(mode=0o700)
+            (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replace_before_output_open)
+    with pytest.raises(RenderMcpError):
+        open_allowed_directory(output, (root,))
+
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert displaced.is_dir()
+    assert tuple(displaced.iterdir()) == ()
 
 
 def test_licensed_config_requires_acknowledgement_and_endpoint(tmp_path: Path) -> None:

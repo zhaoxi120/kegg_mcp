@@ -47,10 +47,11 @@ export KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/analysis-results
 ```
 
 `KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. Renderer input and
-optional output directories must be direct, traversal-free paths below an allowed root. The private
-state root must not overlap an allowed root. Symlink escapes and unsafe writable ancestry are
-rejected. Multiple renderer processes may share one deployment state root. Each process holds an
-isolated live scope, and abandoned-scope cleanup never removes a scope whose lease is still active.
+explicit output directories must be direct, traversal-free paths below an allowed root. The last
+configured root is the default output root when `output_directory` is omitted. The private state
+root must not overlap an allowed root. Symlink escapes and unsafe writable ancestry are rejected.
+Multiple renderer processes may share one deployment state root. Each process holds an isolated
+live scope, and abandoned-scope cleanup never removes a scope whose lease is still active.
 
 Pathway access uses one deployment-wide mode:
 
@@ -91,6 +92,14 @@ uv run kegg-render-mcp
 The six tools are `get_renderer_status`, `probe_renderer_kegg_connectivity`,
 `render_analysis_bundle`, `render_pathway`, `render_module`, and `delete_render_result`.
 
+`tools/list` publishes self-contained Draft 2020-12 input schemas with explicit properties,
+bounds, descriptions, and inline format enums. Each path-or-inline alternative repeats the full
+object property surface so clients that prioritize composition branches still expose
+`render_input_path`, `render_input_json`, `output_directory`, `formats`, and `target_ids`. Local
+Pydantic references are not exposed. This compatibility shape was reviewed against the official
+[OpenAI Codex `rust-v0.144.6` source](https://github.com/openai/codex/tree/rust-v0.144.6/codex-rs/tools/src)
+retrieved on 2026-07-22.
+
 `render_analysis_bundle` is the normal multi-target entry point. `render_pathway` and
 `render_module` render one canonical target. A live connectivity probe makes exactly one explicit
 KEGG `INFO` request; `offline_cache` and `unconfigured` probes make zero requests. MODULE rendering
@@ -121,14 +130,16 @@ kegg-render://results/{render_id}/{artifact}
 
 ## Results and lifecycle
 
-A successful call returns an opaque process-scoped `render_id`, bounded metadata, warnings, and
-server-generated resource URIs. Image metadata includes MIME type, byte size, and dimensions. The
-published `render_manifest.json` records renderer, analysis, target, retrieval/cache, and artifact
-provenance without exposing private configuration.
+A successful call returns an opaque process-scoped `render_id`, the resolved output directory,
+bounded metadata, warnings, server-generated resource URIs, and stable artifact output paths. Image
+metadata includes MIME type, byte size, and dimensions. The published `render_manifest.json`
+records renderer, analysis, target, retrieval/cache, and artifact provenance without exposing
+private configuration.
 
-An optional output directory must be new or empty. Artifacts are published without replacement and
-the manifest is installed last. Failed publication removes only files created by that operation.
-SVG resources use `image/svg+xml`; PNG resources return binary `image/png`.
+When `output_directory` is omitted, the renderer allocates a fresh directory beneath the default
+output root. An explicit output directory must be new or empty. Artifacts are published without
+replacement and the manifest is installed last. Failed publication removes only files created by
+that operation. SVG resources use `image/svg+xml`; PNG resources return binary `image/png`.
 
 Retained results have bounded count, lifetime, and disk use and belong to one active renderer
 process even when several processes share the deployment state root. Unknown, expired, deleted,

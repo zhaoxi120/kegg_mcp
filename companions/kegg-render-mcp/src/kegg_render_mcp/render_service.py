@@ -78,6 +78,7 @@ class RendererService:
                 )
             )
         output = resolve_output_directory(output_directory, self.config.allowed_roots)
+        output_was_allocated = output_directory is None
         artifacts: list[ArtifactBlob] = []
         warnings: list[str] = []
         target_provenance: list[dict[str, object]] = []
@@ -121,6 +122,7 @@ class RendererService:
                 "targets": target_provenance,
             },
             output_directory=output,
+            remove_created_output_directory_on_failure=output_was_allocated,
         )
 
 

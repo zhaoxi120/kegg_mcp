@@ -27,7 +27,10 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
    [rendering-workflow.md](references/rendering-workflow.md), then call `get_renderer_status`.
    Require readiness, schema version 3, the requested static output format, and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, upgrade, or recompute its evidence
-   in the Skill.
+   in the Skill. A user-specified output directory wins. Otherwise, omit `output_directory` and let
+   the renderer allocate a fresh directory beneath its configured project output root. Do not guess
+   a root from the handoff path, create the directory with a shell command, or reuse a non-empty
+   directory.
 
 ## Call only `kegg-render-mcp`
 
@@ -57,8 +60,8 @@ Read [pathway-rendering.md](references/pathway-rendering.md) for pathways and
   from the original request without asking the user to copy the path, restate what to draw, send
   another prompt, or confirm continuation.
 - Render only the targets present in the handoff and selected by the original bounded request.
-  Return the renderer-provided stable image files and manifest when an output directory was
-  requested; do not rerun or revise any upstream analysis.
+  Return the renderer-provided stable image files and manifest from the explicit or default output
+  directory; do not rerun or revise any upstream analysis.
 - This is the final stage unless the user requests a new or different analysis. If the original
   request did not ask for graphics, this Skill must not be invoked automatically.
 

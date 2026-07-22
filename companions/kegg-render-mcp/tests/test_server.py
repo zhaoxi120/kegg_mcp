@@ -230,7 +230,12 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
     async with create_connected_server_and_client_session(create_server(runtime)) as session:
         tools = (await session.list_tools()).tools
         assert tuple(item.name for item in tools) == TOOL_NAMES
-        assert all(item.inputSchema.get("additionalProperties") is False for item in tools)
+        for tool in tools:
+            assert tool.inputSchema.get("additionalProperties") is False
+            Draft202012Validator.check_schema(tool.inputSchema)
+            serialized_schema = json.dumps(tool.inputSchema, separators=(",", ":"))
+            assert "$defs" not in tool.inputSchema
+            assert '"$ref"' not in serialized_schema
         assert _tool(tools, "get_renderer_status").annotations.openWorldHint is False  # type: ignore[union-attr]
         probe_annotations = _tool(tools, "probe_renderer_kegg_connectivity").annotations
         assert probe_annotations is not None
@@ -247,10 +252,88 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert len((await session.list_resources()).resources) == 1
         assert len((await session.list_resource_templates()).resourceTemplates) == 2
         render_schema = _tool(tools, "render_analysis_bundle").inputSchema
-        assert render_schema["oneOf"] == [
-            {"required": ["render_input_path"]},
-            {"required": ["render_input_json"]},
+        # Keep the complete schema below Codex's 5,000-byte compact-tool threshold reviewed on
+        # 2026-07-22; crossing it can prune the explicit alternatives this contract requires.
+        assert len(json.dumps(render_schema, separators=(",", ":")).encode("utf-8")) < 5_000
+        properties = cast(dict[str, dict[str, object]], render_schema["properties"])
+        assert set(properties) == {
+            "render_input_path",
+            "render_input_json",
+            "output_directory",
+            "formats",
+            "target_ids",
+        }
+        assert all(properties[name].get("description") for name in properties)
+        formats = properties["formats"]
+        assert formats["minItems"] == 1
+        assert formats["maxItems"] == 2
+        assert formats["uniqueItems"] is True
+        assert cast(dict[str, object], formats["items"])["enum"] == ["svg", "png"]
+        target_ids = properties["target_ids"]
+        target_arrays: list[dict[str, object]] = []
+        for alternative in cast(list[object], target_ids["anyOf"]):
+            if isinstance(alternative, dict):
+                alternative_mapping = cast(dict[str, object], alternative)
+                if alternative_mapping.get("type") == "array":
+                    target_arrays.append(alternative_mapping)
+        assert len(target_arrays) == 1
+        target_array = target_arrays[0]
+        assert target_array["minItems"] == 1
+        assert target_array["maxItems"] == 32
+        assert target_ids["uniqueItems"] is True
+        assert cast(dict[str, object], target_array["items"])["pattern"] == (
+            r"^(?:ko[0-9]{5}|M[0-9]{5})$"
+        )
+
+        alternatives = cast(list[dict[str, object]], render_schema["oneOf"])
+        assert [item["required"] for item in alternatives] == [
+            ["render_input_path"],
+            ["render_input_json"],
         ]
+        for alternative in alternatives:
+            assert alternative["type"] == "object"
+            assert alternative["additionalProperties"] is False
+            assert set(cast(dict[str, object], alternative["properties"])) == set(properties)
+
+        validator = Draft202012Validator(render_schema)
+        validator.validate({"render_input_path": "/allowed/render_input.json"})  # pyright: ignore[reportUnknownMemberType]
+        validator.validate({"render_input_json": "{}"})  # pyright: ignore[reportUnknownMemberType]
+        validator.validate(  # pyright: ignore[reportUnknownMemberType]
+            {
+                "render_input_path": "/allowed/render_input.json",
+                "render_input_json": None,
+            }
+        )
+        assert list(validator.iter_errors({}))  # pyright: ignore[reportUnknownMemberType]
+        both_sources = {
+            "render_input_path": "/allowed/render_input.json",
+            "render_input_json": "{}",
+        }
+        both_source_errors = list(
+            validator.iter_errors(both_sources)  # pyright: ignore[reportUnknownMemberType]
+        )
+        assert both_source_errors
+        empty_target_errors = list(
+            validator.iter_errors(  # pyright: ignore[reportUnknownMemberType]
+                {"render_input_path": "/allowed/render_input.json", "target_ids": []}
+            )
+        )
+        assert empty_target_errors
+
+        for name in ("render_pathway", "render_module"):
+            one_schema = _tool(tools, name).inputSchema
+            assert set(cast(dict[str, object], one_schema["properties"])) == {
+                "render_input_path",
+                "render_input_json",
+                "target_id",
+                "output_directory",
+                "formats",
+            }
+            assert all(
+                set(cast(dict[str, object], branch["properties"]))
+                == set(cast(dict[str, object], one_schema["properties"]))
+                for branch in cast(list[dict[str, object]], one_schema["oneOf"])
+            )
 
 
 @pytest.mark.asyncio
@@ -287,6 +370,11 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         structured = cast(dict[str, object], rendered.structuredContent)
         data = cast(dict[str, object], cast(dict[str, object], structured["result"])["data"])
         render_id = cast(str, data["render_id"])
+        output_directory = Path(cast(str, data["output_directory"]))
+        assert output_directory.parent == runtime_config.allowed_roots[-1]
+        assert output_directory.name.startswith("kegg-render-")
+        artifact_metadata = cast(list[dict[str, object]], data["artifacts"])
+        assert all(Path(cast(str, item["output_path"])).is_file() for item in artifact_metadata)
 
         index = await session.read_resource(AnyUrl(f"kegg-render://results/{render_id}"))
         assert index.contents[0].mimeType == "application/json"
@@ -319,6 +407,26 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
 
 
 @pytest.mark.asyncio
+async def test_failed_default_render_does_not_leave_an_allocated_directory(
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+) -> None:
+    runtime = RendererRuntime(runtime_config, RendererService(runtime_config, SyntheticProvider()))
+    before = tuple(runtime_config.allowed_roots[-1].glob("kegg-render-*"))
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        failed = await session.call_tool(
+            "render_analysis_bundle",
+            {
+                "render_input_path": str(render_input_file),
+                "target_ids": ["ko99999"],
+            },
+        )
+
+    assert failed.isError is True
+    assert tuple(runtime_config.allowed_roots[-1].glob("kegg-render-*")) == before
+
+
+@pytest.mark.asyncio
 async def test_invalid_request_is_actionable_and_unconfigured_probe_is_classified(
     runtime_config: RendererRuntimeConfig, render_input_file: Path
 ) -> None:
@@ -340,6 +448,22 @@ async def test_invalid_request_is_actionable_and_unconfigured_probe_is_classifie
         invalid_details = cast(list[dict[str, str]], invalid_error["safe_details"])
         assert {item["name"]: item["value"] for item in invalid_details} == {
             "field_path": "target_id",
+            "validation_issue_count": "1",
+            "stage": "tool_input",
+        }
+        ambiguous = await session.call_tool(
+            "render_analysis_bundle",
+            {
+                "render_input_path": str(render_input_file),
+                "render_input_json": render_input_file.read_text(encoding="utf-8"),
+            },
+        )
+        assert ambiguous.isError is True
+        _validate(_tool(tools, "render_analysis_bundle"), ambiguous)
+        ambiguous_error = cast(dict[str, object], ambiguous.structuredContent["error"])  # type: ignore[index]
+        ambiguous_details = cast(list[dict[str, str]], ambiguous_error["safe_details"])
+        assert {item["name"]: item["value"] for item in ambiguous_details} == {
+            "field_path": "root",
             "validation_issue_count": "1",
             "stage": "tool_input",
         }

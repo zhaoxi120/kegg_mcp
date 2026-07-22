@@ -450,14 +450,18 @@ def test_nonempty_output_check_does_not_enumerate_the_whole_directory(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_output", [False, True])
 async def test_failed_export_rolls_back_new_files_and_commit_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
+    explicit_output: bool,
 ) -> None:
     output = allowed_root / "images"
-    output.mkdir(mode=0o700)
+    if explicit_output:
+        output.mkdir(mode=0o700)
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
     real_link = os.link
     links = 0
 
@@ -490,10 +494,13 @@ async def test_failed_export_rolls_back_new_files_and_commit_manifest(
                 render_input_path=str(render_input_file),
                 target_ids=("M00001",),
                 formats=(RenderFormat.SVG, RenderFormat.PNG),
-                output_directory=str(output),
+                output_directory=str(output) if explicit_output else None,
             )
         assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
-        assert not tuple(output.iterdir())
+        if explicit_output:
+            assert not tuple(output.iterdir())
+        else:
+            assert tuple(allowed_root.glob("kegg-render-*")) == allocated_before
     finally:
         service.close()
 
