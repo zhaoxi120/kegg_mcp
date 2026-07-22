@@ -42,7 +42,7 @@ from kegg_mcp.services.result_store import SQLiteResultStore
 
 _SMALL_DETAILED_CSV = (
     b"name,predict_label,probability,threshold,annotate\n"
-    b"protein-1,K00001,0.95,0.50,*\n"
+    b"protein-1,K00001+K00003,0.95,0.50,*\n"
     b"protein-2,K00002,0.65,0.70,\n"
 )
 
@@ -297,7 +297,10 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
 
         normalized = await _normalize_once(tmp_path, _core_arguments(handoff))
         summary = cast(dict[str, object], normalized["import_summary"])
-        assert summary["emitted_records"] == 2
+        assert summary["input_rows"] == 2
+        assert summary["emitted_records"] == 3
+        preview = cast(list[dict[str, object]], normalized["record_preview"])
+        assert [record["ko_id"] for record in preview] == ["K00001", "K00003", "K00002"]
         provenance = cast(dict[str, object], normalized["provenance"])
         source = cast(dict[str, object], cast(list[object], provenance["source_preview"])[0])
         assert source["source_name"] == "deepkoala"

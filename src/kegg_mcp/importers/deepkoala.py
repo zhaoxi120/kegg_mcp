@@ -1,5 +1,7 @@
 """Import-only support for documented DeepKOALA detailed CSV output."""
 
+import re
+
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     AnnotationDataset,
@@ -33,6 +35,7 @@ from kegg_mcp.importers._common import (
 from kegg_mcp.importers.contracts import ImportLimits, SourceProvenanceInput
 
 _REQUIRED_COLUMNS = ("name", "predict_label", "probability", "threshold", "annotate")
+_COMPOSITE_KO_LABEL = re.compile(r"K[0-9]{5}(?:[ \t]*\+[ \t]*K[0-9]{5})+\Z")
 
 
 def import_deepkoala_detailed(
@@ -98,9 +101,16 @@ def import_deepkoala_detailed(
                 )
             )
             continue
-        raw_ko = _text(values["predict_label"])
+        source_raw_ko = _text(values["predict_label"])
         raw_decision = _text(values["annotate"])
-        ko_id, _ = try_normalize_ko_id(raw_ko)
+        raw_ko_components = _split_composite_ko_label(source_raw_ko)
+        if len(records) + len(raw_ko_components) > limits.max_rows:
+            fail(
+                ErrorCode.INPUT_LIMIT_EXCEEDED,
+                "Expanded DeepKOALA assignments exceed the configured record limit.",
+                suggested_action="Reduce the input or use a larger safe max_rows import limit.",
+                safe_details=(SafeDetail(name="max_records", value=str(limits.max_rows)),),
+            )
         score = parse_optional_float(
             _text(values["probability"]),
             row_number=evidence.row_number,
@@ -131,18 +141,24 @@ def import_deepkoala_detailed(
             row_number=evidence.row_number,
             diagnostics=diagnostics,
         )
-        outcome = DEEPKOALA_DETAILED.classify(
-            DecisionEvidence(
-                raw_ko=raw_ko,
-                ko_id=ko_id,
-                raw_decision=raw_decision,
-                score=score,
-                score_type=ScoreType.PROBABILITY,
-                threshold=threshold,
-                threshold_rule=ThresholdRule.GTE if threshold is not None else None,
-            )
+        normalized_components = tuple(
+            (raw_ko, try_normalize_ko_id(raw_ko)[0]) for raw_ko in raw_ko_components
         )
-        if ko_id is None and raw_ko.strip():
+        outcomes = tuple(
+            DEEPKOALA_DETAILED.classify(
+                DecisionEvidence(
+                    raw_ko=raw_ko,
+                    ko_id=ko_id,
+                    raw_decision=raw_decision,
+                    score=score,
+                    score_type=ScoreType.PROBABILITY,
+                    threshold=threshold,
+                    threshold_rule=ThresholdRule.GTE if threshold is not None else None,
+                )
+            )
+            for raw_ko, ko_id in normalized_components
+        )
+        if normalized_components[0][1] is None and source_raw_ko.strip():
             diagnostics.append(
                 ImportDiagnostic(
                     code=DiagnosticCode.INVALID_KO_IDENTIFIER,
@@ -151,7 +167,7 @@ def import_deepkoala_detailed(
                     field="predict_label",
                 )
             )
-        if outcome.reason == "unrecognized_source_decision":
+        if outcomes[0].reason == "unrecognized_source_decision":
             diagnostics.append(
                 ImportDiagnostic(
                     code=DiagnosticCode.UNRECOGNIZED_SOURCE_DECISION,
@@ -176,28 +192,29 @@ def import_deepkoala_detailed(
                     field="annotate,probability,threshold",
                 )
             )
-        records.append(
-            AnnotationRecord(
-                record_id=f"record-{len(records) + 1:06d}",
-                sample_id=sample_id,
-                sequence_id=sequence_id,
-                ko_id=ko_id,
-                raw_ko=raw_ko,
-                raw_decision=raw_decision,
-                normalized_status=outcome.status,
-                status_reason=outcome.reason,
-                decision_policy=DEEPKOALA_DETAILED.reference,
-                score=score,
-                score_type=ScoreType.PROBABILITY,
-                threshold=threshold,
-                threshold_rule=ThresholdRule.GTE if threshold is not None else None,
-                rank=None,
-                domain_start=domain_start,
-                domain_end=domain_end,
-                evidence=evidence,
-                source=provenance,
+        for (raw_ko, ko_id), outcome in zip(normalized_components, outcomes, strict=True):
+            records.append(
+                AnnotationRecord(
+                    record_id=f"record-{len(records) + 1:06d}",
+                    sample_id=sample_id,
+                    sequence_id=sequence_id,
+                    ko_id=ko_id,
+                    raw_ko=raw_ko,
+                    raw_decision=raw_decision,
+                    normalized_status=outcome.status,
+                    status_reason=outcome.reason,
+                    decision_policy=DEEPKOALA_DETAILED.reference,
+                    score=score,
+                    score_type=ScoreType.PROBABILITY,
+                    threshold=threshold,
+                    threshold_rule=ThresholdRule.GTE if threshold is not None else None,
+                    rank=None,
+                    domain_start=domain_start,
+                    domain_end=domain_end,
+                    evidence=evidence,
+                    source=provenance,
+                )
             )
-        )
 
     mapped = _REQUIRED_COLUMNS + (("start", "end") if has_start else ())
     bindings = tuple(ColumnBinding(logical_field=column, source_column=column) for column in mapped)
@@ -226,3 +243,11 @@ def _text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("DeepKOALA evidence values must be text")
     return value
+
+
+def _split_composite_ko_label(raw_ko: str) -> tuple[str, ...]:
+    """Split only an exact plus-joined sequence of canonical K numbers."""
+    candidate = raw_ko.strip()
+    if _COMPOSITE_KO_LABEL.fullmatch(candidate) is None:
+        return (raw_ko,)
+    return tuple(component.strip() for component in candidate.split("+"))

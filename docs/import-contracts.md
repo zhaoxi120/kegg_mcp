@@ -40,8 +40,10 @@ limits = ImportLimits(
 
 These numbers are an application choice, not package defaults. Keeping limits caller-selected
 prevents the importer layer from duplicating deployment-owned service and MCP limits.
-Limits are enforced for bytes, logical rows, table columns, individual field lengths, and auxiliary
-metadata size. Dataset and source metadata each allow at most 128 immutable fields. Invalid Unicode
+Limits are enforced for bytes, logical rows, emitted annotation records, table columns, individual
+field lengths, and auxiliary metadata size. A DeepKOALA composite label can emit more than one
+record, but the same `max_rows` value bounds both source rows and expanded records. Dataset and
+source metadata each allow at most 128 immutable fields. Invalid Unicode
 in payloads is returned as a structured input error rather than a codec exception; invalid metadata
 is rejected by its Pydantic configuration contract. Byte, row, and column limits must fit in the
 portable signed 32-bit parser range. Field length has a separate hard ceiling of 5,000,000
@@ -55,9 +57,11 @@ select a substantially lower application limit.
 - an exact uppercase K number matching `K[0-9]{5}`; or
 - the same identifier with a case-insensitive `ko:` namespace prefix.
 
-Surrounding whitespace is removed for the normalized value. The raw input is retained unchanged in
-the annotation record and row evidence. The normalizer does not extract identifiers from free text
-and does not convert a lowercase `k` identifier to uppercase.
+Surrounding whitespace is removed for the normalized value. Scalar raw input is retained unchanged
+in the annotation record and row evidence. The DeepKOALA composite-label exception is described
+below: each expanded record retains its canonical component in `raw_ko`, while row evidence retains
+the complete source label unchanged. The normalizer does not extract identifiers from free text and
+does not convert a lowercase `k` identifier to uppercase.
 
 An invalid value remains an `AnnotationRecord` with `ko_id=None` and
 `normalized_status="invalid"`; it is also reported by the import report and never enters a strict
@@ -231,6 +235,22 @@ evidence. `score_type` is recorded as `probability`; a present threshold uses `t
 The importer accepts previously generated output only. It does not import DeepKOALA code, load a
 model, inspect a GPU, execute an annotation command, or infer a missing model version.
 
+An exact composite `predict_label` consisting only of two or more canonical K numbers joined by
+`+` is expanded deterministically into one `AnnotationRecord` per component. Horizontal whitespace
+is allowed around the complete label and each plus sign, and more than two components are supported.
+Each component record retains the same source row evidence, score, threshold, source decision,
+domain coordinates, source provenance, and normalized decision semantics. Its `raw_ko` is the
+canonical component; the unchanged composite source string remains in the `predict_label` field of
+its `RowEvidence`. Mixed text, empty components, commas, namespaced components, and lowercase
+K-number components are not partially recovered: they remain one invalid record. No LLM or
+heuristic extraction participates in this rule.
+
+This deterministic expansion is part of importer version `2`; version `1` treated the complete
+composite label as one invalid identifier.
+
+`ImportReport.input_rows` continues to count source rows, while `emitted_records` counts expanded
+records. Therefore one valid composite row can make `emitted_records` greater than `input_rows`.
+
 The detailed-output contract was reviewed against official DeepKOALA documentation on 2026-07-14.
 Release-candidate compatibility checks use an independently installed official DeepKOALA runtime
 and this same importer boundary. Their environment and result belong in release evidence rather
@@ -247,7 +267,8 @@ No importer removes duplicate or conflicting evidence.
   records remain valid.
 - The DeepKOALA importer uses an explicit domain as its assignment slot when coordinates are
   present. Without coordinates, the sample-scoped sequence is the assignment slot, so different
-  assignments to that sequence are reported as a conflict. Different explicit domains remain valid.
+  assignments from different source rows to that sequence are reported as a conflict. Components
+  expanded from the same source row are not conflicts. Different explicit domains remain valid.
 
 The derived KO view de-duplicates only its status-specific KO tuples. The record indexes retain all
 source record identifiers. Accepted, uncertain, and rejected KO tuples may overlap when different
