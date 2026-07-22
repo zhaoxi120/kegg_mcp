@@ -311,7 +311,10 @@ async def test_runner_cancellation_terminates_descendants(checkout: Path, tmp_pa
 import subprocess
 from pathlib import Path
 child = subprocess.Popen(['sleep', '30'])
-Path(args.output_path).write_text(str(child.pid), encoding='ascii')
+output_path = Path(args.output_path)
+pending_path = output_path.with_name(f'.{output_path.name}.pending')
+pending_path.write_text(str(child.pid), encoding='ascii')
+pending_path.replace(output_path)
 child.wait()
 """,
     )
@@ -344,7 +347,10 @@ import subprocess
 from pathlib import Path
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 child = subprocess.Popen(['sleep', '30'])
-Path(args.output_path).write_text(str(child.pid), encoding='ascii')
+output_path = Path(args.output_path)
+pending_path = output_path.with_name(f'.{output_path.name}.pending')
+pending_path.write_text(str(child.pid), encoding='ascii')
+pending_path.replace(output_path)
 child.wait()
 """,
     )
@@ -392,7 +398,10 @@ async def test_parent_sigkill_terminates_deepkoala_child(checkout: Path, tmp_pat
 import os
 import time
 from pathlib import Path
-Path(args.output_path).write_text(str(os.getpid()), encoding='ascii')
+output_path = Path(args.output_path)
+pending_path = output_path.with_name(f'.{output_path.name}.pending')
+pending_path.write_text(str(os.getpid()), encoding='ascii')
+pending_path.replace(output_path)
 time.sleep(30)
 """,
     )
