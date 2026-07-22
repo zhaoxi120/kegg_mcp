@@ -194,9 +194,10 @@ refresh flags, and internal limit models are deployment-owned rather than ordina
 File input and `output_directory` are disabled until `KEGG_MCP_ALLOWED_ROOTS` is configured. Paths
 must be absolute and resolve beneath an allowed root. Traversal, missing files, symlink escapes, and
 unsafe output ancestors are rejected. Once an output path enters a directory owned by the service
-user, that directory and every descendant directory on the path must remain owned by the service
-user and must not be group- or world-writable; listing a path in `KEGG_MCP_ALLOWED_ROOTS` does not
-waive this rule. An output directory must be new or empty;
+user that is not group- or world-writable, that private directory and every descendant directory
+on the path must retain those ownership and mode constraints. Owner-owned shared ancestors may be
+group-writable before that private boundary; the configured allowed root itself must establish the
+private boundary. An output directory must be new or empty;
 any existing entry causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation.
 A successful normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds

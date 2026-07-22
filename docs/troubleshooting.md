@@ -177,10 +177,11 @@ flag.
 ### `OUTPUT_WRITE_FAILED` with an allowed output root
 
 The bundle writer checks the complete ancestor chain, not only the configured allowed root. From
-the first ancestor owned by the service user onward, every directory must be owned by that user and
-must not be group- or world-writable. For example, an owner-owned `775` parent causes a safe failure
-even when the allowed root below it is `700`. Remove group write from that parent or choose a safe
-root with an owner-only ancestor chain; do not weaken the writer or change only the child mode.
+the first directory that is both owned by the service user and not group- or world-writable onward,
+every directory must retain those ownership and mode constraints. An owner-owned shared parent such
+as `/lab/<user>` with mode `775` is allowed when the configured root beneath it is private, such as
+mode `700`. If this error persists, verify that the configured root and output descendants are
+user-owned direct directories with no group/world write bit or symlink component.
 
 ### `RESULT_NOT_FOUND`
 

@@ -26,21 +26,37 @@ def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", [0o770, 0o707])
-def test_directory_open_rejects_writable_user_owned_ancestors(
+def test_writable_user_owned_ancestor_does_not_start_private_boundary(
+    tmp_path: Path,
+    mode: int,
+) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=mode)
+    shared.chmod(mode)
+    descriptor = os.open(shared, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert _validate_output_directory_fd(descriptor, private_boundary=False) is False
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o707])
+def test_writable_user_owned_ancestor_is_rejected_below_private_boundary(
     tmp_path: Path,
     mode: int,
 ) -> None:
     unsafe = tmp_path / "unsafe"
     unsafe.mkdir(mode=mode)
     unsafe.chmod(mode)
+    descriptor = os.open(unsafe, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError):
+            _validate_output_directory_fd(descriptor, private_boundary=True)
+    finally:
+        os.close(descriptor)
 
-    with pytest.raises(OSError):
-        _open_directory_fd(unsafe / "bundle")
 
-    assert not (unsafe / "bundle").exists()
-
-
-def test_directory_validation_rejects_non_owner_below_owner_boundary(
+def test_directory_validation_rejects_non_owner_below_private_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -48,7 +64,7 @@ def test_directory_validation_rejects_non_owner_below_owner_boundary(
     try:
         monkeypatch.setattr(os, "geteuid", lambda: os.fstat(descriptor).st_uid + 1)
         with pytest.raises(OSError):
-            _validate_output_directory_fd(descriptor, owner_boundary=True)
+            _validate_output_directory_fd(descriptor, private_boundary=True)
     finally:
         os.close(descriptor)
 

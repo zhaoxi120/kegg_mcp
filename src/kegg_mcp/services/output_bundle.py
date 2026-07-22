@@ -539,7 +539,10 @@ def _open_directory_fd(path: Path) -> int:
         raise OSError("output directory must be an absolute normalized path")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     current_fd = os.open(os.sep, flags)
-    owner_boundary = os.fstat(current_fd).st_uid == os.geteuid()
+    private_boundary = _validate_output_directory_fd(
+        current_fd,
+        private_boundary=False,
+    )
     try:
         for component in path.parts[1:]:
             if component in {"", ".", ".."}:
@@ -547,29 +550,31 @@ def _open_directory_fd(path: Path) -> int:
             with suppress(FileExistsError):
                 os.mkdir(component, mode=0o700, dir_fd=current_fd)
             next_fd = os.open(component, flags, dir_fd=current_fd)
-            owner_boundary = _validate_output_directory_fd(
+            private_boundary = _validate_output_directory_fd(
                 next_fd,
-                owner_boundary=owner_boundary,
+                private_boundary=private_boundary,
             )
             os.close(current_fd)
             current_fd = next_fd
+        if not private_boundary:
+            raise OSError("output directory must establish a private ownership boundary")
         return current_fd
     except BaseException:
         os.close(current_fd)
         raise
 
 
-def _validate_output_directory_fd(descriptor: int, *, owner_boundary: bool) -> bool:
+def _validate_output_directory_fd(descriptor: int, *, private_boundary: bool) -> bool:
     metadata = os.fstat(descriptor)
     if not stat.S_ISDIR(metadata.st_mode):
         raise OSError("output ancestor must be a directory")
     owned = metadata.st_uid == os.geteuid()
-    effective_boundary = owner_boundary or owned
-    if effective_boundary and not owned:
-        raise OSError("output ancestors below the user boundary must retain ownership")
-    if effective_boundary and stat.S_IMODE(metadata.st_mode) & 0o022:
+    privately_owned = owned and not stat.S_IMODE(metadata.st_mode) & 0o022
+    if private_boundary and not owned:
+        raise OSError("output ancestors below the private boundary must retain ownership")
+    if private_boundary and not privately_owned:
         raise OSError("output ancestors must not be group- or world-writable")
-    return effective_boundary
+    return private_boundary or privately_owned
 
 
 def _bundle_paths(
