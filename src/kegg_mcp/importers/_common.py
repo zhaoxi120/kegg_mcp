@@ -28,7 +28,7 @@ from kegg_mcp.domain.annotations import (
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.importers.contracts import ImportLimits, SourceProvenanceInput
 
-IMPORTER_VERSION = "1"
+IMPORTER_VERSION = "2"
 MAX_EVIDENCE_FIELD_NAME_LENGTH = 256
 MAX_AUXILIARY_METADATA_FIELDS = 128
 MAX_INTEGER_TEXT_DIGITS = 18
@@ -526,7 +526,12 @@ def finalize_dataset(
     seen_duplicates: dict[Hashable, str] = {}
     duplicate_count = 0
     conflict_count = 0
-    slots: dict[Hashable, AnnotationRecord] = {}
+    slot_rows: dict[Hashable, set[int]] = {}
+    slot_assignment_rows: dict[
+        Hashable,
+        dict[tuple[str | None, NormalizedStatus], set[int]],
+    ] = {}
+    slot_first_record_ids: dict[Hashable, str] = {}
 
     for record in records:
         key = duplicate_key(record)
@@ -548,12 +553,19 @@ def finalize_dataset(
         slot = conflict_key(record)
         if slot is None:
             continue
-        previous = slots.get(slot)
-        if previous is None:
-            slots[slot] = record
-        elif (
-            previous.ko_id != record.ko_id or previous.normalized_status != record.normalized_status
-        ):
+        row_number = record.evidence.row_number
+        previous_rows = slot_rows.setdefault(slot, set())
+        assignment_rows = slot_assignment_rows.setdefault(slot, {}).setdefault(
+            (record.ko_id, record.normalized_status),
+            set(),
+        )
+        has_other_source_row = bool(previous_rows) and (
+            len(previous_rows) > 1 or row_number not in previous_rows
+        )
+        assignment_matches_other_row = bool(assignment_rows) and (
+            len(assignment_rows) > 1 or row_number not in assignment_rows
+        )
+        if has_other_source_row and not assignment_matches_other_row:
             conflict_count += 1
             all_diagnostics.append(
                 ImportDiagnostic(
@@ -563,9 +575,17 @@ def finalize_dataset(
                     ),
                     row_number=record.evidence.row_number,
                     field=None,
-                    safe_details=(EvidenceField(name="first_record_id", value=previous.record_id),),
+                    safe_details=(
+                        EvidenceField(
+                            name="first_record_id",
+                            value=slot_first_record_ids[slot],
+                        ),
+                    ),
                 )
             )
+        previous_rows.add(row_number)
+        assignment_rows.add(row_number)
+        slot_first_record_ids.setdefault(slot, record.record_id)
 
     seen_unparsed_rows: dict[Hashable, int] = {}
     for evidence in unparsed_rows:

@@ -43,6 +43,7 @@ def normalize_annotations(
     result_store: SQLiteResultStore,
     scope_id: str,
     output_directory: Path | None = None,
+    remove_created_output_on_failure: bool = False,
 ) -> NormalizeAnnotationsResult:
     """Normalize one inline payload and retain its complete typed dataset."""
     dataset = _import_dataset(request)
@@ -61,6 +62,7 @@ def normalize_annotations(
                 dataset,
                 output_directory,
                 manifest_path_mode=request.manifest_path_mode,
+                remove_created_directory_on_failure=remove_created_output_on_failure,
             )
             if output_directory is not None
             else None

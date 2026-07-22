@@ -76,6 +76,95 @@ def test_deepkoala_marker_threshold_disagreement_is_reported_but_preserved() -> 
     )
 
 
+def test_deepkoala_splits_exact_composite_ko_labels_into_independent_records() -> None:
+    payload = (
+        "name,predict_label,probability,threshold,annotate,note\n"
+        'p1,"  K01784 + K01785+K01786  ",0.9,0.5,*,composite source row\n'
+    )
+
+    dataset = import_deepkoala_detailed(payload, limits=LIMITS)
+    view = build_ko_evidence_view(dataset)
+
+    assert [record.raw_ko for record in dataset.records] == ["K01784", "K01785", "K01786"]
+    assert [record.ko_id for record in dataset.records] == ["K01784", "K01785", "K01786"]
+    assert {record.normalized_status for record in dataset.records} == {NormalizedStatus.ACCEPTED}
+    assert {record.status_reason for record in dataset.records} == {"source_acceptance_marker"}
+    assert {record.score for record in dataset.records} == {0.9}
+    assert {record.threshold for record in dataset.records} == {0.5}
+    assert {record.raw_decision for record in dataset.records} == {"*"}
+    assert all(record.source == dataset.sources[0] for record in dataset.records)
+    assert dataset.sources[0].importer_version == "2"
+    assert {record.evidence.get("predict_label") for record in dataset.records} == {
+        "  K01784 + K01785+K01786  "
+    }
+    assert {record.evidence.get("note") for record in dataset.records} == {"composite source row"}
+    assert dataset.import_report.input_rows == 1
+    assert dataset.import_report.emitted_records == 3
+    assert dataset.import_report.conflict_count == 0
+    assert view.accepted_kos == ("K01784", "K01785", "K01786")
+
+
+def test_deepkoala_composite_components_preserve_rejected_source_semantics() -> None:
+    payload = "name,predict_label,probability,threshold,annotate\np1,K01784+K01785,0.4,0.5,\n"
+
+    dataset = import_deepkoala_detailed(payload, limits=LIMITS)
+    view = build_ko_evidence_view(dataset)
+
+    assert [record.ko_id for record in dataset.records] == ["K01784", "K01785"]
+    assert {record.normalized_status for record in dataset.records} == {NormalizedStatus.REJECTED}
+    assert {record.status_reason for record in dataset.records} == {"below_source_threshold"}
+    assert view.rejected_kos == ("K01784", "K01785")
+    assert select_ko_ids(view, EvidenceMode.STRICT) == ()
+    assert select_ko_ids(view, EvidenceMode.LENIENT) == ()
+
+
+@pytest.mark.parametrize(
+    "raw_label",
+    [
+        "K01784+not-a-ko",
+        "K01784++K01785",
+        "K01784+ko:K01785",
+        "K01784,K01785",
+        "k01784+K01785",
+    ],
+)
+def test_deepkoala_does_not_guess_malformed_or_mixed_composite_labels(raw_label: str) -> None:
+    payload = f'name,predict_label,probability,threshold,annotate\np1,"{raw_label}",0.9,0.5,*\n'
+
+    dataset = import_deepkoala_detailed(payload, limits=LIMITS)
+
+    assert len(dataset.records) == 1
+    assert dataset.records[0].raw_ko == raw_label
+    assert dataset.records[0].ko_id is None
+    assert dataset.records[0].normalized_status is NormalizedStatus.INVALID
+    assert (
+        sum(
+            diagnostic.code is DiagnosticCode.INVALID_KO_IDENTIFIER
+            for diagnostic in dataset.import_report.diagnostics
+        )
+        == 1
+    )
+
+
+def test_deepkoala_bounds_records_created_by_composite_expansion() -> None:
+    payload = (
+        "name,predict_label,probability,threshold,annotate\np1,K01784+K01785+K01786,0.9,0.5,*\n"
+    )
+    limits = ImportLimits(
+        max_bytes=50_000,
+        max_rows=2,
+        max_columns=32,
+        max_field_length=2_000,
+    )
+
+    with pytest.raises(KeggMcpError) as error:
+        import_deepkoala_detailed(payload, limits=limits)
+
+    assert error.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    assert error.value.detail.safe_details[0].name == "max_records"
+    assert error.value.detail.safe_details[0].value == "2"
+
+
 def test_deepkoala_marker_is_exact_and_unknown_values_are_unclassified() -> None:
     payload = (
         "name,predict_label,probability,threshold,annotate\n"

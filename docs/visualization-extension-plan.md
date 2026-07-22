@@ -51,9 +51,10 @@ The following remain unsupported:
 
 ### `deepkoala-mcp`
 
-The annotation companion accepts one allowlisted absolute protein FASTA path and one new allowed
-output directory, validates and privately stages the FASTA, and owns bounded process lifecycle and
-cleanup. It defaults to the installed `202502` resources, `device=cpu`, detailed output, zero
+The annotation companion accepts one allowlisted absolute protein FASTA path and an optional new or
+empty owner-only allowed output directory, validates and privately stages the FASTA, and owns
+bounded process lifecycle and cleanup. When the path is omitted, it allocates a fresh child beneath
+the last configured output root. It defaults to the installed `202502` resources, `device=cpu`, zero
 data-loader workers, and single-domain execution. It accepts `device=cuda` subject to deployment
 and runtime checks and never uses automatic device selection. A request may opt into multi-domain
 execution only when the deployment has separately configured and validated local HMMER/KOfam
@@ -156,8 +157,9 @@ live access mode and zero requests in `offline_cache` or `unconfigured` mode. MO
 closed-world when its handoff is complete. Pathway rendering is open-world when it retrieves KEGG
 assets. Tool annotations reflect these effects.
 
-Every successful render returns an opaque process-scoped `render_id`, bounded artifact metadata,
-warnings, and renderer-created resource URIs:
+Every successful render returns an opaque process-scoped `render_id`, the resolved output
+directory, bounded artifact metadata with stable output paths, warnings, and renderer-created
+resource URIs:
 
 ```text
 kegg-render://results/{render_id}
@@ -171,8 +173,9 @@ SVG resources use `image/svg+xml`; PNG resources use binary `image/png`.
 Retained results have bounded count, lifetime, payload bytes, allocated storage, and cleanup work.
 Multiple renderer processes may share one deployment state root through isolated live scopes, but
 each retained result still belongs to exactly one process. Unknown, expired, deleted, and
-cross-scope identifiers return the same safe not-found result. An allowed output directory is the
-durable handoff and must be new or empty; publication never overwrites an existing entry and
+cross-scope identifiers return the same safe not-found result. The renderer allocates a fresh child
+beneath its last configured allowed root when `output_directory` is omitted. Every output directory
+is a durable handoff and must be new or empty; publication never overwrites an existing entry and
 installs the manifest last.
 
 ## Rendering semantics

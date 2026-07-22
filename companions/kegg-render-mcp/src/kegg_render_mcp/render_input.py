@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,7 +64,11 @@ def load_render_input(
     if (path_text is None) == (render_input_json is None):
         raise _invalid_input("Provide exactly one renderer input source.")
     if path_text is not None:
-        _, descriptor = _open_beneath(path_text, config.allowed_roots, final_kind="file")
+        _, descriptor, _ = _open_beneath(
+            path_text,
+            config.allowed_roots,
+            final_kind="file",
+        )
         try:
             payload = _bounded_read(descriptor, config.limits.max_input_bytes)
         finally:
@@ -130,18 +135,71 @@ def _parse_payload(payload: bytes) -> ValidatedRenderInput:
 
 def resolve_output_directory(path_text: str | None, roots: tuple[Path, ...]) -> Path | None:
     if path_text is None:
-        return None
-    path, descriptor = _open_beneath(
+        return roots[-1] / f"kegg-render-{secrets.token_hex(16)}"
+    path, descriptor, _ = _open_beneath(
         path_text, roots, final_kind="directory", create_final_directory=True
     )
     os.close(descriptor)
     return path
 
 
-def open_allowed_directory(path: Path, roots: tuple[Path, ...]) -> int:
-    """Open a validated directory beneath an allowlist root and return its owned FD."""
-    _, descriptor = _open_beneath(str(path), roots, final_kind="directory")
-    return descriptor
+def open_allowed_directory(path: Path, roots: tuple[Path, ...]) -> tuple[int, bool]:
+    """Open or create a validated output directory and report whether it was created."""
+    _, descriptor, created = _open_beneath(
+        str(path),
+        roots,
+        final_kind="directory",
+        create_final_directory=True,
+    )
+    return descriptor, created
+
+
+def remove_created_empty_directory(
+    path: Path,
+    roots: tuple[Path, ...],
+    descriptor: int,
+) -> bool:
+    """Remove one still-empty created directory only while its pinned identity matches."""
+    with os.scandir(descriptor) as entries:
+        if next(entries, None) is not None:
+            return False
+    pinned = os.fstat(descriptor)
+    try:
+        _, parent_fd, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
+    except RenderMcpError:
+        return False
+    try:
+        return _remove_named_empty_directory_if_identity(
+            parent_fd,
+            path.name,
+            (pinned.st_dev, pinned.st_ino, pinned.st_uid),
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _remove_named_empty_directory_if_identity(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> bool:
+    """Best-effort rmdir for an unchanged named directory; rmdir enforces emptiness."""
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_uid,
+            )
+            != identity
+        ):
+            return False
+        os.rmdir(name, dir_fd=parent_fd)
+        return True
+    except OSError:
+        return False
 
 
 def _bounded_read(descriptor: int, limit: int) -> bytes:
@@ -192,7 +250,7 @@ def _open_beneath(
     *,
     final_kind: str,
     create_final_directory: bool = False,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, bool]:
     path = _lexical_absolute(path_text, "renderer_path")
     root = _containing_root(path, roots)
     try:
@@ -200,34 +258,73 @@ def _open_beneath(
     except ValueError as error:  # pragma: no cover - guarded above
         raise _path_error("The path is outside the configured allowed roots.") from error
     descriptor = _open_absolute_directory(root)
+    created_final_directory = False
     try:
         _validate_private_directory_fd(descriptor)
         parts = relative.parts
         if not parts:
             if final_kind != "directory":
                 raise _path_error("The renderer input must be a file below an allowed root.")
-            return path, descriptor
+            return path, descriptor, created_final_directory
         for index, part in enumerate(parts):
             final = index == len(parts) - 1
             wants_directory = not final or final_kind == "directory"
             flags = os.O_RDONLY | os.O_NOFOLLOW
             if wants_directory:
                 flags |= os.O_DIRECTORY
+            created_identity: tuple[int, int, int] | None = None
             try:
                 next_descriptor = os.open(part, flags, dir_fd=descriptor)
             except FileNotFoundError:
                 if not (final and wants_directory and create_final_directory):
                     raise
                 os.mkdir(part, mode=0o700, dir_fd=descriptor)
-                next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                created_final_directory = True
+                created_metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                if not stat.S_ISDIR(created_metadata.st_mode):
+                    raise OSError("created renderer output entry is not a directory") from None
+                created_identity = (
+                    created_metadata.st_dev,
+                    created_metadata.st_ino,
+                    created_metadata.st_uid,
+                )
+                try:
+                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                except BaseException:
+                    _remove_named_empty_directory_if_identity(
+                        descriptor,
+                        part,
+                        created_identity,
+                    )
+                    raise
+            try:
+                metadata = os.fstat(next_descriptor)
+                if (
+                    created_identity is not None
+                    and (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_uid,
+                    )
+                    != created_identity
+                ):
+                    raise OSError("created renderer output directory was replaced before opening")
+                if wants_directory:
+                    _validate_private_directory_fd(next_descriptor)
+                elif not stat.S_ISREG(metadata.st_mode):
+                    raise _path_error("The renderer input must be a direct regular file.")
+            except BaseException:
+                os.close(next_descriptor)
+                if created_identity is not None:
+                    _remove_named_empty_directory_if_identity(
+                        descriptor,
+                        part,
+                        created_identity,
+                    )
+                raise
             os.close(descriptor)
             descriptor = next_descriptor
-            metadata = os.fstat(descriptor)
-            if wants_directory:
-                _validate_private_directory_fd(descriptor)
-            elif not stat.S_ISREG(metadata.st_mode):
-                raise _path_error("The renderer input must be a direct regular file.")
-        return path, descriptor
+        return path, descriptor, created_final_directory
     except RenderMcpError:
         os.close(descriptor)
         raise

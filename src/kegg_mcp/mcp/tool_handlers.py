@@ -73,6 +73,12 @@ async def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOut
             analysis_unit=request.analysis_unit,
             sample_id=request.sample_id,
         )
+    requested_output = request.output_directory or normalization.output_directory
+    resolved_output = resolve_output_directory(
+        requested_output,
+        runtime.allowed_roots,
+        default_prefix="kegg-analysis",
+    )
     result = analyze_annotation_targets(
         normalization,
         module_ids=request.module_ids,
@@ -83,10 +89,8 @@ async def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOut
         pathway_evidence_mode=request.pathway_evidence_mode,
         pathway_selection=request.pathway_selection,
         allow_global_or_overview=request.allow_global_or_overview,
-        output_directory=resolve_output_directory(
-            request.output_directory or normalization.output_directory,
-            runtime.allowed_roots,
-        ),
+        output_directory=resolved_output,
+        remove_created_output_on_failure=requested_output is None and resolved_output is not None,
     )
     return ToolOutcome(
         result,
@@ -99,11 +103,19 @@ async def normalize(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(NormalizeKoAnnotationsInput, model)
     runtime = context.runtime
     materialized = materialize_annotation_file(request.to_service_request(), runtime.allowed_roots)
+    resolved_output = resolve_output_directory(
+        request.output_directory,
+        runtime.allowed_roots,
+        default_prefix="kegg-normalization",
+    )
     result = normalize_annotations(
         materialized,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
-        output_directory=resolve_output_directory(request.output_directory, runtime.allowed_roots),
+        output_directory=resolved_output,
+        remove_created_output_on_failure=(
+            request.output_directory is None and resolved_output is not None
+        ),
     )
     return ToolOutcome(
         result,

@@ -284,6 +284,28 @@ def test_import_report_requires_retained_evidence_for_every_skipped_row() -> Non
         AnnotationDataset.model_validate(payload)
 
 
+def test_import_report_allows_multiple_records_from_one_parsed_source_row() -> None:
+    dataset = import_plain_ko("K00001\nK00002", limits=LIMITS)
+    payload = dataset.model_dump()
+    report = cast(dict[str, object], payload["import_report"])
+    report["input_rows"] = 1
+
+    validated = AnnotationDataset.model_validate(payload)
+
+    assert validated.import_report.input_rows == 1
+    assert validated.import_report.emitted_records == 2
+
+
+def test_import_report_rejects_records_without_a_parsed_source_row() -> None:
+    dataset = import_plain_ko("K00001", limits=LIMITS)
+    payload = dataset.model_dump()
+    report = cast(dict[str, object], payload["import_report"])
+    report["input_rows"] = 0
+
+    with pytest.raises(ValidationError, match="require at least one parsed input row"):
+        AnnotationDataset.model_validate(payload)
+
+
 def test_ko_evidence_view_rejects_noncanonical_ko_sets() -> None:
     view = build_ko_evidence_view(import_plain_ko("K00002\nK00001", limits=LIMITS))
     payload = view.model_dump()

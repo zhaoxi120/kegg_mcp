@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
-from kegg_render_mcp.render_input import open_allowed_directory
+from kegg_render_mcp.render_input import open_allowed_directory, remove_created_empty_directory
 
 
 class ExportArtifact(Protocol):
@@ -29,9 +29,10 @@ def export_bundle(
     artifacts: tuple[ExportArtifact, ...],
     *,
     manifest_name: str,
+    remove_created_directory_on_failure: bool = False,
 ) -> None:
     """Install one complete export into a new or empty controlled directory."""
-    descriptor = open_allowed_directory(output_directory, allowed_roots)
+    descriptor, created = open_allowed_directory(output_directory, allowed_roots)
     temporary_names: dict[str, str] = {}
     installed_names: list[tuple[str, str]] = []
     committed = False
@@ -71,6 +72,8 @@ def export_bundle(
                 os.unlink(temporary_name, dir_fd=descriptor)
         with contextlib.suppress(OSError):
             os.fsync(descriptor)
+        if not committed and created and remove_created_directory_on_failure:
+            remove_created_empty_directory(output_directory, allowed_roots, descriptor)
         os.close(descriptor)
 
 

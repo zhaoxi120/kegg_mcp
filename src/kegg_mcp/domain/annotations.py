@@ -464,8 +464,13 @@ class ImportReport(FrozenModel):
 
     @model_validator(mode="after")
     def validate_counts(self) -> Self:
-        if self.input_rows != self.emitted_records + self.skipped_rows:
-            raise ValueError("input_rows must equal emitted_records plus skipped_rows")
+        parsed_rows = self.input_rows - self.skipped_rows
+        if parsed_rows < 0:
+            raise ValueError("skipped_rows must not exceed input_rows")
+        if parsed_rows == 0 and self.emitted_records != 0:
+            raise ValueError("emitted_records require at least one parsed input row")
+        if parsed_rows > 0 and self.emitted_records < parsed_rows:
+            raise ValueError("each parsed input row must emit at least one record")
         if self.skipped_rows != len(self.unparsed_rows):
             raise ValueError("skipped_rows must equal the number of retained unparsed rows")
         if sum(item.count for item in self.status_counts) != self.emitted_records:

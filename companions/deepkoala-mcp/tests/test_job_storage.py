@@ -17,6 +17,8 @@ from conftest import DETAILED_CSV
 from deepkoala_mcp.contracts import ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME
 from deepkoala_mcp.job_storage import (
     ControlledOutputDirectory,
+    OutputAlreadyExistsError,
+    OutputPathError,
     OutputValidationError,
     StateSession,
     artifact_size,
@@ -49,6 +51,136 @@ def _raw_output(tmp_path: Path) -> Path:
     raw = tmp_path / "raw.csv"
     raw.write_bytes(DETAILED_CSV)
     return raw
+
+
+def test_existing_empty_output_is_pinned_and_not_removed_by_cleanup(tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "existing"
+    output.mkdir(mode=0o700)
+
+    controlled = create_output_directory(output, (root,))
+    try:
+        assert controlled.created_by_service is False
+        cleanup_output_directory(controlled)
+        assert output.is_dir()
+        assert tuple(output.iterdir()) == ()
+    finally:
+        close_output_directory(controlled)
+
+
+def test_existing_nonempty_output_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "existing"
+    output.mkdir(mode=0o700)
+    (output / "occupied").write_text("x", encoding="ascii")
+
+    with pytest.raises(OutputAlreadyExistsError, match="not empty"):
+        create_output_directory(output, (root,))
+
+
+def test_final_output_open_failure_removes_just_created_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "run"
+    real_open = os.open
+
+    def fail_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            raise OSError("synthetic final open failure")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(storage.os, "open", fail_output_open)
+    with pytest.raises(OutputPathError, match="opened safely"):
+        create_output_directory(output, (root,))
+
+    assert not output.exists()
+
+
+def test_created_output_replacement_is_rejected_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "run"
+    displaced = root / "displaced-run"
+    real_open = os.open
+
+    def replace_before_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            output.rename(displaced)
+            output.mkdir(mode=0o700)
+            (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(storage.os, "open", replace_before_output_open)
+    with pytest.raises(OutputPathError, match="replaced"):
+        create_output_directory(output, (root,))
+
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert displaced.is_dir()
+    assert tuple(displaced.iterdir()) == ()
+
+
+def test_cleanup_preserves_caller_file_in_an_adopted_empty_directory(tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "existing"
+    output.mkdir(mode=0o700)
+    controlled = create_output_directory(output, (root,))
+    injected = output / ANNOTATIONS_FILENAME
+    injected.write_text("caller-owned\n", encoding="ascii")
+
+    try:
+        with pytest.raises(ValueError, match="changed before publication"):
+            cleanup_output_directory(controlled)
+        assert injected.read_text(encoding="ascii") == "caller-owned\n"
+    finally:
+        close_output_directory(controlled)
+
+
+def test_cleanup_preserves_replaced_delivered_file_in_adopted_directory(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(mode=0o700)
+    output = root / "existing"
+    output.mkdir(mode=0o700)
+    controlled = create_output_directory(output, (root,))
+    publish_artifacts(
+        raw_output=_raw_output(tmp_path),
+        output_directory=controlled,
+        report="report\n",
+        max_output_bytes=5_000_000,
+    )
+    replaced = output / ANNOTATIONS_FILENAME
+    replaced.unlink()
+    replaced.write_text("caller replacement\n", encoding="ascii")
+
+    try:
+        with pytest.raises(OutputValidationError, match="replaced or changed"):
+            cleanup_output_directory(controlled)
+        assert replaced.read_text(encoding="ascii") == "caller replacement\n"
+        assert (output / RUN_REPORT_FILENAME).is_file()
+    finally:
+        close_output_directory(controlled)
 
 
 def _hold_runner_lock_in_spawned_process(state_root: str, control: Connection) -> None:
@@ -482,7 +614,11 @@ def test_publish_rolls_back_if_the_stable_path_changes_during_writes(
     changed = False
     moved_output: Path | None = None
 
-    def _write(directory_fd: int, name: str, content: bytes) -> None:
+    def _write(
+        directory_fd: int,
+        name: str,
+        content: bytes,
+    ) -> tuple[int, int, int, int, int]:
         nonlocal changed, moved_output
         if not changed:
             changed = True
@@ -500,7 +636,7 @@ def test_publish_rolls_back_if_the_stable_path_changes_during_writes(
                 moved_output = root / "project" / "run-moved"
                 output.rename(moved_output)
                 output.mkdir(mode=0o700)
-        original_write(directory_fd, name, content)
+        return original_write(directory_fd, name, content)
 
     monkeypatch.setattr(storage, "_write_noreplace", _write)
     try:
@@ -526,12 +662,17 @@ def test_publish_rejects_and_rolls_back_an_entry_added_during_writes(
     original_write = storage._write_noreplace  # pyright: ignore[reportPrivateUsage]
     calls = 0
 
-    def _write(directory_fd: int, name: str, content: bytes) -> None:
+    def _write(
+        directory_fd: int,
+        name: str,
+        content: bytes,
+    ) -> tuple[int, int, int, int, int]:
         nonlocal calls
-        original_write(directory_fd, name, content)
+        identity = original_write(directory_fd, name, content)
         calls += 1
         if calls == 1:
             (output / "unexpected").write_text("do not remove\n", encoding="ascii")
+        return identity
 
     monkeypatch.setattr(storage, "_write_noreplace", _write)
     try:

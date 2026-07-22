@@ -112,6 +112,11 @@ def _request(
     return RunDeepKoalaInput(**values)  # pyright: ignore[reportArgumentType]
 
 
+def _explicit_output_path(request: RunDeepKoalaInput) -> Path:
+    assert request.output_directory is not None
+    return Path(request.output_directory)
+
+
 def _cuda_ready_probe(
     *,
     checkout: Path,
@@ -198,7 +203,7 @@ async def test_cuda_request_requires_available_runtime_without_staging(
             await manager.run(request)
 
     assert captured.value.detail.code is ErrorCode.RUNTIME_UNAVAILABLE
-    assert not Path(request.output_directory).exists()
+    assert not _explicit_output_path(request).exists()
     assert runner.calls == []
 
 
@@ -269,7 +274,7 @@ async def test_malformed_or_empty_detailed_output_fails_and_cleans_stable_direct
     async with _manager(runtime_config, SuccessfulRunner(payload)) as manager:
         started = await manager.run(request)
         assert await _wait_terminal(manager, started.job.job_id) is expected_state
-        assert not Path(request.output_directory).exists()
+        assert not _explicit_output_path(request).exists()
 
 
 @pytest.mark.asyncio
@@ -284,7 +289,7 @@ async def test_nonzero_exit_and_timeout_are_typed_and_clean_output(
         async with _manager(runtime_config, runner) as manager:
             started = await manager.run(request)
             assert await _wait_terminal(manager, started.job.job_id) is expected
-            assert not Path(request.output_directory).exists()
+            assert not _explicit_output_path(request).exists()
 
 
 @pytest.mark.asyncio
@@ -304,7 +309,7 @@ async def test_cleanup_validation_failure_still_makes_the_job_terminal(
 
 
 @pytest.mark.asyncio
-async def test_path_and_existing_output_fail_before_runner_start(
+async def test_path_and_nonempty_output_fail_before_runner_start(
     runtime_config: DeepKoalaRuntimeConfig,
     tmp_path: Path,
 ) -> None:
@@ -329,11 +334,86 @@ async def test_path_and_existing_output_fail_before_runner_start(
                 await manager.run(request)
             assert captured.value.detail.code is code
         existing = runtime_config.output_roots[0] / "existing"
-        existing.mkdir()
+        existing.mkdir(mode=0o700)
+        (existing / "occupied").write_text("x", encoding="ascii")
         with pytest.raises(DeepKoalaMcpError) as captured:
             await manager.run(_request(runtime_config, name="existing"))
         assert captured.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
         assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_existing_empty_output_is_accepted_and_retained_on_failure(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    successful_output = runtime_config.output_roots[0] / "existing-empty-success"
+    successful_output.mkdir(mode=0o700)
+    failed_output = runtime_config.output_roots[0] / "existing-empty-failure"
+    failed_output.mkdir(mode=0o700)
+
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        started = await manager.run(_request(runtime_config, name="existing-empty-success"))
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+    assert (successful_output / ANNOTATIONS_FILENAME).is_file()
+    assert (successful_output / RUN_REPORT_FILENAME).is_file()
+
+    async with _manager(runtime_config, ExitRunner()) as manager:
+        started = await manager.run(_request(runtime_config, name="existing-empty-failure"))
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+    assert failed_output.is_dir()
+    assert tuple(failed_output.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+async def test_late_failure_removes_only_published_artifacts_from_adopted_directory(
+    runtime_config: DeepKoalaRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = runtime_config.output_roots[0] / "adopted-late-failure"
+    output.mkdir(mode=0o700)
+    original_remove = jobs_module.remove_job_directory
+    calls = 0
+
+    def fail_once(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("synthetic private cleanup failure")
+        original_remove(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(jobs_module, "remove_job_directory", fail_once)
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        started = await manager.run(_request(runtime_config, name="adopted-late-failure"))
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+
+    assert output.is_dir()
+    assert tuple(output.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+async def test_omitted_output_directory_allocates_a_fresh_configured_child(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    default_output_root = runtime_config.output_roots[0].parent / "default-output"
+    default_output_root.mkdir(mode=0o700)
+    config = runtime_config.model_copy(
+        update={"output_roots": (*runtime_config.output_roots, default_output_root)}
+    )
+    input_path = runtime_config.input_roots[0] / "allocated.faa"
+    input_path.write_text(">protein\nMPEPTIDE\n", encoding="ascii")
+    request = RunDeepKoalaInput(fasta_path=str(input_path))
+
+    async with _manager(config, SuccessfulRunner()) as manager:
+        started = await manager.run(request)
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+        result = await manager.get_job(started.job.job_id)
+
+    assert result.handoff is not None
+    output = Path(result.handoff.annotations_path).parent
+    assert output.parent == default_output_root
+    assert output.name.startswith("deepkoala-")
+    assert (output / ANNOTATIONS_FILENAME).is_file()
+    assert (output / RUN_REPORT_FILENAME).is_file()
 
 
 @pytest.mark.asyncio
@@ -368,7 +448,7 @@ async def test_single_runner_busy_then_cancel_waits_for_cleanup(
         with pytest.raises(DeepKoalaMcpError) as captured:
             await manager.run(second)
         assert captured.value.detail.code is ErrorCode.RUNNER_BUSY
-        assert not Path(second.output_directory).exists()
+        assert not _explicit_output_path(second).exists()
         cancelled = await manager.cancel(first.job.job_id)
         assert cancelled.state is JobState.CANCELLED
         assert runner.cancelled.is_set()
@@ -401,7 +481,7 @@ async def test_shared_state_root_isolates_jobs_and_enforces_one_runner(
         with pytest.raises(DeepKoalaMcpError) as captured:
             await second_manager.run(second_request)
         assert captured.value.detail.code is ErrorCode.RUNNER_BUSY
-        assert not Path(second_request.output_directory).exists()
+        assert not _explicit_output_path(second_request).exists()
 
         assert (await first_manager.cancel(first.job.job_id)).state is JobState.CANCELLED
         second = await second_manager.run(second_request)
@@ -435,7 +515,7 @@ async def test_symlink_runner_output_is_rejected_without_touching_target(
         started = await manager.run(request)
         assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
         assert target.read_bytes() == DETAILED_CSV
-        assert not Path(request.output_directory).exists()
+        assert not _explicit_output_path(request).exists()
 
 
 @pytest.mark.asyncio

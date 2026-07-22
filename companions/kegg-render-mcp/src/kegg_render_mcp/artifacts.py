@@ -147,6 +147,7 @@ class RenderArtifactStore:
         warnings: tuple[str, ...],
         manifest_context: dict[str, object],
         output_directory: Path | None,
+        remove_created_output_directory_on_failure: bool = False,
     ) -> RenderResult:
         self._require_open()
         self._purge_expired()
@@ -220,6 +221,9 @@ class RenderArtifactStore:
                     self._config.allowed_roots,
                     all_artifacts,
                     manifest_name=manifest_name,
+                    remove_created_directory_on_failure=(
+                        remove_created_output_directory_on_failure
+                    ),
                 )
             metadata = tuple(
                 ArtifactMetadata(
@@ -232,6 +236,9 @@ class RenderArtifactStore:
                     width=item.width,
                     height=item.height,
                     resource_uri=f"kegg-render://results/{render_id}/{item.name}",
+                    output_path=(
+                        str(output_directory / item.name) if output_directory is not None else None
+                    ),
                 )
                 for item in all_artifacts
             )
@@ -243,6 +250,7 @@ class RenderArtifactStore:
                 artifacts=metadata,
                 warnings=warnings,
                 result_uri=f"kegg-render://results/{render_id}",
+                output_directory=(str(output_directory) if output_directory is not None else None),
             )
             self._results[render_id] = _StoredResult(result, total_bytes, storage_bytes)
             return result

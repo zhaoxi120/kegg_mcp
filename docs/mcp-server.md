@@ -191,7 +191,9 @@ in the high-level tool, biological context belongs inside that nested object. KO
 not accept organism-specific pathway references because they lack gene-level context. Cache tuning,
 refresh flags, and internal limit models are deployment-owned rather than ordinary tool inputs.
 
-File input and `output_directory` are disabled until `KEGG_MCP_ALLOWED_ROOTS` is configured. Paths
+File input and explicit `output_directory` paths are disabled until `KEGG_MCP_ALLOWED_ROOTS` is
+configured. When roots are configured and `output_directory` is omitted, Core allocates a fresh
+child beneath the last configured root; root order therefore defines the default output root. Paths
 must be absolute and resolve beneath an allowed root. Traversal, missing files, symlink escapes, and
 unsafe output ancestors are rejected. Once an output path enters a directory owned by the service
 user that is not group- or world-writable, that private directory and every descendant directory

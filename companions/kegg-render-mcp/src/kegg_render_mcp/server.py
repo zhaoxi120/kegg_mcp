@@ -8,8 +8,9 @@ import secrets
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import anyio
 from mcp import types
@@ -358,7 +359,8 @@ def _tool_definitions() -> list[types.Tool]:
         (
             "render_analysis_bundle",
             "Render selected analysis targets",
-            "Validate one compatible handoff and render one through 32 selected targets.",
+            "Validate exactly one path or inline handoff and render one through 32 selected "
+            "targets.",
             RenderAnalysisBundleInput,
             RenderResult,
             pathway_annotations,
@@ -393,12 +395,148 @@ def _tool_definitions() -> list[types.Tool]:
             name=name,
             title=title,
             description=description,
-            inputSchema=input_model.model_json_schema(mode="validation"),
+            inputSchema=_mcp_input_schema(input_model),
             outputSchema=ToolEnvelope[output_model].model_json_schema(mode="serialization"),
             annotations=annotations,
         )
         for name, title, description, input_model, output_model, annotations in definitions
     ]
+
+
+def _mcp_input_schema(input_model: type[BaseModel]) -> dict[str, object]:
+    """Return a self-contained schema with explicit renderer source alternatives."""
+    schema = input_model.model_json_schema(mode="validation")
+    _inline_local_schema_references(schema)
+    if input_model in {
+        RenderAnalysisBundleInput,
+        RenderPathwayInput,
+        RenderModuleInput,
+    }:
+        _expand_render_source_alternatives(schema)
+    return schema
+
+
+def _expand_render_source_alternatives(schema: dict[str, object]) -> None:
+    """Keep the source XOR while making every Codex-visible branch a full object."""
+    properties_value = schema.get("properties")
+    if not isinstance(properties_value, dict):  # pragma: no cover - Pydantic contract guard
+        raise RuntimeError("renderer MCP input schema does not expose object properties")
+    properties = cast(dict[str, object], properties_value)
+    for source_name in ("render_input_path", "render_input_json"):
+        if not isinstance(properties.get(source_name), dict):  # pragma: no cover - contract guard
+            raise RuntimeError("renderer MCP input schema omits a handoff source")
+
+    schema["oneOf"] = [
+        _render_source_alternative(
+            properties,
+            active_name="render_input_path",
+            inactive_name="render_input_json",
+        ),
+        _render_source_alternative(
+            properties,
+            active_name="render_input_json",
+            inactive_name="render_input_path",
+        ),
+    ]
+
+
+def _render_source_alternative(
+    properties: dict[str, object],
+    *,
+    active_name: str,
+    inactive_name: str,
+) -> dict[str, object]:
+    branch_properties = deepcopy(properties)
+    active_property = cast(dict[str, object], branch_properties[active_name])
+    alternatives_value = active_property.get("anyOf")
+    if not isinstance(alternatives_value, list):  # pragma: no cover - Pydantic contract guard
+        raise RuntimeError("renderer MCP handoff source is not nullable")
+    non_null_alternatives: list[dict[str, object]] = []
+    for item in cast(list[object], alternatives_value):
+        if isinstance(item, dict):
+            item_mapping = cast(dict[str, object], item)
+            if item_mapping.get("type") != "null":
+                non_null_alternatives.append(deepcopy(item_mapping))
+    if len(non_null_alternatives) != 1:  # pragma: no cover - Pydantic contract guard
+        raise RuntimeError("renderer MCP handoff source has an unsupported schema")
+    active_schema = non_null_alternatives[0]
+    for annotation in ("description", "title"):
+        if annotation in active_property:
+            active_schema[annotation] = active_property[annotation]
+    branch_properties[active_name] = active_schema
+    branch_properties[inactive_name] = {
+        "type": "null",
+        "description": f"Must be omitted or null when {active_name} is provided.",
+    }
+    return {
+        "type": "object",
+        "properties": branch_properties,
+        "required": [active_name],
+        "additionalProperties": False,
+    }
+
+
+def _inline_local_schema_references(schema: dict[str, object]) -> None:
+    """Inline Pydantic references for MCP clients that do not expand ``$defs``."""
+    definitions_value = schema.get("$defs")
+    if not isinstance(definitions_value, dict):
+        return
+    definitions = cast(dict[str, object], definitions_value)
+    root = {key: value for key, value in schema.items() if key != "$defs"}
+    expanded = _expand_local_schema_node(root, definitions, stack=())
+    if not isinstance(expanded, dict):  # pragma: no cover - root is always a mapping
+        raise RuntimeError("renderer MCP input schema expansion changed the root type")
+    schema.clear()
+    schema.update(cast(dict[str, object], expanded))
+
+
+def _expand_local_schema_node(
+    value: object,
+    definitions: dict[str, object],
+    *,
+    stack: tuple[str, ...],
+) -> object:
+    if isinstance(value, list):
+        return [
+            _expand_local_schema_node(item, definitions, stack=stack)
+            for item in cast(list[object], value)
+        ]
+    if not isinstance(value, dict):
+        return value
+
+    mapping = cast(dict[str, object], value)
+    reference = mapping.get("$ref")
+    if isinstance(reference, str):
+        prefix = "#/$defs/"
+        if not reference.startswith(prefix):
+            raise RuntimeError("renderer MCP input schema has an unsupported reference")
+        name = reference.removeprefix(prefix)
+        definition = definitions.get(name)
+        if not isinstance(definition, dict):
+            raise RuntimeError("renderer MCP input schema has an unresolved reference")
+        if name in stack:
+            raise RuntimeError("renderer MCP input schema has a recursive reference")
+        expanded = _expand_local_schema_node(
+            cast(dict[str, object], definition),
+            definitions,
+            stack=(*stack, name),
+        )
+        if not isinstance(expanded, dict):  # pragma: no cover - guarded above
+            raise RuntimeError("renderer MCP schema reference did not resolve to an object")
+        expanded_mapping = cast(dict[str, object], expanded)
+        for key, sibling in mapping.items():
+            if key != "$ref":
+                expanded_mapping[key] = _expand_local_schema_node(
+                    sibling,
+                    definitions,
+                    stack=stack,
+                )
+        return expanded_mapping
+
+    return {
+        key: _expand_local_schema_node(item, definitions, stack=stack)
+        for key, item in mapping.items()
+    }
 
 
 def _status(runtime: RendererRuntime) -> RendererStatus:

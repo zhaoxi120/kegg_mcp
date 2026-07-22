@@ -10,6 +10,16 @@ from pydantic import AnyUrl, BaseModel, ValidationError
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, SafeDetail
 
+_NESTED_CONTEXT_CONFLICT = "nested_annotation_context_conflict"
+_SAFE_NESTED_CONTEXT_FIELDS = frozenset(
+    {
+        "analysis_unit",
+        "annotations.analysis_unit",
+        "sample_id",
+        "annotations.sample_id",
+    }
+)
+
 
 def success(
     data: BaseModel,
@@ -56,10 +66,20 @@ def validation_error(error: ValidationError) -> ErrorDetail:
     details = [SafeDetail(name="stage", value="input_validation")]
     for issue in error.errors(include_input=False, include_url=False)[:8]:
         location = ".".join(str(part) for part in issue.get("loc", ())) or "$"
+        issue_type = str(issue.get("type", "invalid"))[:1_000]
+        safe_conflict_fields: tuple[str, ...] = ()
+        context = issue.get("ctx")
+        if issue_type == _NESTED_CONTEXT_CONFLICT and isinstance(context, dict):
+            raw_fields = context.get("conflict_fields")
+            if isinstance(raw_fields, str):
+                conflict_fields = tuple(raw_fields.split(","))
+                if conflict_fields and set(conflict_fields) <= _SAFE_NESTED_CONTEXT_FIELDS:
+                    safe_conflict_fields = conflict_fields
+                    location = conflict_fields[0]
         details.append(SafeDetail(name="field_path", value=location[:1_000]))
-        details.append(
-            SafeDetail(name="issue_type", value=str(issue.get("type", "invalid"))[:1_000])
-        )
+        details.append(SafeDetail(name="issue_type", value=issue_type))
+        if safe_conflict_fields:
+            details.append(SafeDetail(name="conflict_fields", value=",".join(safe_conflict_fields)))
     details.append(SafeDetail(name="validation_issue_count", value=str(error.error_count())))
     return ErrorDetail(
         code=ErrorCode.ANALYSIS_CONFIGURATION_INVALID,

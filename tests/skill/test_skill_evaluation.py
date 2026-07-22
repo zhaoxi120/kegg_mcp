@@ -77,7 +77,21 @@ def test_preceding_annotation_handoff_is_consumed_without_user_repetition() -> N
         assert fragment in CORPUS
 
 
+def test_core_output_defaults_to_a_fresh_configured_root_child() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "user-specified path wins",
+        "omit `output_directory`",
+        "Core allocate a fresh directory beneath its configured project output root",
+        "Do not guess a root from the input path",
+        "reuse a non-empty directory",
+        "renderer allocate a fresh project output directory",
+    ):
+        assert fragment in normalized
+
+
 def test_graphics_goal_continues_only_after_successful_core_analysis() -> None:
+    normalized = " ".join(CORPUS.split())
     for fragment in (
         "original request also asks to render",
         "successfully written, compatible",
@@ -86,7 +100,7 @@ def test_graphics_goal_continues_only_after_successful_core_analysis() -> None:
         "asks only for a core report",
         "continue downstream",
     ):
-        assert fragment in CORPUS
+        assert fragment in normalized
 
 
 def test_fasta_only_prefers_deepkoala_and_requests_suite_when_missing() -> None:

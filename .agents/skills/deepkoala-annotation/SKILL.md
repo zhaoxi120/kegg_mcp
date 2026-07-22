@@ -8,7 +8,11 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 ## Run the local annotation stage
 
 1. Inspect the protein FASTA path and requested output location. Require controlled absolute paths;
-   do not copy sequences into a prompt or send them to a remote service.
+   do not copy sequences into a prompt or send them to a remote service. A user-specified output
+   directory always wins and is passed unchanged. Otherwise, omit `output_directory`; the companion
+   allocates a fresh directory beneath its configured project output root. Do not guess an output
+   root from the FASTA path or create a directory with a shell command. An explicit directory may
+   be new or empty and owner-only; never select an existing non-empty directory.
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency
@@ -30,13 +34,23 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    deployment does not ask again for later FASTA jobs. Inspect `device_policy`, `allowed_devices`,
    and `cuda_available` separately, as well as `allow_multi` and `multi_ready`.
    Never install, download, or replace required resources silently.
-4. Before the first `run_deepkoala_job` call in the current Codex task, explicitly tell the user
+4. Before the first `run_deepkoala_job` call, make a small LLM routing decision between `frag` and
+   `full` from the user's description and available project provenance. An explicit user model
+   choice wins. Select `frag` when the input is described as fragmented, truncated, partial, or as
+   fragment-prone metagenomic or assembly-derived protein calls. Select `full` for described
+   complete, reference, or isolate proteins and as the conservative default when provenance is
+   ambiguous. Do not invent a sequence-length cutoff, infer completeness from length alone, or
+   parse sequences in the Skill. Briefly report the selected model and reason, then pass `model`
+   explicitly to `run_deepkoala_job`; this notice is not a confirmation gate. Require the selected
+   model to appear in `allowed_models` with installed resources reported by status. If it is not
+   ready, stop and report that deployment gap rather than silently substituting another model.
+5. Before the first `run_deepkoala_job` call in the current Codex task, explicitly tell the user
    that the default job uses the `cpu` device. Also tell them that GPU execution requires an
    explicit request to the LLM, which will check readiness and change a later job to `device=cuda`
    only when status allows it. This is an informational first-run notice, not a confirmation gate:
    do not pause, wait for a reply, or repeat the notice in the same task before continuing an
    already authorized CPU job.
-5. Treat an explicit request to annotate the FASTA as authorization to call
+6. Treat an explicit request to annotate the FASTA as authorization to call
    `run_deepkoala_job` once. Omit `model_date` for the default call; supply it only when the user
    explicitly requests a specific installed model version. Do not ask for an ACK, notice digest, or
    second confirmation. Omit `device` for the default CPU call. Pass `device=cuda` only after the
@@ -49,14 +63,14 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    `multi=true` only when the user explicitly requests multi-domain annotation and status reports
    both `allow_multi=true` and `multi_ready=true`; keep `batch_size=1` because upstream multi-domain
    execution does not use configurable batching.
-6. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
+7. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
    `cancel_deepkoala_job` only for a user cancellation, an agreed deadline, or safe recovery from
    a lost client operation.
-7. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
+8. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
    `deepkoala_run_report.md` paths, schema/tool versions, original FASTA path, model parameters,
    timing, and caveats. Explicitly state the resolved model name and model version reported by the
    service, plus the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
-8. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
+9. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.
 
@@ -69,11 +83,13 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   annotation job succeeds. Pass the returned `annotations_path`,
   `input_format="deepkoala_detailed"`, and `source` object unchanged. Do not ask the user to copy
   the path, send another prompt, restate the analysis goal, or confirm continuation. Do not read,
-  parse, or rewrite the CSV during the transition.
+  parse, or rewrite the CSV during the transition. Unless the user specified that stage's output
+  directory, let Core allocate its fresh project output directory.
 - If the original request also asks for graphics, preserve its requested formats and target scope
   as a downstream goal. The KO-analysis stage can then continue to the installed
   `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must
-  not call either downstream MCP itself.
+  not call either downstream MCP itself. Unless the user supplies a rendering directory, let the
+  renderer allocate its fresh project output directory.
 - Continue only from a successful stable handoff. If a downstream Skill or its one declared MCP
   dependency is unavailable, stop without rerunning DeepKOALA, retain the unfinished downstream
   goal, and request explicit permission once to repair the complete suite. Resume in a new Codex

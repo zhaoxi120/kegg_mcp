@@ -128,6 +128,7 @@ def analyze_annotation_targets(
     pathway_limits: PathwayCoverageLimits | None = None,
     report_limits: ReportLimits | None = None,
     output_directory: Path | None = None,
+    remove_created_output_on_failure: bool = False,
 ) -> AnalyzeKoAnnotationsResult:
     """Normalize any supported inline format and analyze all selected targets in one call."""
     effective_report_limits = report_limits or ReportLimits()
@@ -394,6 +395,7 @@ def analyze_annotation_targets(
                 module_ranking=module_ranking,
                 pathway_ranking=ranking,
                 manifest_path_mode=request.manifest_path_mode,
+                remove_created_directory_on_failure=remove_created_output_on_failure,
             )
     except BaseException:
         compensate_created_result(

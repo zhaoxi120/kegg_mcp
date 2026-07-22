@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import stat
 from pathlib import Path
 from typing import NoReturn
@@ -104,10 +105,16 @@ def resolve_existing_file(value: str, allowed_roots: tuple[str, ...]) -> Path:
 def resolve_output_directory(
     value: str | None,
     allowed_roots: tuple[str, ...],
+    *,
+    default_prefix: str | None = None,
 ) -> Path | None:
     """Resolve a new or existing output directory below one private allowed root."""
     if value is None:
-        return None
+        if default_prefix is None or not allowed_roots:
+            return None
+        if not default_prefix.isascii() or not default_prefix.replace("-", "").isalnum():
+            raise AssertionError("default output prefix must be an ASCII name component")
+        value = str(Path(allowed_roots[-1]) / f"{default_prefix}-{secrets.token_hex(16)}")
     candidate = Path(value)
     root = _select_allowed_root(candidate, allowed_roots, field="output_directory")
     _validate_allowed_root(root, field="output_directory")

@@ -33,8 +33,9 @@ from the original request. Do not ask the user to copy the path, repeat the grap
 approve a rendering stage that was already requested, and do not repeat analysis.
 
 Rendering is the final stage of that original request. Return renderer-provided artifacts and the
-manifest from the requested output directory. The renderer Skill does not call an annotation or
-core MCP; the model changes focused Skills only at successful stable file boundaries.
+manifest from the explicit or renderer-allocated output directory. The renderer Skill does not
+call an annotation or core MCP; the model changes focused Skills only at successful stable file
+boundaries.
 
 ## Missing earlier stages
 
