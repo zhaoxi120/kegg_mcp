@@ -24,10 +24,15 @@ from deepkoala_mcp.contracts import (
 _JOB = re.compile(r"^job_[a-f0-9]{32}$")
 _SESSION = re.compile(r"^session_[a-f0-9]{32}$")
 _TEMP = re.compile(r"^\.deepkoala-[a-f0-9]{32}\.tmp$")
-_LOCK_NAME = ".deepkoala.lock"
+_COORDINATION_LOCK_NAME = ".deepkoala.lock"
+_RUNNER_LOCK_NAME = ".deepkoala.runner.lock"
+_SESSION_LOCK_NAME = ".session.lock"
 _MAX_JOB_FILES = 16
 _MAX_REPORT_BYTES = MAX_RESOURCE_PAGE_BYTES
 _MAX_OUTPUT_DIRECTORY_ENTRIES = 3
+_MAX_SESSIONS = 32
+_MAX_STATE_ROOT_ENTRIES = _MAX_SESSIONS + 2
+_MAX_SESSION_ENTRIES = MAX_RETAINED_JOBS + 1
 _DELIVERED_ARTIFACTS = (ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME)
 _REQUIRED_COLUMNS = frozenset({"name", "predict_label", "probability", "threshold", "annotate"})
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
@@ -66,6 +71,19 @@ class ControlledOutputDirectory:
     relative_parts: tuple[str, ...]
     identity: tuple[int, int, int]
     delivered_identities: tuple[tuple[str, tuple[int, int, int, int, int]], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StateSession:
+    """Pinned state root and one process-owned private session lease."""
+
+    root: Path
+    root_fd: int
+    session: Path
+    session_fd: int
+    session_identity: tuple[int, int, int]
+    lease_fd: int
+    lease_identity: tuple[int, int, int]
 
 
 def create_output_directory(
@@ -465,128 +483,291 @@ def _artifact_metadata(path: Path, max_bytes: int) -> os.stat_result:
 
 
 def _prepare_state_root(path: Path) -> Path:
-    existed = os.path.lexists(path)
-    if existed:
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError("state root must be a direct directory")
-    else:
-        path.mkdir(parents=True, mode=0o700)
+    created = False
+    if not os.path.lexists(path):
+        try:
+            path.mkdir(parents=True, mode=0o700)
+            created = True
+        except FileExistsError:
+            pass
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("state root must be a direct directory")
     resolved = path.resolve(strict=True)
     if resolved != path:
         raise ValueError("state root must not contain symlinks")
     metadata = resolved.lstat()
     if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-        if not existed:
+        if created:
             os.chmod(resolved, 0o700)
         else:
             raise ValueError("existing state root must be owner-only and owned by this user")
     return resolved
 
 
-def acquire_state_root(path: Path) -> tuple[Path, int, int]:
-    """Open one owner-only state root and hold its deployment-wide exclusive lock."""
+def open_state_session(path: Path) -> StateSession:
+    """Create one leased session while briefly coordinating the shared state root."""
     root = _prepare_state_root(path)
-    directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    lock_fd: int | None = None
+    root_fd = os.open(root, _DIRECTORY_FLAGS)
+    coordination_fd: int | None = None
+    session_name: str | None = None
+    session_fd: int | None = None
+    lease_fd: int | None = None
     try:
-        _validate_owner_only_directory(directory_fd)
-        lock_fd = os.open(
-            _LOCK_NAME,
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-            0o600,
-            dir_fd=directory_fd,
+        _validate_owner_only_directory(root_fd)
+        coordination_fd = _acquire_coordination_lock(root_fd)
+        active_sessions = cleanup_abandoned_sessions(root_fd)
+        if active_sessions >= _MAX_SESSIONS:
+            raise ValueError("state root reached the fixed session limit")
+        for _ in range(4):
+            candidate = f"session_{secrets.token_hex(16)}"
+            try:
+                os.mkdir(candidate, mode=0o700, dir_fd=root_fd)
+            except FileExistsError:
+                continue
+            session_name = candidate
+            break
+        if session_name is None:
+            raise ValueError("could not allocate a unique private session")
+        session_fd = os.open(session_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+        os.fchmod(session_fd, 0o700)
+        _validate_owner_only_directory(session_fd)
+        lease_fd = _create_lock_file(session_fd, _SESSION_LOCK_NAME)
+        fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _validate_named_lock(session_fd, _SESSION_LOCK_NAME, lease_fd)
+        session = root / session_name
+        state = StateSession(
+            root=root,
+            root_fd=root_fd,
+            session=session,
+            session_fd=session_fd,
+            session_identity=_directory_identity(os.fstat(session_fd)),
+            lease_fd=lease_fd,
+            lease_identity=_lock_identity(os.fstat(lease_fd)),
         )
-        lock_stat = os.fstat(lock_fd)
-        if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.geteuid():
-            raise OSError("state lock must be a user-owned regular file")
-        os.fchmod(lock_fd, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return root, directory_fd, lock_fd
+        _release_lock(coordination_fd)
+        coordination_fd = None
+        return state
     except (OSError, ValueError):
-        if lock_fd is not None:
+        if session_name is not None:
+            with contextlib.suppress(OSError, ValueError):
+                if session_fd is not None and lease_fd is not None:
+                    _remove_session_contents(
+                        root_fd,
+                        session_name,
+                        session_fd,
+                        lease_fd,
+                        reject_file_symlinks=False,
+                    )
+                else:
+                    os.rmdir(session_name, dir_fd=root_fd)
+        if lease_fd is not None:
+            _release_lock(lease_fd)
+        if session_fd is not None:
+            os.close(session_fd)
+        if coordination_fd is not None:
+            _release_lock(coordination_fd)
+        os.close(root_fd)
+        raise ValueError("state root session could not be opened safely") from None
+
+
+def close_state_session(state: StateSession) -> None:
+    """Remove only this process session and release every pinned descriptor."""
+    cleanup_error: Exception | None = None
+    coordination_fd: int | None = None
+    try:
+        coordination_fd = _acquire_coordination_lock(state.root_fd)
+        _remove_session_contents(
+            state.root_fd,
+            state.session.name,
+            state.session_fd,
+            state.lease_fd,
+            reject_file_symlinks=False,
+            expected_session_identity=state.session_identity,
+            expected_lease_identity=state.lease_identity,
+        )
+    except (OSError, ValueError) as error:
+        cleanup_error = error
+    finally:
+        if coordination_fd is not None:
+            _release_lock(coordination_fd)
+        _release_lock(state.lease_fd)
+        os.close(state.session_fd)
+        os.close(state.root_fd)
+    if cleanup_error is not None:
+        raise ValueError("private session cleanup failed") from cleanup_error
+
+
+def cleanup_abandoned_sessions(directory_fd: int) -> int:
+    """Remove unlocked strict sessions and return the number of live sessions."""
+    names = _bounded_names(
+        directory_fd,
+        maximum=_MAX_STATE_ROOT_ENTRIES,
+        message="state root exceeds the fixed entry bound",
+    )
+    allowed_locks = {_COORDINATION_LOCK_NAME, _RUNNER_LOCK_NAME}
+    session_names: list[str] = []
+    for name in names:
+        if name in allowed_locks:
+            lock_fd = _open_existing_lock(directory_fd, name)
             os.close(lock_fd)
-        os.close(directory_fd)
-        raise ValueError("state root is already active or unsafe") from None
-
-
-def release_state_root(directory_fd: int, lock_fd: int) -> None:
-    """Release one state-root lease without unlinking its stable lock inode."""
-    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    os.close(lock_fd)
-    os.close(directory_fd)
-
-
-def cleanup_abandoned_sessions(directory_fd: int) -> None:
-    """Remove only strict abandoned session/job directories after locking the root."""
-    for name in os.listdir(directory_fd):
-        if _SESSION.fullmatch(name) is None:
-            continue
+        elif _SESSION.fullmatch(name) is not None:
+            session_names.append(name)
+        else:
+            raise ValueError("state root contains an unexpected entry")
+    if len(session_names) > _MAX_SESSIONS:
+        raise ValueError("state root exceeds the fixed session bound")
+    live_sessions = 0
+    for name in session_names:
         try:
-            _remove_session_name(directory_fd, name, reject_file_symlinks=True)
+            removed = _remove_abandoned_session(directory_fd, name)
         except OSError as error:
             raise ValueError("abandoned session state is unsafe") from error
+        if not removed:
+            live_sessions += 1
+    return live_sessions
 
 
-def remove_job_directory(directory: Path, session: Path) -> None:
-    if directory.parent != session or _JOB.fullmatch(directory.name) is None:
+def try_acquire_runner_lock(state: StateSession) -> int | None:
+    """Acquire the deployment runner lease without staging any job state."""
+    coordination_fd = _acquire_coordination_lock(state.root_fd)
+    runner_fd: int | None = None
+    try:
+        runner_fd = _open_or_create_lock(state.root_fd, _RUNNER_LOCK_NAME)
+        try:
+            fcntl.flock(runner_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(runner_fd)
+            runner_fd = None
+            return None
+        _validate_named_lock(state.root_fd, _RUNNER_LOCK_NAME, runner_fd)
+        return runner_fd
+    except BaseException:
+        if runner_fd is not None:
+            os.close(runner_fd)
+        raise
+    finally:
+        _release_lock(coordination_fd)
+
+
+def release_runner_lock(lock_fd: int) -> None:
+    """Release one acquired deployment runner lease."""
+    _release_lock(lock_fd)
+
+
+def remove_job_directory(directory: Path, state: StateSession) -> None:
+    if directory.parent != state.session or _JOB.fullmatch(directory.name) is None:
         raise ValueError("invalid controlled job directory")
-    session_fd = _open_owner_only_directory(session)
-    try:
-        if not _entry_exists(session_fd, directory.name):
-            return
-        _remove_job_name(session_fd, directory.name, reject_file_symlinks=False)
-    finally:
-        os.close(session_fd)
+    _validate_owner_only_directory(state.session_fd)
+    _validate_named_session(
+        state.root_fd,
+        state.session.name,
+        state.session_fd,
+        state.session_identity,
+    )
+    if not _entry_exists(state.session_fd, directory.name):
+        return
+    _remove_job_name(state.session_fd, directory.name, reject_file_symlinks=False)
 
 
-def remove_session_directory(session: Path) -> None:
-    if _SESSION.fullmatch(session.name) is None:
-        raise ValueError("invalid controlled session directory")
-    root_fd = _open_owner_only_directory(session.parent)
-    try:
-        if not _entry_exists(root_fd, session.name):
-            return
-        _remove_session_name(root_fd, session.name, reject_file_symlinks=False)
-    finally:
-        os.close(root_fd)
-
-
-def _remove_session_name(root_fd: int, session_name: str, *, reject_file_symlinks: bool) -> None:
+def _remove_abandoned_session(root_fd: int, session_name: str) -> bool:
     if _SESSION.fullmatch(session_name) is None:
         raise ValueError("invalid controlled session directory")
-    session_fd = os.open(
-        session_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=root_fd,
-    )
+    session_fd = os.open(session_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+    lease_fd: int | None = None
     try:
         _validate_owner_only_directory(session_fd)
-        job_names = os.listdir(session_fd)
-        if len(job_names) > MAX_RETAINED_JOBS + 1:
-            raise ValueError("controlled session exceeds the bounded job count")
-        if any(_JOB.fullmatch(name) is None for name in job_names):
-            raise ValueError("controlled session contains an unexpected entry")
-        for job_name in job_names:
-            _remove_job_name(session_fd, job_name, reject_file_symlinks=reject_file_symlinks)
+        lease_fd = _open_existing_lock(session_fd, _SESSION_LOCK_NAME)
+        try:
+            fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        _validate_named_lock(session_fd, _SESSION_LOCK_NAME, lease_fd)
+        _remove_session_contents(
+            root_fd,
+            session_name,
+            session_fd,
+            lease_fd,
+            reject_file_symlinks=True,
+        )
+        return True
     finally:
+        if lease_fd is not None:
+            _release_lock(lease_fd)
         os.close(session_fd)
+
+
+def _remove_session_contents(
+    root_fd: int,
+    session_name: str,
+    session_fd: int,
+    lease_fd: int,
+    *,
+    reject_file_symlinks: bool,
+    expected_session_identity: tuple[int, int, int] | None = None,
+    expected_lease_identity: tuple[int, int, int] | None = None,
+) -> None:
+    if _SESSION.fullmatch(session_name) is None:
+        raise ValueError("invalid controlled session directory")
+    _validate_owner_only_directory(session_fd)
+    _validate_named_session(root_fd, session_name, session_fd, expected_session_identity)
+    _validate_named_lock(session_fd, _SESSION_LOCK_NAME, lease_fd)
+    observed_lease_identity = _lock_identity(os.fstat(lease_fd))
+    if expected_lease_identity is not None and observed_lease_identity != expected_lease_identity:
+        raise ValueError("controlled session lease was replaced")
+    names = _bounded_names(
+        session_fd,
+        maximum=_MAX_SESSION_ENTRIES,
+        message="controlled session exceeds the bounded job count",
+    )
+    if _SESSION_LOCK_NAME not in names:
+        raise ValueError("controlled session lease is unavailable")
+    job_names = tuple(name for name in names if name != _SESSION_LOCK_NAME)
+    if any(_JOB.fullmatch(name) is None for name in job_names):
+        raise ValueError("controlled session contains an unexpected entry")
+    for job_name in job_names:
+        _remove_job_name(session_fd, job_name, reject_file_symlinks=reject_file_symlinks)
+    _validate_named_session(root_fd, session_name, session_fd, expected_session_identity)
+    _validate_named_lock(session_fd, _SESSION_LOCK_NAME, lease_fd)
+    os.unlink(_SESSION_LOCK_NAME, dir_fd=session_fd)
+    if _bounded_names(
+        session_fd,
+        maximum=1,
+        message="controlled session changed during cleanup",
+    ):
+        raise ValueError("controlled session changed during cleanup")
+    _validate_named_session(root_fd, session_name, session_fd, expected_session_identity)
     os.rmdir(session_name, dir_fd=root_fd)
+
+
+def _validate_named_session(
+    root_fd: int,
+    session_name: str,
+    session_fd: int,
+    expected_identity: tuple[int, int, int] | None,
+) -> None:
+    named = os.stat(session_name, dir_fd=root_fd, follow_symlinks=False)
+    observed_identity = _directory_identity(os.fstat(session_fd))
+    if (
+        not stat.S_ISDIR(named.st_mode)
+        or _directory_identity(named) != observed_identity
+        or (expected_identity is not None and observed_identity != expected_identity)
+    ):
+        raise ValueError("controlled session directory was replaced")
 
 
 def _remove_job_name(session_fd: int, job_name: str, *, reject_file_symlinks: bool) -> None:
     if _JOB.fullmatch(job_name) is None:
         raise ValueError("invalid controlled job directory")
-    job_fd = os.open(
-        job_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=session_fd,
-    )
+    job_fd = os.open(job_name, _DIRECTORY_FLAGS, dir_fd=session_fd)
     try:
         _validate_owner_only_directory(job_fd)
-        names = os.listdir(job_fd)
-        if len(names) > _MAX_JOB_FILES:
-            raise ValueError("controlled job directory exceeds the file bound")
+        _validate_named_job(session_fd, job_name, job_fd)
+        names = _bounded_names(
+            job_fd,
+            maximum=_MAX_JOB_FILES,
+            message="controlled job directory exceeds the file bound",
+        )
         for name in names:
             metadata = os.stat(name, dir_fd=job_fd, follow_symlinks=False)
             if stat.S_ISLNK(metadata.st_mode) and not reject_file_symlinks:
@@ -595,9 +776,88 @@ def _remove_job_name(session_fd: int, job_name: str, *, reject_file_symlinks: bo
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
                 raise ValueError("controlled job directory contains an unsafe entry")
             os.unlink(name, dir_fd=job_fd)
+        _validate_named_job(session_fd, job_name, job_fd)
+        os.rmdir(job_name, dir_fd=session_fd)
     finally:
         os.close(job_fd)
-    os.rmdir(job_name, dir_fd=session_fd)
+
+
+def _validate_named_job(session_fd: int, job_name: str, job_fd: int) -> None:
+    named = os.stat(job_name, dir_fd=session_fd, follow_symlinks=False)
+    opened_identity = _directory_identity(os.fstat(job_fd))
+    if not stat.S_ISDIR(named.st_mode) or _directory_identity(named) != opened_identity:
+        raise ValueError("controlled job directory was replaced")
+
+
+def _acquire_coordination_lock(root_fd: int) -> int:
+    lock_fd = _open_or_create_lock(root_fd, _COORDINATION_LOCK_NAME)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        _validate_named_lock(root_fd, _COORDINATION_LOCK_NAME, lock_fd)
+        return lock_fd
+    except BaseException:
+        os.close(lock_fd)
+        raise
+
+
+def _create_lock_file(directory_fd: int, name: str) -> int:
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    lock_fd = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    try:
+        os.fchmod(lock_fd, 0o600)
+        _validate_named_lock(directory_fd, name, lock_fd)
+        return lock_fd
+    except BaseException:
+        os.close(lock_fd)
+        raise
+
+
+def _open_or_create_lock(directory_fd: int, name: str) -> int:
+    try:
+        return _create_lock_file(directory_fd, name)
+    except FileExistsError:
+        return _open_existing_lock(directory_fd, name)
+
+
+def _open_existing_lock(directory_fd: int, name: str) -> int:
+    flags = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    lock_fd = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        _validate_named_lock(directory_fd, name, lock_fd)
+        return lock_fd
+    except BaseException:
+        os.close(lock_fd)
+        raise
+
+
+def _validate_named_lock(directory_fd: int, name: str, lock_fd: int) -> None:
+    opened = os.fstat(lock_fd)
+    named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(named.st_mode)
+        or opened.st_uid != os.geteuid()
+        or named.st_uid != os.geteuid()
+        or stat.S_IMODE(opened.st_mode) != 0o600
+        or stat.S_IMODE(named.st_mode) != 0o600
+        or _lock_identity(opened) != _lock_identity(named)
+    ):
+        raise ValueError("state lock must be a stable owner-only regular file")
+
+
+def _bounded_names(directory_fd: int, *, maximum: int, message: str) -> tuple[str, ...]:
+    names: list[str] = []
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            if len(names) >= maximum:
+                raise ValueError(message)
+            names.append(entry.name)
+    return tuple(names)
+
+
+def _release_lock(lock_fd: int) -> None:
+    os.close(lock_fd)
 
 
 def _open_output_root(path: Path) -> int:
@@ -820,16 +1080,6 @@ def _artifact_metadata_at(
     return named
 
 
-def _open_owner_only_directory(path: Path) -> int:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        _validate_owner_only_directory(descriptor)
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return descriptor
-
-
 def _validate_owner_only_directory(descriptor: int) -> None:
     metadata = os.fstat(descriptor)
     if (
@@ -841,6 +1091,10 @@ def _validate_owner_only_directory(descriptor: int) -> None:
 
 
 def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return metadata.st_dev, metadata.st_ino, metadata.st_uid
+
+
+def _lock_identity(metadata: os.stat_result) -> tuple[int, int, int]:
     return metadata.st_dev, metadata.st_ino, metadata.st_uid
 
 
@@ -868,16 +1122,18 @@ __all__ = [
     "OutputAlreadyExistsError",
     "OutputPathError",
     "OutputValidationError",
-    "acquire_state_root",
+    "StateSession",
     "artifact_size",
     "cleanup_abandoned_sessions",
     "cleanup_output_directory",
     "close_output_directory",
+    "close_state_session",
     "create_output_directory",
+    "open_state_session",
     "publish_artifacts",
     "read_artifact_slice",
-    "release_state_root",
+    "release_runner_lock",
     "remove_job_directory",
-    "remove_session_directory",
+    "try_acquire_runner_lock",
     "validate_delivered_artifacts",
 ]

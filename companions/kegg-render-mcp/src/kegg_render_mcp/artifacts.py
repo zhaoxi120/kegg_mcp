@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import re
@@ -15,6 +14,18 @@ from pathlib import Path
 from typing import Final
 
 from kegg_render_mcp import __version__
+from kegg_render_mcp._state_scope import (
+    RendererStateScope,
+    cleanup_state_scope,
+    open_state_scope,
+    release_state_scope,
+)
+from kegg_render_mcp._state_scope import (
+    validate_named_directory as _validate_named_directory,
+)
+from kegg_render_mcp._state_scope import (
+    validate_owner_only_directory as _validate_owner_only_directory,
+)
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
     MAX_ARTIFACTS,
@@ -38,7 +49,6 @@ _MIME_TYPES: Final = {
 _ALLOCATION_UNIT_BYTES: Final = 4_096
 _ARTIFACT_METADATA_RESERVE_BYTES: Final = 1_024
 _RESULT_METADATA_RESERVE_BYTES: Final = 4_096
-_MAX_STATE_ROOT_ENTRIES: Final = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,10 +82,12 @@ class RenderArtifactStore:
 
     def __init__(self, config: RendererRuntimeConfig) -> None:
         self._config = config
+        self._state_scope: RendererStateScope | None = None
         self._state_fd: int | None = None
         self._scope_fd: int | None = None
         self._scope_name: str | None = None
         self._lock_fd: int | None = None
+        self._scope_lock_fd: int | None = None
         self._results: dict[str, _StoredResult] = {}
 
     def snapshot(self) -> ArtifactStoreSnapshot:
@@ -92,63 +104,40 @@ class RenderArtifactStore:
     def open(self) -> None:
         if self._state_fd is not None:
             raise RuntimeError("renderer artifact store is already open")
-        self._state_fd = _open_or_create_private_directory(self._config.state_root)
-        try:
-            self._lock_fd = os.open(
-                ".renderer.lock",
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=self._state_fd,
-            )
-            os.fchmod(self._lock_fd, 0o600)
-            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._cleanup_abandoned_scopes()
-        except Exception:
-            if self._lock_fd is not None:
-                os.close(self._lock_fd)
-            os.close(self._state_fd)
-            self._lock_fd = None
-            self._state_fd = None
-            raise ValueError("renderer state root is already active or unsafe") from None
-        for _ in range(8):
-            name = f"scope_{secrets.token_urlsafe(24)}"
-            try:
-                os.mkdir(name, mode=0o700, dir_fd=self._state_fd)
-            except FileExistsError:
-                continue
-            self._scope_fd = os.open(
-                name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=self._state_fd,
-            )
-            _validate_owner_only_directory(self._scope_fd)
-            self._scope_name = name
-            return
-        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-        os.close(self._lock_fd)
-        os.close(self._state_fd)
-        self._lock_fd = None
-        self._state_fd = None
-        raise OSError("could not allocate renderer process scope")
+        scope = open_state_scope(
+            self._config.state_root,
+            self._config.limits.max_results,
+        )
+        self._state_scope = scope
+        self._state_fd = scope.state_fd
+        self._scope_fd = scope.scope_fd
+        self._scope_name = scope.scope_name
+        self._lock_fd = scope.coordination_lock_fd
+        self._scope_lock_fd = scope.scope_lock_fd
 
     def close(self) -> None:
-        if self._scope_fd is not None:
-            for render_id in tuple(self._results):
-                self._remove_result_directory(render_id, ignore_errors=True)
-            os.close(self._scope_fd)
-        if self._state_fd is not None and self._scope_name is not None:
-            with contextlib.suppress(OSError):
-                os.rmdir(self._scope_name, dir_fd=self._state_fd)
-        if self._lock_fd is not None:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-            os.close(self._lock_fd)
-        if self._state_fd is not None:
-            os.close(self._state_fd)
-        self._scope_fd = None
-        self._state_fd = None
-        self._scope_name = None
-        self._lock_fd = None
-        self._results.clear()
+        try:
+            if self._scope_fd is not None:
+                for render_id in tuple(self._results):
+                    self._remove_result_directory(render_id, ignore_errors=True)
+            if self._state_scope is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    cleanup_state_scope(
+                        self._state_scope,
+                        self._config.limits.max_results,
+                    )
+        finally:
+            try:
+                if self._state_scope is not None:
+                    release_state_scope(self._state_scope)
+            finally:
+                self._state_scope = None
+                self._scope_fd = None
+                self._state_fd = None
+                self._scope_name = None
+                self._lock_fd = None
+                self._scope_lock_fd = None
+                self._results.clear()
 
     def retain(
         self,
@@ -360,65 +349,35 @@ class RenderArtifactStore:
         try:
             result_fd = os.open(
                 render_id,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=self._scope_fd,
             )
             try:
+                _validate_owner_only_directory(result_fd)
+                _validate_named_directory(
+                    self._scope_fd,
+                    render_id,
+                    result_fd,
+                    "renderer result",
+                )
                 for name in _bounded_directory_names(
                     result_fd,
                     MAX_ARTIFACTS + 1,
                     "renderer result directory",
                 ):
                     os.unlink(name, dir_fd=result_fd)
+                _validate_named_directory(
+                    self._scope_fd,
+                    render_id,
+                    result_fd,
+                    "renderer result",
+                )
+                os.rmdir(render_id, dir_fd=self._scope_fd)
             finally:
                 os.close(result_fd)
-            os.rmdir(render_id, dir_fd=self._scope_fd)
         except OSError:
             if not ignore_errors:
                 raise
-
-    def _cleanup_abandoned_scopes(self) -> None:
-        assert self._state_fd is not None
-        state_names = _bounded_directory_names(
-            self._state_fd,
-            _MAX_STATE_ROOT_ENTRIES,
-            "renderer state root",
-        )
-        for scope_name in state_names:
-            if not scope_name.startswith("scope_"):
-                continue
-            scope_fd = os.open(
-                scope_name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=self._state_fd,
-            )
-            try:
-                _validate_owner_only_directory(scope_fd)
-                for result_name in _bounded_directory_names(
-                    scope_fd,
-                    self._config.limits.max_results,
-                    "abandoned renderer scope",
-                ):
-                    if _RESULT_ID.fullmatch(result_name) is None:
-                        raise ValueError("an abandoned renderer scope contains an unsafe entry")
-                    result_fd = os.open(
-                        result_name,
-                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                        dir_fd=scope_fd,
-                    )
-                    try:
-                        for artifact_name in _bounded_directory_names(
-                            result_fd,
-                            MAX_ARTIFACTS + 1,
-                            "abandoned renderer result",
-                        ):
-                            os.unlink(artifact_name, dir_fd=result_fd)
-                    finally:
-                        os.close(result_fd)
-                    os.rmdir(result_name, dir_fd=scope_fd)
-            finally:
-                os.close(scope_fd)
-            os.rmdir(scope_name, dir_fd=self._state_fd)
 
 
 def _estimated_storage_bytes(artifacts: tuple[ArtifactBlob, ...]) -> int:
@@ -484,57 +443,6 @@ def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> No
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary_name, dir_fd=directory_descriptor)
         raise
-
-
-def _open_or_create_private_directory(path: Path) -> int:
-    if not path.is_absolute() or ".." in path.parts or path == Path(path.anchor):
-        raise ValueError("state root must be an absolute non-root path")
-    parent_fd = _open_absolute_directory(path.parent)
-    try:
-        try:
-            descriptor = os.open(
-                path.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
-            )
-        except FileNotFoundError:
-            os.mkdir(path.name, mode=0o700, dir_fd=parent_fd)
-            descriptor = os.open(
-                path.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
-            )
-        _validate_owner_only_directory(descriptor)
-        return descriptor
-    finally:
-        os.close(parent_fd)
-
-
-def _open_absolute_directory(path: Path) -> int:
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for part in path.parts[1:]:
-            next_descriptor = os.open(
-                part,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
-        return descriptor
-    except Exception:
-        os.close(descriptor)
-        raise
-
-
-def _validate_owner_only_directory(descriptor: int) -> None:
-    metadata = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or metadata.st_mode & 0o077
-    ):
-        raise ValueError("renderer state directories must be owner-only direct directories")
 
 
 def _validate_blob(item: ArtifactBlob) -> None:

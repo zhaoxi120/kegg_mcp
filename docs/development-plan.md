@@ -272,10 +272,11 @@ previously generated detailed table and never loads its models or runs its CLI. 
 
 The companion validates one allowed protein FASTA and a new allowed output directory, performs
 runtime preflight, starts one service-owned job, and returns an opaque process-scoped job identifier
-for bounded polling. It runs one job per state root with fixed arguments, defaults to `device=cpu`,
-accepts only an explicitly requested and deployment-allowed `device=cuda`, inherits accelerator
-visibility, bounds CPU threads, uses zero data-loader workers, and owns process-group and Linux
-parent-death control. It never uses automatic device selection.
+for bounded polling. Multiple companion processes may share one state root, but a deployment-wide
+runner lease permits only one job across those processes. Jobs use fixed arguments, default to
+`device=cpu`, accept only an explicitly requested and deployment-allowed `device=cuda`, inherit
+accelerator visibility, bound CPU threads, use zero data-loader workers, and own process-group and
+Linux parent-death control. The companion never uses automatic device selection.
 
 The stable handoff distinguishes the original FASTA path, `deepkoala_annotations.csv` as the core
 import input, `deepkoala_run_report.md` as the human-readable report, and the resolved DeepKOALA and
@@ -368,7 +369,8 @@ external tools, or model resources.
 Installer tests validate source completeness, strict configuration, three locked runtimes, offline
 arguments, generated plugin content, private-data exclusion, Codex inventory checks, conflicts,
 interruption, rollback, and managed DeepKOALA defaults. Release support additionally requires a real
-Codex installation and discovery check in a new task against the exact release candidate.
+Codex installation and discovery check in two concurrently loaded new tasks against the exact
+release candidate.
 
 ## Development and validation workflow
 
@@ -419,8 +421,8 @@ The following conditions block publication when applicable:
 - any distribution contains another component, repository Skill, KEGG payload, model resource,
   secret, private path, biological input, cache, or generated result;
 - the suite transaction, conflict, rollback, private-configuration, or default-offline checks fail;
-- a real Codex app or CLI installation does not discover all three Skills and MCP registrations in a
-  new task;
+- a real Codex app or CLI installation does not keep all three Skills and MCP registrations usable
+  in two concurrently loaded new tasks;
 - a public release lacks a verified private vulnerability-reporting route and an updated
   `SECURITY.md`;
 - a claimed KEGG-derived rendered artifact lacks a separate redistribution-rights review; or

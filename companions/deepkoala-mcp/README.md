@@ -105,9 +105,11 @@ multi-domain path does not use configurable batching.
 DeepKOALA always receives detailed-output, an explicit `device=cpu|cuda`, and `num_workers=0`; it
 never receives `device=auto`. A multi-domain job also receives `--multi --profiles_dir`; the handoff
 and report record the actual device and `multi` value. Only one job runs in a deployment; another
-request returns `RUNNER_BUSY` instead of entering a queue. Status lists installed resources and the
-device allowlist. A successful handoff and report identify the DeepKOALA source and the actual
-resolved model resource version used by that job.
+request, including one received by another stdio process using the same state root, returns
+`RUNNER_BUSY` instead of entering a queue. Multiple client processes may share one deployment state
+root; each receives an isolated process scope while the runner lease remains deployment-wide.
+Status lists installed resources and the device allowlist. A successful handoff and report identify
+the DeepKOALA source and the actual resolved model resource version used by that job.
 
 ## Stable output and lifecycle
 
@@ -151,7 +153,8 @@ passed to another server as result identity.
   attempted shell execution.
 - The service may inherit operator accelerator visibility, defaults to `device=cpu`, and accepts
   `device=cuda` only through its deployment allowlist; it never requests `device=auto`.
-- One job runs at a time with bounded CPU threads, input, output, sequences, and elapsed time.
+- One job runs at a time across all companion processes sharing a deployment state root, with
+  bounded CPU threads, input, output, sequences, and elapsed time.
 - Timeout, cancellation, process-group termination, descendant cleanup, and Linux parent-death
   control bound the external process lifecycle.
 - Inputs must be direct files beneath allowed roots; output must be a new directory beneath an

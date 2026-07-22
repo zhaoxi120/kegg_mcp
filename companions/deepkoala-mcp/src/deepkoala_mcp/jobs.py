@@ -5,12 +5,13 @@ import contextlib
 import os
 import secrets
 import sys
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NoReturn, Protocol
+from typing import Literal, NoReturn
 
 from deepkoala_mcp import __version__
+from deepkoala_mcp._job_types import JobRecord as _JobRecord
+from deepkoala_mcp._job_types import Runner, RuntimeProbe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
@@ -21,7 +22,6 @@ from deepkoala_mcp.contracts import (
     DeleteDeepKoalaJobResult,
     ErrorCode,
     ExecutionPlan,
-    FastaSummary,
     GetDeepKoalaJobResult,
     ImportHandoff,
     JobState,
@@ -55,64 +55,29 @@ from deepkoala_mcp.job_storage import (
     OutputAlreadyExistsError,
     OutputPathError,
     OutputValidationError,
-    acquire_state_root,
+    StateSession,
     artifact_size,
-    cleanup_abandoned_sessions,
     cleanup_output_directory,
     close_output_directory,
+    close_state_session,
     create_output_directory,
+    open_state_session,
     publish_artifacts,
     read_artifact_slice,
-    release_state_root,
+    release_runner_lock,
     remove_job_directory,
-    remove_session_directory,
+    try_acquire_runner_lock,
     validate_delivered_artifacts,
 )
 from deepkoala_mcp.reporting import build_handoff, build_run_report
 from deepkoala_mcp.runner import (
     DeepKoalaProcessRunner,
-    ProcessOutcome,
     RunnerPlan,
     RunnerTimedOutError,
 )
 
 ArtifactName = Literal["annotations", "report"]
 _TERMINAL = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED, JobState.TIMED_OUT})
-
-
-class Runner(Protocol):
-    async def run(self, plan: RunnerPlan) -> ProcessOutcome: ...
-
-
-class RuntimeProbe(Protocol):
-    def __call__(
-        self,
-        *,
-        checkout: Path,
-        python_executable: Path,
-        cpu_threads: int,
-    ) -> RuntimeProbeResult: ...
-
-
-@dataclass(slots=True)
-class _JobRecord:
-    job_id: str
-    directory: Path
-    output_directory: ControlledOutputDirectory
-    input_path: Path
-    source_version: str
-    plan: ExecutionPlan
-    fasta: FastaSummary
-    started_at: datetime
-    state: JobState = JobState.RUNNING
-    completed_at: datetime | None = None
-    exit_code: int | None = None
-    failure_reason: str | None = None
-    correlation_id: str | None = None
-    output_bytes: int | None = None
-    handoff: ImportHandoff | None = None
-    task: asyncio.Task[None] | None = None
-    cancel_requested: bool = False
 
 
 class DeepKoalaJobManager:
@@ -130,9 +95,7 @@ class DeepKoalaJobManager:
         self._run_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
         self._jobs: dict[str, _JobRecord] = {}
-        self._session_directory: Path | None = None
-        self._state_directory_fd: int | None = None
-        self._state_lock_fd: int | None = None
+        self._state_session: StateSession | None = None
         self._opened = False
         self._closing = False
 
@@ -140,24 +103,12 @@ class DeepKoalaJobManager:
         async with self._lifecycle_lock:
             if self._opened:
                 return
-            root, directory_fd, lock_fd = acquire_state_root(self.config.state_root)
-            try:
-                cleanup_abandoned_sessions(directory_fd)
-                session_name = f"session_{secrets.token_hex(16)}"
-                os.mkdir(session_name, mode=0o700, dir_fd=directory_fd)
-                session = root / session_name
-                os.chmod(session, 0o700)
-            except BaseException:
-                release_state_root(directory_fd, lock_fd)
-                raise
-            self._session_directory = session
-            self._state_directory_fd = directory_fd
-            self._state_lock_fd = lock_fd
+            self._state_session = open_state_session(self.config.state_root)
             self._opened = True
             self._closing = False
 
     async def close(self) -> None:
-        async with self._lifecycle_lock:
+        async with self._lifecycle_lock, self._run_lock:
             async with self._lock:
                 if not self._opened:
                     return
@@ -175,29 +126,28 @@ class DeepKoalaJobManager:
                 await asyncio.gather(*tasks, return_exceptions=True)
             async with self._lock:
                 for record in self._jobs.values():
+                    self._release_record_runner(record)
                     close_output_directory(record.output_directory)
-            session = self._session_directory
-            if session is not None:
-                try:
-                    remove_session_directory(session)
-                except (OSError, ValueError, OutputValidationError) as error:
-                    raise RuntimeError("private session cleanup failed") from error
-            directory_fd = self._state_directory_fd
-            lock_fd = self._state_lock_fd
-            if directory_fd is None or lock_fd is None:
-                raise RuntimeError("state-root lease is unavailable during close")
-            release_state_root(directory_fd, lock_fd)
+            state_session = self._state_session
+            cleanup_error: Exception | None = None
+            try:
+                if state_session is None:
+                    raise RuntimeError("private state session is unavailable during close")
+                close_state_session(state_session)
+            except (OSError, ValueError, OutputValidationError) as error:
+                cleanup_error = error
             async with self._lock:
                 self._jobs.clear()
-                self._session_directory = None
-                self._state_directory_fd = None
-                self._state_lock_fd = None
+                self._state_session = None
                 self._opened = False
                 self._closing = False
+            if cleanup_error is not None:
+                raise RuntimeError("private session cleanup failed") from cleanup_error
 
     async def run(self, request: RunDeepKoalaInput) -> RunDeepKoalaResult:
         self._require_open()
         async with self._run_lock:
+            self._require_open()
             async with self._lock:
                 if self._closing:
                     raise RuntimeError("job manager is closing")
@@ -230,9 +180,20 @@ class DeepKoalaJobManager:
                 cpu_threads=self.config.cpu_threads,
                 timeout_seconds=timeout,
             )
+            state_session = self._require_state_session()
             job_id = f"job_{secrets.token_hex(16)}"
-            session = self._require_session()
+            session = state_session.session
             directory = session / job_id
+            try:
+                runner_lock_fd = try_acquire_runner_lock(state_session)
+            except (OSError, ValueError) as error:
+                _raise_internal("runner_lock_acquisition", error)
+            if runner_lock_fd is None:
+                fail(
+                    ErrorCode.RUNNER_BUSY,
+                    "The deployment-wide DeepKOALA runner is already active.",
+                    suggested_action="Wait for the running job to finish or cancel it.",
+                )
             output_directory: ControlledOutputDirectory | None = None
             directory_created = False
             started = False
@@ -259,6 +220,7 @@ class DeepKoalaJobManager:
                     plan=plan,
                     fasta=staged.summary,
                     started_at=_now(),
+                    runner_lock_fd=runner_lock_fd,
                 )
                 async with self._lock:
                     if self._closing:
@@ -266,6 +228,7 @@ class DeepKoalaJobManager:
                     self._jobs[job_id] = record
                     record.task = asyncio.create_task(self._execute(record))
                     started = True
+                    runner_lock_fd = None
                 return RunDeepKoalaResult(
                     job=self._summary(record),
                     plan=record.plan,
@@ -305,23 +268,27 @@ class DeepKoalaJobManager:
                 )
             finally:
                 if not started:
-                    async with self._lock:
-                        self._jobs.pop(job_id, None)
-                    rollback_error: Exception | None = None
-                    if output_directory is not None:
-                        try:
-                            cleanup_output_directory(output_directory)
-                        except (OSError, ValueError, OutputValidationError) as error:
-                            rollback_error = error
-                        finally:
-                            close_output_directory(output_directory)
-                    if directory_created:
-                        try:
-                            remove_job_directory(directory, session)
-                        except (OSError, ValueError) as error:
-                            rollback_error = rollback_error or error
-                    if rollback_error is not None:
-                        _raise_internal("atomic_run_rollback", rollback_error)
+                    try:
+                        async with self._lock:
+                            self._jobs.pop(job_id, None)
+                        rollback_error: Exception | None = None
+                        if output_directory is not None:
+                            try:
+                                cleanup_output_directory(output_directory)
+                            except (OSError, ValueError, OutputValidationError) as error:
+                                rollback_error = error
+                            finally:
+                                close_output_directory(output_directory)
+                        if directory_created:
+                            try:
+                                remove_job_directory(directory, state_session)
+                            except (OSError, ValueError) as error:
+                                rollback_error = rollback_error or error
+                        if rollback_error is not None:
+                            _raise_internal("atomic_run_rollback", rollback_error)
+                    finally:
+                        if runner_lock_fd is not None:
+                            release_runner_lock(runner_lock_fd)
 
     async def get_job(self, job_id: str) -> GetDeepKoalaJobResult:
         self._require_open()
@@ -478,6 +445,12 @@ class DeepKoalaJobManager:
         return record, RUN_REPORT_FILENAME, MAX_RESOURCE_PAGE_BYTES
 
     async def _execute(self, record: _JobRecord) -> None:
+        try:
+            await self._execute_job(record)
+        finally:
+            self._release_record_runner(record)
+
+    async def _execute_job(self, record: _JobRecord) -> None:
         state = JobState.FAILED
         reason: str | None = "The DeepKOALA process did not produce a usable result."
         handoff: ImportHandoff | None = None
@@ -560,7 +533,7 @@ class DeepKoalaJobManager:
                             "stable_output_cleanup", error
                         )
             try:
-                remove_job_directory(record.directory, self._require_session())
+                remove_job_directory(record.directory, self._require_state_session())
             except (OSError, ValueError) as error:
                 if state is JobState.SUCCEEDED:
                     with contextlib.suppress(OSError, ValueError, OutputValidationError):
@@ -575,6 +548,7 @@ class DeepKoalaJobManager:
             if state is not JobState.SUCCEEDED:
                 close_output_directory(record.output_directory)
             completed_at = completed_at or _now()
+            self._release_record_runner(record)
             async with self._lock:
                 record.state = state
                 record.failure_reason = reason
@@ -582,6 +556,14 @@ class DeepKoalaJobManager:
                 record.handoff = handoff if state is JobState.SUCCEEDED else None
                 record.completed_at = completed_at
                 record.task = None
+
+    @staticmethod
+    def _release_record_runner(record: _JobRecord) -> None:
+        runner_lock_fd = record.runner_lock_fd
+        if runner_lock_fd is None:
+            return
+        record.runner_lock_fd = None
+        release_runner_lock(runner_lock_fd)
 
     def _select_installation(self, model: str, date: str) -> Installation:
         try:
@@ -642,11 +624,11 @@ class DeepKoalaJobManager:
         if not self._opened:
             raise RuntimeError("job manager is not open")
 
-    def _require_session(self) -> Path:
-        session = self._session_directory
-        if session is None:
+    def _require_state_session(self) -> StateSession:
+        state_session = self._state_session
+        if state_session is None:
             raise RuntimeError("private session is unavailable")
-        return session
+        return state_session
 
 
 def _now() -> datetime:

@@ -49,7 +49,8 @@ export KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/analysis-results
 `KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. Renderer input and
 optional output directories must be direct, traversal-free paths below an allowed root. The private
 state root must not overlap an allowed root. Symlink escapes and unsafe writable ancestry are
-rejected.
+rejected. Multiple renderer processes may share one deployment state root. Each process holds an
+isolated live scope, and abandoned-scope cleanup never removes a scope whose lease is still active.
 
 Pathway access uses one deployment-wide mode:
 
@@ -130,9 +131,10 @@ the manifest is installed last. Failed publication removes only files created by
 SVG resources use `image/svg+xml`; PNG resources return binary `image/png`.
 
 Retained results have bounded count, lifetime, and disk use and belong to one active renderer
-process. Unknown, expired, deleted, and cross-process identifiers share the same safe not-found
-response. `delete_render_result` removes the retained result and its artifacts; a durable exported
-output directory remains operator-owned.
+process even when several processes share the deployment state root. Unknown, expired, deleted,
+and cross-process identifiers share the same safe not-found response. `delete_render_result`
+removes the retained result and its artifacts; a durable exported output directory remains
+operator-owned.
 
 ## Security boundary
 

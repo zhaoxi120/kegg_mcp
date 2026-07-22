@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import multiprocessing
+import os
+from multiprocessing.connection import Connection
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -12,13 +18,18 @@ from deepkoala_mcp.contracts import ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME
 from deepkoala_mcp.job_storage import (
     ControlledOutputDirectory,
     OutputValidationError,
+    StateSession,
     artifact_size,
     cleanup_output_directory,
     close_output_directory,
+    close_state_session,
     create_output_directory,
+    open_state_session,
     publish_artifacts,
     read_artifact_slice,
+    release_runner_lock,
     remove_job_directory,
+    try_acquire_runner_lock,
     validate_delivered_artifacts,
 )
 
@@ -40,22 +51,227 @@ def _raw_output(tmp_path: Path) -> Path:
     return raw
 
 
+def _hold_runner_lock_in_spawned_process(state_root: str, control: Connection) -> None:
+    state: StateSession | None = None
+    runner_lock: int | None = None
+    try:
+        state = open_state_session(Path(state_root))
+        runner_lock = try_acquire_runner_lock(state)
+        if runner_lock is None:
+            raise RuntimeError("spawned process could not acquire the runner lock")
+        control.send(("ready", state.session.name))
+        if not control.poll(10.0) or control.recv() != "release":
+            raise TimeoutError("spawned process did not receive the release command")
+        acquired_lock = runner_lock
+        runner_lock = None
+        release_runner_lock(acquired_lock)
+        acquired_state = state
+        state = None
+        close_state_session(acquired_state)
+        control.send(("closed", ""))
+    except BaseException as error:
+        with contextlib.suppress(BrokenPipeError, EOFError, OSError):
+            control.send(("error", f"{type(error).__name__}: {error}"))
+        raise
+    finally:
+        if runner_lock is not None:
+            release_runner_lock(runner_lock)
+        if state is not None:
+            close_state_session(state)
+        control.close()
+
+
+def _receive_spawned_message(control: Connection, expected: str) -> str:
+    if not control.poll(10.0):
+        pytest.fail(f"spawned process did not report {expected!r} within the timeout")
+    message = cast(tuple[str, str], control.recv())
+    if len(message) != 2 or message[0] != expected:
+        pytest.fail(f"spawned process reported {message!r}, expected {expected!r}")
+    return message[1]
+
+
+def test_shared_state_root_preserves_live_sessions_and_reaps_only_orphans(
+    tmp_path: Path,
+) -> None:
+    state_root = (tmp_path / "state").resolve()
+    first = open_state_session(state_root)
+    orphan = state_root / f"session_{'a' * 32}"
+    orphan.mkdir(mode=0o700)
+    orphan.chmod(0o700)
+    orphan_lock = orphan / ".session.lock"
+    orphan_lock.touch(mode=0o600)
+    orphan_lock.chmod(0o600)
+    orphan_job = orphan / f"job_{'b' * 32}"
+    orphan_job.mkdir(mode=0o700)
+    orphan_job.chmod(0o700)
+    (orphan_job / "output.csv").write_bytes(DETAILED_CSV)
+    second = open_state_session(state_root)
+    first_closed = False
+    try:
+        assert first.session != second.session
+        assert first.session.is_dir()
+        assert second.session.is_dir()
+        assert not orphan.exists()
+
+        runner_lock = try_acquire_runner_lock(first)
+        assert runner_lock is not None
+        assert fcntl.fcntl(runner_lock, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+        assert try_acquire_runner_lock(second) is None
+        release_runner_lock(runner_lock)
+
+        close_state_session(first)
+        first_closed = True
+        assert second.session.is_dir()
+    finally:
+        if not first_closed:
+            close_state_session(first)
+        close_state_session(second)
+
+
+def test_shared_state_root_coordinates_runner_lock_across_spawned_processes(
+    tmp_path: Path,
+) -> None:
+    state_root = (tmp_path / "state").resolve()
+    context = multiprocessing.get_context("spawn")
+    parent_control, child_control = context.Pipe(duplex=True)
+    process = context.Process(
+        target=_hold_runner_lock_in_spawned_process,
+        args=(str(state_root), child_control),
+    )
+    parent_state: StateSession | None = None
+    parent_runner_lock: int | None = None
+    release_sent = False
+    try:
+        process.start()
+        child_control.close()
+        child_session_name = _receive_spawned_message(parent_control, "ready")
+        child_session = state_root / child_session_name
+        assert child_session.is_dir()
+
+        parent_state = open_state_session(state_root)
+        assert parent_state.session != child_session
+        assert try_acquire_runner_lock(parent_state) is None
+
+        closing_state = parent_state
+        parent_state = None
+        close_state_session(closing_state)
+        assert child_session.is_dir()
+
+        parent_state = open_state_session(state_root)
+        parent_control.send("release")
+        release_sent = True
+        _receive_spawned_message(parent_control, "closed")
+        process.join(timeout=10.0)
+        assert process.exitcode == 0
+        assert not child_session.exists()
+        assert parent_state.session.is_dir()
+
+        parent_runner_lock = try_acquire_runner_lock(parent_state)
+        assert parent_runner_lock is not None
+    finally:
+        if parent_runner_lock is not None:
+            release_runner_lock(parent_runner_lock)
+        if process.is_alive():
+            if not release_sent:
+                with contextlib.suppress(BrokenPipeError, EOFError, OSError):
+                    parent_control.send("release")
+            process.join(timeout=5.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5.0)
+        if parent_state is not None:
+            close_state_session(parent_state)
+        parent_control.close()
+        child_control.close()
+
+
+def test_session_without_owner_lease_fails_closed(tmp_path: Path) -> None:
+    state_root = (tmp_path / "state").resolve()
+    state_root.mkdir(mode=0o700)
+    unsafe_session = state_root / f"session_{'a' * 32}"
+    unsafe_session.mkdir(mode=0o700)
+
+    with pytest.raises(ValueError, match="could not be opened safely"):
+        open_state_session(state_root)
+
+    assert unsafe_session.is_dir()
+    assert os.listdir(unsafe_session) == []
+
+
+def test_close_state_session_rejects_named_directory_replacement(tmp_path: Path) -> None:
+    state = open_state_session((tmp_path / "state").resolve())
+    moved = state.root / "moved-session"
+    state.session.rename(moved)
+    state.session.mkdir(mode=0o700)
+    state.session.chmod(0o700)
+
+    with pytest.raises(ValueError, match="cleanup failed"):
+        close_state_session(state)
+
+    assert state.session.is_dir()
+    assert moved.is_dir()
+
+
 def test_private_job_cleanup_accepts_regular_files_created_under_public_umask(
     tmp_path: Path,
 ) -> None:
-    session = tmp_path / f"session_{'a' * 32}"
-    job = session / f"job_{'b' * 32}"
-    session.mkdir(mode=0o700)
+    state = open_state_session((tmp_path / "state").resolve())
+    job = state.session / f"job_{'b' * 32}"
     job.mkdir(mode=0o700)
-    session.chmod(0o700)
     job.chmod(0o700)
     output = job / "output.csv"
     output.write_bytes(DETAILED_CSV)
     output.chmod(0o644)
 
-    remove_job_directory(job, session)
+    try:
+        remove_job_directory(job, state)
+        assert not job.exists()
+    finally:
+        close_state_session(state)
 
-    assert not job.exists()
+
+def test_private_job_cleanup_rejects_named_directory_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = open_state_session((tmp_path / "state").resolve())
+    job = state.session / f"job_{'b' * 32}"
+    moved = state.session / "moved-job"
+    job.mkdir(mode=0o700)
+    output = job / "output.csv"
+    output.write_bytes(DETAILED_CSV)
+    replacement_marker = job / "replacement"
+    real_bounded_names = storage._bounded_names  # pyright: ignore[reportPrivateUsage]
+    replaced = False
+
+    def replace_after_scan(
+        descriptor: int,
+        *,
+        maximum: int,
+        message: str,
+    ) -> tuple[str, ...]:
+        nonlocal replaced
+        names = real_bounded_names(descriptor, maximum=maximum, message=message)
+        if message == "controlled job directory exceeds the file bound" and not replaced:
+            replaced = True
+            job.rename(moved)
+            job.mkdir(mode=0o700)
+            replacement_marker.touch(mode=0o600)
+            os.chmod(replacement_marker, 0o600)
+        return names
+
+    monkeypatch.setattr(storage, "_bounded_names", replace_after_scan)
+    try:
+        with pytest.raises(ValueError, match="job directory was replaced"):
+            remove_job_directory(job, state)
+        assert replacement_marker.is_file()
+        assert moved.is_dir()
+    finally:
+        monkeypatch.setattr(storage, "_bounded_names", real_bounded_names)
+        replacement_marker.unlink(missing_ok=True)
+        job.rmdir()
+        moved.rename(job)
+        close_state_session(state)
 
 
 def test_publish_accepts_fully_empty_multi_domain_unclassified_row(tmp_path: Path) -> None:

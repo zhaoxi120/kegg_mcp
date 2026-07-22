@@ -51,6 +51,15 @@ repair is appropriate only when the CLI plugin or MCP inventory is incomplete or
 tool reports a concrete deployment failure. Tool absence in the original installation task alone is
 never evidence that the installation failed.
 
+If a fresh task exposes only Core while both inventories remain complete, classify the state as
+`companion_startup_failed`, not `task_reload_required`. Inspect redacted client-side startup logs and
+the component diagnostics. A state-root `already active or unsafe` failure that appears only while
+another task is loaded indicates an installed build without concurrent process scopes; install a
+fixed complete suite into a new private root after the old deployment is no longer active. Do not
+assign a different state root to every task, because DeepKOALA's single-runner guarantee is
+deployment-wide. The same error with no other active task still requires ownership, permissions,
+symlink, and bounded-content checks before replacement.
+
 ### Only the core server is discovered for a FASTA-to-graphic request
 
 `kegg-mcp` accepts existing K numbers and supported KO annotation evidence; it does not accept raw

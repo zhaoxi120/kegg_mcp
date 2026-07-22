@@ -356,6 +356,10 @@ After installation:
    - `kegg-ko-analysis`
    - `kegg-pathway-rendering`
 6. Confirm that the plugin contributes `deepkoala-mcp`, `kegg-mcp`, and `kegg-render-mcp`.
+7. Keep that task loaded, start a second new task outside the source checkout, and repeat the three
+   Skill, MCP, and status checks there.
+8. Return to the first new task and confirm that its three status tools remain available. This
+   concurrent-task check detects companion state-root conflicts that static Codex inventory cannot.
 
 Use one bounded status-only request for each dependency:
 

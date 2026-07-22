@@ -169,9 +169,11 @@ renderer versions, core calculation provenance, target warnings, and safe source
 SVG resources use `image/svg+xml`; PNG resources use binary `image/png`.
 
 Retained results have bounded count, lifetime, payload bytes, allocated storage, and cleanup work.
-They belong to one renderer process. Unknown, expired, deleted, and cross-scope identifiers return
-the same safe not-found result. An allowed output directory is the durable handoff and must be new
-or empty; publication never overwrites an existing entry and installs the manifest last.
+Multiple renderer processes may share one deployment state root through isolated live scopes, but
+each retained result still belongs to exactly one process. Unknown, expired, deleted, and
+cross-scope identifiers return the same safe not-found result. An allowed output directory is the
+durable handoff and must be new or empty; publication never overwrites an existing entry and
+installs the manifest last.
 
 ## Rendering semantics
 

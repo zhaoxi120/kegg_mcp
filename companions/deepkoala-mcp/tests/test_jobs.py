@@ -377,6 +377,53 @@ async def test_single_runner_busy_then_cancel_waits_for_cleanup(
 
 
 @pytest.mark.asyncio
+async def test_shared_state_root_isolates_jobs_and_enforces_one_runner(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    blocking = BlockingRunner()
+    first_manager = DeepKoalaJobManager(
+        runtime_config,
+        runner=blocking,
+        runtime_probe=ready_probe,
+    )
+    second_manager = DeepKoalaJobManager(
+        runtime_config,
+        runner=SuccessfulRunner(),
+        runtime_probe=ready_probe,
+    )
+    await first_manager.open()
+    await second_manager.open()
+    first_closed = False
+    try:
+        first = await first_manager.run(_request(runtime_config, name="shared-first"))
+        await asyncio.wait_for(blocking.started.wait(), timeout=2)
+        second_request = _request(runtime_config, name="shared-second")
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await second_manager.run(second_request)
+        assert captured.value.detail.code is ErrorCode.RUNNER_BUSY
+        assert not Path(second_request.output_directory).exists()
+
+        assert (await first_manager.cancel(first.job.job_id)).state is JobState.CANCELLED
+        second = await second_manager.run(second_request)
+        assert await _wait_terminal(second_manager, second.job.job_id) is JobState.SUCCEEDED
+
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await second_manager.get_job(first.job.job_id)
+        assert captured.value.detail.code is ErrorCode.JOB_NOT_FOUND
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await first_manager.get_job(second.job.job_id)
+        assert captured.value.detail.code is ErrorCode.JOB_NOT_FOUND
+
+        await first_manager.close()
+        first_closed = True
+        assert (await second_manager.get_job(second.job.job_id)).job.state is JobState.SUCCEEDED
+    finally:
+        if not first_closed:
+            await first_manager.close()
+        await second_manager.close()
+
+
+@pytest.mark.asyncio
 async def test_symlink_runner_output_is_rejected_without_touching_target(
     runtime_config: DeepKoalaRuntimeConfig,
     tmp_path: Path,
