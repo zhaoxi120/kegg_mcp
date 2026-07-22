@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from anyio import CapacityLimiter
 
 from kegg_mcp.kegg import KeggClient
 from kegg_mcp.mcp.config import McpRuntimeConfig, load_runtime_config
@@ -19,6 +21,18 @@ class McpRuntime:
     result_store: SQLiteResultStore
     scope_id: str
     allowed_roots: tuple[str, ...] = ()
+    client_handler_limiter: CapacityLimiter = field(
+        default_factory=lambda: CapacityLimiter(1),
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    local_handler_limiter: CapacityLimiter = field(
+        default_factory=lambda: CapacityLimiter(4),
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
 
 def build_runtime(config: McpRuntimeConfig | None = None) -> McpRuntime:

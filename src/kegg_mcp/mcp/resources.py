@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import re
 
+from anyio import lowlevel, to_thread
 from mcp import types
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
@@ -101,7 +102,17 @@ def resource_templates() -> list[types.ResourceTemplate]:
 
 async def read_resource(uri: AnyUrl, runtime: McpRuntime) -> list[ReadResourceContents]:
     try:
-        return _read_resource(str(uri), runtime)
+        try:
+            result = await to_thread.run_sync(
+                _read_resource,
+                str(uri),
+                runtime,
+                abandon_on_cancel=False,
+                limiter=runtime.local_handler_limiter,
+            )
+        finally:
+            await lowlevel.checkpoint_if_cancelled()
+        return result
     except KeggMcpError as exception:
         raise McpError(
             types.ErrorData(

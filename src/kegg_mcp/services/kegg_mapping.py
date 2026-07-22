@@ -52,7 +52,7 @@ def retrieve_kegg_entries(
     """Retrieve approved entries and retain the complete parsed response locally."""
     fetched = client.get(request, options=options)
     payload = fetched.model_dump_json().encode("utf-8")
-    previews = _entry_previews(fetched, request)
+    previews = _entry_previews(fetched)
     provenance = tuple(fetched.batches[:MAX_GET_PROVENANCE_BATCHES])
     artifact = _artifact_metadata(DETAIL_SECTION, "application/json", payload)
     stored = result_store.create(
@@ -85,12 +85,29 @@ def retrieve_kegg_entries(
         raise
 
 
-def _entry_previews(fetched: GetResult, request: GetRequest) -> tuple[KeggEntryPreview, ...]:
-    database_by_identifier = {item.identifier: item.database for item in request.entries}
+def _entry_previews(fetched: GetResult) -> tuple[KeggEntryPreview, ...]:
+    flat_database_by_identifier: dict[str, KeggGetDatabase] = {}
+    for item in fetched.request.entries:
+        if item.database is KeggGetDatabase.BRITE:
+            continue
+        if item.identifier in flat_database_by_identifier:
+            fail(
+                ErrorCode.KEGG_PARSE_FAILED,
+                "The GET result cannot associate a flat-file entry with one database.",
+                suggested_action="Request the database-qualified entries separately and retry.",
+            )
+        flat_database_by_identifier[item.identifier] = item.database
     previews: list[KeggEntryPreview] = []
     for document in fetched.documents:
         if isinstance(document, KeggFlatFileDocument):
             for entry in document.entries:
+                database = flat_database_by_identifier.get(entry.identifier)
+                if database is None:
+                    fail(
+                        ErrorCode.KEGG_PARSE_FAILED,
+                        "The GET result contains an unexpected flat-file entry.",
+                        suggested_action="Refresh the exact database-qualified entries and retry.",
+                    )
                 text = "\n".join(
                     f"{field.name}: {' '.join(field.value_lines)}" for field in entry.fields
                 )
@@ -99,7 +116,7 @@ def _entry_previews(fetched: GetResult, request: GetRequest) -> tuple[KeggEntryP
                 shown_field_names = field_names[:MAX_ENTRY_PREVIEW_FIELDS]
                 previews.append(
                     KeggEntryPreview(
-                        database=database_by_identifier[entry.identifier],
+                        database=database,
                         identifier=entry.identifier,
                         format=document.format.value,
                         field_names=shown_field_names,
@@ -109,6 +126,8 @@ def _entry_previews(fetched: GetResult, request: GetRequest) -> tuple[KeggEntryP
                     )
                 )
         else:
+            if not document.lines:
+                continue
             text = "\n".join(document.lines)
             shown = text[:MAX_ENTRY_PREVIEW_CHARACTERS]
             previews.append(
@@ -134,7 +153,7 @@ def read_cached_kegg_entry(
         request,
         options=KeggRequestOptions(refresh=False, allow_stale=True, cache_only=True),
     )
-    previews = _entry_previews(fetched, request)
+    previews = _entry_previews(fetched)
     return CachedKeggEntryServiceResult(
         requested_count=len(request.entries),
         returned_count=len(previews),
