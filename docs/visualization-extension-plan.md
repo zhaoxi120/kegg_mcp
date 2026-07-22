@@ -129,8 +129,9 @@ arbitrary URL.
 Asset retrieval reuses the core access gate, HTTPS transport, endpoint-scoped cache,
 deployment-wide no-burst rate limiter, retry policy, response-size bounds, and retrieval provenance.
 The core performs bounded PNG structural and decompression validation. For KGML it performs only
-bounded byte/text and active-declaration preflight; complete XML parsing, pathway identity, and
-PNG/KGML dimension compatibility belong to the renderer.
+bounded byte/text and declaration-policy preflight. It accepts the single inert KEGG KGML v0.7.2
+HTTPS `SYSTEM` declaration observed on 2026-07-21 only in the XML prolog and never resolves it;
+complete XML parsing, pathway identity, and PNG/KGML dimension compatibility belong to the renderer.
 
 The asset interface is a library contract used by the independently packaged renderer. It is not a
 core MCP tool, and the renderer does not implement a second network client.
@@ -180,16 +181,16 @@ For a regular reference pathway, the renderer:
 
 1. obtains the matching PNG and KGML under the configured access policy;
 2. validates pathway identity, bytes, dimensions, and compatibility;
-3. parses bounded KGML without DTD, entity, or network resolution;
+3. parses bounded KGML under the typed asset and security policy above;
 4. identifies KO-bearing graphics from canonical `ko:KNNNNN` values;
 5. overlays only the authoritative detected evidence from the core handoff;
 6. adds a versioned legend, warnings, provenance, and conservative caption; and
 7. emits static SVG and any requested bounded PNG derivative.
 
-Accepted evidence has precedence when one graphic maps to both accepted and uncertain KOs.
-Policy-defined uncertain evidence uses a distinct color and dashed non-color cue. Unmatched graphics
-remain unchanged and are described as not detected in the supplied annotations, never biologically
-absent.
+Accepted evidence uses a solid vivid-red (`#FF0000`) overlay and has precedence when one graphic
+maps to both accepted and uncertain KOs. Policy-defined uncertain evidence uses orange (`#E69F00`)
+and a dashed non-color cue. Unmatched graphics remain unchanged and are described as not detected
+in the supplied annotations, never biologically absent.
 
 The displayed coverage numerator, denominator, ratio, namespace, and evidence mode come from the
 core target. KGML graphics do not replace or recompute the core denominator. Coverage is
@@ -233,10 +234,11 @@ Renderer input and output enforce:
 - restrictive permissions and non-overwriting atomic publication; and
 - rollback limited to files created by the failed operation.
 
-KGML parsing disables DTDs, entities, external resolution, and network access. PNG input is checked
-for valid structure, dimensions, decompression bounds, and compatible identity. Generated SVG has
-no scripts, event handlers, active links, remote fonts, or external resources; the validated source
-PNG is embedded as static data.
+KGML parsing accepts only the exact inert KEGG KGML v0.7.2 HTTPS `SYSTEM` declaration and disables
+parameter-entity, external-entity, DTD, and network resolution. Other DTD declarations and all entity
+declarations are rejected. PNG input is checked for valid structure, dimensions, decompression
+bounds, and compatible identity. Generated SVG has no scripts, event handlers, active links, remote
+fonts, or external resources; the validated source PNG is embedded as static data.
 
 Status, errors, manifests, and provenance redact credentials, environment values, usernames,
 endpoint URLs, cache fingerprints, private state paths, and full cache paths. Errors return bounded

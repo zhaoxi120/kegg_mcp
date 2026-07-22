@@ -102,3 +102,15 @@ def test_rendering_skill_distinguishes_live_and_offline_asset_preflights() -> No
         "deployment configuration",
     ):
         assert fragment in corpus
+
+
+def test_rendering_skill_keeps_explicit_ko01100_outside_regular_overlay_pipeline() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "explicitly names `ko01100`",
+        "model-native drawing step",
+        "model-generated conceptual diagram",
+        "not a KEGG-derived asset or KO coverage overlay",
+        "conceal or replace a failed regular-pathway render",
+    ):
+        assert fragment in corpus

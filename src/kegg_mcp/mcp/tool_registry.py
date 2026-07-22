@@ -254,6 +254,7 @@ def _tool(spec: ToolSpec) -> types.Tool:
     output_schema = spec.output_model.model_json_schema(mode="serialization")
     constrain_mcp_input_schema(input_schema)
     constrain_mcp_output_schema(output_schema)
+    _inline_local_schema_references(input_schema)
     _remove_nested_schema_identities(input_schema)
     _remove_nested_schema_identities(output_schema)
     return types.Tool(
@@ -264,6 +265,69 @@ def _tool(spec: ToolSpec) -> types.Tool:
         outputSchema=output_schema,
         annotations=spec.annotations,
     )
+
+
+def _inline_local_schema_references(schema: dict[str, object]) -> None:
+    """Inline Pydantic local references for clients that do not expand ``$defs``."""
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        return
+    definition_map = cast(dict[str, object], definitions)
+    root = {key: value for key, value in schema.items() if key != "$defs"}
+    expanded = _expand_local_schema_node(root, definition_map, stack=())
+    if not isinstance(expanded, dict):  # pragma: no cover - root is always a mapping
+        raise RuntimeError("MCP input schema expansion did not preserve the root object")
+    schema.clear()
+    schema.update(cast(dict[str, object], expanded))
+
+
+def _expand_local_schema_node(
+    value: object,
+    definitions: dict[str, object],
+    *,
+    stack: tuple[str, ...],
+) -> object:
+    if isinstance(value, list):
+        return [
+            _expand_local_schema_node(item, definitions, stack=stack)
+            for item in cast(list[object], value)
+        ]
+    if not isinstance(value, dict):
+        return value
+
+    mapping = cast(dict[str, object], value)
+    reference = mapping.get("$ref")
+    if isinstance(reference, str):
+        prefix = "#/$defs/"
+        if not reference.startswith(prefix):
+            raise RuntimeError("MCP input schema contains an unsupported reference")
+        name = reference.removeprefix(prefix)
+        definition = definitions.get(name)
+        if not isinstance(definition, dict):
+            raise RuntimeError("MCP input schema contains an unresolved local reference")
+        if name in stack:
+            raise RuntimeError("MCP input schema contains a recursive local reference")
+        expanded_definition = _expand_local_schema_node(
+            cast(dict[str, object], definition),
+            definitions,
+            stack=(*stack, name),
+        )
+        if not isinstance(expanded_definition, dict):  # pragma: no cover - guarded above
+            raise RuntimeError("MCP input schema reference did not resolve to an object")
+        expanded_mapping = cast(dict[str, object], expanded_definition)
+        for key, sibling in mapping.items():
+            if key != "$ref":
+                expanded_mapping[key] = _expand_local_schema_node(
+                    sibling,
+                    definitions,
+                    stack=stack,
+                )
+        return expanded_mapping
+
+    return {
+        key: _expand_local_schema_node(item, definitions, stack=stack)
+        for key, item in mapping.items()
+    }
 
 
 def _remove_nested_schema_identities(value: object) -> None:

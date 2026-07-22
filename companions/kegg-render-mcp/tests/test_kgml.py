@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import synthetic_kgml
+from conftest import KGML_DOCTYPE, synthetic_kgml
 from kegg_render_mcp.config import RendererLimits
 from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
 from kegg_render_mcp.kgml import parse_kgml, validate_graphic_bounds
@@ -13,7 +13,16 @@ from kegg_render_mcp.kgml import parse_kgml, validate_graphic_bounds
 def test_parse_kgml_preserves_multi_ko_graphics_in_deterministic_order() -> None:
     document = parse_kgml(synthetic_kgml(), "ko00010", RendererLimits())
     assert document.pathway_id == "ko00010"
+    assert document.parser_version == "1.1"
     assert document.graphics[0].ko_ids == ("K00001", "K00002")
+    assert tuple(item.entry_id for item in document.graphics) == (1, 2)
+
+
+def test_parse_kgml_accepts_payload_without_a_doctype() -> None:
+    payload = synthetic_kgml().replace(f"{KGML_DOCTYPE}\n".encode(), b"")
+
+    document = parse_kgml(payload, "ko00010", RendererLimits())
+
     assert tuple(item.entry_id for item in document.graphics) == (1, 2)
 
 
@@ -21,6 +30,31 @@ def test_parse_kgml_preserves_multi_ko_graphics_in_deterministic_order() -> None
     "payload",
     [
         b'<!DOCTYPE pathway [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><pathway/>',
+        (b'<!DOCTYPE pathway SYSTEM "file:///tmp/KGML.dtd"><pathway name="path:ko00010"/>'),
+        (
+            b'<!DOCTYPE pathway SYSTEM "http://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://example.test/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.3_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway PUBLIC "-//KEGG//KGML" '
+            b'"https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd" '
+            b'[<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (KGML_DOCTYPE + KGML_DOCTYPE + '<pathway name="path:ko00010"/>').encode(),
+        ('<pathway name="path:ko00010"/>' + KGML_DOCTYPE).encode(),
         b'<pathway name="path:ko00020"/>',
         b'<pathway name="path:ko00010"><entry id="x" name="ko:K00001"/></pathway>',
         (

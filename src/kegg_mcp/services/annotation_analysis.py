@@ -12,6 +12,7 @@ from kegg_mcp.analysis import (
     PathwayCoverageLimits,
     PathwayCoverageParameters,
     PathwayRankingResult,
+    PathwayRankingRow,
     PathwaySelection,
     evaluate_module_pair,
     evaluate_pathway_coverage,
@@ -87,6 +88,28 @@ from kegg_mcp.services.result_store import (
     compensate_created_result,
 )
 
+# Current KEGG Global, Overview, and higher-level Overview KO reference maps.
+# Checked against https://www.kegg.jp/kegg/pathway.html on 2026-07-22. These
+# special line/arrow maps are outside the regular-reference automatic-selection
+# policy.
+_AUTOMATIC_PATHWAY_EXCLUSIONS = frozenset(
+    {
+        "ko01100",
+        "ko01110",
+        "ko01120",
+        "ko01200",
+        "ko01210",
+        "ko01212",
+        "ko01220",
+        "ko01230",
+        "ko01232",
+        "ko01240",
+        "ko01250",
+        "ko01310",
+        "ko01320",
+    }
+)
+
 
 def analyze_annotation_targets(
     request: NormalizeAnnotationsRequest,
@@ -126,6 +149,7 @@ def analyze_annotation_targets(
     module_ranking_execution: ModuleRankingExecution | None = None
     ranking: PathwayRankingResult | None = None
     ranking_execution: PathwayRankingExecution | None = None
+    selected_pathway_rows: tuple[PathwayRankingRow, ...] = ()
     if pathway_selection is None and not module_ids and not pathways:
         module_selection = ModuleSelection(top_n=5)
         pathway_selection = PathwaySelection(top_n=5)
@@ -185,11 +209,20 @@ def analyze_annotation_targets(
                 "No reference pathway could be ranked from the selected K numbers.",
                 suggested_action="Supply explicit pathway targets or different KO evidence.",
             )
-        selected_rows = ranking.rows[: pathway_selection.top_n]
-        pathways = tuple(PathwaySpec(pathway_id=row.pathway_id) for row in selected_rows)
+        selected_pathway_rows = tuple(
+            row for row in ranking.rows if row.pathway_id not in _AUTOMATIC_PATHWAY_EXCLUSIONS
+        )[: pathway_selection.top_n]
+        if not selected_pathway_rows:
+            fail(
+                ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+                "No supported reference pathway remained after automatic exclusions.",
+                suggested_action="Supply an explicit supported pathway target.",
+            )
+        pathways = tuple(PathwaySpec(pathway_id=row.pathway_id) for row in selected_pathway_rows)
         ranking_execution = _pathway_ranking_execution(
             ranking,
             pathway_selection,
+            selected_rows=selected_pathway_rows,
             dataset=dataset,
             mapping_provenance=pathway_mapping_provenance,
         )
@@ -396,7 +429,7 @@ def analyze_annotation_targets(
                 detected_unique_ko_count=row.detected_unique_ko_count,
                 relationship_row_count=row.relationship_row_count,
             )
-            for row in ranking.rows[: pathway_selection.top_n]
+            for row in selected_pathway_rows
         )
         if ranking is not None and pathway_selection is not None
         else ()
@@ -498,10 +531,10 @@ def _pathway_ranking_execution(
     ranking: PathwayRankingResult,
     selection: PathwaySelection,
     *,
+    selected_rows: tuple[PathwayRankingRow, ...],
     dataset: AnnotationDataset,
     mapping_provenance: tuple[KeggBatchProvenance, ...],
 ) -> PathwayRankingExecution:
-    selected_rows = ranking.rows[: selection.top_n]
     return PathwayRankingExecution(
         selection=selection,
         evidence_mode=ranking.evidence_mode,

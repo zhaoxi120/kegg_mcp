@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import replace
 from pathlib import Path
 from xml.etree import ElementTree
@@ -10,6 +11,7 @@ import pytest
 from kegg_mcp.analysis import PathwayReferenceScope
 from kegg_mcp.domain import AnalysisUnit, EvidenceMode
 from kegg_mcp.services.render_contracts import RenderabilityStatus
+from PIL import Image
 
 from conftest import SyntheticProvider
 from kegg_render_mcp.config import RendererRuntimeConfig
@@ -17,7 +19,7 @@ from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
 from kegg_render_mcp.pathway_scene import construct_pathway_scene
 from kegg_render_mcp.raster import PNG_SIGNATURE, render_pathway_png, validate_png
 from kegg_render_mcp.render_input import load_render_input
-from kegg_render_mcp.svg import render_pathway_svg
+from kegg_render_mcp.svg import ACCEPTED_COLOR, UNCERTAIN_COLOR, render_pathway_svg
 
 
 @pytest.mark.asyncio
@@ -38,6 +40,7 @@ async def test_accepted_precedes_uncertain_on_multi_ko_graphic(
     assert tuple(item.state for item in scene.overlays) == ("accepted", "uncertain")
     assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
     assert "not pathway presence" in scene.caption
+    assert "ko00010 - Synthetic pathway" in scene.caption
 
 
 @pytest.mark.asyncio
@@ -104,6 +107,10 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
     )
     svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
     text = svg.content.decode()
+    assert ACCEPTED_COLOR == "#FF0000"
+    assert ACCEPTED_COLOR in text
+    assert UNCERTAIN_COLOR in text
+    assert "#0057FF" not in text
     assert "Accepted annotation" in text
     assert "Policy-defined uncertain annotation" in text
     assert "not evidence of biological absence" in text
@@ -118,6 +125,12 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
         max_nodes=10_000,
     )
     assert "Warnings: Synthetic stale-reference warning." in warned.content.decode()
+    long_warned = render_pathway_svg(
+        replace(scene, warnings=(("Synthetic bounded warning text. " * 80).strip(),)),
+        max_bytes=4_000_000,
+        max_nodes=10_000,
+    )
+    assert long_warned.height > warned.height
 
     node_count = sum(1 for _ in ElementTree.fromstring(svg.content).iter())
     render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=node_count)
@@ -175,6 +188,15 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     assert png.content.startswith(PNG_SIGNATURE)
     assert (png.width, png.height) == (760, 360)
     assert validate_png(png.content, max_bytes=4_000_000, max_pixels=2_000_000) == (760, 360)
+    with Image.open(io.BytesIO(png.content)) as rendered:
+        rgb = rendered.convert("RGB")
+        assert rgb.getpixel((30, 50)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        accepted_box = rgb.crop((34, 41, 86, 59))
+        accepted_bytes = accepted_box.tobytes()
+        assert any(
+            max(accepted_bytes[offset : offset + 3]) < 80
+            for offset in range(0, len(accepted_bytes), 3)
+        )
     warned = render_pathway_png(
         replace(scene, warnings=("Synthetic stale-reference warning.",)),
         max_asset_bytes=2_000_000,
@@ -191,6 +213,13 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     )
     assert without_warning.height == 320
     assert without_warning.content != png.content
+    long_warning = render_pathway_png(
+        replace(scene, warnings=(("Synthetic bounded warning text. " * 80).strip(),)),
+        max_asset_bytes=2_000_000,
+        max_pixels=2_000_000,
+        max_output_bytes=4_000_000,
+    )
+    assert long_warning.height > warned.height
 
 
 def test_png_validation_rejects_signature_truncation_and_pixel_limit() -> None:

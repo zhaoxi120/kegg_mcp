@@ -136,3 +136,15 @@ def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
     assert "no explicit selection are supplied" in corpus
     assert "`pathway_selection`" in corpus
     assert "Top-5 MODULEs and Top-5 canonical KO" in corpus
+
+
+def test_ko_analysis_routes_explicit_ko01100_outside_regular_pipeline() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "`ko01100`",
+        "do not send it through the regular-pathway Core/Renderer pipeline",
+        "model-native drawing step",
+        "model-generated conceptual diagram",
+        "rather than a KEGG-derived coverage overlay",
+    ):
+        assert fragment in corpus

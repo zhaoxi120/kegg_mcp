@@ -81,8 +81,18 @@ class PathwaySpec(FrozenModel):
         }
     )
 
-    pathway_id: str = Field(min_length=7, max_length=9)
-    reference_namespace: PathwayReferenceNamespace = PathwayReferenceNamespace.KO
+    pathway_id: str = Field(
+        min_length=7,
+        max_length=9,
+        description="Canonical KEGG pathway identifier, for example ko00010.",
+        examples=["ko00010"],
+    )
+    reference_namespace: PathwayReferenceNamespace = Field(
+        default=PathwayReferenceNamespace.KO,
+        description=(
+            "Reference denominator namespace. It is inferred from pathway_id when omitted."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

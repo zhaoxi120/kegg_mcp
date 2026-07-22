@@ -14,3 +14,8 @@ Global and overview maps remain summary-only unless the renderer declares a supp
 Do not approximate them with a regular box overlay or infer organism-specific claims from KO-only
 evidence. Never fetch arbitrary URLs, expose endpoint configuration, return raw KEGG assets, or
 copy cache payloads.
+
+An original request that explicitly names `ko01100` is handled outside this Skill by a separate
+model-native drawing step after supported renderer targets finish. That drawing must be labelled as
+a model-generated conceptual diagram, not a KEGG-derived asset or KO coverage overlay. Never use
+this exception to conceal or replace a failed regular-pathway render.

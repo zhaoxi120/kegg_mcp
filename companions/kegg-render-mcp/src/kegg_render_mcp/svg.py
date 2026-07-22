@@ -11,7 +11,7 @@ from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayScene
 
-ACCEPTED_COLOR = "#0072B2"
+ACCEPTED_COLOR = "#FF0000"
 UNCERTAIN_COLOR = "#E69F00"
 UNSUPPORTED_COLOR = "#7F7F7F"
 TEXT_COLOR = "#1F2937"
@@ -27,7 +27,13 @@ class SvgArtifact:
 
 
 def render_pathway_svg(scene: PathwayScene, *, max_bytes: int, max_nodes: int) -> SvgArtifact:
-    footer = 225 if scene.warnings else 190
+    warning_text = "Warnings: " + " | ".join(scene.warnings)[:1000] if scene.warnings else ""
+    warning_rows = wrap_text_rows(warning_text, width_chars=100, max_rows=5)
+    caption_rows = wrap_text_rows(scene.caption, width_chars=100, max_rows=5)
+    warning_block_height = len(warning_rows) * 18 + 12 if warning_rows else 0
+    content_y_offset = 98 + warning_block_height
+    required_footer = content_y_offset + 30 + len(caption_rows) * 18 + 20
+    footer = max(225 if warning_rows else 190, required_footer)
     width = max(scene.width, 760)
     height = scene.height + footer
     encoded = base64.b64encode(scene.source_png).decode("ascii")
@@ -64,9 +70,9 @@ def render_pathway_svg(scene: PathwayScene, *, max_bytes: int, max_nodes: int) -
         ]
     )
     content_y = footer_y + 70
-    if scene.warnings:
-        lines.append(_text(24, content_y, "Warnings: " + " | ".join(scene.warnings)[:1000], 13))
-        content_y += 30
+    if warning_rows:
+        lines.extend(_positioned_text(warning_rows, x=24, y=content_y, size=13))
+        content_y += warning_block_height
     lines.extend(
         [
             _text(
@@ -242,6 +248,15 @@ def _legend(x: int, y: int, color: str, label: str, *, dashed: bool) -> str:
 
 
 def _wrapped_text(value: str, *, x: int, y: int, width_chars: int, size: int) -> list[str]:
+    return _positioned_text(
+        wrap_text_rows(value, width_chars=width_chars, max_rows=5),
+        x=x,
+        y=y,
+        size=size,
+    )
+
+
+def wrap_text_rows(value: str, *, width_chars: int, max_rows: int) -> tuple[str, ...]:
     words = value.split()
     rows: list[str] = []
     current: list[str] = []
@@ -254,7 +269,11 @@ def _wrapped_text(value: str, *, x: int, y: int, width_chars: int, size: int) ->
             current.append(word)
     if current:
         rows.append(" ".join(current))
-    return [_text(x, y + index * (size + 5), row, size) for index, row in enumerate(rows[:5])]
+    return tuple(rows[:max_rows])
+
+
+def _positioned_text(rows: tuple[str, ...], *, x: int, y: int, size: int) -> list[str]:
+    return [_text(x, y + index * (size + 5), row, size) for index, row in enumerate(rows)]
 
 
 def _validate_static_svg(content: bytes, *, max_bytes: int, max_nodes: int) -> None:

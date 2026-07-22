@@ -10,6 +10,10 @@ project-owned MODULE logic diagrams from the authoritative core AST. SVG is cano
 optional bounded derivative, and artifacts are available through local directories and scoped MCP
 resources.
 
+Accepted evidence uses a solid vivid-red (`#FF0000`) overlay. Policy-defined uncertain evidence
+uses orange (`#E69F00`) plus a dashed border, and accepted evidence retains precedence on shared
+graphics.
+
 Global and overview pathway overlays are unsupported because they require a separately reviewed
 line-overlay policy. `map` and organism-specific targets remain explicit summary-only core results;
 only regular KO reference pathways are renderable. Graphics describe annotation evidence and do not
@@ -133,9 +137,11 @@ output directory remains operator-owned.
 ## Security boundary
 
 Input JSON, targets, XML, coordinates, dimensions, pixels, SVG nodes, artifact bytes, retained
-results, storage, and cleanup are bounded. KGML DTDs, entities, external resolution, excessive
-depth, and mismatched identities are rejected. PNG structure, dimensions, decompression, and total
-pixels are validated before use.
+results, storage, and cleanup are bounded. The renderer accepts the single inert KEGG KGML v0.7.2
+HTTPS `SYSTEM` declaration observed on 2026-07-21, but never resolves or fetches its DTD. Other DTD
+declarations, entity declarations, external entity resolution, excessive depth, and mismatched
+identities are rejected. PNG structure, dimensions, decompression, and total pixels are validated
+before use.
 
 Generated SVG has no scripts, event handlers, active links, remote fonts, or external resources;
 the validated source PNG is embedded as static data. Artifact names derive only from canonical

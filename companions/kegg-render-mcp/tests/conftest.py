@@ -53,19 +53,23 @@ from kegg_render_mcp.contracts import ConnectivityStatus
 from kegg_render_mcp.pathway_scene import RetrievedAsset
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
+KGML_DOCTYPE = '<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
 
 
 def synthetic_png(width: int = 240, height: int = 140) -> bytes:
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     draw.rectangle((20, 20, 220, 120), outline="#444444")
+    draw.text((40, 45), "K00001", fill="black")
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
 def synthetic_kgml(pathway_id: str = "ko00010") -> bytes:
+    # This inert declaration was observed in current KEGG KGML responses on 2026-07-21.
     return f"""<?xml version="1.0" encoding="UTF-8"?>
+{KGML_DOCTYPE}
 <pathway name="path:{pathway_id}" number="00010" title="Synthetic pathway">
   <entry id="1" name="ko:K00001 ko:K00002" type="gene">
     <graphics name="K00001..." type="rectangle" x="60" y="50" width="60" height="24"/>

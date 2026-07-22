@@ -12,10 +12,17 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayScene
-from kegg_render_mcp.svg import ACCEPTED_COLOR, UNCERTAIN_COLOR, UNSUPPORTED_COLOR
+from kegg_render_mcp.svg import (
+    ACCEPTED_COLOR,
+    UNCERTAIN_COLOR,
+    UNSUPPORTED_COLOR,
+    wrap_text_rows,
+)
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PIL_PIXEL_LIMIT_LOCK = threading.Lock()
+_TEXT_ROW_HEIGHT = 16
+_MAX_FOOTER_TEXT_ROWS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,14 +71,29 @@ def render_pathway_png(
     width, height = validate_png(scene.source_png, max_bytes=max_asset_bytes, max_pixels=max_pixels)
     if (width, height) != (scene.width, scene.height):
         raise _asset_error("Decoded PNG dimensions disagree with validated asset metadata.")
-    footer = 220 if scene.warnings else 180
+    warning_text = "Warnings: " + " | ".join(scene.warnings)[:1000] if scene.warnings else ""
+    warning_rows = wrap_text_rows(
+        warning_text,
+        width_chars=110,
+        max_rows=_MAX_FOOTER_TEXT_ROWS,
+    )
+    caption_rows = wrap_text_rows(
+        scene.caption,
+        width_chars=110,
+        max_rows=_MAX_FOOTER_TEXT_ROWS,
+    )
+    warning_block_height = len(warning_rows) * _TEXT_ROW_HEIGHT + 8 if warning_rows else 0
+    content_y_offset = 74 + warning_block_height
+    required_footer = content_y_offset + 24 + len(caption_rows) * _TEXT_ROW_HEIGHT + 16
+    footer = max(220 if warning_rows else 180, required_footer)
     output_width = max(width, 760)
     output_height = height + footer
     if output_width * output_height > max_pixels:
         raise _output_error("The pathway PNG derivative exceeds the configured pixel limit.")
     with Image.open(io.BytesIO(scene.source_png)) as source:
-        canvas = Image.new("RGBA", (output_width, output_height), "white")
-        canvas.alpha_composite(source.convert("RGBA"), (0, 0))
+        background = Image.new("RGBA", (output_width, output_height), "white")
+        background.alpha_composite(source.convert("RGBA"), (0, 0))
+        canvas = background.convert("RGB")
     draw = ImageDraw.Draw(canvas, "RGBA")
     for overlay in scene.overlays:
         left = round(overlay.x - overlay.width / 2)
@@ -99,23 +121,22 @@ def render_pathway_png(
     )
     draw.text((240, y + 24), "Policy-defined uncertain annotation", fill="#1F2937", font=font)
     content_y = y + 54
-    if scene.warnings:
-        _draw_wrapped(
+    if warning_rows:
+        _draw_rows(
             draw,
-            "Warnings: " + " | ".join(scene.warnings)[:1000],
+            warning_rows,
             (20, content_y),
-            width=110,
             font=font,
         )
-        content_y += 34
+        content_y += warning_block_height
     draw.text(
         (20, content_y),
         "Unmatched graphics are not evidence of biological absence.",
         fill="#1F2937",
         font=font,
     )
-    _draw_wrapped(draw, scene.caption, (20, content_y + 24), width=110, font=font)
-    return _serialize_png(canvas.convert("RGB"), max_output_bytes)
+    _draw_rows(draw, caption_rows, (20, content_y + 24), font=font)
+    return _serialize_png(canvas, max_output_bytes)
 
 
 def render_module_png(scene: ModuleScene, *, max_pixels: int, max_output_bytes: int) -> PngArtifact:
@@ -251,20 +272,28 @@ def _draw_wrapped(
     width: int,
     font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
 ) -> None:
-    words = value.split()
-    rows: list[str] = []
-    current: list[str] = []
-    for word in words:
-        candidate = " ".join((*current, word))
-        if len(candidate) > width and current:
-            rows.append(" ".join(current))
-            current = [word]
-        else:
-            current.append(word)
-    if current:
-        rows.append(" ".join(current))
-    for index, row in enumerate(rows[:4]):
-        draw.text((origin[0], origin[1] + index * 16), row, fill="#1F2937", font=font)
+    _draw_rows(
+        draw,
+        wrap_text_rows(value, width_chars=width, max_rows=_MAX_FOOTER_TEXT_ROWS),
+        origin,
+        font=font,
+    )
+
+
+def _draw_rows(
+    draw: ImageDraw.ImageDraw,
+    rows: tuple[str, ...],
+    origin: tuple[int, int],
+    *,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
+) -> None:
+    for index, row in enumerate(rows):
+        draw.text(
+            (origin[0], origin[1] + index * _TEXT_ROW_HEIGHT),
+            row,
+            fill="#1F2937",
+            font=font,
+        )
 
 
 def _ratio(value: float | None) -> str:

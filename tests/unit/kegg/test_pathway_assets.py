@@ -6,6 +6,7 @@ import struct
 import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 from pydantic import ValidationError
@@ -33,6 +34,7 @@ from kegg_mcp.kegg.pathway_assets import (
 from kegg_mcp.kegg.transport import TransportResponse
 
 _NOW = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
+_KGML_DOCTYPE = '<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
 
 
 def _chunk(chunk_type: bytes, data: bytes) -> bytes:
@@ -52,9 +54,12 @@ def _png(width: int = 2, height: int = 1, *, compressed_rows: bytes | None = Non
     )
 
 
-def _kgml(pathway_id: str = "ko00010") -> bytes:
+def _kgml(pathway_id: str = "ko00010", *, include_doctype: bool = True) -> bytes:
+    # This inert declaration was observed in current KEGG KGML responses on 2026-07-21.
+    doctype = _KGML_DOCTYPE if include_doctype else ""
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
+        f"{doctype}"
         f'<pathway name="path:{pathway_id}" org="ko" number="00010">'
         '<entry id="1" name="ko:K00844" type="ortholog" />'
         "</pathway>"
@@ -186,7 +191,7 @@ def test_png_validation_rejects_invalid_idat_stream_and_scanline_output() -> Non
         )
 
 
-def test_kgml_preflight_defers_xml_identity_and_structure_but_rejects_active_declarations() -> None:
+def test_kgml_preflight_accepts_supported_inert_doctype_and_defers_xml_structure() -> None:
     request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.KGML)
 
     assert validate_pathway_asset_content(
@@ -197,6 +202,11 @@ def test_kgml_preflight_defers_xml_identity_and_structure_but_rejects_active_dec
     assert validate_pathway_asset_content(
         request,
         _kgml("ko00020"),
+        content_type="application/xml",
+    ) == ("application/xml", None, None)
+    assert validate_pathway_asset_content(
+        request,
+        _kgml(include_doctype=False),
         content_type="application/xml",
     ) == ("application/xml", None, None)
     assert validate_pathway_asset_content(
@@ -216,11 +226,88 @@ def test_kgml_preflight_defers_xml_identity_and_structure_but_rejects_active_dec
             b"\xff",
             content_type="application/xml",
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '\u00a0<pathway name="path:ko00010"/>',
+        '<pathway\u00a0name="path:ko00010"/>',
+        '<pathwayX name="path:ko00010"/>',
+        (
+            "<!DOCTYPE\u00a0pathway SYSTEM "
+            '"https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
+            '<pathway name="path:ko00010"/>'
+        ),
+    ],
+)
+def test_kgml_preflight_rejects_non_xml_whitespace_and_unbounded_root_names(
+    payload: str,
+) -> None:
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.KGML)
+
+    with pytest.raises(ValueError):
+        validate_pathway_asset_content(
+            request,
+            payload.encode(),
+            content_type="application/xml",
+        )
+
+
+def test_kgml_preflight_rejects_long_invalid_prolog_without_regex_backtracking() -> None:
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.KGML)
+    payload = b" " * 16_384 + b"X"
+
+    started = perf_counter()
+    with pytest.raises(ValueError, match="pathway root"):
+        validate_pathway_asset_content(
+            request,
+            payload,
+            content_type="application/xml",
+        )
+
+    assert perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        (b'<!DOCTYPE pathway SYSTEM "file:///tmp/KGML.dtd"><pathway name="path:ko00010"/>'),
+        (
+            b'<!DOCTYPE pathway SYSTEM "http://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://example.test/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.3_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway PUBLIC "-//KEGG//KGML" '
+            b'"https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd">'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (
+            b'<!DOCTYPE pathway SYSTEM "https://www.kegg.jp/kegg/xml/KGML_v0.7.2_.dtd" '
+            b'[<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            b'<pathway name="path:ko00010"/>'
+        ),
+        (_KGML_DOCTYPE + _KGML_DOCTYPE + '<pathway name="path:ko00010"/>').encode(),
+        ('<pathway name="path:ko00010"/>' + _KGML_DOCTYPE).encode(),
+    ],
+)
+def test_kgml_preflight_rejects_unsupported_or_misplaced_declarations(
+    payload: bytes,
+) -> None:
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.KGML)
+
     with pytest.raises(ValueError, match="DTD or entity"):
         validate_pathway_asset_content(
             request,
-            b'<!DOCTYPE pathway [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
-            b'<pathway name="path:ko00010"/>',
+            payload,
             content_type="application/xml",
         )
 

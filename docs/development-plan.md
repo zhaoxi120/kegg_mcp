@@ -200,8 +200,12 @@ presence, completeness, expression, activity, flux, phenotype, or experimental v
 When the high-level service receives no explicit MODULE or pathway target, it independently selects
 up to five MODULEs and five canonical KO reference pathways. Ranking uses the number of unique K
 numbers selected by the requested evidence mode and the canonical target identifier as the stable
-tie-breaker. Ranking selects definitions to analyze; it is neither MODULE completion nor enrichment.
-Duplicate records and duplicate KEGG relationships never inflate the overlap.
+tie-breaker. Automatic pathway selection directly excludes the current KEGG Global, Overview, and
+higher-level Overview KO map identifiers before Top-N truncation and fills the selection from the
+next ranked regular references. The fixed identifier set was checked against the official KEGG
+PATHWAY identifier classes and map list on 2026-07-22. Ranking selects definitions to analyze; it is
+neither MODULE completion nor enrichment. Duplicate records and duplicate KEGG relationships never
+inflate the overlap.
 
 KO-set comparison is deterministic set comparison. It preserves labels, analysis units, policies,
 and compatible KEGG provenance. It reports shared and set-specific evidence and differences in

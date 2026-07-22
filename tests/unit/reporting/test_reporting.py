@@ -26,6 +26,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
+from kegg_mcp.analysis.pathway_ranking import PathwayRankingRow, PathwaySelection
 from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode, ScoreType
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
@@ -195,6 +196,17 @@ def _artifact(rendered: RenderedReport, section: ReportSection):
     return next(item for item in rendered.artifacts if item.section is section)
 
 
+def _pathway_ranking_row(pathway_id: str, rank: int) -> PathwayRankingRow:
+    return PathwayRankingRow(
+        pathway_id=pathway_id,
+        pathway_number=pathway_id.removeprefix("ko"),
+        detected_unique_ko_count=1,
+        detected_ko_ids=("K00001",),
+        relationship_row_count=1,
+        rank=rank,
+    )
+
+
 def _schema_property_names(node: object) -> set[str]:
     if isinstance(node, dict):
         mapping = cast(dict[str, object], node)
@@ -234,6 +246,22 @@ def test_canonical_artifacts_round_trip_with_exact_sizes_and_provenance() -> Non
     assert structured.report.pathway_coverages[0].reference_link_provenance[0].is_stale
     assert structured.report.module_evaluations[0].strict.module_id == "M00001"
     assert RenderedReport.model_validate_json(first.model_dump_json()) == first
+
+
+def test_pathway_ranking_falls_back_to_requested_top_n_without_execution_provenance() -> None:
+    report = ReportInput(
+        dataset=_dataset(),
+        pathway_selection=PathwaySelection(top_n=1),
+        pathway_ranking=(
+            _pathway_ranking_row("ko00010", 1),
+            _pathway_ranking_row("ko00020", 2),
+        ),
+    )
+
+    summary = _artifact(render_report(report), ReportSection.SUMMARY).content
+
+    assert "| 1 | `ko00010` | 1 | 1 | yes |" in summary
+    assert "| 2 | `ko00020` | 1 | 1 | no |" in summary
 
 
 def test_markdown_distinguishes_evidence_modes_metrics_and_claim_boundaries() -> None:
