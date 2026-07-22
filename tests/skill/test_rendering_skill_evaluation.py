@@ -88,3 +88,18 @@ def test_missing_suite_stage_requests_installation_or_repair() -> None:
         "stop before rendering",
     ):
         assert fragment in CORPUS
+
+
+def test_registered_suite_with_stale_task_snapshot_does_not_reinstall() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "task_reload_required",
+        "new_task_required=true",
+        "current_task_reload_supported=false",
+        "repeat_installation_required=false",
+        "stale tool snapshot",
+        "do not request or perform another installation",
+        "new Codex task outside the source checkout",
+    ):
+        assert fragment in normalized
+    assert normalized.index("task_reload_required") < normalized.index("incomplete deployment")

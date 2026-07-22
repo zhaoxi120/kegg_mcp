@@ -125,6 +125,11 @@ A successful installer exit or simulated Codex response is insufficient. From th
    DeepKOALA structured status to return `route_state="local_ready"`; and
 6. record versions, failures, and redacted evidence in the release notes.
 
+The installation task is expected to retain its pre-install tool snapshot. Verify that the installer
+reports `new_task_required=true`, `current_task_reload_supported=false`, and
+`repeat_installation_required=false`; never treat missing newly installed tools in that same task as
+a reason to reinstall. Only the required fresh-task smoke is discovery evidence.
+
 Discovery, registration, rollback, or validator failures block release support for the suite path.
 
 ## Build and installed-artifact audit

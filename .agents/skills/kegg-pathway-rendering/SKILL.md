@@ -12,14 +12,20 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
    earlier stages through the installed focused Skills and enter this Skill only after the core
    returns a compatible stable handoff; never call those MCP servers here. Prefer DeepKOALA as the
    first protein-FASTA annotation route. If a required focused Skill or declared MCP dependency is
-   unavailable in Codex, stop, preserve the original downstream goals, and request explicit
-   permission once to install or repair the complete repository suite. Resume in a new Codex task
-   after discovery.
+   unavailable, first distinguish `task_reload_required` from an incomplete deployment. A
+   successful suite result with `new_task_required=true`,
+   `current_task_reload_supported=false`, and `repeat_installation_required=false`, or equivalent
+   inventory evidence that the enabled plugin and all three MCP registrations exist, means the
+   current task has a stale tool snapshot. The Skill must stop before rendering, preserve the
+   original downstream goals, direct the user to one new Codex task outside the source checkout,
+   and do not request or perform another installation. Only a fresh-task failure combined with
+   incomplete deployment inventory may request explicit permission once to install or repair the
+   complete repository suite. Resume in a new Codex task after discovery.
 2. Require the declared `kegg-render-mcp` dependency and `get_renderer_status` tool to be exposed.
-   If they are unavailable in Codex, apply the same complete-suite repair route and stop before
-   rendering. Otherwise read [rendering-workflow.md](references/rendering-workflow.md), then call
-   `get_renderer_status`. Require readiness, schema version 3, the requested static output format,
-   and compatible bounds.
+   If they are unavailable in Codex, apply the same activation-versus-repair classification and
+   stop before rendering. Otherwise read
+   [rendering-workflow.md](references/rendering-workflow.md), then call `get_renderer_status`.
+   Require readiness, schema version 3, the requested static output format, and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, upgrade, or recompute its evidence
    in the Skill.
 

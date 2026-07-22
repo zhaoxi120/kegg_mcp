@@ -11,12 +11,18 @@ description: Normalize existing K numbers or KO annotation tables, retrieve boun
    If the only input is protein FASTA without KO evidence and the user explicitly selected another
    annotator, stop this Skill and return only after that route supplies supported KO evidence.
    Otherwise prefer the installed `deepkoala-annotation` Skill as the first annotation route. If
-   that Skill or `deepkoala-mcp` is unavailable in Codex, stop before a core call, report an
-   incomplete suite deployment, and request explicit permission once to install or repair the
-   complete repository suite. If the user declines that action, remain stopped until a
-   user-selected route supplies supported KO evidence. After a successful suite action, resume the
-   original request in a new Codex task after discovery. Never call `deepkoala-mcp` or any annotator
-   MCP from this Skill.
+   that Skill or `deepkoala-mcp` is unavailable, first distinguish `task_reload_required` from an
+   incomplete deployment. A successful suite result with `new_task_required=true`,
+   `current_task_reload_supported=false`, and `repeat_installation_required=false`, or equivalent
+   inventory evidence that the enabled plugin and all three MCP registrations exist, means the
+   current task has a stale tool snapshot. Preserve the original request, stop before a core call,
+   direct the user to one new Codex task outside the source checkout, and do not request or perform
+   another installation. Only a fresh-task failure combined with incomplete deployment inventory
+   is an incomplete suite deployment for which explicit permission may be requested once to install
+   or repair the complete repository suite. If the user declines that action, remain stopped until
+   a user-selected route supplies supported KO evidence. After a successful suite action, resume
+   the original request in a new Codex task after discovery. Never call `deepkoala-mcp` or any
+   annotator MCP from this Skill.
 2. Read [workflow-selection.md](references/workflow-selection.md) and choose the smallest core
    workflow. Do not ask the user to restate readable input.
 3. For a shared annotation file, pass its controlled absolute path, declared format, source

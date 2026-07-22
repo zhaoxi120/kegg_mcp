@@ -106,3 +106,20 @@ def test_fasta_only_prefers_deepkoala_and_requests_suite_when_missing() -> None:
     assert normalized.index("explicitly selected another") < normalized.index(
         "Otherwise prefer the installed `deepkoala-annotation` Skill"
     )
+
+
+def test_registered_suite_with_stale_task_snapshot_is_not_reinstalled() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "task_reload_required",
+        "new_task_required=true",
+        "current_task_reload_supported=false",
+        "repeat_installation_required=false",
+        "stale tool snapshot",
+        "do not request or perform another installation",
+        "new Codex task outside the source checkout",
+    ):
+        assert fragment in normalized
+    assert normalized.index("task_reload_required") < normalized.index(
+        "incomplete suite deployment"
+    )

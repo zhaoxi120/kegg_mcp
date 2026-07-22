@@ -6,9 +6,12 @@
 - `multi_dependencies_unavailable`: ordinary annotation remains available, but do not pass
   `multi=true`; report the operator action needed to repair HMMER, profiles, or the supported
   upstream interface.
-- missing declared MCP dependency or required tool in Codex: stop before annotation, report an
-  incomplete suite deployment, request explicit permission once to install or repair the complete
-  repository suite, and resume the original request in a new Codex task after discovery.
+- missing declared MCP dependency or required tool in the task immediately after a successful suite
+  installation: classify `task_reload_required`, do not install again, and resume the preserved
+  request in one new Codex task outside the source checkout.
+- missing declared MCP dependency in a fresh task with incomplete Codex plugin or MCP inventory:
+  stop before annotation, report an incomplete suite deployment, request explicit permission once
+  to install or repair the complete repository suite, and resume in a new task after discovery.
 - missing companion registration in another MCP client: explain how to register the existing
   executable, then stop.
 - missing checkout, interpreter, or model resources: identify the missing deployment component and
@@ -19,6 +22,11 @@
 Suite installation permission applies once to each new suite installation root. An installed
 `local_ready` deployment does not repeat that question for later FASTA jobs; a separate new root is
 a separate first installation.
+
+The installer success fields `new_task_required=true`, `current_task_reload_supported=false`, and
+`repeat_installation_required=false` are activation state, not a failed installation. A task cannot
+use MCP tools added after its tool snapshot was created. Never turn that state into a second install
+request; use a new task first.
 
 A CUDA readiness or policy failure stops the requested GPU job; do not substitute CPU or automatic
 device selection. Installing or replacing PyTorch, CUDA, drivers, or other runtime resources still

@@ -64,9 +64,12 @@ Select KEGG access explicitly. Use confirmed `public_academic` only when both th
 qualify for public academic KEGG access. Non-academic deployments require an appropriately licensed
 endpoint.
 
-After installation, start a new Codex task outside this source checkout and confirm discovery of all
-three Skills and MCP servers. The generated-plugin path is release-supported only after the exact
-release candidate passes [release readiness](docs/release-readiness.md).
+After installation, the installer's JSON result reports `new_task_required=true`,
+`current_task_reload_supported=false`, and `repeat_installation_required=false`. The installation
+task cannot hot-load newly registered MCP tools: close it and start one new Codex task outside this
+source checkout before judging discovery. Do not reinstall a suite that Codex already reports as an
+enabled plugin with all three MCP registrations. The generated-plugin path is release-supported
+only after the exact release candidate passes [release readiness](docs/release-readiness.md).
 
 ## End-to-end requests
 

@@ -100,3 +100,20 @@ def test_missing_companion_requests_complete_suite_installation() -> None:
     assert normalized.index("explicitly selected another annotator") < normalized.index(
         "Otherwise require the declared `deepkoala-mcp` dependency"
     )
+
+
+def test_post_install_tool_absence_never_requests_reinstallation() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "task_reload_required",
+        "new_task_required=true",
+        "current_task_reload_supported=false",
+        "repeat_installation_required=false",
+        "stale tool snapshot",
+        "do not request or perform another installation",
+        "new Codex task outside the source checkout",
+    ):
+        assert fragment in normalized
+    assert normalized.index("task_reload_required") < normalized.index(
+        "incomplete suite deployment"
+    )
