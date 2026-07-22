@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -55,10 +55,10 @@ class ToolOutcome:
     result_id: str | None = None
 
 
-ToolHandler = Callable[[ToolContext, BaseModel], Awaitable[ToolOutcome]]
+ToolHandler = Callable[[ToolContext, BaseModel], ToolOutcome]
 
 
-async def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeKoAnnotationsInput, model)
     runtime = context.runtime
     if request.annotations is not None:
@@ -99,7 +99,7 @@ async def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOut
     )
 
 
-async def normalize(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def normalize(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(NormalizeKoAnnotationsInput, model)
     runtime = context.runtime
     materialized = materialize_annotation_file(request.to_service_request(), runtime.allowed_roots)
@@ -124,7 +124,7 @@ async def normalize(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
-async def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(GetKeggEntriesInput, model)
     runtime = context.runtime
     result = retrieve_kegg_entries(
@@ -140,7 +140,7 @@ async def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
-async def map_identifiers(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def map_identifiers(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(MapKoIdsInput, model)
     runtime = context.runtime
     result = map_ko_identifiers(
@@ -159,7 +159,7 @@ async def map_identifiers(context: ToolContext, model: BaseModel) -> ToolOutcome
     )
 
 
-async def analyze_modules(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def analyze_modules(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeModulesInput, model)
     runtime = context.runtime
     result = analyze_module_targets(
@@ -176,7 +176,7 @@ async def analyze_modules(context: ToolContext, model: BaseModel) -> ToolOutcome
     )
 
 
-async def analyze_pathways(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def analyze_pathways(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzePathwaysInput, model)
     runtime = context.runtime
     result = analyze_pathway_targets(
@@ -195,7 +195,7 @@ async def analyze_pathways(context: ToolContext, model: BaseModel) -> ToolOutcom
     )
 
 
-async def compare_sets(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def compare_sets(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(CompareKoSetsInput, model)
     runtime = context.runtime
     result = compare_annotation_sets(
@@ -214,7 +214,7 @@ async def compare_sets(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
-async def probe_connectivity(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def probe_connectivity(context: ToolContext, model: BaseModel) -> ToolOutcome:
     cast(ProbeKeggConnectivityInput, model)
     result = probe_kegg_connectivity_service(cast(KeggConnectivityClient, context.runtime.client))
     return ToolOutcome(
@@ -223,7 +223,7 @@ async def probe_connectivity(context: ToolContext, model: BaseModel) -> ToolOutc
     )
 
 
-async def delete_result(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def delete_result(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(DeleteAnalysisResultInput, model)
     runtime = context.runtime
     result = delete_analysis_result(
@@ -237,7 +237,7 @@ async def delete_result(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
-async def list_results(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def list_results(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(ListAnalysisResultsInput, model)
     runtime = context.runtime
     result = list_analysis_results(
@@ -249,7 +249,7 @@ async def list_results(context: ToolContext, model: BaseModel) -> ToolOutcome:
     return ToolOutcome(result, f"Returned {len(result.items)} current-session retained results.")
 
 
-async def get_status(context: ToolContext, model: BaseModel) -> ToolOutcome:
+def get_status(context: ToolContext, model: BaseModel) -> ToolOutcome:
     cast(GetServerStatusInput, model)
     runtime = context.runtime
     result = get_server_status_service(

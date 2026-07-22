@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from anyio import lowlevel, to_thread
 from mcp import types
 from pydantic import BaseModel, ValidationError
 
@@ -207,6 +208,34 @@ _TOOL_BY_NAME = {spec.name: spec for spec in TOOL_SPECS}
 if len(_TOOL_BY_NAME) != len(TOOL_SPECS):  # pragma: no cover - import-time contract guard
     raise RuntimeError("core MCP tool registry names must be unique")
 
+_CLIENT_TOOL_NAMES = frozenset(
+    {
+        "analyze_ko_annotations",
+        "get_kegg_entries",
+        "map_ko_ids",
+        "analyze_modules",
+        "analyze_pathways",
+        "compare_ko_sets",
+        "probe_kegg_connectivity",
+    }
+)
+_LOCAL_TOOL_NAMES = frozenset(
+    {
+        "normalize_ko_annotations",
+        "list_analysis_results",
+        "delete_analysis_result",
+    }
+)
+_INLINE_TOOL_NAMES = frozenset({"get_server_status"})
+_CLASSIFIED_TOOL_NAMES = _CLIENT_TOOL_NAMES | _LOCAL_TOOL_NAMES | _INLINE_TOOL_NAMES
+if (  # pragma: no cover - import-time contract guard
+    frozenset(TOOL_NAMES) != _CLASSIFIED_TOOL_NAMES
+    or _CLIENT_TOOL_NAMES & _LOCAL_TOOL_NAMES
+    or _CLIENT_TOOL_NAMES & _INLINE_TOOL_NAMES
+    or _LOCAL_TOOL_NAMES & _INLINE_TOOL_NAMES
+):
+    raise RuntimeError("every registered tool must have exactly one execution class")
+
 
 def tool_definitions() -> list[types.Tool]:
     return [_tool(spec) for spec in TOOL_SPECS]
@@ -232,7 +261,24 @@ async def dispatch_tool(
     except ValidationError as exception:
         return error_result(validation_error(exception))
     try:
-        outcome = await spec.handler(ToolContext(runtime, TOOL_NAMES), request)
+        if name in _INLINE_TOOL_NAMES:
+            outcome = spec.handler(ToolContext(runtime, TOOL_NAMES), request)
+        else:
+            limiter = (
+                runtime.client_handler_limiter
+                if name in _CLIENT_TOOL_NAMES
+                else runtime.local_handler_limiter
+            )
+            try:
+                outcome = await to_thread.run_sync(
+                    spec.handler,
+                    ToolContext(runtime, TOOL_NAMES),
+                    request,
+                    abandon_on_cancel=False,
+                    limiter=limiter,
+                )
+            finally:
+                await lowlevel.checkpoint_if_cancelled()
     except KeggMcpError as exception:
         return error_result(exception.detail)
     except ResultStoreError:

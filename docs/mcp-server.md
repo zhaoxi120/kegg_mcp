@@ -280,6 +280,16 @@ it cannot cross a result or process scope.
 `kegg-cache://entries/...` is cache-only and never triggers network access or creates a retained
 result. It returns a bounded parsed preview rather than the raw cached payload.
 
+Core runs synchronous service operations in bounded worker threads so HTTPS retries, analysis,
+file access, and SQLite transactions do not block the MCP event loop. KEGG-client operations are
+serialized because the injected client contract does not promise thread safety; local storage and
+resource reads use separate bounded worker capacity so status and resource handling remain
+responsive during a slow KEGG request. The MCP cancellation response can be sent immediately, but
+the cancelled request task and shutdown wait for its in-flight synchronous operation to finish;
+the task then propagates cancellation without a second response. This prevents detached workers
+from writing after scope cleanup. Fully interruptible cancellation requires a future asynchronous
+transport and service API.
+
 ## Independent renderer MCP
 
 `kegg-render-mcp` is a separate distribution and process. It accepts the core's version 3 handoff,
