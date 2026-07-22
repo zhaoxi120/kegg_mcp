@@ -59,7 +59,7 @@ from kegg_mcp.kegg.transport import (
     TransportResponse,
 )
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
-from kegg_mcp.services.kegg_mapping import retrieve_kegg_entries
+from kegg_mcp.services.kegg_mapping import read_cached_kegg_entry, retrieve_kegg_entries
 from kegg_mcp.services.models import MAX_GET_PROVENANCE_BATCHES, NormalizeAnnotationsRequest
 from kegg_mcp.services.result_store import SQLiteResultStore
 
@@ -442,6 +442,109 @@ def test_multi_entry_get_populates_single_entry_and_arbitrary_subset_cache(tmp_p
     ]
     assert all(batch.origin is ResponseOrigin.CACHE for batch in subset.batches)
     assert len(transport.urls) == 1
+
+
+@pytest.mark.parametrize("pathway_first", [True, False])
+def test_entry_service_preserves_database_for_pathway_and_brite_identifier_collision(
+    tmp_path: Path,
+    pathway_first: bool,
+) -> None:
+    pathway_entry = KeggEntryRef(
+        database=KeggGetDatabase.PATHWAY,
+        identifier="ko00001",
+    )
+    brite_entry = KeggEntryRef(
+        database=KeggGetDatabase.BRITE,
+        identifier="ko00001",
+        brite_kind=KeggBriteEntryKind.HIERARCHY,
+    )
+    pathway_response = TransportResponse(
+        status_code=200,
+        body=(
+            b"ENTRY       ko00001                    Pathway\nNAME        Synthetic pathway\n///\n"
+        ),
+    )
+    brite_response = TransportResponse(
+        status_code=200,
+        body=b"+C\tKO hierarchy\nA09100 Metabolism\n",
+    )
+    responses: list[TransportResponse | TransportError]
+    if pathway_first:
+        entries = (pathway_entry, brite_entry)
+        responses = [pathway_response, brite_response]
+    else:
+        entries = (brite_entry, pathway_entry)
+        responses = [brite_response, pathway_response]
+
+    result = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=KeggClient(
+            _public_config(tmp_path / "colliding-entry-cache.sqlite3"),
+            transport=QueueTransport(responses),
+            clock=_clock(_NOW),
+        ),
+        result_store=SQLiteResultStore(tmp_path / "colliding-entry-results.sqlite3"),
+        scope_id="colliding-entry-service",
+    )
+
+    assert [
+        (preview.database, preview.identifier, preview.format) for preview in result.previews
+    ] == [
+        (
+            entry.database,
+            entry.identifier,
+            "brite_htext" if entry.database is KeggGetDatabase.BRITE else "flat_file",
+        )
+        for entry in entries
+    ]
+
+
+def test_entry_service_omits_missing_brite_collision_from_live_and_cached_previews(
+    tmp_path: Path,
+) -> None:
+    pathway_entry = KeggEntryRef(
+        database=KeggGetDatabase.PATHWAY,
+        identifier="ko00001",
+    )
+    brite_entry = KeggEntryRef(
+        database=KeggGetDatabase.BRITE,
+        identifier="ko00001",
+        brite_kind=KeggBriteEntryKind.HIERARCHY,
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "missing-brite-cache.sqlite3"),
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=(
+                        b"ENTRY       ko00001                    Pathway\n"
+                        b"NAME        Synthetic pathway\n///\n"
+                    ),
+                ),
+                TransportResponse(status_code=200, body=b""),
+            ]
+        ),
+        clock=_clock(_NOW),
+    )
+
+    result = retrieve_kegg_entries(
+        GetRequest(entries=(pathway_entry, brite_entry)),
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "missing-brite-results.sqlite3"),
+        scope_id="missing-brite-service",
+    )
+
+    assert result.returned_count == 1
+    assert result.missing_identifiers == ("ko00001",)
+    assert [(preview.database, preview.identifier) for preview in result.previews] == [
+        (KeggGetDatabase.PATHWAY, "ko00001")
+    ]
+
+    cached = read_cached_kegg_entry(GetRequest(entries=(brite_entry,)), client=client)
+    assert cached.returned_count == 0
+    assert cached.missing_identifiers == ("ko00001",)
+    assert cached.previews == ()
 
 
 def test_offline_multi_entry_service_bounds_direct_provenance_and_retains_every_batch(
