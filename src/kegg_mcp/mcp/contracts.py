@@ -7,6 +7,7 @@ from typing import Annotated, Generic, Literal, Self, TypeVar, cast
 
 from pydantic import Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
+from pydantic_core import PydanticCustomError
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection
@@ -78,7 +79,15 @@ class NormalizeKoAnnotationsInput(FrozenModel):
 
     text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
     file_path: str | None = Field(default=None, min_length=1, max_length=4_096)
-    output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
+    output_directory: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4_096,
+        description=(
+            "New or empty allowed bundle directory. Omit to allocate a fresh directory beneath "
+            "the deployment's default output root when file handoff is enabled."
+        ),
+    )
     manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED
     input_format: AnnotationInputFormat = AnnotationInputFormat.PLAIN_KO
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
@@ -149,7 +158,15 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
     pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
-    output_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
+    output_directory: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4_096,
+        description=(
+            "New or empty allowed analysis directory. Omit to allocate a fresh directory beneath "
+            "the deployment's default output root when file handoff is enabled."
+        ),
+    )
 
     @field_validator("pathways")
     @classmethod
@@ -160,13 +177,18 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
     def validate_common_path(self) -> Self:
         if (self.ko_text is None) == (self.annotations is None):
             raise ValueError("provide exactly one of ko_text or annotations")
-        if self.annotations is not None and (
-            self.analysis_unit is not AnalysisUnit.UNKNOWN or self.sample_id != "sample-1"
-        ):
-            raise ValueError(
-                "analysis_unit and sample_id must be set inside annotations when annotations "
-                "is supplied"
-            )
+        if self.annotations is not None:
+            conflict_fields: list[str] = []
+            if "analysis_unit" in self.model_fields_set:
+                conflict_fields.extend(("analysis_unit", "annotations.analysis_unit"))
+            if "sample_id" in self.model_fields_set:
+                conflict_fields.extend(("sample_id", "annotations.sample_id"))
+            if conflict_fields:
+                raise PydanticCustomError(
+                    "nested_annotation_context_conflict",
+                    "top-level context conflicts with nested annotation context",
+                    {"conflict_fields": ",".join(conflict_fields)},
+                )
         if (
             self.annotations is not None
             and self.annotations.output_directory is not None

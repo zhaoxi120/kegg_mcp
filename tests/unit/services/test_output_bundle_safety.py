@@ -7,7 +7,7 @@ import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.services.output_bundle import (
-    _open_directory_fd,  # pyright: ignore[reportPrivateUsage]
+    _open_directory_fd_with_creation,  # pyright: ignore[reportPrivateUsage]
     _validate_output_directory_fd,  # pyright: ignore[reportPrivateUsage]
     _write_files,  # pyright: ignore[reportPrivateUsage]
 )
@@ -20,7 +20,7 @@ def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
     alias.symlink_to(real, target_is_directory=True)
 
     with pytest.raises(OSError):
-        _open_directory_fd(alias / "bundle")
+        _open_directory_fd_with_creation(alias / "bundle")
 
     assert not (real / "bundle").exists()
 
@@ -133,3 +133,166 @@ def test_failed_install_leaves_no_commit_manifest_or_partial_payload(
     assert not (output / "one.txt").exists()
     assert not (output / "two.txt").exists()
     assert not tuple(output.glob(".*.tmp"))
+
+
+def test_failed_install_removes_service_created_empty_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "service-bundle"
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+            remove_created_directory_on_failure=True,
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert not output.exists()
+
+
+def test_final_open_failure_removes_just_created_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "service-bundle"
+    real_open = os.open
+
+    def fail_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            raise OSError("synthetic final open failure")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_output_open)
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+            remove_created_directory_on_failure=True,
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert not output.exists()
+
+
+def test_created_directory_replacement_is_rejected_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "service-bundle"
+    displaced = tmp_path / "displaced-service-bundle"
+    real_open = os.open
+
+    def replace_before_output_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == output.name and flags & os.O_DIRECTORY:
+            output.rename(displaced)
+            output.mkdir(mode=0o700)
+            (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replace_before_output_open)
+    with pytest.raises(OSError, match="replaced"):
+        _open_directory_fd_with_creation(output)
+
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert displaced.is_dir()
+    assert tuple(displaced.iterdir()) == ()
+
+
+def test_failed_install_preserves_explicit_new_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "explicit-bundle"
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+    with pytest.raises(KeggMcpError):
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+        )
+
+    assert output.is_dir()
+    assert tuple(output.iterdir()) == ()
+
+
+def test_failed_install_does_not_remove_directory_with_caller_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "service-bundle"
+
+    def inject_file_then_fail(*_args: object, **_kwargs: object) -> None:
+        (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", inject_file_then_fail)
+    with pytest.raises(KeggMcpError):
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+            remove_created_directory_on_failure=True,
+        )
+
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_failed_install_does_not_remove_replacement_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "service-bundle"
+    displaced = tmp_path / "displaced-service-bundle"
+
+    def replace_then_fail(*_args: object, **_kwargs: object) -> None:
+        output.rename(displaced)
+        output.mkdir(mode=0o700)
+        (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", replace_then_fail)
+    with pytest.raises(KeggMcpError):
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+            remove_created_directory_on_failure=True,
+        )
+
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert displaced.is_dir()
+    assert tuple(displaced.iterdir()) == ()

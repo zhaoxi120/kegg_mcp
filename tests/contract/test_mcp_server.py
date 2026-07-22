@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -882,6 +883,44 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
             "ANALYSIS_CONFIGURATION_INVALID"
         )
 
+        conflicting_sample = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {"text": "K00844", "sample_id": "nested-sample"},
+                "sample_id": "top-level-sample",
+                "module_ids": ["M00001"],
+            },
+        )
+        assert conflicting_sample.isError is True
+        assert conflicting_sample.structuredContent is not None
+        conflicting_sample_error = conflicting_sample.structuredContent["error"]
+        assert conflicting_sample_error["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+        conflicting_sample_details = {
+            item["name"]: item["value"] for item in conflicting_sample_error["safe_details"]
+        }
+        assert conflicting_sample_details["issue_type"] == ("nested_annotation_context_conflict")
+        assert conflicting_sample_details["field_path"] == "sample_id"
+        assert conflicting_sample_details["conflict_fields"] == ("sample_id,annotations.sample_id")
+        serialized_conflict = json.dumps(conflicting_sample.structuredContent)
+        assert "top-level-sample" not in serialized_conflict
+        assert "nested-sample" not in serialized_conflict
+
+        explicit_default_sample = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {"text": "K00844", "sample_id": "nested-sample"},
+                "sample_id": "sample-1",
+                "module_ids": ["M00001"],
+            },
+        )
+        assert explicit_default_sample.isError is True
+        assert explicit_default_sample.structuredContent is not None
+        explicit_default_details = {
+            item["name"]: item["value"]
+            for item in explicit_default_sample.structuredContent["error"]["safe_details"]
+        }
+        assert explicit_default_details["conflict_fields"] == ("sample_id,annotations.sample_id")
+
         ignored_preview = await session.call_tool(
             "analyze_ko_annotations",
             {
@@ -1040,6 +1079,130 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
             "source_count": 1,
             "values": [str(fasta)],
         }
+
+
+@pytest.mark.asyncio
+async def test_omitted_output_uses_fresh_child_of_last_configured_root(
+    tmp_path: Path,
+) -> None:
+    intake_root = tmp_path / "inputs"
+    output_root = tmp_path / "analysis"
+    intake_root.mkdir(mode=0o700)
+    output_root.mkdir(mode=0o700)
+    runtime = _runtime(
+        tmp_path,
+        allowed_roots=(str(intake_root.resolve()), str(output_root.resolve())),
+    )
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool("normalize_ko_annotations", {"text": "K00844"})
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    bundle = result.structuredContent["result"]["data"]["output_bundle"]
+    output = Path(bundle["output_directory"])
+    assert output.parent == output_root
+    assert output.name.startswith("kegg-normalization-")
+    assert Path(bundle["manifest"]).is_file()
+
+
+@pytest.mark.asyncio
+async def test_failed_default_output_write_removes_service_allocated_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "inputs"
+    output_root = tmp_path / "analysis"
+    input_root.mkdir(mode=0o700)
+    output_root.mkdir(mode=0o700)
+    runtime = _runtime(
+        tmp_path,
+        allowed_roots=(str(input_root.resolve()), str(output_root.resolve())),
+    )
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool("normalize_ko_annotations", {"text": "K00844"})
+
+    assert result.isError is True
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "OUTPUT_WRITE_FAILED"
+    assert tuple(output_root.iterdir()) == ()
+    assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_default_analysis_write_removes_service_allocated_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "inputs"
+    output_root = tmp_path / "analysis"
+    input_root.mkdir(mode=0o700)
+    output_root.mkdir(mode=0o700)
+    runtime = McpRuntime(
+        client=_FakeReferenceClient(),  # pyright: ignore[reportArgumentType]
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="failed-default-analysis-output",
+        allowed_roots=(str(input_root.resolve()), str(output_root.resolve())),
+    )
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic install failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "K00001\nK00002",
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010"}],
+            },
+        )
+
+    assert result.isError is True
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "OUTPUT_WRITE_FAILED"
+    assert tuple(output_root.iterdir()) == ()
+    assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
+
+
+@pytest.mark.asyncio
+async def test_high_level_analysis_omitted_output_allocates_render_handoff(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "inputs"
+    output_root = tmp_path / "analysis"
+    input_root.mkdir(mode=0o700)
+    output_root.mkdir(mode=0o700)
+    runtime = McpRuntime(
+        client=_FakeReferenceClient(),  # pyright: ignore[reportArgumentType]
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="default-analysis-output",
+        allowed_roots=(str(input_root.resolve()), str(output_root.resolve())),
+    )
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "K00001\nK00002",
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010"}],
+            },
+        )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    bundle = result.structuredContent["result"]["data"]["output_bundle"]
+    output = Path(bundle["output_directory"])
+    assert output.parent == output_root
+    assert output.name.startswith("kegg-analysis-")
+    assert Path(bundle["render_input"]).is_file()
 
 
 @pytest.mark.asyncio

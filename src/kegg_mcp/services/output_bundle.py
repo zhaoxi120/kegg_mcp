@@ -84,6 +84,7 @@ def write_normalization_bundle(
     output_directory: Path,
     *,
     manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED,
+    remove_created_directory_on_failure: bool = False,
 ) -> OutputBundle:
     """Write the reusable normalization stage without cache or result-store files."""
     normalized = _normalized_annotations_tsv(dataset)
@@ -99,7 +100,11 @@ def write_normalization_bundle(
         manifest_path_mode=manifest_path_mode,
     )
     files["bundle_manifest.json"] = manifest
-    _write_files(output_directory, files)
+    _write_files(
+        output_directory,
+        files,
+        remove_created_directory_on_failure=remove_created_directory_on_failure,
+    )
     return _bundle_paths(output_directory, files=files)
 
 
@@ -117,6 +122,7 @@ def write_analysis_bundle(
     module_ranking: ModuleRankingResult | None = None,
     pathway_ranking: PathwayRankingResult | None = None,
     manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED,
+    remove_created_directory_on_failure: bool = False,
 ) -> OutputBundle:
     """Write canonical handoff tables, report, and renderer input as one stable bundle."""
     render_input = build_render_input(
@@ -154,7 +160,11 @@ def write_analysis_bundle(
         render_input_schema=(RENDER_INPUT_SCHEMA_VERSION, RENDER_INPUT_MIME_TYPE),
         analysis_execution=execution,
     )
-    _write_files(output_directory, files)
+    _write_files(
+        output_directory,
+        files,
+        remove_created_directory_on_failure=remove_created_directory_on_failure,
+    )
     return _bundle_paths(
         output_directory,
         files=files,
@@ -433,16 +443,22 @@ def _tsv(header: tuple[str, ...], rows: Iterable[tuple[object, ...]]) -> str:
     return target.getvalue()
 
 
-def _write_files(output_directory: Path, files: dict[str, str]) -> None:
+def _write_files(
+    output_directory: Path,
+    files: dict[str, str],
+    *,
+    remove_created_directory_on_failure: bool = False,
+) -> None:
     manifest_name = "bundle_manifest.json"
     if manifest_name not in files:
         raise AssertionError("output bundles require a commit manifest")
     temporary_names: list[str] = []
     installed_names: list[tuple[str, str]] = []
     directory_fd: int | None = None
+    directory_created = False
     committed = False
     try:
-        directory_fd = _open_directory_fd(output_directory)
+        directory_fd, directory_created = _open_directory_fd_with_creation(output_directory)
         if os.listdir(directory_fd):
             fail(
                 ErrorCode.OUTPUT_ALREADY_EXISTS,
@@ -530,38 +546,144 @@ def _write_files(output_directory: Path, files: dict[str, str]) -> None:
                     os.unlink(temporary, dir_fd=directory_fd)
             with suppress(OSError):
                 os.fsync(directory_fd)
+            if not committed and directory_created and remove_created_directory_on_failure:
+                _remove_created_empty_directory(output_directory, directory_fd)
             os.close(directory_fd)
 
 
-def _open_directory_fd(path: Path) -> int:
-    """Create and open an absolute directory without following any path component."""
+def _open_directory_fd_with_creation(path: Path) -> tuple[int, bool]:
+    """Create and open a directory and report whether this call created the final entry."""
+    return _walk_output_directory(path, create_missing=True)
+
+
+def _open_existing_directory_fd(path: Path) -> int:
+    descriptor, created = _walk_output_directory(path, create_missing=False)
+    if created:  # pragma: no cover - impossible when creation is disabled
+        os.close(descriptor)
+        raise AssertionError("existing-directory walk unexpectedly created an entry")
+    return descriptor
+
+
+def _walk_output_directory(path: Path, *, create_missing: bool) -> tuple[int, bool]:
     if not path.is_absolute() or ".." in path.parts:
         raise OSError("output directory must be an absolute normalized path")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     current_fd = os.open(os.sep, flags)
+    created_final = False
     private_boundary = _validate_output_directory_fd(
         current_fd,
         private_boundary=False,
     )
     try:
-        for component in path.parts[1:]:
+        components = path.parts[1:]
+        for index, component in enumerate(components):
             if component in {"", ".", ".."}:
                 raise OSError("output directory contains an invalid component")
-            with suppress(FileExistsError):
-                os.mkdir(component, mode=0o700, dir_fd=current_fd)
-            next_fd = os.open(component, flags, dir_fd=current_fd)
-            private_boundary = _validate_output_directory_fd(
-                next_fd,
-                private_boundary=private_boundary,
-            )
+            created = False
+            created_identity: tuple[int, int, int] | None = None
+            if create_missing:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                    created = True
+                    created_metadata = os.stat(
+                        component,
+                        dir_fd=current_fd,
+                        follow_symlinks=False,
+                    )
+                    if not stat.S_ISDIR(created_metadata.st_mode):
+                        raise OSError("created output entry is not a directory")
+                    created_identity = (
+                        created_metadata.st_dev,
+                        created_metadata.st_ino,
+                        created_metadata.st_uid,
+                    )
+                except FileExistsError:
+                    pass
+            try:
+                next_fd = os.open(component, flags, dir_fd=current_fd)
+            except BaseException:
+                if created and created_identity is not None:
+                    _remove_named_empty_directory_if_identity(
+                        current_fd,
+                        component,
+                        created_identity,
+                    )
+                raise
+            try:
+                if created_identity is not None:
+                    opened_metadata = os.fstat(next_fd)
+                    if (
+                        opened_metadata.st_dev,
+                        opened_metadata.st_ino,
+                        opened_metadata.st_uid,
+                    ) != created_identity:
+                        raise OSError("created output directory was replaced before opening")
+                private_boundary = _validate_output_directory_fd(
+                    next_fd,
+                    private_boundary=private_boundary,
+                )
+            except BaseException:
+                os.close(next_fd)
+                if created and created_identity is not None:
+                    _remove_named_empty_directory_if_identity(
+                        current_fd,
+                        component,
+                        created_identity,
+                    )
+                raise
             os.close(current_fd)
             current_fd = next_fd
+            if index == len(components) - 1:
+                created_final = created
         if not private_boundary:
             raise OSError("output directory must establish a private ownership boundary")
-        return current_fd
+        return current_fd, created_final
     except BaseException:
         os.close(current_fd)
         raise
+
+
+def _remove_created_empty_directory(path: Path, descriptor: int) -> bool:
+    """Remove a still-empty service-created directory only while its identity remains pinned."""
+    try:
+        if os.listdir(descriptor):
+            return False
+        pinned = os.fstat(descriptor)
+        parent_fd = _open_existing_directory_fd(path.parent)
+    except OSError:
+        return False
+    try:
+        return _remove_named_empty_directory_if_identity(
+            parent_fd,
+            path.name,
+            (pinned.st_dev, pinned.st_ino, pinned.st_uid),
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _remove_named_empty_directory_if_identity(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> bool:
+    """Best-effort rmdir for one unchanged named directory; rmdir itself enforces emptiness."""
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_uid,
+            )
+            != identity
+        ):
+            return False
+        os.rmdir(name, dir_fd=parent_fd)
+        return True
+    except OSError:
+        return False
 
 
 def _validate_output_directory_fd(descriptor: int, *, private_boundary: bool) -> bool:
