@@ -25,17 +25,17 @@ from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import TOOL_NAMES
 from kegg_mcp.services.kegg_mapping import read_cached_kegg_entry
 from kegg_mcp.services.operational import get_server_status_service
-from kegg_mcp.services.result_store import ResultStoreError
+from kegg_mcp.services.result_store import RESULT_ID_FRAGMENT, ResultStoreError
 
 MAX_INLINE_RESOURCE_BYTES = 64 * 1024
 
-_RESULT_RE = re.compile(r"ko-analysis://results/(res_[A-Za-z0-9_-]{32})\Z")
+_RESULT_RE = re.compile(rf"ko-analysis://results/({RESULT_ID_FRAGMENT})\Z")
 _SECTION_RE = re.compile(
-    r"ko-analysis://results/(res_[A-Za-z0-9_-]{32})/"
+    rf"ko-analysis://results/({RESULT_ID_FRAGMENT})/"
     r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})\Z"
 )
 _RANGE_RE = re.compile(
-    r"ko-analysis://results/(res_[A-Za-z0-9_-]{32})/"
+    rf"ko-analysis://results/({RESULT_ID_FRAGMENT})/"
     r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([0-9]{1,19})/([0-9]{1,5})\Z"
 )
 _CACHE_ENTRY_RE = re.compile(r"kegg-cache://entries/([a-z]+)/([A-Za-z0-9.-]{1,100})\Z")

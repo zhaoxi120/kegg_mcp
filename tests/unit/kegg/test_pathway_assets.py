@@ -14,7 +14,10 @@ from pydantic import ValidationError
 import kegg_mcp.kegg.client as client_module
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg import (
+    PATHWAY_ASSET_PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     AccessMode,
+    CacheLookupState,
     CachePolicy,
     KeggClient,
     KeggClientConfig,
@@ -24,7 +27,9 @@ from kegg_mcp.kegg import (
     PathwayAssetRequest,
     PathwayAssetResult,
     ResponseOrigin,
+    RetrievalEndpointClass,
 )
+from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import HttpMetadata, KeggClientLimits
 from kegg_mcp.kegg.operations import ResponseParser
 from kegg_mcp.kegg.pathway_assets import (
@@ -341,9 +346,77 @@ def test_client_retrieves_validates_and_reuses_one_png_asset(tmp_path: Path) -> 
     assert (network.width, network.height) == (2, 1)
     assert network.provenance.origin is ResponseOrigin.NETWORK
     assert network.provenance.parser_name == "pathway_png"
+    assert network.provenance.parser_version == PATHWAY_ASSET_PARSER_VERSION
     assert PathwayAssetResult.model_validate_json(network.model_dump_json()) == network
     assert cached.content == network.content
     assert cached.provenance.origin is ResponseOrigin.CACHE
+
+
+def test_client_reuses_one_explicitly_allowed_stale_asset(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.IMAGE)
+    KeggClient(
+        _config(cache_path),
+        transport=_QueueTransport(
+            TransportResponse(
+                status_code=200,
+                body=_png(),
+                http_metadata=(HttpMetadata(name="content-type", value="image/png"),),
+            )
+        ),
+        clock=lambda: _NOW,
+    ).get_pathway_asset(request)
+
+    stale = KeggClient(
+        _config(cache_path),
+        transport=_BombTransport(),
+        clock=lambda: _NOW + timedelta(seconds=61),
+    ).get_pathway_asset(
+        request,
+        options=KeggRequestOptions(
+            refresh=False,
+            cache_only=True,
+            allow_stale=True,
+        ),
+    )
+
+    assert stale.provenance.origin is ResponseOrigin.CACHE
+    assert stale.provenance.cache_lookup_state is CacheLookupState.STALE_HIT
+    assert stale.provenance.is_stale is True
+
+
+def test_client_reports_cached_asset_content_failure_without_network(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    request = PathwayAssetRequest(pathway_id="ko00010", kind=PathwayAssetKind.IMAGE)
+    limits = _config(cache_path).limits
+    prepared = prepare_pathway_asset(request, limits)
+    SQLiteKeggCache(cache_path).write(
+        prepared.operation,
+        prepared.normalized_request_key,
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=b"not-a-png",
+        retrieved_at=_NOW,
+        expires_at=_NOW + timedelta(seconds=60),
+        parser_version=PATHWAY_ASSET_PARSER_VERSION,
+        database_release=None,
+        http_metadata=(HttpMetadata(name="content-type", value="image/png"),),
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        KeggClient(
+            _config(cache_path),
+            transport=_BombTransport(),
+            clock=lambda: _NOW + timedelta(seconds=1),
+        ).get_pathway_asset(
+            request,
+            options=KeggRequestOptions(refresh=False, cache_only=True),
+        )
+
+    assert caught.value.detail.code is ErrorCode.CACHE_FAILED
+    assert {item.value for item in caught.value.detail.safe_details} == {"pathway_asset_validation"}
 
 
 def test_offline_client_forces_refresh_requests_to_the_read_only_asset_cache(

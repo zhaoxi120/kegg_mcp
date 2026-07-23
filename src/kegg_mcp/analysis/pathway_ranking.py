@@ -14,6 +14,8 @@ from kegg_mcp.domain.annotations import (
     AnnotationDataset,
     EvidenceMode,
     FrozenModel,
+    KNumber,
+    ModuleId,
     build_ko_evidence_view,
     select_ko_ids,
 )
@@ -25,8 +27,6 @@ PATHWAY_RANKING_METHOD = "selected_unique_ko_count"
 PATHWAY_RANKING_VERSION = "1"
 MODULE_RANKING_METHOD = "selected_unique_ko_count"
 MODULE_RANKING_VERSION = "1"
-
-KNumber = Annotated[str, Field(pattern=r"^K[0-9]{5}$")]
 
 
 class PathwaySelection(FrozenModel):
@@ -68,6 +68,28 @@ class KoPathwayRelationship(FrozenModel):
     line_number: int = Field(strict=True, gt=0)
 
 
+def _validate_sorted_unique_ko_ids(ko_ids: tuple[str, ...], *, field_name: str) -> None:
+    if ko_ids != tuple(sorted(set(ko_ids))):
+        raise ValueError(f"{field_name} must be sorted and unique")
+
+
+def _validate_ranking_row_counts(
+    detected_ko_ids: tuple[str, ...],
+    detected_unique_ko_count: int,
+    relationship_row_count: int,
+) -> None:
+    _validate_sorted_unique_ko_ids(detected_ko_ids, field_name="detected_ko_ids")
+    if detected_unique_ko_count != len(detected_ko_ids):
+        raise ValueError("detected_unique_ko_count must match detected_ko_ids")
+    if relationship_row_count < detected_unique_ko_count:
+        raise ValueError("relationship_row_count cannot be smaller than the unique KO count")
+
+
+def _validate_contiguous_ranks(ranks: tuple[int, ...], *, target_name: str) -> None:
+    if ranks != tuple(range(1, len(ranks) + 1)):
+        raise ValueError(f"{target_name} ranking rows must use contiguous one-based ranks")
+
+
 class PathwayRankingRow(FrozenModel):
     """One complete candidate row ordered by a deterministic ranking policy."""
 
@@ -82,12 +104,11 @@ class PathwayRankingRow(FrozenModel):
     def validate_row(self) -> Self:
         if self.pathway_id != f"ko{self.pathway_number}":
             raise ValueError("pathway_id must be the canonical KO-reference pathway identifier")
-        if self.detected_ko_ids != tuple(sorted(set(self.detected_ko_ids))):
-            raise ValueError("detected_ko_ids must be sorted and unique")
-        if self.detected_unique_ko_count != len(self.detected_ko_ids):
-            raise ValueError("detected_unique_ko_count must match detected_ko_ids")
-        if self.relationship_row_count < self.detected_unique_ko_count:
-            raise ValueError("relationship_row_count cannot be smaller than the unique KO count")
+        _validate_ranking_row_counts(
+            self.detected_ko_ids,
+            self.detected_unique_ko_count,
+            self.relationship_row_count,
+        )
         return self
 
 
@@ -110,11 +131,11 @@ class PathwayRankingResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
-        if self.selected_ko_ids != tuple(sorted(set(self.selected_ko_ids))):
-            raise ValueError("selected_ko_ids must be sorted and unique")
-        ranks = tuple(item.rank for item in self.rows)
-        if ranks != tuple(range(1, len(self.rows) + 1)):
-            raise ValueError("pathway ranking rows must use contiguous one-based ranks")
+        _validate_sorted_unique_ko_ids(self.selected_ko_ids, field_name="selected_ko_ids")
+        _validate_contiguous_ranks(
+            tuple(item.rank for item in self.rows),
+            target_name="pathway",
+        )
         sort_keys = tuple((-item.detected_unique_ko_count, item.pathway_id) for item in self.rows)
         if sort_keys != tuple(sorted(sort_keys)):
             raise ValueError("pathway ranking rows are not in deterministic rank order")
@@ -138,7 +159,7 @@ class KoModuleRelationship(FrozenModel):
     """One normalized KO-to-MODULE row retained for ranking provenance."""
 
     source_ko_id: KNumber
-    module_id: str = Field(pattern=r"^M[0-9]{5}$")
+    module_id: ModuleId
     source_namespace: Literal["ko"] = "ko"
     target_namespace: Literal["md", "module"]
     batch_index: int = Field(strict=True, ge=0)
@@ -148,7 +169,7 @@ class KoModuleRelationship(FrozenModel):
 class ModuleRankingRow(FrozenModel):
     """One complete MODULE candidate row in deterministic rank order."""
 
-    module_id: str = Field(pattern=r"^M[0-9]{5}$")
+    module_id: ModuleId
     detected_unique_ko_count: int = Field(strict=True, gt=0)
     detected_ko_ids: Annotated[tuple[KNumber, ...], Field(min_length=1, max_length=100_000)]
     relationship_row_count: int = Field(strict=True, gt=0)
@@ -156,12 +177,11 @@ class ModuleRankingRow(FrozenModel):
 
     @model_validator(mode="after")
     def validate_row(self) -> Self:
-        if self.detected_ko_ids != tuple(sorted(set(self.detected_ko_ids))):
-            raise ValueError("detected_ko_ids must be sorted and unique")
-        if self.detected_unique_ko_count != len(self.detected_ko_ids):
-            raise ValueError("detected_unique_ko_count must match detected_ko_ids")
-        if self.relationship_row_count < self.detected_unique_ko_count:
-            raise ValueError("relationship_row_count cannot be smaller than the unique KO count")
+        _validate_ranking_row_counts(
+            self.detected_ko_ids,
+            self.detected_unique_ko_count,
+            self.relationship_row_count,
+        )
         return self
 
 
@@ -184,11 +204,11 @@ class ModuleRankingResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> Self:
-        if self.selected_ko_ids != tuple(sorted(set(self.selected_ko_ids))):
-            raise ValueError("selected_ko_ids must be sorted and unique")
-        ranks = tuple(item.rank for item in self.rows)
-        if ranks != tuple(range(1, len(self.rows) + 1)):
-            raise ValueError("MODULE ranking rows must use contiguous one-based ranks")
+        _validate_sorted_unique_ko_ids(self.selected_ko_ids, field_name="selected_ko_ids")
+        _validate_contiguous_ranks(
+            tuple(item.rank for item in self.rows),
+            target_name="MODULE",
+        )
         sort_keys = tuple((-item.detected_unique_ko_count, item.module_id) for item in self.rows)
         if sort_keys != tuple(sorted(sort_keys)):
             raise ValueError("MODULE ranking rows are not in deterministic rank order")

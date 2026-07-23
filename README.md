@@ -53,12 +53,12 @@ lockfiles and declared build requirements.
 
 For a new suite root, `--allow-deepkoala-install` confirms one clone of the official DeepKOALA
 repository and installation of its upstream requirements. Later FASTA jobs do not ask again. The
-bundled `202502` model and `device=cpu` are the defaults. Before the first annotation call in a
-Codex task, the installed Skill tells the user that CPU will be used. A user who needs GPU execution
-must explicitly ask the LLM; it selects `device=cuda` only after status reports that CUDA is allowed
-and available. Multi-domain mode remains off for every request unless the operator has separately
-configured local HMMER/KOfam resources and the user explicitly requests it. This repository does
-not download those resources or update DeepKOALA models.
+bundled resource/model date `202502` and `device=cpu` are the defaults. Before the first annotation
+call in a Codex task, the installed Skill tells the user that CPU will be used. A user who needs GPU
+execution must explicitly ask the LLM; it selects `device=cuda` only after status reports that CUDA
+is allowed and available. Multi-domain mode remains off for every request unless the operator has
+separately configured local HMMER/KOfam resources and the user explicitly requests it. This
+repository does not download those resources or update DeepKOALA models.
 
 Select KEGG access explicitly. Use confirmed `public_academic` only when both the user and the work
 qualify for public academic KEGG access. Non-academic deployments require an appropriately licensed
@@ -136,18 +136,21 @@ Installing a wheel alone does not make repository-scoped Skills available. Other
 install the three distributions independently and register their stdio commands manually.
 
 - [Installation and operation](docs/installation.md)
+- [Manual component deployment](docs/manual-component-deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Release readiness](docs/release-readiness.md)
 
 ## Developer reference
 
-- [Current architecture and development contract](docs/development-plan.md)
-- [Visualization architecture](docs/visualization-extension-plan.md)
+- [Cross-component architecture and development contract](docs/architecture.md)
+- [Visualization architecture](docs/visualization-architecture.md)
+- [Core distribution reference](docs/core-package.md)
 - [Import contracts](docs/import-contracts.md)
 - [KEGG client and cache](docs/kegg-client.md)
 - [MODULE evaluation](docs/module-analysis.md)
-- [Pathway coverage and KO-set comparison](docs/pathway-comparison-analysis.md)
+- [Pathway coverage and deterministic functional comparison](docs/pathway-comparison-analysis.md)
 - [Services, results, and reporting](docs/services-results-reporting.md)
+- [Codex Skill release evaluation](docs/skill-evaluation.md)
 
 The normal offline validation profile is:
 

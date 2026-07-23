@@ -27,6 +27,7 @@ from deepkoala_mcp.config import (
     load_runtime_config,
 )
 from deepkoala_mcp.contracts import (
+    DEFAULT_MODEL_DATE,
     ImportHandoff,
     RunDeepKoalaInput,
     SourceProvenance,
@@ -154,7 +155,7 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
         output_directory="/allowed/run-1",
     )
     assert request.device == "cpu"
-    assert request.model_date == "202502"
+    assert request.model_date == DEFAULT_MODEL_DATE
     assert request.multi is False
     cuda_request = RunDeepKoalaInput(
         fasta_path="/allowed/proteins.faa",

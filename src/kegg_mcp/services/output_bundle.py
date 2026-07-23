@@ -459,7 +459,7 @@ def _write_files(
     committed = False
     try:
         directory_fd, directory_created = _open_directory_fd_with_creation(output_directory)
-        if os.listdir(directory_fd):
+        if _directory_has_entries(directory_fd):
             fail(
                 ErrorCode.OUTPUT_ALREADY_EXISTS,
                 "The requested output bundle directory is not empty.",
@@ -646,7 +646,7 @@ def _walk_output_directory(path: Path, *, create_missing: bool) -> tuple[int, bo
 def _remove_created_empty_directory(path: Path, descriptor: int) -> bool:
     """Remove a still-empty service-created directory only while its identity remains pinned."""
     try:
-        if os.listdir(descriptor):
+        if _directory_has_entries(descriptor):
             return False
         pinned = os.fstat(descriptor)
         parent_fd = _open_existing_directory_fd(path.parent)
@@ -660,6 +660,12 @@ def _remove_created_empty_directory(path: Path, descriptor: int) -> bool:
         )
     finally:
         os.close(parent_fd)
+
+
+def _directory_has_entries(descriptor: int) -> bool:
+    """Check directory emptiness without materializing caller-controlled names."""
+    with os.scandir(descriptor) as entries:
+        return next(entries, None) is not None
 
 
 def _remove_named_empty_directory_if_identity(

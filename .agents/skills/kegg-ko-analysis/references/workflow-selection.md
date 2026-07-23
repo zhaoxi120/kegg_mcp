@@ -20,10 +20,11 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Annotation table or detailed CSV
 
-1. Use a controlled absolute `file_path`. Pass a user-specified new or empty `output_directory`
-   unchanged; otherwise omit it so Core allocates a fresh directory beneath its configured project
-   output root. Use `normalize_ko_annotations` alone only when the user wants a reusable normalized
-   table.
+1. Use a controlled absolute path in `file_path`. Pass a user-specified new or empty
+   `output_directory` unchanged; the user-specified path wins. Otherwise, omit `output_directory`
+   and let Core allocate a fresh directory beneath its configured project output root. Do not guess
+   a root from the input path, create it with a shell command, or reuse a non-empty directory. Use
+   `normalize_ko_annotations` alone only when the user wants a reusable normalized table.
 2. Let the server infer unambiguous common columns and report the mapping. Supply an explicit
    column mapping only for ambiguous or non-standard tables.
 3. Preserve raw source decisions, scores, thresholds, ranks, domains, protein names, source/model
@@ -34,16 +35,21 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Automatic cross-Skill continuation
 
-- When the immediately preceding `deepkoala-annotation` stage produced the evidence, consume the
-  returned stable CSV path, `input_format`, and source provenance unchanged. Do not ask the user to
-  copy the path, repeat the request, or confirm a KEGG-analysis stage already present in the
-  original request. Do not rerun or reinterpret annotation.
-- When the original request also asks for graphics, retain its formats and target scope. After the
-  core writes a compatible `render_input.json`, continue with the installed
-  `kegg-pathway-rendering` Skill using that path unchanged. Do not repeat analysis in the rendering
-  transition.
-- When graphics were not requested, stop after the core report. Continue only after a successful
-  handoff; never treat an upstream failure as empty KO evidence.
+- When the immediately preceding `deepkoala-annotation` stage produced the evidence,
+  consume its stable CSV handoff directly. Use the returned `annotations_path`, `input_format`, and
+  `source` object unchanged; do not ask the user to restate the path, copy it, repeat the request,
+  or confirm a KEGG-analysis stage already present in the original request.
+  Do not rerun annotation or rewrite the CSV.
+- When the original request also asks to render, visualize, draw, or export graphics, first require
+  a successfully written, compatible `render_input.json`, then automatically continue with the installed
+  `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path while
+  preserving the requested formats and target scope. Do not ask the user to copy the path, and do
+  not repeat analysis in the rendering transition.
+- When the original request asks only for a core report, return it and stop. Other requests may
+  continue downstream only after a successful handoff; never treat an upstream failure as empty KO
+  evidence.
+- When no rendering output path was specified, omit it and let the renderer allocate a fresh
+  project output directory.
 
 ## Multiple KO sets
 
@@ -53,12 +59,15 @@ Choose only from KO evidence already supplied. This Skill never runs an annotato
 
 ## Out-of-scope starting points
 
-- Protein FASTA without KO evidence starts with a user-selected annotator when one was explicit;
-  return only when it supplies supported KO evidence. Otherwise prefer the independent
-  `deepkoala-annotation` Skill. If that route is unavailable in the same task that just installed a
-  registered suite, classify `task_reload_required`, do not install again, and resume in one new
-  Codex task outside the source checkout. Only a fresh-task failure with incomplete plugin or MCP
-  inventory requests explicit permission once to install or repair the complete suite. If the user
+- If the user explicitly selected another annotator for protein FASTA without KO evidence, stop
+  before a core call and resume only after that route supplies supported KO evidence. Otherwise
+  prefer the installed `deepkoala-annotation` Skill as the independent first annotation route. If
+  that route is unavailable in the same task that just installed a registered suite, classify
+  `task_reload_required` and resume in one new Codex task outside the source checkout. The fields
+  `new_task_required=true`, `current_task_reload_supported=false`, and
+  `repeat_installation_required=false` identify a stale tool snapshot; do not request or perform
+  another installation. Only a fresh-task failure with incomplete suite deployment inventory may
+  request explicit permission once to install or repair the complete repository suite. If the user
   declines that action, remain stopped until a selected route supplies supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
   `kegg-pathway-rendering` Skill without rerunning core analysis.

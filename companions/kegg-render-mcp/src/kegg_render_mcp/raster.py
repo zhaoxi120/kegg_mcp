@@ -9,15 +9,24 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
-from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
-from kegg_render_mcp.module_scene import ModuleScene
-from kegg_render_mcp.pathway_scene import PathwayScene
-from kegg_render_mcp.svg import (
+from kegg_render_mcp._presentation import (
     ACCEPTED_COLOR,
     UNCERTAIN_COLOR,
     UNSUPPORTED_COLOR,
-    wrap_text_rows,
 )
+from kegg_render_mcp._presentation import (
+    block_color as _block_color,
+)
+from kegg_render_mcp._presentation import (
+    exact_completion_text as _exact,
+)
+from kegg_render_mcp._presentation import (
+    ratio_text as _ratio,
+)
+from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
+from kegg_render_mcp.module_scene import ModuleScene
+from kegg_render_mcp.pathway_scene import PathwayScene
+from kegg_render_mcp.svg import wrap_text_rows
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PIL_PIXEL_LIMIT_LOCK = threading.Lock()
@@ -184,15 +193,7 @@ def render_module_png(scene: ModuleScene, *, max_pixels: int, max_output_bytes: 
     draw.text((panel_x, 112), "Required blocks", fill="#1F2937", font=font)
     for index, block in enumerate(scene.blocks):
         y = 132 + index * 28
-        color = (
-            ACCEPTED_COLOR
-            if block.strict_state == "complete"
-            else UNCERTAIN_COLOR
-            if block.lenient_state == "complete"
-            else UNSUPPORTED_COLOR
-            if "not_evaluable" in {block.strict_state, block.lenient_state}
-            else "#FFFFFF"
-        )
+        color = _block_color(block.strict_state, block.lenient_state)
         draw.rectangle((panel_x, y, panel_x + 15, y + 15), fill=color, outline="#374151")
         draw.text(
             (panel_x + 22, y + 3),
@@ -294,14 +295,6 @@ def _draw_rows(
             fill="#1F2937",
             font=font,
         )
-
-
-def _ratio(value: float | None) -> str:
-    return "not evaluable" if value is None else f"{value:.1%}"
-
-
-def _exact(value: bool | None) -> str:
-    return "complete" if value is True else "incomplete" if value is False else "not evaluable"
 
 
 def _asset_error(message: str) -> RenderMcpError:

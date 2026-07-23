@@ -10,10 +10,10 @@ denominator, ratio, evidence mode, retrieval time, cache state, calculation vers
 Coverage is descriptive KO coverage, not pathway presence, completeness, activity, flux, or
 phenotype.
 
-Global and overview maps remain summary-only unless the renderer declares a supported policy.
-Do not approximate them with a regular box overlay or infer organism-specific claims from KO-only
-evidence. Never fetch arbitrary URLs, expose endpoint configuration, return raw KEGG assets, or
-copy cache payloads.
+Global and overview pathway overlays are unsupported by the current renderer. Do not approximate
+them with a regular box overlay or infer organism-specific claims from KO-only evidence. Never
+fetch arbitrary URLs, expose endpoint configuration, return raw KEGG assets, or copy cache
+payloads.
 
 An original request that explicitly names `ko01100` is handled outside this Skill by a separate
 model-native drawing step after supported renderer targets finish. That drawing must be labelled as

@@ -14,6 +14,7 @@ from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 
 KNumber = Annotated[str, Field(pattern=r"^K[0-9]{5}$")]
+ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 RecordIdentifier = Annotated[
     str,
     Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
@@ -135,6 +136,35 @@ class ThresholdRule(StrEnum):
     GTE = "gte"
     LTE = "lte"
     SOURCE_SPECIFIC = "source_specific"
+
+
+def validate_ko_evidence_consistency(
+    *,
+    raw_ko: str,
+    ko_id: str | None,
+) -> None:
+    """Validate the shared raw and normalized KO invariant."""
+    normalized_ko, _ = try_normalize_ko_id(raw_ko)
+    if normalized_ko != ko_id:
+        raise ValueError("ko_id must be the exact normalization of raw_ko")
+
+
+def validate_score_evidence_consistency(
+    *,
+    score: float | None,
+    score_type: ScoreType | None,
+    threshold: float | None,
+    threshold_rule: ThresholdRule | None,
+) -> None:
+    """Validate shared score, threshold, and probability invariants."""
+    if score is not None and score_type is None:
+        raise ValueError("score_type is required when score is present")
+    if (threshold is None) != (threshold_rule is None):
+        raise ValueError("threshold and threshold_rule must be provided together")
+    if score_type is ScoreType.PROBABILITY:
+        for name, value in (("score", score), ("threshold", threshold)):
+            if value is not None and not 0.0 <= value <= 1.0:
+                raise ValueError(f"probability {name} must be between zero and one")
 
 
 class AnalysisUnit(StrEnum):
@@ -365,9 +395,10 @@ class AnnotationRecord(FrozenModel):
 
     @model_validator(mode="after")
     def validate_evidence_consistency(self) -> Self:
-        normalized_raw_ko, _ = try_normalize_ko_id(self.raw_ko)
-        if normalized_raw_ko != self.ko_id:
-            raise ValueError("ko_id must be the exact normalization of raw_ko")
+        validate_ko_evidence_consistency(
+            raw_ko=self.raw_ko,
+            ko_id=self.ko_id,
+        )
         status_needs_ko = self.normalized_status in {
             NormalizedStatus.ACCEPTED,
             NormalizedStatus.UNCERTAIN,
@@ -387,14 +418,12 @@ class AnnotationRecord(FrozenModel):
             and self.domain_end < self.domain_start
         ):
             raise ValueError("domain_end must be greater than or equal to domain_start")
-        if self.score is not None and self.score_type is None:
-            raise ValueError("score_type is required when score is present")
-        if (self.threshold is None) != (self.threshold_rule is None):
-            raise ValueError("threshold and threshold_rule must be provided together")
-        if self.score_type is ScoreType.PROBABILITY:
-            for name, value in (("score", self.score), ("threshold", self.threshold)):
-                if value is not None and not 0.0 <= value <= 1.0:
-                    raise ValueError(f"probability {name} must be between zero and one")
+        validate_score_evidence_consistency(
+            score=self.score,
+            score_type=self.score_type,
+            threshold=self.threshold,
+            threshold_rule=self.threshold_rule,
+        )
         return self
 
 

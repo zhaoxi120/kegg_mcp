@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Final
 
 from kegg_render_mcp import __version__
+from kegg_render_mcp._filesystem import bounded_directory_names as _bounded_directory_names
 from kegg_render_mcp._state_scope import (
     RendererStateScope,
     cleanup_state_scope,
@@ -28,7 +29,9 @@ from kegg_render_mcp._state_scope import (
 )
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
+    ARTIFACT_NAME_PATTERN,
     MAX_ARTIFACTS,
+    RENDER_ID_PATTERN,
     ArtifactKind,
     ArtifactMetadata,
     DeleteRenderResult,
@@ -39,8 +42,8 @@ from kegg_render_mcp.contracts import (
 )
 from kegg_render_mcp.export_writer import export_bundle
 
-_ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_RESULT_ID = re.compile(r"render_[A-Za-z0-9_-]{32}\Z")
+_ARTIFACT_NAME = re.compile(rf"{ARTIFACT_NAME_PATTERN}\Z")
+_RESULT_ID = re.compile(rf"{RENDER_ID_PATTERN}\Z")
 _MIME_TYPES: Final = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
@@ -396,16 +399,6 @@ def _estimated_storage_bytes(artifacts: tuple[ArtifactBlob, ...]) -> int:
         ) * _ALLOCATION_UNIT_BYTES
         total += allocated_payload + _ARTIFACT_METADATA_RESERVE_BYTES
     return total
-
-
-def _bounded_directory_names(descriptor: int, limit: int, label: str) -> tuple[str, ...]:
-    names: list[str] = []
-    with os.scandir(descriptor) as entries:
-        for entry in entries:
-            if len(names) >= limit:
-                raise ValueError(f"{label} exceeds its entry-count limit")
-            names.append(entry.name)
-    return tuple(names)
 
 
 def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> None:

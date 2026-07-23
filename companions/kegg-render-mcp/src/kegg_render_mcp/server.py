@@ -6,13 +6,14 @@ import json
 import re
 import secrets
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
 import anyio
+from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION
 from mcp import types
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -23,6 +24,9 @@ from pydantic import AnyUrl, BaseModel, ValidationError
 from kegg_render_mcp import SERVER_NAME, __version__
 from kegg_render_mcp.config import RendererRuntimeConfig, load_runtime_config
 from kegg_render_mcp.contracts import (
+    ARTIFACT_NAME_PATTERN,
+    MAX_TARGETS,
+    RENDER_ID_PATTERN,
     ConnectivityResult,
     ConnectivityStatus,
     DeleteRenderResult,
@@ -49,19 +53,9 @@ from kegg_render_mcp.pathway_scene import (
 from kegg_render_mcp.render_service import RendererService
 from kegg_render_mcp.validation_errors import ValidationIssueSummary, summarize_validation_error
 
-TOOL_NAMES = (
-    "get_renderer_status",
-    "probe_renderer_kegg_connectivity",
-    "render_analysis_bundle",
-    "render_pathway",
-    "render_module",
-    "delete_render_result",
-)
-
-_RESULT_RE = re.compile(r"kegg-render://results/(render_[A-Za-z0-9_-]{32})\Z")
+_RESULT_RE = re.compile(rf"kegg-render://results/({RENDER_ID_PATTERN})\Z")
 _ARTIFACT_RE = re.compile(
-    r"kegg-render://results/(render_[A-Za-z0-9_-]{32})/"
-    r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})\Z"
+    rf"kegg-render://results/({RENDER_ID_PATTERN})/({ARTIFACT_NAME_PATTERN})\Z"
 )
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -72,10 +66,195 @@ class RendererRuntime:
     service: RendererService
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolExecution:
+    output: BaseModel
+    narrative: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolSpec:
+    """One authoritative renderer tool definition and dispatch target."""
+
+    name: str
+    title: str
+    description: str
+    input_model: type[BaseModel]
+    output_model: type[BaseModel]
+    annotations: types.ToolAnnotations
+    handler: Callable[[RendererRuntime, BaseModel], Awaitable[_ToolExecution]]
+
+
 class _RequestValidationError(Exception):
     def __init__(self, summary: ValidationIssueSummary) -> None:
         super().__init__("invalid request")
         self.summary = summary
+
+
+async def _handle_status(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, EmptyInput)
+    return _ToolExecution(_status(runtime), "Returned redacted renderer capabilities.")
+
+
+async def _handle_probe(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, EmptyInput)
+    classification = await runtime.service.provider.probe()
+    return _ToolExecution(
+        ConnectivityResult(
+            reachable=classification is ConnectivityStatus.REACHABLE,
+            classification=classification,
+            request_count=(
+                0
+                if classification
+                in {ConnectivityStatus.NOT_CONFIGURED, ConnectivityStatus.OFFLINE_CACHE}
+                else 1
+            ),
+            message=_connectivity_message(classification),
+        ),
+        "Completed the bounded renderer KEGG connectivity preflight.",
+    )
+
+
+async def _handle_bundle(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, RenderAnalysisBundleInput)
+    result = await runtime.service.render(
+        render_input_path=request.render_input_path,
+        render_input_json=request.render_input_json,
+        target_ids=request.target_ids,
+        formats=request.formats,
+        output_directory=request.output_directory,
+    )
+    return _ToolExecution(result, f"Rendered {len(result.target_ids)} bounded target(s).")
+
+
+async def _handle_pathway(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, RenderPathwayInput)
+    result = await runtime.service.render(
+        render_input_path=request.render_input_path,
+        render_input_json=request.render_input_json,
+        target_ids=(request.target_id,),
+        formats=request.formats,
+        output_directory=request.output_directory,
+    )
+    return _ToolExecution(result, "Rendered one regular pathway evidence overlay.")
+
+
+async def _handle_module(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, RenderModuleInput)
+    result = await runtime.service.render(
+        render_input_path=request.render_input_path,
+        render_input_json=request.render_input_json,
+        target_ids=(request.target_id,),
+        formats=request.formats,
+        output_directory=request.output_directory,
+    )
+    return _ToolExecution(result, "Rendered one MODULE evidence logic diagram.")
+
+
+async def _handle_delete(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, DeleteRenderResultInput)
+    return _ToolExecution(
+        runtime.service.store.delete(request.render_id),
+        "Deleted the scoped retained render result.",
+    )
+
+
+_STATUS_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_PROBE_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+_PATHWAY_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+_MODULE_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+_DELETE_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+_TOOL_SPECS = (
+    _ToolSpec(
+        name="get_renderer_status",
+        title="Get renderer status",
+        description="Return redacted renderer capabilities, access state, bounds, and retention.",
+        input_model=EmptyInput,
+        output_model=RendererStatus,
+        annotations=_STATUS_ANNOTATIONS,
+        handler=_handle_status,
+    ),
+    _ToolSpec(
+        name="probe_renderer_kegg_connectivity",
+        title="Probe renderer KEGG connectivity",
+        description="Make one low-cost KEGG INFO request for live access; offline modes make none.",
+        input_model=EmptyInput,
+        output_model=ConnectivityResult,
+        annotations=_PROBE_ANNOTATIONS,
+        handler=_handle_probe,
+    ),
+    _ToolSpec(
+        name="render_analysis_bundle",
+        title="Render selected analysis targets",
+        description=(
+            "Validate exactly one path or inline handoff and render one through "
+            f"{MAX_TARGETS} selected targets."
+        ),
+        input_model=RenderAnalysisBundleInput,
+        output_model=RenderResult,
+        annotations=_PATHWAY_ANNOTATIONS,
+        handler=_handle_bundle,
+    ),
+    _ToolSpec(
+        name="render_pathway",
+        title="Render one regular pathway",
+        description=(
+            "Render one regular pathway evidence overlay from matching PNG and KGML assets."
+        ),
+        input_model=RenderPathwayInput,
+        output_model=RenderResult,
+        annotations=_PATHWAY_ANNOTATIONS,
+        handler=_handle_pathway,
+    ),
+    _ToolSpec(
+        name="render_module",
+        title="Render one MODULE",
+        description="Render one closed-world logic diagram from authoritative core AST and states.",
+        input_model=RenderModuleInput,
+        output_model=RenderResult,
+        annotations=_MODULE_ANNOTATIONS,
+        handler=_handle_module,
+    ),
+    _ToolSpec(
+        name="delete_render_result",
+        title="Delete one render result",
+        description="Delete one process-scoped retained result and all of its artifacts.",
+        input_model=DeleteRenderResultInput,
+        output_model=DeleteRenderResult,
+        annotations=_DELETE_ANNOTATIONS,
+        handler=_handle_delete,
+    ),
+)
+TOOL_NAMES = tuple(spec.name for spec in _TOOL_SPECS)
+_TOOL_SPECS_BY_NAME = {spec.name: spec for spec in _TOOL_SPECS}
+if len(_TOOL_SPECS_BY_NAME) != len(_TOOL_SPECS):  # pragma: no cover - import-time invariant
+    raise RuntimeError("renderer tool registry contains duplicate names")
 
 
 def build_runtime(config: RendererRuntimeConfig | None = None) -> RendererRuntime:
@@ -155,10 +334,11 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Render compatible kegg-mcp render_input.json version 3 handoffs as bounded static "
-            "SVG and PNG artifacts. Pathway graphics visualize accepted and policy-defined "
-            "uncertain annotations; MODULE diagrams preserve the authoritative core AST and "
-            "completion results. Graphics do not prove biological activity or phenotype."
+            "Render compatible kegg-mcp render_input.json version "
+            f"{RENDER_INPUT_SCHEMA_VERSION} handoffs as bounded static SVG and PNG artifacts. "
+            "Pathway graphics visualize accepted and policy-defined uncertain annotations; "
+            "MODULE diagrams preserve the authoritative core AST and completion results. "
+            "Graphics do not prove biological activity or phenotype."
         ),
         lifespan=lifespan,
     )
@@ -172,69 +352,20 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
         name: str, arguments: dict[str, Any]
     ) -> types.CallToolResult:
         try:
-            if name == "get_renderer_status":
-                _parse(EmptyInput, arguments)
-                return _success(_status(state), "Returned redacted renderer capabilities.")
-            if name == "probe_renderer_kegg_connectivity":
-                _parse(EmptyInput, arguments)
-                classification = await state.service.provider.probe()
-                return _success(
-                    ConnectivityResult(
-                        reachable=classification is ConnectivityStatus.REACHABLE,
-                        classification=classification,
-                        request_count=(
-                            0
-                            if classification
-                            in {ConnectivityStatus.NOT_CONFIGURED, ConnectivityStatus.OFFLINE_CACHE}
-                            else 1
-                        ),
-                        message=_connectivity_message(classification),
-                    ),
-                    "Completed the bounded renderer KEGG connectivity preflight.",
+            spec = _TOOL_SPECS_BY_NAME.get(name)
+            if spec is None:
+                return _error(
+                    ErrorDetail(
+                        code=ErrorCode.INVALID_REQUEST,
+                        message="The requested MCP tool name is unknown.",
+                        suggested_action="Use a tool name returned by tools/list.",
+                    )
                 )
-            if name == "render_analysis_bundle":
-                request = _parse(RenderAnalysisBundleInput, arguments)
-                result = await state.service.render(
-                    render_input_path=request.render_input_path,
-                    render_input_json=request.render_input_json,
-                    target_ids=request.target_ids,
-                    formats=request.formats,
-                    output_directory=request.output_directory,
-                )
-                return _success(result, f"Rendered {len(result.target_ids)} bounded target(s).")
-            if name == "render_pathway":
-                request = _parse(RenderPathwayInput, arguments)
-                result = await state.service.render(
-                    render_input_path=request.render_input_path,
-                    render_input_json=request.render_input_json,
-                    target_ids=(request.target_id,),
-                    formats=request.formats,
-                    output_directory=request.output_directory,
-                )
-                return _success(result, "Rendered one regular pathway evidence overlay.")
-            if name == "render_module":
-                request = _parse(RenderModuleInput, arguments)
-                result = await state.service.render(
-                    render_input_path=request.render_input_path,
-                    render_input_json=request.render_input_json,
-                    target_ids=(request.target_id,),
-                    formats=request.formats,
-                    output_directory=request.output_directory,
-                )
-                return _success(result, "Rendered one MODULE evidence logic diagram.")
-            if name == "delete_render_result":
-                request = _parse(DeleteRenderResultInput, arguments)
-                return _success(
-                    state.service.store.delete(request.render_id),
-                    "Deleted the scoped retained render result.",
-                )
-            return _error(
-                ErrorDetail(
-                    code=ErrorCode.INVALID_REQUEST,
-                    message="The requested MCP tool name is unknown.",
-                    suggested_action="Use a tool name returned by tools/list.",
-                )
-            )
+            request = _parse(spec.input_model, arguments)
+            execution = await spec.handler(state, request)
+            if not isinstance(execution.output, spec.output_model):
+                raise RuntimeError("renderer tool handler returned the wrong output contract")
+            return _success(execution.output, execution.narrative)
         except _RequestValidationError as error:
             return _error(
                 ErrorDetail(
@@ -322,84 +453,16 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
 
 
 def _tool_definitions() -> list[types.Tool]:
-    status_annotations = types.ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
-    )
-    probe_annotations = types.ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
-    )
-    pathway_annotations = types.ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
-    )
-    module_annotations = types.ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
-    )
-    delete_annotations = types.ToolAnnotations(
-        readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
-    )
-    definitions: tuple[
-        tuple[str, str, str, type[BaseModel], type[BaseModel], types.ToolAnnotations], ...
-    ] = (
-        (
-            "get_renderer_status",
-            "Get renderer status",
-            "Return redacted renderer capabilities, access state, bounds, and retention.",
-            EmptyInput,
-            RendererStatus,
-            status_annotations,
-        ),
-        (
-            "probe_renderer_kegg_connectivity",
-            "Probe renderer KEGG connectivity",
-            "Make one low-cost KEGG INFO request for live access; offline modes make none.",
-            EmptyInput,
-            ConnectivityResult,
-            probe_annotations,
-        ),
-        (
-            "render_analysis_bundle",
-            "Render selected analysis targets",
-            "Validate exactly one path or inline handoff and render one through 32 selected "
-            "targets.",
-            RenderAnalysisBundleInput,
-            RenderResult,
-            pathway_annotations,
-        ),
-        (
-            "render_pathway",
-            "Render one regular pathway",
-            "Render one regular pathway evidence overlay from matching PNG and KGML assets.",
-            RenderPathwayInput,
-            RenderResult,
-            pathway_annotations,
-        ),
-        (
-            "render_module",
-            "Render one MODULE",
-            "Render one closed-world logic diagram from authoritative core AST and states.",
-            RenderModuleInput,
-            RenderResult,
-            module_annotations,
-        ),
-        (
-            "delete_render_result",
-            "Delete one render result",
-            "Delete one process-scoped retained result and all of its artifacts.",
-            DeleteRenderResultInput,
-            DeleteRenderResult,
-            delete_annotations,
-        ),
-    )
     return [
         types.Tool(
-            name=name,
-            title=title,
-            description=description,
-            inputSchema=_mcp_input_schema(input_model),
-            outputSchema=ToolEnvelope[output_model].model_json_schema(mode="serialization"),
-            annotations=annotations,
+            name=spec.name,
+            title=spec.title,
+            description=spec.description,
+            inputSchema=_mcp_input_schema(spec.input_model),
+            outputSchema=ToolEnvelope[spec.output_model].model_json_schema(mode="serialization"),
+            annotations=spec.annotations,
         )
-        for name, title, description, input_model, output_model, annotations in definitions
+        for spec in _TOOL_SPECS
     ]
 
 
@@ -555,7 +618,7 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
         retained_storage_bytes=snapshot.retained_storage_bytes,
         bounds=RendererBounds(
             max_input_bytes=limits.max_input_bytes,
-            max_targets=32,
+            max_targets=MAX_TARGETS,
             max_results=limits.max_results,
             max_asset_bytes=limits.max_asset_bytes,
             max_pixels=limits.max_pixels,

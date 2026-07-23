@@ -55,6 +55,10 @@ live scope, and abandoned-scope cleanup never removes a scope whose lease is sti
 
 Pathway access uses one deployment-wide mode:
 
+The defaults below describe a directly configured Renderer distribution. A suite installation does
+not silently inherit them: its deployment TOML requires the operator to select and confirm the KEGG
+access mode explicitly.
+
 | Mode | Configuration and behavior |
 | --- | --- |
 | `public_academic` | Default live public KEGG access for eligible academic use; `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED` defaults to `true`. |

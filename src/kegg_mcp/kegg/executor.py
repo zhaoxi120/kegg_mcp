@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, TypeAlias
+from typing import Generic, NoReturn, Protocol, TypeAlias, TypeVar
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.kegg.cache import CachedResponse, CacheReadState, SQLiteKeggCache
@@ -13,6 +13,7 @@ from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
     AccessMode,
     CacheLookupState,
+    HttpMetadata,
     InfoRequest,
     KeggBatchProvenance,
     KeggBriteHtextDocument,
@@ -38,6 +39,7 @@ _TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 500, 502, 503, 504})
 ParsedDocument: TypeAlias = (
     KeggInfoDocument | KeggFlatFileDocument | KeggBriteHtextDocument | KeggPairDocument
 )
+PayloadT = TypeVar("PayloadT")
 
 
 class RateLimiter(Protocol):
@@ -51,6 +53,13 @@ class RateLimiter(Protocol):
 @dataclass(frozen=True, slots=True)
 class ExecutedBatch:
     document: ParsedDocument
+    provenance: KeggBatchProvenance
+    body: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutedPayload(Generic[PayloadT]):
+    value: PayloadT
     provenance: KeggBatchProvenance
     body: bytes
 
@@ -108,6 +117,39 @@ class KeggRequestExecutor:
         *,
         info_request: InfoRequest | None = None,
     ) -> ExecutedBatch:
+        executed = self._execute_payload(
+            prepared,
+            options,
+            parser_version=PARSER_VERSION,
+            decode=lambda body, _metadata: self._parse_response(
+                prepared,
+                body,
+                info_request=info_request,
+            ),
+            database_release=lambda document: (
+                document.release if isinstance(document, KeggInfoDocument) else None
+            ),
+            cache_only_failure=self._raise_document_cache_miss,
+            cached_validation_failure=lambda: self._raise_cached_document_failure(prepared),
+        )
+        return ExecutedBatch(
+            document=executed.value,
+            provenance=executed.provenance,
+            body=executed.body,
+        )
+
+    def _execute_payload(
+        self,
+        prepared: PreparedRequest,
+        options: KeggRequestOptions,
+        *,
+        parser_version: str,
+        decode: Callable[[bytes, tuple[HttpMetadata, ...]], PayloadT],
+        database_release: Callable[[PayloadT], str | None],
+        cache_only_failure: Callable[[CacheLookupState], NoReturn],
+        cached_validation_failure: Callable[[], NoReturn],
+    ) -> _ExecutedPayload[PayloadT]:
+        """Run one parser-specific payload through the shared cache/transport state machine."""
         if not self._network_enabled:
             options = options.model_copy(update={"refresh": False, "cache_only": True})
         now = self.read_clock()
@@ -120,28 +162,30 @@ class KeggRequestExecutor:
                 self._retrieval_endpoint_class,
                 self._endpoint_fingerprint,
                 now=now,
-                expected_parser_version=PARSER_VERSION,
+                expected_parser_version=parser_version,
             )
             if lookup.state is CacheReadState.FRESH:
                 if lookup.response is None:
                     raise AssertionError("a fresh cache hit omitted its response")
-                return self.from_cache(
+                return self._from_cached_payload(
                     prepared,
                     lookup.response,
                     CacheLookupState.FRESH_HIT,
                     now,
-                    info_request=info_request,
+                    decode=decode,
+                    cached_validation_failure=cached_validation_failure,
                     is_stale=False,
                 )
             if lookup.state is CacheReadState.STALE and options.allow_stale:
                 if lookup.response is None:
                     raise AssertionError("a stale cache hit omitted its response")
-                return self.from_cache(
+                return self._from_cached_payload(
                     prepared,
                     lookup.response,
                     CacheLookupState.STALE_HIT,
                     now,
-                    info_request=info_request,
+                    decode=decode,
+                    cached_validation_failure=cached_validation_failure,
                     is_stale=True,
                 )
             cache_state = (
@@ -151,18 +195,12 @@ class KeggRequestExecutor:
             )
 
         if options.cache_only:
-            fail(
-                ErrorCode.CACHE_ENTRY_NOT_FOUND,
-                "The requested KEGG response is unavailable in the selected cache namespace.",
-                suggested_action="Fetch the entry through an ordinary network-enabled request.",
-                safe_details=(SafeDetail(name="cache_state", value=cache_state.value),),
-            )
+            cache_only_failure(cache_state)
 
         response, attempt_count = self.request_with_retries(prepared)
         retrieved_at = self.read_clock()
         self.validate_response_body(prepared, response.body, origin=ResponseOrigin.NETWORK)
-        document = self._parse_response(prepared, response.body, info_request=info_request)
-        database_release = document.release if isinstance(document, KeggInfoDocument) else None
+        value = decode(response.body, response.http_metadata)
         expires_at = retrieved_at + timedelta(seconds=self._config.cache.ttl_seconds)
         cached = self._cache.write(
             prepared.operation,
@@ -172,8 +210,8 @@ class KeggRequestExecutor:
             body=response.body,
             retrieved_at=retrieved_at,
             expires_at=expires_at,
-            parser_version=PARSER_VERSION,
-            database_release=database_release,
+            parser_version=parser_version,
+            database_release=database_release(value),
             http_metadata=response.http_metadata,
         )
         provenance = self.provenance(
@@ -185,7 +223,7 @@ class KeggRequestExecutor:
             attempt_count=attempt_count,
             is_stale=False,
         )
-        return ExecutedBatch(document=document, provenance=provenance, body=cached.body)
+        return _ExecutedPayload(value=value, provenance=provenance, body=cached.body)
 
     def from_cache(
         self,
@@ -197,21 +235,43 @@ class KeggRequestExecutor:
         info_request: InfoRequest | None,
         is_stale: bool,
     ) -> ExecutedBatch:
+        executed = self._from_cached_payload(
+            prepared,
+            cached,
+            cache_state,
+            served_at,
+            decode=lambda body, _metadata: self._parse_response(
+                prepared,
+                body,
+                info_request=info_request,
+            ),
+            cached_validation_failure=lambda: self._raise_cached_document_failure(prepared),
+            is_stale=is_stale,
+        )
+        return ExecutedBatch(
+            document=executed.value,
+            provenance=executed.provenance,
+            body=executed.body,
+        )
+
+    def _from_cached_payload(
+        self,
+        prepared: PreparedRequest,
+        cached: CachedResponse,
+        cache_state: CacheLookupState,
+        served_at: datetime,
+        *,
+        decode: Callable[[bytes, tuple[HttpMetadata, ...]], PayloadT],
+        cached_validation_failure: Callable[[], NoReturn],
+        is_stale: bool,
+    ) -> _ExecutedPayload[PayloadT]:
         self.validate_response_body(prepared, cached.body, origin=ResponseOrigin.CACHE)
         try:
-            document = self._parse_response(prepared, cached.body, info_request=info_request)
+            value = decode(cached.body, cached.http_metadata)
         except KeggMcpError:
-            fail(
-                ErrorCode.CACHE_FAILED,
-                "A cached KEGG response failed parser validation.",
-                suggested_action="Refresh or remove the affected local cache entry.",
-                safe_details=(
-                    SafeDetail(name="operation", value=prepared.operation.value),
-                    SafeDetail(name="stage", value="cached_parse"),
-                ),
-            )
-        return ExecutedBatch(
-            document=document,
+            cached_validation_failure()
+        return _ExecutedPayload(
+            value=value,
             provenance=self.provenance(
                 prepared,
                 cached,
@@ -222,6 +282,27 @@ class KeggRequestExecutor:
                 is_stale=is_stale,
             ),
             body=cached.body,
+        )
+
+    @staticmethod
+    def _raise_document_cache_miss(cache_state: CacheLookupState) -> NoReturn:
+        fail(
+            ErrorCode.CACHE_ENTRY_NOT_FOUND,
+            "The requested KEGG response is unavailable in the selected cache namespace.",
+            suggested_action="Fetch the entry through an ordinary network-enabled request.",
+            safe_details=(SafeDetail(name="cache_state", value=cache_state.value),),
+        )
+
+    @staticmethod
+    def _raise_cached_document_failure(prepared: PreparedRequest) -> NoReturn:
+        fail(
+            ErrorCode.CACHE_FAILED,
+            "A cached KEGG response failed parser validation.",
+            suggested_action="Refresh or remove the affected local cache entry.",
+            safe_details=(
+                SafeDetail(name="operation", value=prepared.operation.value),
+                SafeDetail(name="stage", value="cached_parse"),
+            ),
         )
 
     def request_with_retries(self, prepared: PreparedRequest) -> tuple[TransportResponse, int]:

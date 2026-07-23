@@ -16,24 +16,14 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency
-   and its status and job tools to be exposed in the current task. If they are unavailable, first
-   distinguish `task_reload_required` from an incomplete deployment. A successful suite result with
-   `new_task_required=true`, `current_task_reload_supported=false`, and
-   `repeat_installation_required=false`, or equivalent inventory evidence that the enabled plugin
-   and all three MCP registrations already exist, means the current task has a stale tool snapshot.
-   Stop before annotation, preserve the original downstream goals, tell the user to open one new
-   Codex task outside the source checkout, and do not request or perform another installation. Only
-   when a fresh task and deployment inventory both fail to expose the suite should this be reported
-   as an incomplete suite deployment and explicit permission requested once to install or repair
-   the complete repository suite. If the user declines that action, remain stopped until a
-   user-selected route supplies supported KO evidence. After a successful suite action, resume the
-   original request in a new Codex task after the components are discovered.
-3. Call `get_deepkoala_runner_status`. If the companion is unready, report its stable route state
-   and ask permission only for the missing installation or repair action. Suite installation
-   permission is requested once for each new installation root; an already installed `local_ready`
-   deployment does not ask again for later FASTA jobs. Inspect `device_policy`, `allowed_devices`,
-   and `cuda_available` separately, as well as `allow_multi` and `multi_ready`.
-   Never install, download, or replace required resources silently.
+   and its status and job tools to be exposed in the current task. Before acting on missing or
+   unready tools, read the canonical readiness matrix in
+   [deployment-and-handoff.md](references/deployment-and-handoff.md). Stop before annotation until
+   that route permits a job.
+3. Call `get_deepkoala_runner_status`. Inspect `device_policy`, `allowed_devices`, and
+   `cuda_available` separately, as well as `allow_multi` and `multi_ready`. Report the stable route
+   state and follow the referenced readiness action. Never install, download, or replace required
+   resources silently.
 4. Before the first `run_deepkoala_job` call, make a small LLM routing decision between `frag` and
    `full` from the user's description and available project provenance. An explicit user model
    choice wins. Select `frag` when the input is described as fragmented, truncated, partial, or as
@@ -90,10 +80,8 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must
   not call either downstream MCP itself. Unless the user supplies a rendering directory, let the
   renderer allocate its fresh project output directory.
-- Continue only from a successful stable handoff. If a downstream Skill or its one declared MCP
-  dependency is unavailable, stop without rerunning DeepKOALA, retain the unfinished downstream
-  goal, and request explicit permission once to repair the complete suite. Resume in a new Codex
-  task after the component is discovered.
+- Continue only from a successful stable handoff. The referenced handoff guide owns unavailable
+  downstream-component and resumption behavior; never rerun DeepKOALA to repair a later stage.
 
 Read [deployment-and-handoff.md](references/deployment-and-handoff.md) when status is unready, a
 policy check fails, or another MCP client must consume the output.

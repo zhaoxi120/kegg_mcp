@@ -7,13 +7,24 @@ import html
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
+from kegg_render_mcp._presentation import (
+    ACCEPTED_COLOR,
+    UNCERTAIN_COLOR,
+    UNSUPPORTED_COLOR,
+)
+from kegg_render_mcp._presentation import (
+    block_color as _block_color,
+)
+from kegg_render_mcp._presentation import (
+    exact_completion_text as _exact,
+)
+from kegg_render_mcp._presentation import (
+    ratio_text as _ratio,
+)
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError
 from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayScene
 
-ACCEPTED_COLOR = "#FF0000"
-UNCERTAIN_COLOR = "#E69F00"
-UNSUPPORTED_COLOR = "#7F7F7F"
 TEXT_COLOR = "#1F2937"
 BACKGROUND_COLOR = "#FFFFFF"
 SVG_RENDERER_VERSION = "1.0"
@@ -319,24 +330,6 @@ def _is_xml_character(codepoint: int) -> bool:
 
 def _truncate(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
-
-
-def _ratio(value: float | None) -> str:
-    return "not evaluable" if value is None else f"{value:.1%}"
-
-
-def _exact(value: bool | None) -> str:
-    return "complete" if value is True else "incomplete" if value is False else "not evaluable"
-
-
-def _block_color(strict: str, lenient: str) -> str:
-    if strict == "complete":
-        return ACCEPTED_COLOR
-    if lenient == "complete":
-        return UNCERTAIN_COLOR
-    if strict == "not_evaluable" or lenient == "not_evaluable":
-        return UNSUPPORTED_COLOR
-    return "#FFFFFF"
 
 
 def _limit_error(message: str) -> RenderMcpError:

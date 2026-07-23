@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -16,12 +17,16 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = PROJECT_ROOT / "scripts" / "install-suite.py"
+LAUNCHER = PROJECT_ROOT / "scripts" / "run-installed-mcp.py"
+EXAMPLE_DEPLOYMENT_CONFIG = PROJECT_ROOT / "examples" / "config" / "kegg-mcp-suite.toml"
+RENDERER_CONFIG = (
+    PROJECT_ROOT / "companions" / "kegg-render-mcp" / "src" / "kegg_render_mcp" / "config.py"
+)
 SKILL_NAMES = {
     "deepkoala-annotation",
     "kegg-ko-analysis",
     "kegg-pathway-rendering",
 }
-SERVER_NAMES = {"deepkoala-mcp", "kegg-mcp", "kegg-render-mcp"}
 
 
 def _load_installer_module(installer: Path = INSTALLER) -> Any:
@@ -40,6 +45,21 @@ def _load_installer_module(installer: Path = INSTALLER) -> Any:
 
 
 INSTALLER_MODULE = _load_installer_module()
+LAUNCHER_MODULE = _load_installer_module(LAUNCHER)
+SERVER_NAMES = set(INSTALLER_MODULE.SERVER_NAMES)
+
+
+def _literal_assignment(path: Path, name: str) -> object:
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in module.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == name
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} is not one literal assignment in {path}")
 
 
 def _mkdir(path: Path, *, private: bool = False) -> Path:
@@ -121,6 +141,60 @@ def _write_config(
     config.write_text(_deployment_toml(paths, extras=selected_extras), encoding="utf-8")
     config.chmod(0o600)
     return config, paths
+
+
+def test_installer_and_launcher_share_deployment_manifest_contract() -> None:
+    assert tuple(INSTALLER_MODULE.SERVER_NAMES) == tuple(LAUNCHER_MODULE.SERVER_NAMES)
+    assert INSTALLER_MODULE.DEPLOYMENT_MANIFEST_SCHEMA_VERSION == LAUNCHER_MODULE.SCHEMA_VERSION
+
+
+def test_cross_distribution_deployment_constants_remain_aligned() -> None:
+    from deepkoala_mcp.contracts import RunDeepKoalaInput
+
+    from kegg_mcp.mcp.config import RATE_LIMIT_ROOT_ENV as CORE_RATE_LIMIT_ROOT_ENV
+
+    assert (
+        INSTALLER_MODULE.RATE_LIMIT_ROOT_ENV
+        == CORE_RATE_LIMIT_ROOT_ENV
+        == _literal_assignment(RENDERER_CONFIG, "RATE_LIMIT_ROOT_ENV")
+    )
+    assert (
+        RunDeepKoalaInput.model_fields["model_date"].default
+        == INSTALLER_MODULE.DEFAULT_DEEPKOALA_MODEL_DATE
+    )
+
+
+def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path) -> None:
+    paths = _deployment_paths(tmp_path)
+    core_state = _mkdir(paths["private"] / "core", private=True)
+    replacements = {
+        "/absolute/private/path/to/kegg-suite/rate-limit": str(paths["rate"]),
+        "/absolute/private/path/to/kegg-suite/core/results.sqlite3": str(
+            core_state / "results.sqlite3"
+        ),
+        "/absolute/shared/path/to/kegg-suite/inputs": str(paths["input"]),
+        "/absolute/shared/path/to/kegg-suite/analysis": str(paths["output"]),
+        "/absolute/private/path/to/kegg-suite/deepkoala-state": str(paths["deep_state"]),
+        "/absolute/private/path/to/kegg-suite/renderer-state": str(paths["render_state"]),
+    }
+    rendered = EXAMPLE_DEPLOYMENT_CONFIG.read_text(encoding="utf-8").replace(
+        "academic_use_confirmed = false",
+        "academic_use_confirmed = true",
+        1,
+    )
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+    config_path = paths["private"] / "tracked-example.toml"
+    config_path.write_text(rendered, encoding="utf-8")
+    config_path.chmod(0o600)
+
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert config.kegg.rate_limit_root == paths["rate"].resolve()
+    assert config.core.result_store_path == (core_state / "results.sqlite3").resolve()
+    assert config.deepkoala.input_roots == (paths["input"].resolve(),)
+    assert config.deepkoala.output_roots == (paths["output"].resolve(),)
+    assert config.renderer.allowed_roots == (paths["output"].resolve(),)
 
 
 def _rewrite_deepkoala_config(config: Path, paths: dict[str, Path], deepkoala_extra: str) -> None:
@@ -581,6 +655,8 @@ def test_offline_environment_omits_unrequested_licensed_namespace_confirmation(
     assert renderer["KEGG_RENDER_MCP_ACCESS_MODE"] == "offline_cache"
     assert core["KEGG_MCP_CACHE_PATH"] == str(offline.kegg.cache_path)
     assert renderer["KEGG_RENDER_MCP_CACHE_PATH"] == str(offline.kegg.cache_path)
+    assert core[INSTALLER_MODULE.RATE_LIMIT_ROOT_ENV] == str(offline.kegg.rate_limit_root)
+    assert renderer[INSTALLER_MODULE.RATE_LIMIT_ROOT_ENV] == str(offline.kegg.rate_limit_root)
     assert "KEGG_MCP_LICENSED_USE_CONFIRMED" not in core
     assert "KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED" not in renderer
 
@@ -898,7 +974,13 @@ def test_installed_launcher_replaces_ambient_suite_configuration_and_executes_on
     }
     manifest = deployment / "deployment.json"
     manifest.write_text(
-        json.dumps({"schema_version": 1, "commands": commands, "environments": environments}),
+        json.dumps(
+            {
+                "schema_version": INSTALLER_MODULE.DEPLOYMENT_MANIFEST_SCHEMA_VERSION,
+                "commands": commands,
+                "environments": environments,
+            }
+        ),
         encoding="utf-8",
     )
     manifest.chmod(0o600)

@@ -1,15 +1,17 @@
 # KEGG Pathway and MODULE Visualization Architecture
 
-Status: implemented post-MVP architecture; exact-release deployment validation remains gated.
+This document owns the implemented renderer handoff, typed pathway-asset boundary, rendering
+semantics, graphics security, and visualization-specific rights rules. The cross-component
+[architecture](architecture.md) owns process boundaries, and
+[release readiness](release-readiness.md) owns version and release status.
 
-External interface review dates: KEGG visualization and rights sources 2026-07-16; Codex plugin
-source 2026-07-19.
+External interface review dates: KEGG visualization and rights sources 2026-07-16; inert KGML
+declaration observation 2026-07-21; Codex plugin source 2026-07-23.
 
 ## Purpose
 
 This document defines the current local visualization architecture for KEGG-aware KO analysis. It
-covers the supported FASTA-to-image workflow, component and Skill boundaries, stable handoffs,
-rendering semantics, security requirements, KEGG access constraints, and release validation.
+covers stable handoffs, rendering semantics, security requirements, and KEGG access constraints.
 
 Annotation, analysis, and rendering run in three independent local stdio MCP processes. The core
 normalizes evidence exactly once, the renderer never recomputes analysis, and each Skill orchestrates
@@ -51,33 +53,18 @@ The following remain unsupported:
 
 ### `deepkoala-mcp`
 
-The annotation companion accepts one allowlisted absolute protein FASTA path and an optional new or
-empty owner-only allowed output directory, validates and privately stages the FASTA, and owns
-bounded process lifecycle and cleanup. When the path is omitted, it allocates a fresh child beneath
-the last configured output root. It defaults to the installed `202502` resources, `device=cpu`, zero
-data-loader workers, and single-domain execution. It accepts `device=cuda` subject to deployment
-and runtime checks and never uses automatic device selection. A request may opt into multi-domain
-execution only when the deployment has separately configured and validated local HMMER/KOfam
-resources. The companion never downloads those resources, normalizes K numbers, or queries KEGG.
-
-The stable successful output is:
+The annotation companion is upstream of visualization. It owns FASTA validation, execution, and
+the stable successful output:
 
 ```text
 deepkoala_annotations.csv
 deepkoala_run_report.md
 ```
 
-The versioned handoff keeps the original `input_path` separate from the generated
-`annotations_path` and `report_path`. Its `source` records the annotation tool and resolved model
-version; private staged FASTA and raw runner paths are never returned.
-
-The process-scoped job identifier and `deepkoala://` resources are lifecycle and bounded-transfer
-aids. Stable files, not job identity, are the default cross-process handoff.
-
-The suite installer may clone the official DeepKOALA repository and install its declared Python
-requirements only after the one-time confirmation for each new installation root. Later FASTA jobs
-in that installed deployment do not repeat the installation question. The repository provides no
-automatic path for installing later model weights.
+The Core consumes the detailed CSV rather than a process-scoped companion job identifier. The
+companion never normalizes K numbers or queries KEGG. Its
+[component README](../companions/deepkoala-mcp/README.md) owns installation, model/device policy,
+multi-domain readiness, tools, lifecycle, and detailed file provenance.
 
 ### Core `kegg-mcp`
 
@@ -143,40 +130,15 @@ The renderer is an independently packaged local stdio MCP server requiring a com
 library. It validates exactly one version-3 handoff supplied as an allowed absolute path or bounded
 inline JSON document.
 
-Its public tools are:
-
-- `get_renderer_status`;
-- `probe_renderer_kegg_connectivity`;
-- `render_analysis_bundle`;
-- `render_pathway`;
-- `render_module`; and
-- `delete_render_result`.
-
 Status is redacted and closed-world. A connectivity probe performs one explicit `INFO` request in a
 live access mode and zero requests in `offline_cache` or `unconfigured` mode. MODULE rendering is
 closed-world when its handoff is complete. Pathway rendering is open-world when it retrieves KEGG
 assets. Tool annotations reflect these effects.
 
-Every successful render returns an opaque process-scoped `render_id`, the resolved output
-directory, bounded artifact metadata with stable output paths, warnings, and renderer-created
-resource URIs:
-
-```text
-kegg-render://results/{render_id}
-kegg-render://results/{render_id}/{artifact}
-```
-
-The retained `render_manifest.json` records artifact identity, MIME type, byte size, dimensions,
-renderer versions, core calculation provenance, target warnings, and safe source-asset provenance.
-SVG resources use `image/svg+xml`; PNG resources use binary `image/png`.
-
-Retained results have bounded count, lifetime, payload bytes, allocated storage, and cleanup work.
-Multiple renderer processes may share one deployment state root through isolated live scopes, but
-each retained result still belongs to exactly one process. Unknown, expired, deleted, and
-cross-scope identifiers return the same safe not-found result. The renderer allocates a fresh child
-beneath its last configured allowed root when `output_directory` is omitted. Every output directory
-is a durable handoff and must be new or empty; publication never overwrites an existing entry and
-installs the manifest last.
+Successful operations produce bounded static artifacts and a `render_manifest.json` in a new or
+empty durable output directory. Opaque retained-result identities remain process-scoped and are not
+cross-stage authorization. The [Renderer README](../companions/kegg-render-mcp/README.md) owns the
+exact tools, resource URIs, status fields, retention limits, configuration, and output lifecycle.
 
 ## Rendering semantics
 
@@ -291,52 +253,29 @@ renderer. Missing, failed, or incompatible stages stop with their specific diagn
 
 ## Unified Codex deployment
 
-`scripts/install-suite.py` is the supported Codex app and Codex CLI installation path. It consumes
-the three checked-in lockfiles, creates three separate runtimes, and generates one local plugin with
-version-matched copies of the three canonical Skills and three absolute MCP launch registrations.
-No server starts another, and private deployment configuration does not enter the plugin cache.
+`scripts/install-suite.py` creates three separate runtimes and one generated local plugin without
+merging component processes or state. The [installation guide](installation.md) owns operator
+configuration and lifecycle; generic clients use
+[manual component deployment](manual-component-deployment.md).
 
-`uv` dependency resolution is offline by default. The explicit locked-dependency download switch
-applies only to artifacts required by the checked-in lockfiles and declared build requirements. It
-does not authorize Python, uv, Codex, repository source, model updates, KOfam profiles, KEGG data, or
-KEGG assets.
+## Validation ownership
 
-The generated-plugin path is Codex-specific. Other MCP clients use explicit component installation
-and stdio registration.
-
-## Testing and release status
-
-The implemented source is covered by:
+The visualization implementation is covered by:
 
 - core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 3
   and typed pathway assets;
-- DeepKOALA companion contract, lifecycle, stdio, stable-file, and real MCP JSON-boundary tests using
-  synthetic inputs and output;
 - renderer schema, pathway, MODULE, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
   and distribution tests using only synthetic assets;
 - static Skill contract and route-evaluation tests; and
-- deterministic suite-installer tests for strict configuration, three runtime commands, generated
-  plugin content, registration validation, interrupted publication, and bounded rollback.
+- the synthetic three-process composition test.
 
-Pull-request CI runs the governed core compatibility campaign once: 30 requests each for `INFO`,
-`GET`, `LINK`, and `CONV`, serialized at one request per second with zero retries. Renderer CI uses
-only synthetic assets and performs no live KEGG request. CI does not upload KEGG payloads.
-
-The automated synthetic composition gate is
+The composition test is
 `companions/kegg-render-mcp/tests/test_synthetic_pipeline.py`. It carries a FASTA-derived companion
 handoff through core high-level analysis and into renderer output across three independent MCP
 sessions without rebuilding an intermediate contract or accessing the network.
 
-One exact-release gate cannot be established by repository tests: an installation produced from the
-exact release candidate must be opened in a new Codex task and prove discovery and invocation of all
-three Skills and all three MCP servers. A generated plugin tree, mocked Codex output, or successful
-installer return is not that gate. Record exact commit, package versions, Python, uv, Git, Codex
-version, CI result, access/rights review, and security review in release notes before calling that
-revision release-supported.
-
-Global/overview overlays, renderer live-KEGG compatibility tests, automatic installation of later
-DeepKOALA models, and redistribution approval are outside the implemented release scope. They are
-not substitutes for the automated composition gate or the real-Codex release gate above.
+The [release-readiness checklist](release-readiness.md) owns the exact commands, live-versus-
+synthetic distinction, new-task discovery smoke, evidence record, and publication decision.
 
 ## Primary external sources
 
@@ -352,7 +291,7 @@ The visualization contract was reviewed on 2026-07-16 against:
 - [Model Context Protocol resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources),
   including binary content and MIME metadata.
 
-The generated local plugin contract was reviewed on 2026-07-19 against the official
+The generated local plugin contract was reviewed again on 2026-07-23 against the official
 [Codex plugin documentation](https://learn.chatgpt.com/docs/build-plugins).
 
 Any external fact that changes a parser, schema, fixture, or acceptance test requires a new

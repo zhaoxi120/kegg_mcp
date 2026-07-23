@@ -1,4 +1,4 @@
-# Pathway coverage and KO-set comparison contract
+# Pathway Coverage and Deterministic Functional Comparison
 
 This document specifies the current pathway and comparison analysis layer. It is a project contract
 for deterministic analysis, not an official KEGG pathway-completeness method or a statistical

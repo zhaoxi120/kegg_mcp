@@ -27,9 +27,12 @@ PLUGIN_NAME = "kegg-mcp"
 DEFAULT_MARKETPLACE_NAME = "kegg-mcp-local"
 DEEPKOALA_REPOSITORY = "https://github.com/zhaoxi120/deepkoala.git"
 DEFAULT_DEEPKOALA_MODEL_DATE = "202502"
+DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
+DEPLOYMENT_MANIFEST_SCHEMA_VERSION = 1
 SERVER_NAMES = ("deepkoala-mcp", "kegg-mcp", "kegg-render-mcp")
 SKILL_NAMES = ("deepkoala-annotation", "kegg-ko-analysis", "kegg-pathway-rendering")
 RUNTIME_NAMES = ("core", "deepkoala", "renderer")
+RATE_LIMIT_ROOT_ENV = "KEGG_MCP_RATE_LIMIT_ROOT"
 NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 MAX_CONFIG_BYTES = 65_536
 MAX_GENERATED_JSON_BYTES = 256 * 1024
@@ -438,8 +441,11 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
     document = _read_private_toml(path)
     _reject_unknown(document, {"schema_version", "kegg", "core", "deepkoala", "renderer"}, "root")
     schema_version = document.get("schema_version")
-    if type(schema_version) is not int or schema_version != 1:
-        _error("deployment_config_invalid", "schema_version must be 1")
+    if type(schema_version) is not int or schema_version != DEPLOYMENT_CONFIG_SCHEMA_VERSION:
+        _error(
+            "deployment_config_invalid",
+            f"schema_version must be {DEPLOYMENT_CONFIG_SCHEMA_VERSION}",
+        )
 
     kegg = _required_table(document, "kegg")
     _reject_unknown(
@@ -1123,7 +1129,7 @@ def _deployment_environments(
 ) -> dict[str, dict[str, str]]:
     core = {
         "KEGG_MCP_ACCESS_MODE": config.kegg.mode,
-        "KEGG_MCP_RATE_LIMIT_ROOT": str(config.kegg.rate_limit_root),
+        RATE_LIMIT_ROOT_ENV: str(config.kegg.rate_limit_root),
         "KEGG_MCP_RESULT_STORE_PATH": str(config.core.result_store_path),
         "KEGG_MCP_ALLOWED_ROOTS": os.pathsep.join(str(root) for root in config.core.allowed_roots),
     }
@@ -1134,7 +1140,7 @@ def _deployment_environments(
         ),
         "KEGG_RENDER_MCP_ACCESS_MODE": config.kegg.mode,
         "KEGG_RENDER_MCP_OFFLINE_ALLOW_STALE": str(config.renderer.offline_allow_stale).lower(),
-        "KEGG_MCP_RATE_LIMIT_ROOT": str(config.kegg.rate_limit_root),
+        RATE_LIMIT_ROOT_ENV: str(config.kegg.rate_limit_root),
     }
     if config.kegg.academic_use_confirmed:
         core["KEGG_MCP_ACADEMIC_USE_CONFIRMED"] = "true"
@@ -1544,7 +1550,7 @@ def _materialize_deployment(
     _write_json(
         deployment_root / "deployment.json",
         {
-            "schema_version": 1,
+            "schema_version": DEPLOYMENT_MANIFEST_SCHEMA_VERSION,
             "commands": commands,
             "environments": {name: dict(values) for name, values in environments.items()},
         },

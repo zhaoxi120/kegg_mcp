@@ -32,8 +32,8 @@ When requirements conflict, use this order:
 1. the current user request or assigned GitHub issue;
 2. this `AGENTS.md`;
 3. implemented public schemas, interfaces, and tests;
-4. `docs/development-plan.md` for current core architecture and
-   `docs/visualization-extension-plan.md` for current visualization architecture; and
+4. `docs/architecture.md` for current cross-component architecture and
+   `docs/visualization-architecture.md` for current visualization architecture; and
 5. other documentation.
 
 For external behavior, prefer current primary sources: official KEGG API, MODULE, and legal
@@ -71,7 +71,10 @@ schema, parser, fixture, or acceptance test.
   be comparable.
 - Report exact MODULE completion separately from project block coverage. Follow KEGG MODULE logic:
   spaces and plus signs are AND, commas are OR, and minus marks an optional component. Preserve
-  parentheses and module references. Unsupported syntax returns `not_evaluable` with a reason.
+  parentheses and module references. Preserve unsupported syntax; a required block whose truth
+  cannot be established safely because of it is not evaluable and retains a reason. The aggregate
+  result is `partially_evaluable` when another required block remains evaluable, and
+  `not_evaluable` when none can be evaluated safely.
 - Pathway KO coverage is descriptive. Do not call it pathway presence, completeness, activity,
   flux, phenotype, or enrichment. State the reference type and denominator.
 - Distinguish genome, MAG, isolate proteome, pangenome, and metagenomic-community analysis units.

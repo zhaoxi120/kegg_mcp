@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from kegg_render_mcp.contracts import MAX_ARTIFACTS
+from kegg_render_mcp._filesystem import bounded_directory_names, open_absolute_directory
+from kegg_render_mcp.contracts import ARTIFACT_NAME_PATTERN, MAX_ARTIFACTS, RENDER_ID_PATTERN
 
-_ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_RESULT_ID = re.compile(r"render_[A-Za-z0-9_-]{32}\Z")
+_ARTIFACT_NAME = re.compile(rf"{ARTIFACT_NAME_PATTERN}\Z")
+_RESULT_ID = re.compile(rf"{RENDER_ID_PATTERN}\Z")
 _SCOPE_NAME = re.compile(r"scope_[A-Za-z0-9_-]{32}\Z")
 _COORDINATION_LOCK_NAME: Final = ".renderer.lock"
 _SCOPE_LOCK_NAME: Final = ".scope.lock"
@@ -145,17 +146,6 @@ def validate_owner_only_directory(descriptor: int) -> None:
         or metadata.st_mode & 0o077
     ):
         raise ValueError("renderer state directories must be owner-only direct directories")
-
-
-def bounded_directory_names(descriptor: int, limit: int, label: str) -> tuple[str, ...]:
-    """List at most a caller-provided number of direct entries."""
-    names: list[str] = []
-    with os.scandir(descriptor) as entries:
-        for entry in entries:
-            if len(names) >= limit:
-                raise ValueError(f"{label} exceeds its entry-count limit")
-            names.append(entry.name)
-    return tuple(names)
 
 
 def _allocate_scope(state_fd: int) -> tuple[int, str, int]:
@@ -417,7 +407,7 @@ def _release_descriptors(
 def _open_or_create_private_directory(path: Path) -> int:
     if not path.is_absolute() or ".." in path.parts or path == Path(path.anchor):
         raise ValueError("state root must be an absolute non-root path")
-    parent_fd = _open_absolute_directory(path.parent)
+    parent_fd = open_absolute_directory(path.parent)
     try:
         try:
             descriptor = os.open(
@@ -437,23 +427,3 @@ def _open_or_create_private_directory(path: Path) -> int:
         return descriptor
     finally:
         os.close(parent_fd)
-
-
-def _open_absolute_directory(path: Path) -> int:
-    descriptor = os.open(
-        "/",
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-    )
-    try:
-        for part in path.parts[1:]:
-            next_descriptor = os.open(
-                part,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
-        return descriptor
-    except Exception:
-        os.close(descriptor)
-        raise

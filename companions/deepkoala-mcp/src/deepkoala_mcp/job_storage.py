@@ -16,12 +16,13 @@ from pathlib import Path
 
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
+    JOB_ID_PATTERN,
     MAX_RESOURCE_PAGE_BYTES,
     MAX_RETAINED_JOBS,
     RUN_REPORT_FILENAME,
 )
 
-_JOB = re.compile(r"^job_[a-f0-9]{32}$")
+_JOB = re.compile(rf"^{JOB_ID_PATTERN}$")
 _SESSION = re.compile(r"^session_[a-f0-9]{32}$")
 _COORDINATION_LOCK_NAME = ".deepkoala.lock"
 _RUNNER_LOCK_NAME = ".deepkoala.runner.lock"

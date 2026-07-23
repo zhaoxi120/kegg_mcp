@@ -35,6 +35,18 @@ class _Runner:
         return ProcessOutcome(return_code=0)
 
 
+class _BlockingRunner:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, plan: RunnerPlan) -> ProcessOutcome:
+        del plan
+        self.started.set()
+        await self.release.wait()
+        return ProcessOutcome(return_code=0)
+
+
 def _manager(config: DeepKoalaRuntimeConfig, payload: bytes = DETAILED_CSV) -> DeepKoalaJobManager:
     return DeepKoalaJobManager(config, runner=_Runner(payload), runtime_probe=ready_probe)
 
@@ -64,6 +76,32 @@ def _data(result: types.CallToolResult) -> dict[str, object]:
     assert result.structuredContent is not None
     wrapped = cast(dict[str, object], result.structuredContent["result"])
     return cast(dict[str, object], wrapped["data"])
+
+
+def test_tool_names_are_unique() -> None:
+    assert len(TOOL_NAMES) == len(set(TOOL_NAMES))
+
+
+@pytest.mark.asyncio
+async def test_cancel_tool_dispatches_to_the_registered_handler(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    runner = _BlockingRunner()
+    manager = DeepKoalaJobManager(runtime_config, runner=runner, runtime_probe=ready_probe)
+    async with create_connected_server_and_client_session(create_server(manager)) as session:
+        tools = (await session.list_tools()).tools
+        started = await session.call_tool(
+            "run_deepkoala_job",
+            _input(runtime_config, "cancel-dispatch"),
+        )
+        job_id = cast(str, cast(dict[str, object], _data(started)["job"])["job_id"])
+        await asyncio.wait_for(runner.started.wait(), timeout=2)
+
+        cancelled = await session.call_tool("cancel_deepkoala_job", {"job_id": job_id})
+
+        _validate(_tool(tools, "cancel_deepkoala_job"), cancelled)
+        assert cancelled.isError is False
+        assert _data(cancelled)["state"] == "cancelled"
 
 
 @pytest.mark.asyncio
