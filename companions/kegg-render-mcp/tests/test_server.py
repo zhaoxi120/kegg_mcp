@@ -41,7 +41,12 @@ from kegg_render_mcp.contracts import (
 )
 from kegg_render_mcp.pathway_scene import CorePathwayAssetProvider
 from kegg_render_mcp.render_service import RendererService
-from kegg_render_mcp.server import TOOL_NAMES, RendererRuntime, build_runtime, create_server
+from kegg_render_mcp.server import (
+    TOOL_NAMES,
+    RendererRuntime,
+    build_runtime,
+    create_server,
+)
 
 
 class _ProbeClient:
@@ -114,6 +119,10 @@ async def test_explicit_probe_bypasses_cache_for_one_wire_attempt() -> None:
 
     assert await provider.probe() is ConnectivityStatus.REACHABLE
     assert client.options == [KeggRequestOptions(refresh=True)]
+
+
+def test_tool_names_are_unique() -> None:
+    assert len(TOOL_NAMES) == len(set(TOOL_NAMES))
 
 
 @pytest.mark.asyncio
@@ -398,6 +407,17 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         )
         _validate(_tool(tools, "render_module"), inline)
         assert inline.isError is False
+
+        pathway = await session.call_tool(
+            "render_pathway",
+            {
+                "render_input_path": str(render_input_file),
+                "target_id": "ko00010",
+                "formats": ["svg"],
+            },
+        )
+        _validate(_tool(tools, "render_pathway"), pathway)
+        assert pathway.isError is False
 
         deleted = await session.call_tool("delete_render_result", {"render_id": render_id})
         _validate(_tool(tools, "delete_render_result"), deleted)

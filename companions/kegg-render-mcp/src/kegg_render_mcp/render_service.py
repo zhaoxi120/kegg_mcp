@@ -9,6 +9,8 @@ from kegg_mcp.services.render_contracts import ModuleRenderTarget, PathwayRender
 from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
+    MAX_TARGETS,
+    MAX_WARNINGS,
     ErrorCode,
     ErrorDetail,
     RenderFormat,
@@ -69,12 +71,14 @@ class RendererService:
             render_input_json=render_input_json,
         )
         selected = source.target_ids if target_ids is None else target_ids
-        if not selected or len(selected) > 32 or len(selected) != len(set(selected)):
+        if not selected or len(selected) > MAX_TARGETS or len(selected) != len(set(selected)):
             raise RenderMcpError(
                 ErrorDetail(
                     code=ErrorCode.INVALID_REQUEST,
                     message="The selected render target set is empty, duplicated, or too large.",
-                    suggested_action="Select one through 32 retained target identifiers.",
+                    suggested_action=(
+                        f"Select one through {MAX_TARGETS} retained target identifiers."
+                    ),
                 )
             )
         output = resolve_output_directory(output_directory, self.config.allowed_roots)
@@ -106,13 +110,13 @@ class RendererService:
             artifacts.extend(rendered.artifacts)
             warnings.extend(rendered.warnings)
             target_provenance.append(rendered.provenance)
-        safe_warnings = tuple(dict.fromkeys(item[:1000] for item in warnings))[:32]
+        safe_warnings = tuple(dict.fromkeys(item[:1000] for item in warnings))[:MAX_WARNINGS]
         return self.store.retain(
             target_ids=selected,
             artifacts=tuple(artifacts),
             warnings=safe_warnings,
             manifest_context={
-                "render_input_schema_version": "3",
+                "render_input_schema_version": source.document.schema_version,
                 "producer": source.document.producer.model_dump(mode="json"),
                 "dataset_id": source.document.dataset.dataset_id,
                 "analysis_unit": source.document.dataset.analysis_unit.value,

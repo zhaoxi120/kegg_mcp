@@ -17,6 +17,8 @@ from kegg_mcp.services.render_contracts import (
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kegg_render_mcp._filesystem import open_absolute_directory
+
 ENV_PREFIX = "KEGG_RENDER_MCP_"
 STATE_ROOT_ENV = f"{ENV_PREFIX}STATE_ROOT"
 ALLOWED_ROOTS_ENV = f"{ENV_PREFIX}ALLOWED_ROOTS"
@@ -214,16 +216,8 @@ def _existing_root(value: str) -> Path:
 
 
 def _validate_allowed_root(path: Path) -> None:
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = open_absolute_directory(path)
     try:
-        for part in path.parts[1:]:
-            next_descriptor = os.open(
-                part,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISDIR(metadata.st_mode)

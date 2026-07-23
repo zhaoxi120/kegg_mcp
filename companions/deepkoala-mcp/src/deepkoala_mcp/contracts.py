@@ -19,8 +19,10 @@ MAX_RESOURCE_PAGE_BYTES = 65_536
 HANDOFF_SCHEMA_VERSION = "1"
 ANNOTATIONS_FILENAME = "deepkoala_annotations.csv"
 RUN_REPORT_FILENAME = "deepkoala_run_report.md"
+DEFAULT_MODEL_DATE = "202502"
+JOB_ID_PATTERN = r"job_[a-f0-9]{32}"
 
-JobId = Annotated[str, Field(pattern=r"^job_[a-f0-9]{32}$", max_length=36)]
+JobId = Annotated[str, Field(pattern=rf"^{JOB_ID_PATTERN}$", max_length=36)]
 ModelName = Literal["full", "frag"]
 ModelDate = Annotated[
     str,
@@ -169,7 +171,7 @@ class RunDeepKoalaInput(FrozenModel):
         ),
     )
     model: ModelName = "full"
-    model_date: ModelDate = "202502"
+    model_date: ModelDate = DEFAULT_MODEL_DATE
     device: Literal["cpu", "cuda"] = "cpu"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)
@@ -327,11 +329,11 @@ class ImportHandoff(FrozenModel):
     report_path: str = Field(min_length=1, max_length=4_096)
     input_format: Literal["deepkoala_detailed"]
     annotations_resource_uri: str = Field(
-        pattern=r"^deepkoala://jobs/job_[a-f0-9]{32}/annotations$",
+        pattern=rf"^deepkoala://jobs/{JOB_ID_PATTERN}/annotations$",
         max_length=80,
     )
     report_resource_uri: str = Field(
-        pattern=r"^deepkoala://jobs/job_[a-f0-9]{32}/report$",
+        pattern=rf"^deepkoala://jobs/{JOB_ID_PATTERN}/report$",
         max_length=80,
     )
     source: SourceProvenance

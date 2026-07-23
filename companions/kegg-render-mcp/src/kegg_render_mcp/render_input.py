@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from kegg_mcp.services.render_contracts import (
+    RENDER_INPUT_SCHEMA_VERSION,
     ModuleRenderTarget,
     PathwayRenderTarget,
     RenderInput,
 )
 from pydantic import ValidationError
 
+from kegg_render_mcp._filesystem import open_absolute_directory
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError, SafeDetail
 from kegg_render_mcp.input_validation import validate_tool_input
@@ -103,11 +105,14 @@ def _parse_payload(payload: bytes) -> ValidatedRenderInput:
         raise _invalid_input("The renderer input root must be a JSON object.")
     raw = cast(dict[str, Any], parsed)
     version: object = raw.get("schema_version")
-    if version != "3":
+    if version != RENDER_INPUT_SCHEMA_VERSION:
         raise RenderMcpError(
             ErrorDetail(
                 code=ErrorCode.INCOMPATIBLE_SCHEMA,
-                message="Only renderer handoff schema version 3 is compatible.",
+                message=(
+                    "Only renderer handoff schema version "
+                    f"{RENDER_INPUT_SCHEMA_VERSION} is compatible."
+                ),
                 suggested_action="Rerun analysis with a compatible kegg-mcp version.",
                 safe_details=(SafeDetail(name="received_version", value=str(version)[:32]),),
             )
@@ -257,7 +262,7 @@ def _open_beneath(
         relative = path.relative_to(root)
     except ValueError as error:  # pragma: no cover - guarded above
         raise _path_error("The path is outside the configured allowed roots.") from error
-    descriptor = _open_absolute_directory(root)
+    descriptor = open_absolute_directory(root)
     created_final_directory = False
     try:
         _validate_private_directory_fd(descriptor)
@@ -331,23 +336,6 @@ def _open_beneath(
     except OSError as error:
         os.close(descriptor)
         raise _path_error("A renderer path component could not be opened safely.") from error
-
-
-def _open_absolute_directory(path: Path) -> int:
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for part in path.parts[1:]:
-            next_descriptor = os.open(
-                part,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
-        return descriptor
-    except Exception:
-        os.close(descriptor)
-        raise
 
 
 def _validate_private_directory_fd(descriptor: int) -> None:

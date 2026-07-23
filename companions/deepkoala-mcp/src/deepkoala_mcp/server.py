@@ -7,8 +7,9 @@ import json
 import re
 import secrets
 import sys
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
 import anyio
@@ -22,6 +23,7 @@ from pydantic import AnyUrl, BaseModel, ValidationError
 from deepkoala_mcp import SERVER_NAME, __version__
 from deepkoala_mcp.config import load_runtime_config
 from deepkoala_mcp.contracts import (
+    JOB_ID_PATTERN,
     MAX_RESOURCE_PAGE_BYTES,
     CancelDeepKoalaJobInput,
     CompanionStatus,
@@ -41,24 +43,151 @@ from deepkoala_mcp.contracts import (
 )
 from deepkoala_mcp.jobs import ArtifactName, DeepKoalaJobManager
 
-TOOL_NAMES = (
-    "get_deepkoala_runner_status",
-    "run_deepkoala_job",
-    "get_deepkoala_job",
-    "cancel_deepkoala_job",
-    "delete_deepkoala_job",
-)
 _RESOURCE = re.compile(
-    r"^deepkoala://jobs/(job_[a-f0-9]{32})/(annotations|report)"
+    rf"^deepkoala://jobs/({JOB_ID_PATTERN})/(annotations|report)"
     r"(?:/(0|[1-9][0-9]{0,7})/([1-9][0-9]{0,5}))?$"
 )
 _M = TypeVar("_M", bound=BaseModel)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolExecution:
+    output: BaseModel
+    narrative: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolSpec:
+    """One authoritative DeepKOALA tool definition and dispatch target."""
+
+    name: str
+    title: str
+    description: str
+    input_model: type[BaseModel]
+    output_model: type[BaseModel]
+    annotations: types.ToolAnnotations
+    handler: Callable[[DeepKoalaJobManager, BaseModel], Awaitable[_ToolExecution]]
 
 
 class _RequestValidationError(Exception):
     def __init__(self, issue_count: int) -> None:
         super().__init__("invalid tool input")
         self.issue_count = issue_count
+
+
+async def _handle_status(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, GetDeepKoalaStatusInput)
+    return _ToolExecution(await manager.status(), "Returned redacted local runner status.")
+
+
+async def _handle_run(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, RunDeepKoalaInput)
+    result = await manager.run(request)
+    return _ToolExecution(result, f"Started DeepKOALA job {result.job.job_id}.")
+
+
+async def _handle_get_job(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, GetDeepKoalaJobInput)
+    result = await manager.get_job(request.job_id)
+    return _ToolExecution(result, f"Job is {result.job.state.value}.")
+
+
+async def _handle_cancel(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, CancelDeepKoalaJobInput)
+    result = await manager.cancel(request.job_id)
+    return _ToolExecution(result, f"Job is {result.state.value}.")
+
+
+async def _handle_delete(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
+    assert isinstance(request, DeleteDeepKoalaJobInput)
+    return _ToolExecution(
+        await manager.delete(request.job_id),
+        "Forgot the terminal job record and retained delivered files.",
+    )
+
+
+_READ_ONLY_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_RUN_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+_CANCEL_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_DELETE_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+_TOOL_SPECS = (
+    _ToolSpec(
+        name="get_deepkoala_runner_status",
+        title="Get local DeepKOALA runner status",
+        description=(
+            "Return redacted base and optional multi-domain readiness, policy, bounds, and job "
+            "counts."
+        ),
+        input_model=GetDeepKoalaStatusInput,
+        output_model=CompanionStatus,
+        annotations=_READ_ONLY_ANNOTATIONS,
+        handler=_handle_status,
+    ),
+    _ToolSpec(
+        name="run_deepkoala_job",
+        title="Run a local DeepKOALA job",
+        description=(
+            "Validate paths and policy, stage FASTA, and start detailed annotation atomically; "
+            "multi-domain mode requires explicit request and deployment readiness."
+        ),
+        input_model=RunDeepKoalaInput,
+        output_model=RunDeepKoalaResult,
+        annotations=_RUN_ANNOTATIONS,
+        handler=_handle_run,
+    ),
+    _ToolSpec(
+        name="get_deepkoala_job",
+        title="Get a local DeepKOALA job",
+        description="Read state and the stable file handoff after success.",
+        input_model=GetDeepKoalaJobInput,
+        output_model=GetDeepKoalaJobResult,
+        annotations=_READ_ONLY_ANNOTATIONS,
+        handler=_handle_get_job,
+    ),
+    _ToolSpec(
+        name="cancel_deepkoala_job",
+        title="Cancel a local DeepKOALA job",
+        description="Terminate and reap the one running DeepKOALA process group.",
+        input_model=CancelDeepKoalaJobInput,
+        output_model=JobSummary,
+        annotations=_CANCEL_ANNOTATIONS,
+        handler=_handle_cancel,
+    ),
+    _ToolSpec(
+        name="delete_deepkoala_job",
+        title="Delete a terminal DeepKOALA job record",
+        description="Forget one terminal process record while retaining delivered files.",
+        input_model=DeleteDeepKoalaJobInput,
+        output_model=DeleteDeepKoalaJobResult,
+        annotations=_DELETE_ANNOTATIONS,
+        handler=_handle_delete,
+    ),
+)
+TOOL_NAMES = tuple(spec.name for spec in _TOOL_SPECS)
+_TOOL_SPECS_BY_NAME = {spec.name: spec for spec in _TOOL_SPECS}
+if len(_TOOL_SPECS_BY_NAME) != len(_TOOL_SPECS):  # pragma: no cover - import-time invariant
+    raise RuntimeError("DeepKOALA tool registry contains duplicate names")
 
 
 def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
@@ -99,34 +228,20 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         arguments: dict[str, Any],
     ) -> types.CallToolResult:
         try:
-            if name == "get_deepkoala_runner_status":
-                _parse(GetDeepKoalaStatusInput, arguments)
-                return _success(await state.status(), "Returned redacted local runner status.")
-            if name == "run_deepkoala_job":
-                request = _parse(RunDeepKoalaInput, arguments)
-                result = await state.run(request)
-                return _success(result, f"Started DeepKOALA job {result.job.job_id}.")
-            if name == "get_deepkoala_job":
-                request = _parse(GetDeepKoalaJobInput, arguments)
-                result = await state.get_job(request.job_id)
-                return _success(result, f"Job is {result.job.state.value}.")
-            if name == "cancel_deepkoala_job":
-                request = _parse(CancelDeepKoalaJobInput, arguments)
-                result = await state.cancel(request.job_id)
-                return _success(result, f"Job is {result.state.value}.")
-            if name == "delete_deepkoala_job":
-                request = _parse(DeleteDeepKoalaJobInput, arguments)
-                return _success(
-                    await state.delete(request.job_id),
-                    "Forgot the terminal job record and retained delivered files.",
+            spec = _TOOL_SPECS_BY_NAME.get(name)
+            if spec is None:
+                return _error(
+                    ErrorDetail(
+                        code=ErrorCode.INVALID_REQUEST,
+                        message="The requested MCP tool name is unknown.",
+                        suggested_action="Use a tool name returned by tools/list.",
+                    )
                 )
-            return _error(
-                ErrorDetail(
-                    code=ErrorCode.INVALID_REQUEST,
-                    message="The requested MCP tool name is unknown.",
-                    suggested_action="Use a tool name returned by tools/list.",
-                )
-            )
+            request = _parse(spec.input_model, arguments)
+            execution = await spec.handler(state, request)
+            if not isinstance(execution.output, spec.output_model):
+                raise RuntimeError("DeepKOALA tool handler returned the wrong output contract")
+            return _success(execution.output, execution.narrative)
         except _RequestValidationError as error:
             return _error(
                 ErrorDetail(
@@ -261,86 +376,16 @@ def _json_resource(value: Mapping[str, object]) -> ReadResourceContents:
 
 
 def _tool_definitions() -> list[types.Tool]:
-    read_only = types.ToolAnnotations(
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    )
-    run = types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    )
-    cancel = types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    )
-    delete = types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    )
-    definitions: tuple[
-        tuple[str, str, str, type[BaseModel], type[BaseModel], types.ToolAnnotations], ...
-    ] = (
-        (
-            "get_deepkoala_runner_status",
-            "Get local DeepKOALA runner status",
-            "Return redacted base and optional multi-domain readiness, policy, bounds, and job "
-            "counts.",
-            GetDeepKoalaStatusInput,
-            CompanionStatus,
-            read_only,
-        ),
-        (
-            "run_deepkoala_job",
-            "Run a local DeepKOALA job",
-            "Validate paths and policy, stage FASTA, and start detailed annotation atomically; "
-            "multi-domain mode requires explicit request and deployment readiness.",
-            RunDeepKoalaInput,
-            RunDeepKoalaResult,
-            run,
-        ),
-        (
-            "get_deepkoala_job",
-            "Get a local DeepKOALA job",
-            "Read state and the stable file handoff after success.",
-            GetDeepKoalaJobInput,
-            GetDeepKoalaJobResult,
-            read_only,
-        ),
-        (
-            "cancel_deepkoala_job",
-            "Cancel a local DeepKOALA job",
-            "Terminate and reap the one running DeepKOALA process group.",
-            CancelDeepKoalaJobInput,
-            JobSummary,
-            cancel,
-        ),
-        (
-            "delete_deepkoala_job",
-            "Delete a terminal DeepKOALA job record",
-            "Forget one terminal process record while retaining delivered files.",
-            DeleteDeepKoalaJobInput,
-            DeleteDeepKoalaJobResult,
-            delete,
-        ),
-    )
     return [
         types.Tool(
-            name=name,
-            title=title,
-            description=description,
-            inputSchema=input_model.model_json_schema(mode="validation"),
-            outputSchema=ToolEnvelope[output_model].model_json_schema(mode="serialization"),
-            annotations=annotations,
+            name=spec.name,
+            title=spec.title,
+            description=spec.description,
+            inputSchema=spec.input_model.model_json_schema(mode="validation"),
+            outputSchema=ToolEnvelope[spec.output_model].model_json_schema(mode="serialization"),
+            annotations=spec.annotations,
         )
-        for name, title, description, input_model, output_model, annotations in definitions
+        for spec in _TOOL_SPECS
     ]
 
 

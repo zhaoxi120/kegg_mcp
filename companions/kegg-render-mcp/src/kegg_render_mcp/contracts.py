@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeVar
 
+from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_TARGETS = 32
@@ -14,8 +15,12 @@ MAX_WARNINGS = 32
 MAX_ARTIFACTS = 97
 MAX_SAFE_DETAILS = 8
 MAX_INLINE_INPUT_CHARACTERS = 50_000_000
+RENDER_ID_PATTERN = r"render_[A-Za-z0-9_-]{32}"
+ARTIFACT_NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
 
 _RenderTargetId = Annotated[str, Field(pattern=r"^(?:ko[0-9]{5}|M[0-9]{5})$")]
+_RenderId = Annotated[str, Field(pattern=rf"^{RENDER_ID_PATTERN}$")]
+_ArtifactName = Annotated[str, Field(pattern=rf"^{ARTIFACT_NAME_PATTERN}$")]
 
 
 class _Model(BaseModel):
@@ -219,7 +224,7 @@ class RenderModuleInput(RenderOneInput):
 
 
 class DeleteRenderResultInput(_Model):
-    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+    render_id: _RenderId
 
 
 class RendererBounds(_Model):
@@ -237,7 +242,7 @@ class RendererStatus(_Model):
     server_name: Literal["kegg-render-mcp"] = "kegg-render-mcp"
     server_version: str = Field(min_length=1, max_length=32)
     ready: bool
-    compatible_schema_versions: tuple[Literal["3"], ...] = ("3",)
+    compatible_schema_versions: tuple[Literal["3"], ...] = (RENDER_INPUT_SCHEMA_VERSION,)
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
     access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
@@ -271,13 +276,13 @@ class ConnectivityResult(_Model):
 
 
 class ArtifactMetadata(_Model):
-    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    name: _ArtifactName
     kind: ArtifactKind
     mime_type: Literal["image/svg+xml", "image/png", "application/json"]
     byte_size: int = Field(ge=1)
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
-    resource_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}/")
+    resource_uri: str = Field(pattern=rf"^kegg-render://results/{RENDER_ID_PATTERN}/")
     output_path: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @model_validator(mode="after")
@@ -292,13 +297,13 @@ class ArtifactMetadata(_Model):
 
 
 class RenderResult(_Model):
-    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+    render_id: _RenderId
     created_at: datetime
     expires_at: datetime
     target_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_TARGETS)
     artifacts: tuple[ArtifactMetadata, ...] = Field(min_length=1, max_length=MAX_ARTIFACTS)
     warnings: tuple[str, ...] = Field(default=(), max_length=MAX_WARNINGS)
-    result_uri: str = Field(pattern=r"^kegg-render://results/render_[A-Za-z0-9_-]{32}$")
+    result_uri: str = Field(pattern=rf"^kegg-render://results/{RENDER_ID_PATTERN}$")
     output_directory: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @model_validator(mode="after")
@@ -310,7 +315,7 @@ class RenderResult(_Model):
 
 
 class DeleteRenderResult(_Model):
-    render_id: str = Field(pattern=r"^render_[A-Za-z0-9_-]{32}$")
+    render_id: _RenderId
     deleted: Literal[True] = True
 
 
