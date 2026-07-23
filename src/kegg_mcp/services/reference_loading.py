@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, NoReturn, Protocol, Self, cast
+from typing import NoReturn, Protocol, Self, cast
 
 from pydantic import ConfigDict, Field, ValidationError, model_validator
 
@@ -23,7 +23,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayReferenceNamespace,
     build_pathway_reference,
 )
-from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel
+from kegg_mcp.domain.annotations import JSON_SCHEMA_DIALECT, FrozenModel, ModuleId
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.execution import ReferenceLoadingLimits
 from kegg_mcp.kegg.contracts import (
@@ -45,7 +45,6 @@ from kegg_mcp.kegg.contracts import (
     is_kegg_pathway_identifier,
 )
 
-ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 _MAX_MODULE_GET_ENTRIES = 10
 
 

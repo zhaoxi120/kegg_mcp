@@ -119,7 +119,7 @@ class KeggClient:
             sleeper=sleeper,
             random_uniform=random_uniform,
         )
-        self._pathway_assets = PathwayAssetClient(config, self._cache, self._executor)
+        self._pathway_assets = PathwayAssetClient(self._executor)
 
     @property
     def config(self) -> KeggClientConfig:

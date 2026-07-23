@@ -15,6 +15,11 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from kegg_mcp._sqlite_security import (
+    prepare_private_parent,
+    tighten_file_permissions,
+    validate_private_directory,
+)
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 
 _SCHEMA_VERSION: Final = 2
@@ -46,7 +51,9 @@ HARD_MAX_RANGE_BYTES: Final = 8 * _MEBIBYTE
 
 _SCOPE_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SECTION_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_RESULT_ID_PATTERN: Final = re.compile(r"res_[A-Za-z0-9_-]{32}\Z")
+RESULT_ID_FRAGMENT: Final = r"res_[A-Za-z0-9_-]{32}"
+RESULT_ID_SCHEMA_PATTERN: Final = rf"^{RESULT_ID_FRAGMENT}$"
+_RESULT_ID_PATTERN: Final = re.compile(rf"{RESULT_ID_FRAGMENT}\Z")
 _MIME_TYPE_PATTERN: Final = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/"
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}(?:; charset=utf-8)?\Z"
@@ -255,7 +262,7 @@ class ResultArtifactMetadata(_StoreModel):
 class ResultMetadata(_StoreModel):
     """Metadata for a stored result; the originating scope is intentionally omitted."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     created_at: datetime
     expires_at: datetime
     total_bytes: int = Field(strict=True, ge=0, le=HARD_MAX_RESULT_BYTES)
@@ -287,7 +294,7 @@ class ResultMetadataPage(_StoreModel):
 class ResultArtifactPage(_StoreModel):
     """One bounded metadata page for sections under an authorized result."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     items: tuple[ResultArtifactMetadata, ...]
     total_items: int = Field(strict=True, ge=1, le=HARD_MAX_ARTIFACTS_PER_RESULT)
     offset: int = Field(strict=True, ge=0)
@@ -298,7 +305,7 @@ class ResultArtifactPage(_StoreModel):
 class ResultArtifactRange(_StoreModel):
     """One bounded byte range from an authorized immutable artifact."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     section: str = Field(min_length=1, max_length=128)
     mime_type: str = Field(min_length=3, max_length=255)
     total_bytes: int = Field(strict=True, ge=0, le=HARD_MAX_ARTIFACT_BYTES)
@@ -334,7 +341,7 @@ class ResultArtifactRange(_StoreModel):
 class DeletedResult(_StoreModel):
     """Metadata returned after one authorized explicit deletion."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     deleted_at: datetime
     deleted_artifacts: int = Field(strict=True, ge=1, le=HARD_MAX_ARTIFACTS_PER_RESULT)
     deleted_bytes: int = Field(strict=True, ge=0, le=HARD_MAX_RESULT_BYTES)
@@ -1121,7 +1128,7 @@ class SQLiteResultStore:
         except BaseException:
             connection.close()
             raise
-        _tighten_file_permissions(path)
+        tighten_file_permissions(path)
         return connection
 
     def _connect_read_only(self) -> sqlite3.Connection:
@@ -1186,15 +1193,7 @@ class SQLiteResultStore:
 
     def _validate_existing_location(self) -> Path:
         path = self._resolved_configured_path()
-        parent = path.parent
-        _reject_symlink_components(parent)
-        parent_stat = parent.lstat()
-        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
-            raise OSError("result store parent must be a real directory")
-        if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
-            raise OSError("result store parent must be owned by the current user")
-        if stat.S_IMODE(parent_stat.st_mode) & 0o022:
-            raise OSError("result store parent must not be group- or world-writable")
+        validate_private_directory(path.parent)
         return path
 
     def _resolved_configured_path(self) -> Path:
@@ -1205,24 +1204,7 @@ class SQLiteResultStore:
 
     def _prepare_location(self) -> Path:
         path = self._resolved_configured_path()
-        parent = path.parent
-        missing_directories: list[Path] = []
-        candidate = parent
-        while not candidate.exists() and candidate != candidate.parent:
-            missing_directories.append(candidate)
-            candidate = candidate.parent
-        _reject_symlink_components(candidate)
-        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        for directory in missing_directories:
-            _tighten_directory_permissions(directory)
-        _reject_symlink_components(parent)
-        parent_stat = parent.lstat()
-        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
-            raise OSError("result store parent must be a real directory")
-        if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
-            raise OSError("result store parent must be owned by the current user")
-        if stat.S_IMODE(parent_stat.st_mode) & 0o022:
-            raise OSError("result store parent must not be group- or world-writable")
+        prepare_private_parent(path.parent)
         return path
 
 
@@ -1389,41 +1371,6 @@ def _decode_result_id_and_bytes_rows(
             raise _ResultStoreIntegrityError("invalid persisted result identifier")
         decoded.append((result_id, _decode_nonnegative_integer(byte_size)))
     return tuple(decoded)
-
-
-def _reject_symlink_components(path: Path) -> None:
-    """Reject every existing symlink or non-directory parent component."""
-    if not path.is_absolute():
-        raise OSError("result store parent must be absolute")
-    current = Path(path.anchor)
-    for component in path.parts[1:]:
-        current /= component
-        try:
-            component_stat = current.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(component_stat.st_mode):
-            raise OSError("result store parent must not contain symlinks")
-        if not stat.S_ISDIR(component_stat.st_mode):
-            raise OSError("result store parent components must be directories")
-
-
-def _tighten_directory_permissions(path: Path) -> None:
-    try:
-        path_stat = path.lstat()
-        if stat.S_ISDIR(path_stat.st_mode) and not stat.S_ISLNK(path_stat.st_mode):
-            path.chmod(0o700)
-    except OSError:
-        pass
-
-
-def _tighten_file_permissions(path: Path) -> None:
-    try:
-        path_stat = path.lstat()
-        if stat.S_ISREG(path_stat.st_mode) and not stat.S_ISLNK(path_stat.st_mode):
-            path.chmod(0o600)
-    except OSError:
-        pass
 
 
 def _raise_input_limit(limit_name: str, actual: int, maximum: int) -> NoReturn:

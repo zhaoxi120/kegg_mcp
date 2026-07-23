@@ -20,6 +20,7 @@ from kegg_mcp.domain.annotations import (
     DecisionPolicyReference,
     EvidenceMode,
     FrozenModel,
+    ModuleId,
 )
 from kegg_mcp.importers.contracts import ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
@@ -92,7 +93,7 @@ class ModuleRankingExecution(FrozenModel):
     selected_unique_ko_count: int = Field(strict=True, gt=0)
     candidate_module_count: int = Field(strict=True, ge=0)
     selected_module_ids: Annotated[
-        tuple[Annotated[str, Field(pattern=r"^M[0-9]{5}$")], ...],
+        tuple[ModuleId, ...],
         Field(max_length=25),
     ]
     mapping_request_count: int = Field(strict=True, gt=0)

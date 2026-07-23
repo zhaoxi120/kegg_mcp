@@ -15,9 +15,10 @@ from kegg_mcp.domain.annotations import (
     NormalizedStatus,
     ScoreType,
     ThresholdRule,
+    validate_ko_evidence_consistency,
+    validate_score_evidence_consistency,
     validate_utf8_text,
 )
-from kegg_mcp.domain.identifiers import try_normalize_ko_id
 
 
 class DecisionEvidence(FrozenModel):
@@ -40,17 +41,16 @@ class DecisionEvidence(FrozenModel):
 
     @model_validator(mode="after")
     def validate_decision_evidence(self) -> Self:
-        normalized_ko, _ = try_normalize_ko_id(self.raw_ko)
-        if normalized_ko != self.ko_id:
-            raise ValueError("ko_id must be the exact normalization of raw_ko")
-        if self.score is not None and self.score_type is None:
-            raise ValueError("score_type is required when score is present")
-        if (self.threshold is None) != (self.threshold_rule is None):
-            raise ValueError("threshold and threshold_rule must be provided together")
-        if self.score_type is ScoreType.PROBABILITY:
-            for name, value in (("score", self.score), ("threshold", self.threshold)):
-                if value is not None and not 0.0 <= value <= 1.0:
-                    raise ValueError(f"probability {name} must be between zero and one")
+        validate_ko_evidence_consistency(
+            raw_ko=self.raw_ko,
+            ko_id=self.ko_id,
+        )
+        validate_score_evidence_consistency(
+            score=self.score,
+            score_type=self.score_type,
+            threshold=self.threshold,
+            threshold_rule=self.threshold_rule,
+        )
         return self
 
 

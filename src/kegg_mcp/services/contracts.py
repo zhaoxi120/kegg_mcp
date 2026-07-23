@@ -16,11 +16,11 @@ from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     EvidenceMode,
     FrozenModel,
+    ModuleId,
     NormalizedStatus,
     StatusCount,
 )
 
-ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 
 

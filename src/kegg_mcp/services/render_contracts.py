@@ -47,6 +47,7 @@ from kegg_mcp.domain.annotations import (
     EvidenceMode,
     FrozenModel,
     KNumber,
+    ModuleId,
     NormalizedStatus,
     SourceProvenance,
     StatusCount,
@@ -64,7 +65,6 @@ MODULE_RENDER_MAX_CANVAS_DIMENSION = 20_000
 MODULE_RENDER_MAX_CANVAS_PIXELS = 20_000_000
 MODULE_RENDER_MAX_SVG_NODES = 4_096
 
-ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 PathwayId = Annotated[str, Field(pattern=r"^(?:ko|map|[a-z][a-z0-9]{1,7})[0-9]{5}$")]
 MachineReason = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]

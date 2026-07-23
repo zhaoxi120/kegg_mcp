@@ -11,7 +11,7 @@ from pydantic_core import PydanticCustomError
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection
-from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel
+from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel, KNumber, ModuleId
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
@@ -39,6 +39,8 @@ from kegg_mcp.services.reference_loading import (
     canonicalize_pathway_specs,
 )
 from kegg_mcp.services.result_store import (
+    RESULT_ID_FRAGMENT,
+    RESULT_ID_SCHEMA_PATTERN,
     DeletedResult,
     ResultArtifactMetadata,
     ResultMetadata,
@@ -46,9 +48,11 @@ from kegg_mcp.services.result_store import (
 )
 
 T = TypeVar("T")
-ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
-KoId = Annotated[str, Field(pattern=r"^K[0-9]{5}$")]
-ResultUri = Annotated[str, Field(pattern=r"^ko-analysis://results/res_[A-Za-z0-9_-]{32}$")]
+KoId = KNumber
+ResultUri = Annotated[
+    str,
+    Field(pattern=rf"^ko-analysis://results/{RESULT_ID_FRAGMENT}$"),
+]
 
 
 class ToolPayload(FrozenModel, Generic[T]):
@@ -293,7 +297,7 @@ class ProbeKeggConnectivityInput(FrozenModel):
 class DeleteAnalysisResultInput(FrozenModel):
     """One opaque current-session retained result selected for immediate deletion."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
 
 
 class ListAnalysisResultsInput(FrozenModel):
@@ -315,7 +319,7 @@ class OversizedArtifactNotice(FrozenModel):
     """Safe response for a section too large to return in one resource read."""
 
     kind: Literal["artifact_requires_pagination"] = "artifact_requires_pagination"
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     section: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     mime_type: str
     total_bytes: int = Field(strict=True, ge=0)
@@ -326,7 +330,7 @@ class OversizedArtifactNotice(FrozenModel):
 class ArtifactRangeEnvelope(FrozenModel):
     """One bounded binary-safe artifact page with deterministic continuation."""
 
-    result_id: str = Field(pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
     section: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     mime_type: str
     total_bytes: int = Field(strict=True, ge=0)

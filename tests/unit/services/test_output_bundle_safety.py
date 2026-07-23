@@ -89,6 +89,34 @@ def test_existing_bundle_is_rejected_without_modification(tmp_path: Path) -> Non
     assert not (output / "one.txt").exists()
 
 
+def test_large_nonempty_bundle_directory_is_rejected_without_listing_all_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    output.mkdir()
+    for index in range(2_048):
+        (output / f"caller-{index:04d}.txt").touch()
+
+    def reject_unbounded_listing(_path: object) -> list[str]:
+        raise AssertionError("output directory names were materialized")
+
+    monkeypatch.setattr(os, "listdir", reject_unbounded_listing)
+
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
+    with os.scandir(output) as entries:
+        assert sum(1 for _entry in entries) == 2_048
+
+
 def test_failed_install_leaves_no_commit_manifest_or_partial_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

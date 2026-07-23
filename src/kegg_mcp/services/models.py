@@ -24,6 +24,7 @@ from kegg_mcp.domain.annotations import (
     EvidenceMode,
     FrozenModel,
     ImportDiagnostic,
+    ModuleId,
     NormalizedStatus,
     ScoreType,
     ThresholdRule,
@@ -34,7 +35,11 @@ from kegg_mcp.kegg import AccessMode, KeggGetDatabase, KeggLinkRelationship
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggPairRow, RetrievalEndpointClass
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
 from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle
-from kegg_mcp.services.result_store import ResultArtifactMetadata, ResultMetadata
+from kegg_mcp.services.result_store import (
+    RESULT_ID_SCHEMA_PATTERN,
+    ResultArtifactMetadata,
+    ResultMetadata,
+)
 
 DEFAULT_IMPORT_LIMITS = ImportLimits(
     max_bytes=5_000_000,
@@ -65,7 +70,6 @@ MAX_SELECTED_PATHWAY_SUMMARIES = 25
 BoundedDirectText = Annotated[str, Field(min_length=1, max_length=MAX_DIRECT_WARNING_CHARACTERS)]
 EntryFieldName = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=32)]
 EntryIdentifier = Annotated[str, Field(min_length=1, max_length=100)]
-ModuleIdentifier = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 PathwayIdentifier = Annotated[str, Field(min_length=7, max_length=9)]
 
 
@@ -178,7 +182,7 @@ class SelectedPathwaySummary(FrozenModel):
 
 class SelectedModuleSummary(FrozenModel):
     rank: int = Field(strict=True, gt=0, le=25)
-    module_id: ModuleIdentifier
+    module_id: ModuleId
     detected_unique_ko_count: int = Field(strict=True, gt=0)
     relationship_row_count: int = Field(strict=True, gt=0)
 
@@ -203,7 +207,7 @@ class NormalizeAnnotationsResult(FrozenModel):
 
 class DatasetSource(FrozenModel):
     ko_text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
-    result_id: str | None = Field(default=None, pattern=r"^res_[A-Za-z0-9_-]{32}$")
+    result_id: str | None = Field(default=None, pattern=RESULT_ID_SCHEMA_PATTERN)
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
 
@@ -461,10 +465,10 @@ class KoSetComparisonPreview(FrozenModel):
 class FunctionalComparisonSummary(FrozenModel):
     module_target_count: int = Field(strict=True, ge=0, le=25)
     strict_module_differences: Annotated[
-        tuple[ModuleIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
+        tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
     lenient_module_differences: Annotated[
-        tuple[ModuleIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
+        tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
     pathway_target_count: int = Field(strict=True, ge=0, le=25)
     strict_pathway_differences: Annotated[

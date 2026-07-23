@@ -12,6 +12,7 @@ from kegg_mcp.domain.annotations import (
     EvidenceMode,
     FrozenModel,
     KNumber,
+    ModuleId,
     RecordIdentifier,
     validate_utf8_text,
 )
@@ -23,7 +24,6 @@ MODULE_RESOLVER_VERSION = "1"
 MODULE_CALCULATION_METHOD = "exact_completion_and_top_level_block_coverage"
 MODULE_CALCULATION_VERSION = "1"
 
-ModuleId = Annotated[str, Field(pattern=r"^M[0-9]{5}$")]
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
 
