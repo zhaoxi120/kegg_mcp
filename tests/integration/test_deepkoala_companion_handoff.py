@@ -45,6 +45,14 @@ _SMALL_DETAILED_CSV = (
     b"protein-1,K00001+K00003,0.95,0.50,*\n"
     b"protein-2,K00002,0.65,0.70,\n"
 )
+_MULTI_DOMAIN_DETAILED_CSV = (
+    b"name,predict_label,probability,threshold,annotate,start,end\n"
+    b"protein-1,K00001,0.95,0.50,*,1,80\n"
+    b"protein-1,K00002,0.90,0.50,*,81,160\n"
+)
+_UNCLASSIFIED_MULTI_DOMAIN_CSV = (
+    b"name,predict_label,probability,threshold,annotate,start,end\nprotein-1,,,,,,\n"
+)
 
 
 class _FakeRunner:
@@ -312,6 +320,55 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         assert stable_annotations.is_file()
         with pytest.raises(McpError, match="ARTIFACT_NOT_FOUND"):
             await session.read_resource(AnyUrl(handoff.annotations_resource_uri))
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_preview"),
+    [
+        (
+            _MULTI_DOMAIN_DETAILED_CSV,
+            [
+                ("K00001", "accepted", 1, 80),
+                ("K00002", "accepted", 81, 160),
+            ],
+        ),
+        (
+            _UNCLASSIFIED_MULTI_DOMAIN_CSV,
+            [(None, "unclassified", None, None)],
+        ),
+    ],
+    ids=["multi-domain", "unclassified"],
+)
+@pytest.mark.asyncio
+async def test_advanced_csv_variants_cross_the_companion_core_boundary(
+    tmp_path: Path,
+    payload: bytes,
+    expected_preview: list[tuple[str | None, str, int | None, int | None]],
+) -> None:
+    config = _build_runtime_config(tmp_path)
+    manager = DeepKoalaJobManager(
+        config,
+        runner=_FakeRunner(payload),
+        runtime_probe=_ready_probe,
+    )
+    server = create_deepkoala_server(manager)
+
+    async with create_connected_server_and_client_session(server) as session:
+        job_id = await _start_job(session, config, "advanced-csv")
+        completed = await _poll_terminal(session, job_id)
+        handoff = _parse_handoff(completed)
+        normalized = await _normalize_once(tmp_path, _core_arguments(handoff))
+
+    preview = cast(list[dict[str, object]], normalized["record_preview"])
+    assert [
+        (
+            record["ko_id"],
+            record["normalized_status"],
+            record["domain_start"],
+            record["domain_end"],
+        )
+        for record in preview
+    ] == expected_preview
 
 
 @pytest.mark.parametrize("large", [False, True], ids=["direct-text", "paged-base64"])
