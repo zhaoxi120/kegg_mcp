@@ -118,6 +118,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
 
     assert project["name"] == "kegg-mcp"
     assert project["version"] == "0.5.0"
+    assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
     assert scripts == {"kegg-mcp": "kegg_mcp.mcp.cli:main"}
@@ -130,6 +131,38 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
         package for package in locked_packages if package.get("name") == project["name"]
     )
     assert locked_project["version"] == project["version"]
+
+
+def test_document_ownership_and_release_gates_are_explicit() -> None:
+    retired = (
+        PROJECT_ROOT / "docs" / "development-plan.md",
+        PROJECT_ROOT / "docs" / "visualization-extension-plan.md",
+    )
+    current = (
+        PROJECT_ROOT / "docs" / "architecture.md",
+        PROJECT_ROOT / "docs" / "visualization-architecture.md",
+        PROJECT_ROOT / "docs" / "core-package.md",
+        PROJECT_ROOT / "docs" / "manual-component-deployment.md",
+    )
+    assert not any(path.exists() for path in retired)
+    assert all(path.is_file() for path in current)
+
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
+    readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
+    contributing = (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    for relative in (
+        "docs/architecture.md",
+        "docs/visualization-architecture.md",
+        "docs/core-package.md",
+        "docs/manual-component-deployment.md",
+        "docs/skill-evaluation.md",
+    ):
+        assert relative in readme
+    assert "manual-component-deployment.md" in installation
+    assert "skill-evaluation.md#release-review-matrix" in readiness
+    assert "companions/kegg-render-mcp" in contributing
 
 
 def test_distribution_versions_and_compatibility_are_consistent() -> None:
@@ -283,7 +316,7 @@ def test_python_identifiers_do_not_embed_contract_versions() -> None:
         assert offenders == [], f"{path.relative_to(PROJECT_ROOT)}: {offenders}"
 
 
-def test_visualization_extension_has_an_independent_synthetic_release_boundary() -> None:
+def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     server_doc = (PROJECT_ROOT / "docs/mcp-server.md").read_text(encoding="utf-8")

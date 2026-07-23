@@ -5,6 +5,10 @@ tests validate metadata, declared MCP dependencies, required instructions, and f
 logic. The manual review is not a runtime LLM evaluation and does not claim that CI contacted KEGG,
 executed DeepKOALA, or rendered a real KEGG asset.
 
+The [release-readiness checklist](release-readiness.md) incorporates this matrix as a mandatory
+publication gate. This document owns the route scenarios and evidence fields; the checklist owns
+the final release decision.
+
 ## Deterministic checks
 
 The `tests/skill/` suite verifies that:

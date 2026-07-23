@@ -13,12 +13,9 @@ separate locked runtimes and registers one generated local plugin containing all
 MCP bindings. Generic MCP clients can instead install and configure the component servers
 manually.
 
-The installer implementation is present, but each release candidate remains gated on a real
-installation and discovery of all three Skills and MCP servers in a new Codex task.
-
-Release evidence and archive review belong in the
-[release-readiness checklist](release-readiness.md). Tool schemas and result resources are
-documented in [MCP tools, resources, and configuration](mcp-server.md).
+The [release-readiness checklist](release-readiness.md) owns current release status, exact-candidate
+installation evidence, and archive review. Tool schemas and result resources are documented in
+[MCP tools, resources, and configuration](mcp-server.md).
 
 ## Requirements and support
 
@@ -59,6 +56,10 @@ completion or pathway coverage.
 The core Python wheel contains only `kegg-mcp`. A component wheel does not install
 repository-scoped Skills or another server. The generated plugin is a local deployment artifact,
 not a fourth distribution or a tracked copy of the Skills.
+
+For a direct, manually configured Core server, file handoff remains disabled until
+`KEGG_MCP_ALLOWED_ROOTS` is configured; the complete manual environment belongs in
+[Manual component deployment](manual-component-deployment.md).
 
 `render_input.json` uses the renderer-specific version 3 contract and carries
 `AnalysisExecutionProvenance` version 3. Source KEGG PNG and KGML assets remain local and are not
@@ -388,98 +389,13 @@ For an eligible live acceptance check, ask:
 
 This is a bounded discovery check, not a bulk compatibility campaign.
 
-## Manual component installation for generic MCP clients
+## Manual deployment for other MCP clients
 
-Use manual installation only for development or clients that do not consume the generated Codex
-plugin. Install each required component from the same reviewed source baseline into an independent
-environment.
-
-For core development:
-
-```bash
-cd /absolute/path/to/kegg_mcp
-uv sync --frozen
-uv run --frozen kegg-mcp doctor
-```
-
-For an audited core wheel, replace `VERSION` with the version in the reviewed wheel filename:
-
-```bash
-python3.11 -m venv /absolute/private/core-venv
-/absolute/private/core-venv/bin/python -m pip install /absolute/path/to/kegg_mcp-VERSION-py3-none-any.whl
-/absolute/private/core-venv/bin/kegg-mcp doctor
-```
-
-The Python wheel installs the server command only; it does not install repository-scoped Skills.
-Build and inspect wheels by following the [release-readiness checklist](release-readiness.md).
-
-### Manual Core environment
-
-The raw Core server reads environment variables and does not automatically load `.env` files.
-Examples:
-
-```text
-# Eligible public-academic use
-KEGG_MCP_ACCESS_MODE=public_academic
-KEGG_MCP_ACADEMIC_USE_CONFIRMED=true
-
-# Licensed use
-KEGG_MCP_ACCESS_MODE=licensed
-KEGG_MCP_LICENSED_ENDPOINT=https://kegg.example.edu/api
-KEGG_MCP_LICENSED_USE_CONFIRMED=true
-
-# Network-disabled use
-KEGG_MCP_ACCESS_MODE=offline_cache
-KEGG_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
-```
-
-File handoff is disabled unless `KEGG_MCP_ALLOWED_ROOTS` lists existing absolute roots separated by
-the platform path separator:
-
-```text
-KEGG_MCP_ALLOWED_ROOTS=/absolute/project/inputs:/absolute/project/annotations:/absolute/project/analysis
-KEGG_MCP_RESULT_STORE_PATH=/absolute/private/core/results.sqlite3
-```
-
-Inputs and output directories must resolve beneath an allowed root. Traversal, symlink escapes, and
-non-empty output targets are rejected.
-
-### Generic JSON client configuration
-
-The following public-academic example is configuration-file content, not a shell command:
-
-```json
-{
-  "mcpServers": {
-    "kegg-mcp": {
-      "command": "/absolute/private/core-venv/bin/kegg-mcp",
-      "env": {
-        "KEGG_MCP_ACCESS_MODE": "public_academic",
-        "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true",
-        "KEGG_MCP_ALLOWED_ROOTS": "/absolute/project/inputs:/absolute/project/annotations:/absolute/project/analysis"
-      }
-    },
-    "kegg-render-mcp": {
-      "command": "/absolute/private/renderer-venv/bin/kegg-render-mcp",
-      "env": {
-        "KEGG_RENDER_MCP_STATE_ROOT": "/absolute/private/renderer-state",
-        "KEGG_RENDER_MCP_ALLOWED_ROOTS": "/absolute/project/analysis",
-        "KEGG_RENDER_MCP_ACCESS_MODE": "public_academic",
-        "KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED": "true"
-      }
-    }
-  }
-}
-```
-
-Register `deepkoala-mcp` as a third independent server only when FASTA annotation is required. A
-manual deployment needs an existing official DeepKOALA checkout and Python environment; follow the
-[DeepKOALA companion README](../companions/deepkoala-mcp/README.md). Renderer installation,
-licensed/offline configuration, and cache rules are in the
-[Renderer companion README](../companions/kegg-render-mcp/README.md).
-
-Use direct absolute stdio commands. Do not use a remote URL, shell activation wrapper, `module
-load`, or output redirection. Stdout is reserved for MCP protocol messages; diagnostics use stderr.
+The component Python wheel installs the server command only; it does not install
+repository-scoped Skills or another server. Development environments and clients that do not
+consume the generated Codex plugin should follow
+[Manual component deployment](manual-component-deployment.md). Keep manual registrations isolated
+from a suite-managed Codex deployment.
 
 ## One end-to-end workflow
 

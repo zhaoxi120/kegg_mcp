@@ -1,18 +1,14 @@
 # KEGG MCP Current Architecture and Development Contract
 
-Status: implemented architecture and active development contract.
+This document owns the cross-component architecture and active development contract. The
+[release-readiness checklist](release-readiness.md) owns the current distribution-version matrix,
+release status, and publication gates. Component documents own their public runtime details.
 
 The repository contains three independently packaged local stdio MCP servers and three focused
-repository Skills. Core version `0.5.0`, DeepKOALA companion version `0.4.0`, and renderer version
-`0.3.0` are the current source versions. All three distributions support Linux with CPython 3.11.x
-only. Wider Python or operating-system support requires separate compatibility work.
+repository Skills. All three distributions support Linux with CPython 3.11.x only. Wider Python or
+operating-system support requires separate compatibility work.
 
-The unified Codex installer is implemented and covered by deterministic release tests. It remains
-release-gated until the exact release candidate is installed through a real supported Codex path
-and all three Skills and MCP registrations are discovered in a new Codex task. Public release also
-requires the repository-visibility and rights checks listed below.
-
-Last architecture review: 2026-07-21.
+Last architecture and document-ownership review: 2026-07-23.
 
 ## Product boundary
 
@@ -76,8 +72,8 @@ The repository keeps three process boundaries:
 | `kegg-render-mcp` | Validate a version 3 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 The distributions remain independently versioned, locked, installed, and reviewed. The renderer
-depends on `kegg-mcp>=0.5,<0.6` for the typed pathway-asset interface. The core package does not
-depend on either companion, and no server starts another server.
+declares a bounded compatible Core range for the typed pathway-asset interface. The Core package
+does not depend on either companion, and no server starts another server.
 
 The three repository Skills have one MCP dependency each:
 
@@ -95,6 +91,22 @@ optimizations, not cross-process authorization or durable handoff tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. MCP handlers call public service functions and do not duplicate domain logic.
+
+### Document ownership
+
+This architecture records only cross-component boundaries and invariants:
+
+- [Import contracts](import-contracts.md), [KEGG client](kegg-client.md), and
+  [MODULE](module-analysis.md) and [pathway/comparison](pathway-comparison-analysis.md) documents
+  own their corresponding Core domain contracts.
+- [Core MCP server](mcp-server.md) owns public tools, resources, transport schemas, and deployment
+  environment; [Services, result storage, and reporting](services-results-reporting.md) owns
+  transport-independent orchestration and storage internals.
+- [Visualization architecture](visualization-architecture.md) owns renderer handoffs, asset
+  boundaries, rendering semantics, and graphics security.
+- The component READMEs own component installation, environment variables, tools, and lifecycle.
+- [Installation](installation.md) owns suite operation, while
+  [release readiness](release-readiness.md) alone owns the version matrix and release gates.
 
 ## Annotation evidence and provenance
 
@@ -175,14 +187,16 @@ MODULE evaluation follows the supported KEGG logical syntax:
 - M-number references are resolved with bounded depth and cycle detection.
 
 The parser preserves source spans and unsupported content. It never drops an unknown token. A
-malformed, unresolved, cyclic, unsupported, or limit-exceeding required expression produces an
-explicit `partially_evaluable` or `not_evaluable` result with a reason.
+required block whose truth cannot be established safely because of malformed, unresolved, cyclic,
+unsupported, or limit-exceeding content is not evaluable and retains a reason. The aggregate is
+`partially_evaluable` when another required block remains evaluable and `not_evaluable` when none
+can be evaluated safely.
 
 Exact MODULE completion is a Boolean evaluation of the full supported definition. Project block
-coverage is the ratio of completed required top-level blocks to all evaluable required top-level
-blocks. It is not an official KEGG completeness percentage. No coverage ratio is exposed when every
-required block cannot be evaluated. Optional terms do not increase the denominator. Minimal missing
-alternatives are bounded and do not imply that adding a gene will activate a process.
+coverage is the ratio of completed required top-level blocks to all required top-level blocks and
+is exposed only when every required block is evaluable. It is not an official KEGG completeness
+percentage. Optional terms do not increase the denominator. Minimal missing alternatives are
+bounded and do not imply that adding a gene will activate a process.
 
 Pathway coverage is descriptive unique-KO overlap. Each request and result records the canonical
 pathway identifier, reference namespace, numerator, denominator, retrieval time, cache state, and
@@ -218,11 +232,6 @@ The core MCP server uses stdio transport. Protocol messages are the only stdout 
 diagnostics use stderr or a configured file. All tool inputs and outputs use explicit schemas,
 schema-conforming `structuredContent`, bounded text summaries, and accurate MCP annotations.
 
-The eleven core tools are `analyze_ko_annotations`, `normalize_ko_annotations`,
-`get_kegg_entries`, `map_ko_ids`, `analyze_modules`, `analyze_pathways`, `compare_ko_sets`,
-`probe_kegg_connectivity`, `list_analysis_results`, `delete_analysis_result`, and
-`get_server_status`.
-
 `analyze_ko_annotations` is the common one-call workflow. It imports evidence once, performs
 bounded optional Top-N selection, loads only required references, evaluates requested targets,
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
@@ -233,30 +242,11 @@ roots, storage, rate limits, and hard service limits remain deployment configura
 probing is explicit and open-world. Status is side-effect-free, redacted, and does not imply that
 the network has been tested.
 
-Large results return bounded previews plus scoped retrieval. The core publishes fixed status and
-cache resources and these resource templates:
-
-```text
-ko-analysis://results/{result_id}
-ko-analysis://results/{result_id}/{section}
-ko-analysis://results/{result_id}/{section}/{offset}/{limit}
-kegg-cache://entries/{database}/{identifier}
-```
-
-URI parameters, offsets, sizes, identifiers, and MIME types are validated. Unknown, expired,
-deleted, invalid, and cross-scope result identifiers return the same safe not-found behavior.
-
-The SQLite result store defaults to a 24-hour hard TTL, a 512 MiB logical artifact quota, a 640 MiB
-main-database cap, and 10,000 active results. It never evicts an unexpired result to make room for a
-new one. Normal stdio shutdown deletes the current process scope. Explicit cleanup removes only
-expired rows; durable output bundles remain operator-owned.
-
-Output-bundle schema version 3 always writes validated normalized evidence and a
-`bundle_manifest.json` beneath a configured allowed root. Analysis bundles additionally include
-reports, analysis tables, and `render_input.json`; normalization-only bundles do not claim those
-artifacts. A destination must be new or empty. Writes are atomic, owner-only where supported,
-symlink-safe, and never replace an existing entry. The manifest is installed last as the commit
-marker and redacts absolute source paths by default.
+Large results use bounded direct projections, scoped same-process retrieval, and durable versioned
+output files. The [Core MCP server](mcp-server.md) owns the exact tools, resources, response
+schemas, URI behavior, and public retention contract. The
+[services and storage contract](services-results-reporting.md) owns orchestration, serialization,
+bundle transactions, and SQLite internals.
 
 Errors use stable machine-readable codes, a bounded safe message, recoverability, a suggested
 action, and redacted details. Inputs, fields, identifiers, target counts, decompressed bytes,
@@ -270,112 +260,38 @@ DeepKOALA is an external, independently versioned annotation tool. The core serv
 previously generated detailed table and never loads its models or runs its CLI. Only
 `deepkoala-mcp` may launch the configured external checkout.
 
-The companion validates one allowed protein FASTA and an optional allowed output directory that is
-new or empty. When omitted, it allocates a fresh child beneath the last configured output root. It
-performs runtime preflight, starts one service-owned job, and returns an opaque process-scoped job
-identifier for bounded polling. Multiple companion processes may share one state root, but a
-deployment-wide runner lease permits only one job across those processes. Jobs use fixed arguments,
-default to `device=cpu`, and accept only an explicitly requested and deployment-allowed
-`device=cuda`. They inherit accelerator visibility, bound CPU threads, use zero data-loader workers,
-and own process-group and Linux parent-death control. The companion never uses automatic device
-selection.
+The companion owns allowed-root FASTA validation, one deployment-wide runner lease, fixed direct
+subprocess arguments, explicit CPU/CUDA policy, bounded polling and cleanup, and stable
+`deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves detailed
+source evidence and resolved model provenance; it never normalizes K numbers.
 
-The stable handoff distinguishes the original FASTA path, `deepkoala_annotations.csv` as the core
-import input, `deepkoala_run_report.md` as the human-readable report, and the resolved DeepKOALA and
-model resource versions used by the job.
-
-The default managed installation uses the official DeepKOALA repository and its bundled `202502`
-resources. The suite does not pin a source revision, verify a source archive hash, download
-multi-domain dependencies, or provide an in-repository weight-update mechanism. Multi-domain
-capability is deployment opt-in: the operator must separately provide an absolute `hmmsearch`
-executable and a local KOfam profile directory. Individual requests still default to single-domain
-mode and may enable multi-domain execution only when the deployment reports it ready. A user may
-manage a newer external installation separately, but every result must report the resolved model
-version.
-
-Detailed output preserves `predict_label`, probability, threshold, and source annotation marker.
-An exact plus-joined sequence of canonical K numbers is deterministically expanded into independent
-records that share the original row evidence and provenance; malformed or mixed labels are never
-partially inferred.
-The default importer accepts a verified source-positive marker or probability meeting its source
-threshold. A below-threshold prediction remains source-rejected, not uncertain. Missing predictions
-are unclassified and malformed K numbers are invalid. Multi-domain rows retain paired coordinates
-as independent evidence records. The companion records whether multi-domain mode was used without
-exposing local HMMER or profile paths.
-
-Companion status preserves the existing readiness fields and adds one stable redacted route state,
-fixed issue text, and a fixed next action. It reports structural multi-domain readiness separately
-from the default request mode without claiming that a local profile collection is complete. Invalid
-deployment configuration remains a doctor/startup failure rather than a fabricated MCP route.
+Multi-domain capability is deployment opt-in and requires separately provided local resources.
+Requests remain single-domain unless the user explicitly selects a ready capability. The
+[DeepKOALA companion README](../companions/deepkoala-mcp/README.md) owns installation,
+configuration, tool, lifecycle, and detailed handoff behavior.
 
 ## Renderer contract
 
-The core produces immutable `render_input.json` schema version 3 and
-`AnalysisExecutionProvenance` version 3. The handoff contains accepted and policy-defined uncertain
-evidence, complete pathway detected-KO evidence within explicit limits, resolved MODULE syntax and
-states, renderability results, and calculation provenance. Preview-only version 1 input cannot be
-upgraded losslessly and is rejected with a recoverable instruction to rerun analysis.
+The renderer consumes the Core's immutable `render_input.json` schema version 3 and
+`AnalysisExecutionProvenance` version 3. It never normalizes annotations, chooses a second KO
+policy, or recomputes MODULE completion, block coverage, pathway denominators, or coverage ratios.
+It produces bounded static regular-pathway overlays and project-owned MODULE logic diagrams.
 
-The renderer consumes core-authoritative evidence and results. It does not normalize annotations,
-resolve a second KO policy, or recompute MODULE completion, block coverage, pathway denominators, or
-coverage ratios. It uses the core package's typed single-pathway PNG/KGML asset interface and shares
-the deployment access gate, rate limiter, cache namespaces, bounds, and retrieval provenance.
-
-The supported outputs are:
-
-- regular reference-pathway overlays using a matching bounded PNG and KGML document;
-- project-owned MODULE logic diagrams derived from the authoritative core AST;
-- canonical static SVG; and
-- optional bounded PNG raster derivatives.
-
-Accepted and uncertain evidence use distinct, accessible states with redundant non-color cues.
-Unmatched graphics remain unchanged and are never labelled biologically absent. MODULE diagrams
-preserve AND, OR, optional, grouping, reference, unsupported, and unresolved states and display
-exact completion separately from block coverage.
-
-Renderer paths, XML bytes, elements, attributes, nesting, coordinates, image bytes, decoded pixels,
-canvas dimensions, SVG nodes, serialized output, retained artifacts, and resource pages are bounded.
-XML processing disables DTD resolution, external entities, and network access. SVG contains no
-scripts, event handlers, active links, remote fonts, or external resources.
-
-Real KEGG PNG, KGML, cache payloads, and rendered derivatives are not tracked, packaged, or uploaded
-by CI. Renderer fixtures are synthetic and redistributable. Returning a local derivative does not
-grant redistribution rights; distributing a KEGG-derived image requires a separate rights review.
+The [visualization architecture](visualization-architecture.md) owns the handoff, typed pathway
+asset boundary, rendering semantics, graphics security, and data-rights rules. The
+[Renderer README](../companions/kegg-render-mcp/README.md) owns component installation,
+configuration, public tools, resource lifecycle, and output behavior.
 
 ## Unified Codex installation contract
 
-`scripts/install-suite.py` is the only supported Codex installation path. It consumes the three
-checked-in lockfiles, creates three independent runtimes, copies the three canonical Skill trees,
-and registers one generated local plugin with three absolute MCP launch commands. The plugin is a
-local deployment artifact, not a fourth Python distribution and not a generic MCP-client installer.
+`scripts/install-suite.py` is the supported Codex installation path. It creates three independent
+locked runtimes and one generated local plugin containing the canonical Skills and absolute MCP
+launch commands. Publication is transactional, private deployment data stays outside the plugin,
+and the default dependency path is offline.
 
-The operator supplies absolute paths to CPython 3.11, compatible `uv`, Git, and Codex executables.
-The installer does not select these tools from ambient `PATH` and never downloads Python, `uv`,
-Codex, or repository source.
-
-Deployment configuration is a strict TOML direct regular file owned by the current user, with no
-group or other permission bits, inside an owner-only direct parent. Unknown fields, wrong types,
-relative paths, symlinks, unsafe ancestry, unsafe or overlapping private roots, uncovered handoff
-roots, incompatible access profiles, and existing registration conflicts fail before publication.
-Private configuration and runtime metadata remain outside the plugin directory Codex may cache.
-
-All `uv` work is offline by default. `--allow-locked-dependency-downloads` permits only `uv` network
-access for artifacts selected by checked-in lockfiles and declared build requirements. It does not
-update a lockfile or authorize another runtime group. `--allow-deepkoala-install` separately confirms
-the first official DeepKOALA clone and upstream-requirements installation for each new suite root.
-Later FASTA jobs in the same installation do not repeat that question.
-
-Publication is transactional across runtimes and Codex registration. Existing marketplace names,
-plugins, MCP registrations, or installation roots are never replaced. A caught failure rolls back
-only state proven to belong to the new transaction. Incomplete or failed rollback state is marked
-for bounded manual recovery; cleanup never deletes user biological inputs, outputs, caches,
-external tools, or model resources.
-
-Installer tests validate source completeness, strict configuration, three locked runtimes, offline
-arguments, generated plugin content, private-data exclusion, Codex inventory checks, conflicts,
-interruption, rollback, and managed DeepKOALA defaults. Release support additionally requires a real
-Codex installation and discovery check in two concurrently loaded new tasks against the exact
-release candidate.
+The [installation guide](installation.md) owns operator configuration and lifecycle. The
+[release-readiness checklist](release-readiness.md) owns exact-candidate installation, discovery,
+archive, rights, and publication evidence.
 
 ## Development and validation workflow
 
@@ -415,28 +331,12 @@ Every handoff reports the exact checks run and those deferred to CI. For larger 
 production and test growth, new dependencies or public symbols, reused abstractions, obsolete paths
 removed, and the reason for any unavoidable parallel implementation.
 
-## Release blockers
+## Release contract ownership
 
-A release candidate is validated from the exact merged commit and its three locked distributions.
-The following conditions block publication when applicable:
-
-- the package versions, renderer compatibility range, lockfiles, and built archives disagree;
-- offline unit, contract, integration, package, and clean-wheel smoke checks fail;
-- the governed pull-request live KEGG campaign fails or uploads KEGG payloads;
-- any distribution contains another component, repository Skill, KEGG payload, model resource,
-  secret, private path, biological input, cache, or generated result;
-- the suite transaction, conflict, rollback, private-configuration, or default-offline checks fail;
-- a real Codex app or CLI installation does not keep all three Skills and MCP registrations usable
-  in two concurrently loaded new tasks;
-- a public release lacks a verified private vulnerability-reporting route and an updated
-  `SECURITY.md`;
-- a claimed KEGG-derived rendered artifact lacks a separate redistribution-rights review; or
-- scientific outputs, tool schemas, resource scope, status redaction, rate limits, or cache rights
-  no longer satisfy this contract.
-
-GitHub release notes record the exact commit, tag, platform, Python and tool versions, distribution
-versions, CI result, rights review, security review, and redacted suite-installation evidence. A tag
-or version identifier is never reused. Release artifacts contain only audited archives.
+Architecture changes must preserve the boundaries and invariants in this document, but this
+document does not duplicate a release status or gate list. The
+[release-readiness checklist](release-readiness.md) is the sole operational publication gate, and
+the [Codex Skill evaluation](skill-evaluation.md) supplies its mandatory manual route matrix.
 
 ## Primary sources and review dates
 
@@ -473,13 +373,13 @@ MCP tool and resource contracts were reviewed on 2026-07-16 against the 2025-06-
 - [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) and
   [resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
 
-Codex Skill, repository-guidance, and generated-plugin behavior was reviewed on 2026-07-19:
+Codex Skill, repository-guidance, and generated-plugin behavior was reviewed again on 2026-07-23:
 
-- [OpenAI Codex Skills](https://developers.openai.com/codex/skills),
-  [`AGENTS.md`](https://developers.openai.com/codex/guides/agents-md), and
+- [OpenAI Codex Skills](https://learn.chatgpt.com/docs/build-skills),
+  [`AGENTS.md`](https://learn.chatgpt.com/docs/agent-configuration/agents-md), and
   [plugin documentation](https://learn.chatgpt.com/docs/build-plugins)
 
 The implementation-facing detailed contracts remain in `import-contracts.md`, `kegg-client.md`,
 `module-analysis.md`, `pathway-comparison-analysis.md`, `services-results-reporting.md`,
-`mcp-server.md`, and `visualization-extension-plan.md`. Public interfaces and tests govern exact
+`mcp-server.md`, and `visualization-architecture.md`. Public interfaces and tests govern exact
 runtime behavior when a summary here omits a lower-level detail.

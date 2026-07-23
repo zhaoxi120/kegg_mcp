@@ -4,6 +4,10 @@ This document describes the current transport-independent orchestration, reporti
 and retained-result contracts. MCP tools call these public services; they do not reimplement
 normalization, KEGG retrieval, MODULE evaluation, pathway coverage, or result retention.
 
+This document owns service composition, serializer behavior, transactional bundle writing, and
+storage internals. The [Core MCP server](mcp-server.md) owns public tool schemas, direct-response
+fields, resource URIs, pagination, protocol errors, and deployment environment variables.
+
 ## Layer boundaries
 
 - `kegg_mcp.services` composes importers, the typed KEGG client, analysis, reporting, and storage.
@@ -48,21 +52,11 @@ remain bounded across the complete operation.
 
 ## Direct and retained results
 
-Direct tool output contains the compact information needed for the next decision: record and KO
-counts, selected targets, bounded MODULE/pathway previews, request/cache summaries, warnings,
-caveats, and output-bundle metadata when requested.
-
-The authoritative retained JSON keeps complete information within configured limits, including:
-
-- source and annotation provenance;
-- decision and evidence policy;
-- KEGG request and parser provenance;
-- execution parameters and six sanitized stage metrics;
-- complete bounded rankings and target relationships; and
-- MODULE, pathway, comparison, and renderer-handoff details.
-
-Opaque result identifiers are same-process retrieval aids. Versioned output files are the durable
-cross-process handoff.
+Services produce a compact direct projection and a complete retained artifact from the same
+authoritative domain result. The projection never becomes an alternative analysis path. Retained
+artifacts preserve complete bounded provenance, parameters, metrics, rankings, relationships, and
+evaluations. Public response fields and retrieval behavior are specified only in
+[Core MCP server](mcp-server.md#tools).
 
 ## Report artifacts
 
@@ -80,26 +74,16 @@ content. Only the Markdown preview may be truncated.
 
 ## Output bundles and renderer handoff
 
-When an allowed `output_directory` is supplied, the service may write normalized annotations,
-protein-to-KO mappings, MODULE/pathway tables, ranking and relationship tables, the Markdown report,
-`render_input.json`, and a versioned manifest.
+The bundle writer serializes service-owned tables and reports into a new or empty allowed-root
+directory, validates the complete planned artifact set, publishes files without replacement, and
+installs the manifest last as the transaction marker. Source-path redaction is applied while
+constructing the manifest rather than by MCP transport.
 
-Output-bundle schema version 3:
-
-- accepts only a new or empty allowed-root directory;
-- rejects symlinks and never replaces an existing entry;
-- installs the manifest last as the commit marker;
-- records MIME type, exact byte size, and controlled path for every file; and
-- redacts absolute source paths unless `manifest_path_mode="absolute"` is explicitly requested.
-
-The public `RenderInput` schema version 3 is distinct from the bundle schema. Its MIME type is
-`application/vnd.kegg-mcp.render-input+json;version=3`. It contains accepted and policy-defined
-uncertain evidence, complete-within-limit pathway detected K numbers, resolved MODULE definitions
-and ASTs, exact strict/lenient outcomes, required-block states, and execution provenance.
-
-Rejected, unclassified, and invalid records never enter visualization evidence. Oversized targets
-become explicit `not_renderable` summaries; no preview is relabelled as complete. Identity, count,
-and byte-limit failures occur before a partial handoff is published.
+The renderer handoff is a separate typed service model. It contains only accepted and
+policy-defined uncertain evidence plus complete-within-limit authoritative analysis state;
+rejected, unclassified, and invalid records never enter visualization evidence. Its detailed
+schema and renderability semantics are owned by
+[Visualization architecture](visualization-architecture.md).
 
 ## Scoped result storage
 

@@ -22,6 +22,30 @@ uv run pyright
 uv run pytest
 ```
 
+Companion changes use independently locked environments.
+
+For DeepKOALA companion changes:
+
+```bash
+cd companions/deepkoala-mcp
+uv sync --frozen
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+```
+
+For renderer changes:
+
+```bash
+cd companions/kegg-render-mcp
+uv sync --frozen --all-groups
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+```
+
 ## Contribution rules
 
 - Read `AGENTS.md`, the implemented public interfaces and tests, and the relevant current
@@ -42,15 +66,3 @@ uv run pytest
 Describe the affected layer, the contract or behavior being changed, any optional local checks
 run, and any data-rights or biological-interpretation implications. A pull request should not
 claim completion until its GitHub checks and documented acceptance criteria pass.
-
-GitHub Actions runs the companion's independent offline suite when applicable. The equivalent
-optional local commands are:
-
-```bash
-cd companions/deepkoala-mcp
-uv sync --frozen
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run pytest
-```

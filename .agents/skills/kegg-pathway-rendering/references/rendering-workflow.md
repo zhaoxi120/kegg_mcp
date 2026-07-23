@@ -28,26 +28,30 @@ per-call refresh or stale override, or synthesize a substitute graphic.
 ## Automatic cross-Skill continuation
 
 When the immediately preceding `kegg-ko-analysis` stage produced a compatible
-`render_input.json`, use its stable path unchanged. Preserve the formats and bounded target scope
-from the original request. Do not ask the user to copy the path, repeat the graphics request, or
-approve a rendering stage that was already requested, and do not repeat analysis.
+`render_input.json`, use that handoff path unchanged. Preserve the formats and bounded target scope
+from the original request without asking the user to copy the path, repeat the graphics request,
+or approve a rendering stage that was already requested; do not rerun or revise any upstream analysis.
 
-Rendering is the final stage of that original request. Return renderer-provided artifacts and the
-manifest from the explicit or renderer-allocated output directory. The renderer Skill does not
-call an annotation or core MCP; the model changes focused Skills only at successful stable file
-boundaries.
+Rendering is the final stage unless the user requests a new or different analysis. If the original
+request did not ask for graphics, this Skill must not be invoked automatically. Return
+renderer-provided artifacts and the manifest from the explicit or default output directory. The
+renderer Skill does not call an annotation or core MCP; the model changes focused Skills only at
+successful stable file boundaries.
 
 ## Missing earlier stages
 
-- Protein FASTA without KO evidence preferably starts with `deepkoala-annotation`.
+- Prefer DeepKOALA as the first protein-FASTA route when the user did not select another
+  annotator; protein FASTA without KO evidence starts with `deepkoala-annotation`.
 - Existing K numbers or annotation tables start with `kegg-ko-analysis`.
 - This Skill starts only from the stable render handoff produced by a completed core analysis.
 
 If a required focused Skill or declared MCP dependency is unavailable in the same task that just
 installed a registered suite, classify `task_reload_required`, preserve the original analysis goal
-plus graphics formats and target scope, and resume in one new Codex task outside the source checkout.
-Do not request or perform another installation. Only a fresh-task failure with incomplete plugin or
-MCP inventory requests explicit permission once to install or repair the complete repository suite.
+plus graphics formats and target scope, and resume in one new Codex task outside the source
+checkout. The success fields `new_task_required=true`, `current_task_reload_supported=false`, and
+`repeat_installation_required=false` identify a stale tool snapshot; do not request or perform
+another installation. Only a fresh-task failure with incomplete deployment inventory may
+request explicit permission once to install or repair the complete repository suite.
 If the user explicitly selects another annotator, enter this Skill only after the independent core
 stage produces a compatible handoff from supported KO evidence.
 
@@ -60,7 +64,8 @@ Skill, or pass a private result identifier between MCP processes.
 If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
 diagnostic and suggested operator action. An unavailable renderer tool immediately after successful
 installation is `task_reload_required`, not evidence that repair is needed. Stop before rendering
-and use one new task; request explicit repair permission only after a fresh-task failure and
+and use one new task; for every other unavailable route, stop before rendering and request explicit
+repair permission only after a fresh-task failure and
 incomplete inventory. The Skill itself does not install software, download assets, or invoke an
 unrelated image tool. Preserve the requested formats and target scope.
 

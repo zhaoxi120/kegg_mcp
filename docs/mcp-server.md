@@ -13,6 +13,11 @@ See the [DeepKOALA companion README](../companions/deepkoala-mcp/README.md) and
 [renderer companion README](../companions/kegg-render-mcp/README.md) for their independent
 contracts.
 
+This document owns Core tools, resources, transport schemas, public retention behavior, protocol
+errors, and deployment environment variables. Transport-independent orchestration, serializers,
+bundle publication, and storage internals are owned by
+[Services, Result Storage, and Reporting](services-results-reporting.md).
+
 ## Start the server
 
 After installing the project, configure an MCP client to run:
@@ -21,8 +26,9 @@ After installing the project, configure an MCP client to run:
 uv run kegg-mcp
 ```
 
-The default access mode is confirmed `public_academic`. Server logs and configuration failures are written to
-stderr; stdout is reserved for MCP protocol messages.
+The raw Core distribution defaults to confirmed `public_academic`; the suite installer does not
+inherit that default and requires the operator to select an access mode explicitly. Server logs
+and configuration failures are written to stderr; stdout is reserved for MCP protocol messages.
 
 Local pytest skips live requests by default. Pull-request CI explicitly runs the bounded
 120-request public-academic compatibility campaign once.
@@ -296,7 +302,7 @@ transport and service API.
 renders bounded static SVG or PNG, and never normalizes evidence or recomputes analysis. Its tools,
 resources, access modes, result lifecycle, and security contract are documented in the
 [renderer README](../companions/kegg-render-mcp/README.md) and
-[visualization architecture](visualization-extension-plan.md).
+[visualization architecture](visualization-architecture.md).
 
 ## Errors and testing
 
@@ -307,5 +313,7 @@ codes rather than `CACHE_FAILED`. Invalid or unauthorized resource URIs use MCP 
 Endpoint URLs, environment values, credentials, raw tables, and cache payloads are not included in
 status or error output.
 
-Default local tests are offline. The governed core live campaign and independent synthetic renderer
-job are defined in [the live-test guide](../tests/live/README.md) and the release checklist.
+Default local tests are offline. The governed Core live campaign is defined in
+[the live-test guide](../tests/live/README.md). The independent synthetic renderer pipeline and
+its exact release command are defined in the
+[release-readiness checklist](release-readiness.md#automated-validation).

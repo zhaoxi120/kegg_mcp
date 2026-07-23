@@ -1,7 +1,8 @@
 # Release Readiness
 
-Use this checklist for the exact merged commit proposed for a GitHub release. Source tests alone do
-not authorize KEGG access or redistribution of KEGG content.
+Use this checklist for the exact merged commit proposed for a GitHub release. This document is the
+owner of the current distribution-version matrix, release status, and publication gates. Source
+tests alone do not authorize KEGG access or redistribution of KEGG content.
 
 Current status: validate the exact merged commit, real suite installation, and new-task Codex
 discovery before creating the next tag. Record the final evidence in the release notes.
@@ -181,13 +182,19 @@ advice.
 - [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
 - [ ] Only accepted plus policy-defined uncertain evidence may enter lenient analysis.
 - [ ] Exact MODULE completion and block coverage remain separate.
-- [ ] Unsupported MODULE syntax returns `not_evaluable` with a reason.
+- [ ] Unsupported MODULE syntax is preserved; a required block whose truth cannot be established
+      safely because of it is not evaluable and retains a reason. The aggregate is
+      `partially_evaluable` when another required block remains evaluable and `not_evaluable` when
+      none can be evaluated safely.
 - [ ] With no explicit targets or selection, the high-level service independently selects up to
       five MODULEs and up to five canonical KO reference pathways.
 - [ ] Pathway results retain reference type, numerator, denominator, and retrieval provenance.
 - [ ] Reports make no pathway-presence, activity, flux, phenotype, validation, or statistical claim
       from KO coverage.
 - [ ] Skills orchestrate only their declared MCP and do not duplicate server logic.
+- [ ] Every focused route in the
+      [Codex Skill release review matrix](skill-evaluation.md#release-review-matrix) passes against
+      this exact candidate, with the required evidence recorded.
 
 ## Publication
 

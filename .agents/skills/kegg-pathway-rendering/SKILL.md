@@ -10,22 +10,13 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
 1. Accept a controlled `render_input.json` version 3 path or the renderer's bounded inline input
    transport. If the original request starts with only protein FASTA or KO evidence, route those
    earlier stages through the installed focused Skills and enter this Skill only after the core
-   returns a compatible stable handoff; never call those MCP servers here. Prefer DeepKOALA as the
-   first protein-FASTA annotation route. If a required focused Skill or declared MCP dependency is
-   unavailable, first distinguish `task_reload_required` from an incomplete deployment. A
-   successful suite result with `new_task_required=true`,
-   `current_task_reload_supported=false`, and `repeat_installation_required=false`, or equivalent
-   inventory evidence that the enabled plugin and all three MCP registrations exist, means the
-   current task has a stale tool snapshot. The Skill must stop before rendering, preserve the
-   original downstream goals, direct the user to one new Codex task outside the source checkout,
-   and do not request or perform another installation. Only a fresh-task failure combined with
-   incomplete deployment inventory may request explicit permission once to install or repair the
-   complete repository suite. Resume in a new Codex task after discovery.
+   returns a compatible stable handoff; never call those MCP servers here. Read the missing-stage
+   and activation routes in [rendering-workflow.md](references/rendering-workflow.md) before acting
+   on an unavailable focused Skill or declared MCP dependency.
 2. Require the declared `kegg-render-mcp` dependency and `get_renderer_status` tool to be exposed.
-   If they are unavailable in Codex, apply the same activation-versus-repair classification and
-   stop before rendering. Otherwise read
-   [rendering-workflow.md](references/rendering-workflow.md), then call `get_renderer_status`.
-   Require readiness, schema version 3, the requested static output format, and compatible bounds.
+   Follow the reference's activation-versus-repair classification when it is absent. Otherwise call
+   `get_renderer_status`. Require readiness, schema version 3, the requested static output format,
+   and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, upgrade, or recompute its evidence
    in the Skill. A user-specified output directory wins. Otherwise, omit `output_directory` and let
    the renderer allocate a fresh directory beneath its configured project output root. Do not guess
@@ -55,15 +46,10 @@ Read [pathway-rendering.md](references/pathway-rendering.md) for pathways and
 
 ## Finish an original cross-stage request
 
-- When the immediately preceding `kegg-ko-analysis` stage returns a compatible
-  `render_input.json`, use that handoff path unchanged. Carry forward the formats and target scope
-  from the original request without asking the user to copy the path, restate what to draw, send
-  another prompt, or confirm continuation.
-- Render only the targets present in the handoff and selected by the original bounded request.
-  Return the renderer-provided stable image files and manifest from the explicit or default output
-  directory; do not rerun or revise any upstream analysis.
-- This is the final stage unless the user requests a new or different analysis. If the original
-  request did not ask for graphics, this Skill must not be invoked automatically.
+Apply the canonical continuation rules in
+[rendering-workflow.md](references/rendering-workflow.md#automatic-cross-skill-continuation).
+Render only targets present in the handoff and selected by the original bounded request, then
+return the renderer-provided stable image files and manifest.
 
 ## Report conservative graphics
 

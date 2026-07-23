@@ -15,7 +15,7 @@
 - missing companion registration in another MCP client: explain how to register the existing
   executable, then stop.
 - missing checkout, interpreter, or model resources: identify the missing deployment component and
-  request permission before changing it.
+  ask permission only for the missing installation or repair action before changing it.
 - incompatible runtime, state root, output root, or device policy: return the companion's stable
   diagnostic and the named operator action. Do not work around policy in the Skill.
 
@@ -25,8 +25,9 @@ a separate first installation.
 
 The installer success fields `new_task_required=true`, `current_task_reload_supported=false`, and
 `repeat_installation_required=false` are activation state, not a failed installation. A task cannot
-use MCP tools added after its tool snapshot was created. Never turn that state into a second install
-request; use a new task first.
+use MCP tools added after its tool snapshot was created; that is a stale tool snapshot. Never turn
+that state into a second install request: do not request or perform another installation; use a new
+task first.
 
 A CUDA readiness or policy failure stops the requested GPU job; do not substitute CPU or automatic
 device selection. Installing or replacing PyTorch, CUDA, drivers, or other runtime resources still
