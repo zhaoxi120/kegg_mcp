@@ -353,7 +353,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
 
     renderer_job = ci.split("validate-renderer-companion:", maxsplit=1)[1]
     for command in (
-        "uv sync --frozen",
+        "uv sync --locked",
         "uv run --frozen ruff check .",
         "uv run --frozen ruff format --check .",
         "uv run --frozen pyright",
@@ -388,7 +388,7 @@ def test_deepkoala_companion_has_an_independent_build_gate() -> None:
         "validate-renderer-companion:", maxsplit=1
     )[0]
     for command in (
-        "uv sync --frozen",
+        "uv sync --locked",
         "uv run --frozen ruff check .",
         "uv run --frozen ruff format --check .",
         "uv run --frozen pyright",
@@ -405,6 +405,8 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     smoke_path = PROJECT_ROOT / "tests/release/smoke_wheel.py"
     smoke = smoke_path.read_text(encoding="utf-8")
 
+    assert ci.count("uv sync --locked") == 3
+    assert "uv sync --frozen" not in ci
     assert smoke_path.is_file()
     assert ci.count("tests/release/smoke_wheel.py") == 3
     for distribution, version in (

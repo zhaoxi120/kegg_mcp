@@ -240,12 +240,14 @@ name = "kegg-mcp"
 version = "0.5.0"
 source = { editable = "../../" }
 dependencies = [
+    { name = "anyio" },
     { name = "mcp" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.10,<5" },
     { name = "mcp", specifier = ">=1.27,<2" },
     { name = "pydantic", specifier = ">=2.12,<3" },
 ]
