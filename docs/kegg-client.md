@@ -205,10 +205,12 @@ canonical three- or four-letter organism code. That scope becomes the wire datab
 prefix before the response is cached. The generic public search operation does not expose this
 internal gene-search route.
 
-Each FIND row contains a database-validated KEGG identifier and the raw matched text returned by
-KEGG. Rows are candidates only. A keyword, formula, exact-mass, or molecular-weight match does not
-establish a unique identity, annotation, biological role, or experimental validation, and the
-client does not manufacture a relevance score or select a best match.
+Each FIND row retains the database-validated simplified KEGG identifier and raw matched text
+returned by KEGG. Gene FIND rows retain their organism-qualified gene identifier. Higher-level
+services convert those source identifiers into typed `KeggEntityRef` values. Rows are candidates
+only. A keyword, formula, exact-mass, or molecular-weight match does not establish a unique identity,
+annotation, biological role, or experimental validation, and the client does not manufacture a
+relevance score or select a best match.
 
 ### GET
 

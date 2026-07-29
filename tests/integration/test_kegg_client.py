@@ -1391,9 +1391,7 @@ def test_cache_only_read_rechecks_cached_response_size_under_current_limit(
 
 def test_find_uses_typed_parsing_provenance_and_cache_reuse(tmp_path: Path) -> None:
     cache_path = tmp_path / "find.sqlite3"
-    body = (
-        "cpd:C00031\tD-Glucose; Grape sugar; β-D-glucose\ncpd:C00267\talpha-D-Glucose\n"
-    ).encode()
+    body = ("C00031\tD-Glucose; Grape sugar; β-D-glucose\nC00267\talpha-D-Glucose\n").encode()
     transport = QueueTransport([TransportResponse(status_code=200, body=body)])
     request = FindRequest(
         database=KeggFindDatabase.COMPOUND,
@@ -1421,8 +1419,8 @@ def test_find_uses_typed_parsing_provenance_and_cache_reuse(tmp_path: Path) -> N
         "https://rest.kegg.jp/find/compound/%CE%B2-D-glucose%20%2B%20water%20%E6%B0%B4%20100%25"
     ]
     assert [row.identifier for row in network_result.document.rows] == [
-        "cpd:C00031",
-        "cpd:C00267",
+        "C00031",
+        "C00267",
     ]
     assert network_result.document.rows[0].matched_text.endswith("β-D-glucose")
     assert network_result.batch.operation is KeggOperation.FIND
@@ -1514,7 +1512,7 @@ def test_find_provenance_accepts_a_legal_request_key_above_the_old_limit(
     client = KeggClient(
         _public_config(tmp_path / "long-find.sqlite3"),
         transport=QueueTransport(
-            [TransportResponse(status_code=200, body=b"ko:K00001\tSynthetic match\n")]
+            [TransportResponse(status_code=200, body=b"K00001\tSynthetic match\n")]
         ),
         rate_limiter=RecordingLimiter(),
         clock=_clock(_NOW),
@@ -1523,7 +1521,7 @@ def test_find_provenance_accepts_a_legal_request_key_above_the_old_limit(
     result = client.find(request)
 
     assert len(result.batch.request_key) > 4_096
-    assert result.document.rows[0].identifier == "ko:K00001"
+    assert result.document.rows[0].identifier == "K00001"
 
 
 def test_selected_gene_and_genome_get_reconcile_and_reuse_entry_cache(
@@ -1645,7 +1643,7 @@ def test_search_service_prefers_fresh_cache_by_default(
         [
             TransportResponse(
                 status_code=200,
-                body=b"ko:K00844\thexokinase [EC:2.7.1.1]\n",
+                body=b"K00844\thexokinase [EC:2.7.1.1]\n",
             )
         ]
     )

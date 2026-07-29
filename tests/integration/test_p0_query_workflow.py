@@ -67,7 +67,7 @@ class _RouteTransport:
     @staticmethod
     def _body(path: str) -> bytes:
         if path == "/find/compound/glucose":
-            return b"cpd:C00031\tD-Glucose; Grape sugar\ncpd:C00267\talpha-D-Glucose\n"
+            return b"C00031\tD-Glucose; Grape sugar\nC00267\talpha-D-Glucose\n"
         if path == "/link/genome/taxid:562/species":
             return b"taxid:562\tgn:eco\ntaxid:562\tgn:T00068\n"
         if path == "/get/gn:eco":

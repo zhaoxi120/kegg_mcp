@@ -1018,7 +1018,7 @@ class KeggPairDocument(FrozenModel):
 
 
 class KeggFindRow(FrozenModel):
-    """One ordered KEGG FIND candidate with the source text preserved."""
+    """One ordered KEGG FIND candidate with its simplified identifier and source text."""
 
     line_number: PositiveCount
     identifier: str = Field(min_length=1, max_length=256)

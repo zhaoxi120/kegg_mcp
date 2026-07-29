@@ -451,9 +451,9 @@ def test_search_preserves_raw_candidates_without_scores_and_retains_all_rows(
 ) -> None:
     client = _QueryClient()
     client.find_rows[(KeggFindDatabase.KO, "hexokinase", None)] = (
-        ("ko:K00844", "hexokinase [EC:2.7.1.1]"),
-        ("ko:K12407", "glucokinase"),
-        ("ko:K00844", "hexokinase [EC:2.7.1.1]"),
+        ("K00844", "hexokinase [EC:2.7.1.1]"),
+        ("K12407", "glucokinase"),
+        ("K00844", "hexokinase [EC:2.7.1.1]"),
     )
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
 
@@ -1173,9 +1173,7 @@ def test_organism_name_resolution_rejects_a_find_get_code_mismatch(
         name="Mus musculus",
         lineage=("Eukaryotes",),
     )
-    client.find_rows[(KeggFindDatabase.ORGANISM, "human", None)] = (
-        ("gn:T01002", "hsa Homo sapiens"),
-    )
+    client.find_rows[(KeggFindDatabase.ORGANISM, "human", None)] = (("T01002", "hsa Homo sapiens"),)
     store = SQLiteResultStore(tmp_path / "organism-mismatch.sqlite3")
 
     with pytest.raises(KeggMcpError) as caught:
@@ -1328,7 +1326,7 @@ def test_organism_genome_get_is_chunked_and_recorded_per_low_level_batch(
             name=f"Synthetic organism {index}",
             lineage=("Bacteria",),
         )
-        find_rows.append((f"gn:{t_number}", f"{code} Synthetic organism {index}"))
+        find_rows.append((t_number, f"{code} Synthetic organism {index}"))
     client.find_rows[(KeggFindDatabase.ORGANISM, "Synthetic", None)] = tuple(find_rows)
     store = SQLiteResultStore(tmp_path / "chunked.sqlite3")
 
@@ -1740,9 +1738,7 @@ def test_retained_result_model_failures_are_compensated(
         raise RuntimeError("synthetic result failure")
 
     search_client = _QueryClient()
-    search_client.find_rows[(KeggFindDatabase.KO, "hexokinase", None)] = (
-        ("ko:K00844", "hexokinase"),
-    )
+    search_client.find_rows[(KeggFindDatabase.KO, "hexokinase", None)] = (("K00844", "hexokinase"),)
     search_store = SQLiteResultStore(tmp_path / "search.sqlite3")
     with monkeypatch.context() as patch:
         patch.setattr(kegg_search, "SearchKeggEntriesResult", reject_result)

@@ -47,16 +47,6 @@ _FIND_NUMBERED_IDENTIFIERS = {
     KeggFindDatabase.GENOME: re.compile(r"^T[0-9]{5}$"),
     KeggFindDatabase.ORGANISM: re.compile(r"^T[0-9]{5}$"),
 }
-_FIND_NAMESPACES = {
-    KeggFindDatabase.KO: frozenset({"ko"}),
-    KeggFindDatabase.PATHWAY: frozenset({"path", "pathway"}),
-    KeggFindDatabase.MODULE: frozenset({"md", "module"}),
-    KeggFindDatabase.REACTION: frozenset({"rn", "reaction"}),
-    KeggFindDatabase.ENZYME: frozenset({"ec", "enzyme"}),
-    KeggFindDatabase.COMPOUND: frozenset({"cpd", "compound"}),
-    KeggFindDatabase.GENOME: frozenset({"gn", "genome"}),
-    KeggFindDatabase.ORGANISM: frozenset({"gn", "genome"}),
-}
 _FIND_REFERENCE_MODULE = re.compile(r"^M[0-9]{5}$")
 _FIND_ORGANISM_MODULE = re.compile(r"^(?P<organism>(?:[a-z]{3,4}|T[0-9]{5}))_M[0-9]{5}$")
 
@@ -255,24 +245,21 @@ def _find_identifier_matches(
         if not is_kegg_gene_identifier(identifier):
             return False
         return organism is None or identifier.partition(":")[0] == organism
-    namespace, separator, value = identifier.partition(":")
-    if separator != ":" or namespace not in _FIND_NAMESPACES[database]:
-        return False
     if database is KeggFindDatabase.PATHWAY:
-        return is_kegg_pathway_identifier(value)
+        return is_kegg_pathway_identifier(identifier)
     if database is KeggFindDatabase.MODULE:
-        if _FIND_REFERENCE_MODULE.fullmatch(value) is not None:
+        if _FIND_REFERENCE_MODULE.fullmatch(identifier) is not None:
             return True
-        match = _FIND_ORGANISM_MODULE.fullmatch(value)
+        match = _FIND_ORGANISM_MODULE.fullmatch(identifier)
         if match is None:
             return False
-        organism = match.group("organism")
-        return organism is not None and (
-            organism.startswith("T") or is_kegg_organism_code(organism)
+        module_organism = match.group("organism")
+        return module_organism is not None and (
+            module_organism.startswith("T") or is_kegg_organism_code(module_organism)
         )
     if database is KeggFindDatabase.ENZYME:
-        return is_ec_number(value)
-    return _FIND_NUMBERED_IDENTIFIERS[database].fullmatch(value) is not None
+        return is_ec_number(identifier)
+    return _FIND_NUMBERED_IDENTIFIERS[database].fullmatch(identifier) is not None
 
 
 def parse_pair_response(body: bytes) -> KeggPairDocument:
