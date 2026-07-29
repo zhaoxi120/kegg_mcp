@@ -117,7 +117,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.5.0"
+    assert project["version"] == "0.6.0"
     assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
@@ -189,7 +189,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.5,<0.6" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.7" in renderer_project["dependencies"]
     assert "latest GitHub release and the current `main` branch" in security
     assert "Distribution boundary" in readiness
 
@@ -332,7 +332,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.5,<0.6" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.7" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -410,9 +410,9 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert smoke_path.is_file()
     assert ci.count("tests/release/smoke_wheel.py") == 3
     for distribution, version in (
-        ("kegg-mcp", "0.5.0"),
+        ("kegg-mcp", "0.6.0"),
         ("deepkoala-mcp", "0.4.0"),
-        ("kegg-render-mcp", "0.3.0"),
+        ("kegg-render-mcp", "0.3.1"),
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci
@@ -442,7 +442,7 @@ def test_rights_and_release_status_are_prominent() -> None:
     assert "confirmed `public_academic`" in re.sub(r"\s+", " ", readme)
     assert "KEGG_MCP_ACCESS_MODE: public_academic" in ci
     assert 'KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"' in ci
-    assert 'KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "30"' in ci
+    assert 'KEGG_MCP_LIVE_REQUESTS_PER_OPERATION: "20"' in ci
     assert "120 live KEGG requests" in ci
     assert "push:" not in ci
     assert "probe connectivity once" in installation

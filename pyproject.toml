@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kegg-mcp"
-version = "0.5.0"
-description = "Local-first MCP server for KEGG-aware analysis of KO annotations"
+version = "0.6.0"
+description = "Local-first MCP server for bounded KEGG queries and KO annotation analysis"
 readme = "docs/core-package.md"
 requires-python = ">=3.11,<3.12"
 license = "MIT"

@@ -9,6 +9,7 @@ import pytest
 from kegg_mcp.kegg import (
     CacheLookupState,
     ConvRequest,
+    FindRequest,
     GetRequest,
     InfoRequest,
     KeggBatchProvenance,
@@ -16,17 +17,21 @@ from kegg_mcp.kegg import (
     KeggClient,
     KeggConvDatabase,
     KeggEntryRef,
+    KeggFindDatabase,
     KeggGetDatabase,
     KeggInfoDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
     LinkRequest,
+    OrganismPathwayListRequest,
     ResponseOrigin,
 )
 from kegg_mcp.kegg.contracts import KeggBriteHtextDocument
 
 _REFRESH = KeggRequestOptions(refresh=True)
 _INFO_REQUEST = InfoRequest(database=KeggInfoDatabase.KO)
+_LIST_REQUEST = OrganismPathwayListRequest(organism="hsa")
+_FIND_REQUEST = FindRequest(database=KeggFindDatabase.KO, query="hexokinase")
 _GET_REQUEST = GetRequest(
     entries=(
         KeggEntryRef(
@@ -76,6 +81,24 @@ def test_live_info_repeatedly(
         assert result.document.lines
 
 
+def test_live_organism_pathway_list_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
+        result = live_kegg_client.list_organism_pathways(
+            _LIST_REQUEST,
+            options=_REFRESH,
+        )
+
+        _assert_single_network_request(result.batch)
+        assert result.request.organism == "hsa"
+        assert result.document.organism == "hsa"
+        assert result.document.rows
+        assert all(row.pathway_id.startswith("path:hsa") for row in result.document.rows)
+        assert all(row.name.strip() for row in result.document.rows)
+
+
 def test_live_get_repeatedly(
     live_kegg_client: KeggClient,
     live_requests_per_operation: int,
@@ -91,6 +114,18 @@ def test_live_get_repeatedly(
         assert isinstance(document, KeggBriteHtextDocument)
         assert document.identifier == "br08901"
         assert document.lines
+
+
+def test_live_find_repeatedly(
+    live_kegg_client: KeggClient,
+    live_requests_per_operation: int,
+) -> None:
+    for _ in range(live_requests_per_operation):
+        result = live_kegg_client.find(_FIND_REQUEST, options=_REFRESH)
+
+        _assert_single_network_request(result.batch)
+        assert result.request.database is KeggFindDatabase.KO
+        assert result.document.rows
 
 
 def test_live_link_repeatedly(

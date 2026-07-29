@@ -20,9 +20,9 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.transport import HttpsTransport, TransportError, TransportResponse
 from kegg_mcp.mcp.config import load_runtime_config
 
-_DEFAULT_REQUESTS_PER_OPERATION = 30
-_MAX_REQUESTS_PER_OPERATION = 30
-_OPERATION_COUNT = 4
+_DEFAULT_REQUESTS_PER_OPERATION = 20
+_MAX_REQUESTS_PER_OPERATION = 20
+_OPERATION_COUNT = 6
 _MIN_START_GAP_SECONDS = 0.95
 
 
@@ -77,7 +77,7 @@ def live_requests_per_operation() -> int:
     except ValueError as exc:
         raise pytest.UsageError("KEGG_MCP_LIVE_REQUESTS_PER_OPERATION must be an integer") from exc
     if not 1 <= value <= _MAX_REQUESTS_PER_OPERATION:
-        raise pytest.UsageError("KEGG_MCP_LIVE_REQUESTS_PER_OPERATION must be between 1 and 30")
+        raise pytest.UsageError("KEGG_MCP_LIVE_REQUESTS_PER_OPERATION must be between 1 and 20")
     return value
 
 

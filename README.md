@@ -1,7 +1,8 @@
 # KEGG MCP
 
-KEGG MCP is a local, Linux-only suite for KEGG Orthology (KO) analysis. It provides three
-independent stdio MCP servers and three focused repository-scoped Codex Skills:
+KEGG MCP is a local, Linux-only suite for KEGG Orthology (KO) analysis and bounded KEGG
+entity querying. It provides three independent stdio MCP servers and three focused
+repository-scoped Codex Skills:
 
 ```text
 protein FASTA -> deepkoala-mcp -> detailed CSV -> kegg-mcp
@@ -17,14 +18,23 @@ CSV evidence. It:
 
 - preserves source decisions, scores, thresholds, multiple assignments, and provenance;
 - derives accepted-only strict and policy-defined lenient evidence views;
-- retrieves bounded KEGG `INFO`, `GET`, `LINK`, and `CONV` references through a local cache;
+- uses bounded typed KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
+  operations through a local cache;
+- returns bounded search candidates and resolves gene or organism identifiers without silently
+  choosing an ambiguous match;
+- traces allowlisted KEGG relationships for one or two hops with typed nodes and edges;
+- maps supplied entities into bounded BRITE hierarchy paths and audits annotation evidence and
+  KEGG relationship mapping yields;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit namespace and denominator;
 - compares KO sets deterministically; and
 - produces bounded structured output, reports, and a typed renderer handoff.
 
-A K-number assignment is annotation evidence, not experimental validation. Pathway KO coverage does
-not establish pathway presence, completeness, activity, flux, or phenotype.
+A K-number assignment is annotation evidence, not experimental validation. Search hits are
+candidates, and KEGG relationships and BRITE classifications are database-backed routing evidence.
+These query functions do not perform enrichment, statistical testing, pathway-activity or flux
+inference, or arbitrary graph analysis. Pathway KO coverage does not establish pathway presence,
+completeness, activity, flux, or phenotype.
 
 ## Quick start for Codex
 
@@ -88,23 +98,27 @@ reports the resolved DeepKOALA model version. Target ranking selects what to ana
 enrichment, completion, or pathway-presence inference.
 
 Requests that already contain KO evidence start at `kegg-mcp`. Requests that provide a compatible
-`render_input.json` may start at `kegg-render-mcp`.
+`render_input.json` may start at `kegg-render-mcp`. Bounded KEGG search, gene or organism
+resolution, relation tracing, and BRITE classification requests also start directly at
+`kegg-mcp`; they do not require an annotation run.
 
 ## Components and contracts
 
 | Process | Responsibility | Details |
 | --- | --- | --- |
 | `deepkoala-mcp` | Runs one configured local DeepKOALA job and returns a controlled detailed-CSV handoff. | [Companion README](companions/deepkoala-mcp/README.md) |
-| `kegg-mcp` | Owns evidence normalization, KEGG retrieval, MODULE/pathway analysis, reports, and renderer handoff. | [MCP contract](docs/mcp-server.md) |
+| `kegg-mcp` | Owns evidence normalization, bounded KEGG query and evidence routing, MODULE/pathway analysis, reports, and renderer handoff. | [MCP contract](docs/mcp-server.md) |
 | `kegg-render-mcp` | Renders the authoritative handoff without recomputing biological analysis. | [Renderer README](companions/kegg-render-mcp/README.md) |
 
 The core produces `render_input.json` schema version 3 and preserves
 `AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. Source KEGG PNG and KGML
 assets remain local.
 
-Core tools cover normalization, high-level analysis, bounded KEGG retrieval and mapping, MODULE and
-pathway analysis, KO-set comparison, connectivity/status, and scoped result listing/deletion. Full
-tool and resource schemas are documented in [MCP server](docs/mcp-server.md).
+Core tools cover normalization, high-level analysis, bounded KEGG search and retrieval,
+gene/organism resolution, typed relation tracing, BRITE hierarchy mapping, annotation mapping
+audit, MODULE and pathway analysis, KO-set comparison, connectivity/status, and scoped result
+listing/deletion. Full tool and resource schemas are documented in
+[MCP server](docs/mcp-server.md).
 
 Each Skill declares exactly one MCP dependency. Stable versioned files, not private process-scoped
 job or result identifiers, are the durable cross-stage interface.
