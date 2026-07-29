@@ -23,7 +23,7 @@ from kegg_mcp.mcp.contracts import (
 from kegg_mcp.mcp.responses import internal_error
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import TOOL_NAMES
-from kegg_mcp.services.kegg_mapping import read_cached_kegg_entry
+from kegg_mcp.services.kegg_entries import read_cached_kegg_entry
 from kegg_mcp.services.operational import get_server_status_service
 from kegg_mcp.services.result_store import RESULT_ID_FRAGMENT, ResultStoreError
 
@@ -38,7 +38,7 @@ _RANGE_RE = re.compile(
     rf"ko-analysis://results/({RESULT_ID_FRAGMENT})/"
     r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([0-9]{1,19})/([0-9]{1,5})\Z"
 )
-_CACHE_ENTRY_RE = re.compile(r"kegg-cache://entries/([a-z]+)/([A-Za-z0-9.-]{1,100})\Z")
+_CACHE_ENTRY_RE = re.compile(r"kegg-cache://entries/([a-z]+)/([A-Za-z0-9:._-]{1,100})\Z")
 
 
 class InvalidResourceUri(ValueError):

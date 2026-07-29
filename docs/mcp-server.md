@@ -67,10 +67,10 @@ one canonical endpoint, and batches `get` requests at no more than ten entries. 
 coordinate through the same owner-only rate-limit root.
 
 Cache payloads and retained results are local data and must not be committed, packaged, or attached
-to CI artifacts. The low-level client keeps explicit refresh semantics, while high-level MCP
-analysis uses fresh-cache-first requests so an equivalent Top-N run can report cache hits without
-repeating network requests. The cached-entry resource remains a cache-only read and never falls
-back to the network.
+to CI artifacts. The low-level client keeps explicit refresh semantics, while high-level MCP query
+and analysis services use fresh-cache-first requests so an equivalent call can report cache hits
+without repeating network requests. An explicit service caller may still request refresh. The
+cached-entry resource remains a cache-only read and never falls back to the network.
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
@@ -88,7 +88,7 @@ can display nested object fields and enum values without resolving `$defs`.
 
 ## Tools
 
-The server exposes eleven tools:
+The server exposes fifteen tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
@@ -103,10 +103,25 @@ The server exposes eleven tools:
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries. The direct response reports the
   total retrieval-batch count, returns at most five provenance records with an explicit truncation
   flag, and retains every batch in the scoped `detail` artifact. It is not an arbitrary URL proxy.
-- `map_ko_ids`: map selected K numbers to pathways, modules, reactions, EC numbers, or BRITE.
-  Pathway summaries distinguish `unique_reference_pathway_number_count` from the paired
-  `available_ko_reference_view_count` and `available_map_reference_view_count`; these view counts
-  do not claim that LINK returned both namespaces.
+- `search_kegg_entries`: search one allowlisted database by keyword, or search compounds by
+  formula, exact mass, or molecular weight. It returns bounded endpoint candidates without an
+  invented relevance score or automatic best-match selection. Exact-mass results are candidates,
+  not compound identifications.
+- `resolve_kegg_entities`: resolve a discriminated gene or organism request through typed FIND,
+  GET, CONV, LINK, and organism-pathway LIST steps. Gene symbols require organism context;
+  organism mismatches and all ambiguous candidates remain explicit. Unmapped identifiers are not
+  treated as absent entities, and pathway directory entries are references rather than evidence of
+  pathway presence, completeness, activity, flux, or phenotype.
+- `trace_kegg_relations`: traverse one or two levels over a fixed relation allowlist with at most
+  200 nodes and 500 edges. Typed edges are database cross-references, not evidence of regulation,
+  causality, activity, flux, phenotype, or mechanism.
+- `map_brite_hierarchy`: preserve all matched BRITE paths, multi-parent memberships, unmatched
+  entities, and descriptive unique-input classification counts. It does not calculate enrichment
+  or dominant function.
+- `audit_annotation_mapping`: summarize source evidence, strict and lenient KO views, mapping yield
+  across pathway, MODULE, reaction, enzyme, and BRITE relations, mapping-degree distributions,
+  retrieval provenance, and optional assembly-quality warnings. It never corrects scores or fills
+  missing K numbers.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
@@ -137,6 +152,33 @@ tools can also update the local response cache, so even a connectivity probe is 
 read-only. Deletion is idempotent in environmental effect although a repeated call returns the
 same safe not-found class. These hints inform clients; they do not replace server-side validation
 or authorization.
+
+Minimal compound candidate search:
+
+```json
+{"database":"compound","query":"glucose","mode":"keyword","max_results":20}
+```
+
+Minimal taxonomy-to-organism resolution that preserves all species candidates:
+
+```json
+{
+  "kind": "organism",
+  "source_namespace": "taxonomy",
+  "identifiers": ["taxid:562"],
+  "taxonomy_rank": "species"
+}
+```
+
+Minimal one-level typed relation trace:
+
+```json
+{
+  "seeds": [{"kind":"ko","identifier":"K00844"}],
+  "edge_types": ["ko_to_reaction"],
+  "max_depth": 1
+}
+```
 
 Minimal plain-KO normalization input:
 

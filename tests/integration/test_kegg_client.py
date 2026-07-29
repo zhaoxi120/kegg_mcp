@@ -11,7 +11,7 @@ from typing import ClassVar, NoReturn
 import pytest
 
 import kegg_mcp.kegg.client as client_module
-import kegg_mcp.services.kegg_mapping as kegg_mapping_module
+import kegg_mcp.services.kegg_entries as kegg_entries_module
 from kegg_mcp.analysis import PathwaySelection
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
 from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
@@ -24,6 +24,7 @@ from kegg_mcp.kegg.contracts import (
     CacheLookupState,
     CachePolicy,
     ConvRequest,
+    FindRequest,
     GetRequest,
     HttpMetadata,
     InfoRequest,
@@ -32,15 +33,18 @@ from kegg_mcp.kegg.contracts import (
     KeggClientLimits,
     KeggConvDatabase,
     KeggEntryRef,
+    KeggFindDatabase,
     KeggFlatFileDocument,
     KeggGetDatabase,
     KeggInfoDatabase,
     KeggLinkRelationship,
     KeggOperation,
     KeggRequestOptions,
+    KeggTaxonomyRank,
     LicensedAccess,
     LinkRequest,
     OfflineCacheAccess,
+    OrganismPathwayListRequest,
     PublicAcademicAccess,
     ResponseOrigin,
     RetrievalEndpointClass,
@@ -49,6 +53,7 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.kegg.operations import (
     PreparedRequest,
     prepare_conv,
+    prepare_find,
     prepare_get,
     prepare_info,
     prepare_link,
@@ -59,8 +64,22 @@ from kegg_mcp.kegg.transport import (
     TransportResponse,
 )
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
-from kegg_mcp.services.kegg_mapping import read_cached_kegg_entry, retrieve_kegg_entries
+from kegg_mcp.services.entity_resolution import resolve_kegg_entities
+from kegg_mcp.services.kegg_entries import read_cached_kegg_entry, retrieve_kegg_entries
+from kegg_mcp.services.kegg_search import search_kegg_entries
 from kegg_mcp.services.models import MAX_GET_PROVENANCE_BATCHES, NormalizeAnnotationsRequest
+from kegg_mcp.services.query_models import (
+    GeneIdentifierNamespace,
+    GeneResolutionRequest,
+    KeggEntityKind,
+    KeggSearchDatabase,
+    MappingStatus,
+    OrganismIdentifierNamespace,
+    OrganismResolutionRequest,
+    SearchKeggEntriesRequest,
+    TaxonomyResolutionRank,
+)
+from kegg_mcp.services.query_support import load_genome_records
 from kegg_mcp.services.result_store import SQLiteResultStore
 
 _NOW = datetime(2026, 7, 14, 3, 0, tzinfo=UTC)
@@ -676,7 +695,7 @@ def test_entry_result_model_failure_compensates_the_created_result(
         del values
         raise ValueError("synthetic result-model failure")
 
-    monkeypatch.setattr(kegg_mapping_module, "KeggEntriesServiceResult", reject_result_model)
+    monkeypatch.setattr(kegg_entries_module, "KeggEntriesServiceResult", reject_result_model)
 
     with pytest.raises(ValueError, match="synthetic result-model failure"):
         retrieve_kegg_entries(
@@ -1368,6 +1387,640 @@ def test_cache_only_read_rechecks_cached_response_size_under_current_limit(
         )
 
     assert caught.value.detail.code is ErrorCode.CACHE_FAILED
+
+
+def test_find_uses_typed_parsing_provenance_and_cache_reuse(tmp_path: Path) -> None:
+    cache_path = tmp_path / "find.sqlite3"
+    body = (
+        "cpd:C00031\tD-Glucose; Grape sugar; β-D-glucose\ncpd:C00267\talpha-D-Glucose\n"
+    ).encode()
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    request = FindRequest(
+        database=KeggFindDatabase.COMPOUND,
+        query="β-D-glucose + water \u6c34 100%",
+    )
+    config = _public_config(cache_path)
+    live = KeggClient(
+        config,
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    network_result = live.find(request)
+    cached_result = KeggClient(
+        config,
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).find(
+        request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
+
+    assert transport.urls == [
+        "https://rest.kegg.jp/find/compound/%CE%B2-D-glucose%20%2B%20water%20%E6%B0%B4%20100%25"
+    ]
+    assert [row.identifier for row in network_result.document.rows] == [
+        "cpd:C00031",
+        "cpd:C00267",
+    ]
+    assert network_result.document.rows[0].matched_text.endswith("β-D-glucose")
+    assert network_result.batch.operation is KeggOperation.FIND
+    assert network_result.batch.parser_name == "find_table"
+    assert network_result.batch.origin is ResponseOrigin.NETWORK
+    assert cached_result.document == network_result.document
+    assert cached_result.batch.origin is ResponseOrigin.CACHE
+    assert cached_result.batch.cache_lookup_state is CacheLookupState.FRESH_HIT
+
+
+def test_organism_pathway_list_uses_typed_parsing_and_cache_reuse(tmp_path: Path) -> None:
+    cache_path = tmp_path / "organism-pathways.sqlite3"
+    body = (
+        b"path:hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
+        b"path:hsa04012\tErbB signaling pathway - Homo sapiens (human)\n"
+    )
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    request = OrganismPathwayListRequest(organism="hsa")
+    config = _public_config(cache_path)
+    live = KeggClient(
+        config,
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    network_result = live.list_organism_pathways(request)
+    cached_result = KeggClient(
+        config,
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).list_organism_pathways(
+        request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/list/pathway/hsa"]
+    assert [row.pathway_id for row in network_result.document.rows] == [
+        "path:hsa00010",
+        "path:hsa04012",
+    ]
+    assert network_result.batch.operation is KeggOperation.LIST
+    assert network_result.batch.parser_name == "organism_pathway_list"
+    assert network_result.batch.origin is ResponseOrigin.NETWORK
+    assert cached_result.document == network_result.document
+    assert cached_result.batch.origin is ResponseOrigin.CACHE
+    assert cached_result.batch.cache_lookup_state is CacheLookupState.FRESH_HIT
+
+
+def test_organism_scoped_gene_find_rejects_a_cross_organism_response_before_cache_write(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "gene-find.sqlite3"
+    request = FindRequest(
+        database=KeggFindDatabase.GENES,
+        query="TP53",
+        organism="hsa",
+    )
+    config = _public_config(cache_path)
+    client = KeggClient(
+        config,
+        transport=QueueTransport(
+            [
+                TransportResponse(
+                    status_code=200,
+                    body=b"mmu:22059\tTrp53; transformation related protein 53\n",
+                )
+            ]
+        ),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        client.find(request)
+
+    prepared = prepare_find(request, config.limits)[0]
+    assert caught.value.detail.code is ErrorCode.KEGG_PARSE_FAILED
+    assert _read_public_cache(cache_path, prepared, now=_NOW).state is CacheReadState.MISS
+
+
+def test_find_provenance_accepts_a_legal_request_key_above_the_old_limit(
+    tmp_path: Path,
+) -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.KO,
+        query="a" * 4_096,
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "long-find.sqlite3"),
+        transport=QueueTransport(
+            [TransportResponse(status_code=200, body=b"ko:K00001\tSynthetic match\n")]
+        ),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.find(request)
+
+    assert len(result.batch.request_key) > 4_096
+    assert result.document.rows[0].identifier == "ko:K00001"
+
+
+def test_selected_gene_and_genome_get_reconcile_and_reuse_entry_cache(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "gene-genome-get.sqlite3"
+    request = GetRequest(
+        entries=(
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:10458"),
+            KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="hsa"),
+        )
+    )
+    body = (
+        b"ENTRY       10458             CDS       T01001\n"
+        b"ORGANISM    hsa  Homo sapiens\n"
+        b"///\n"
+        b"ENTRY       T01001            Complete  Genome\n"
+        b"ORG_CODE    hsa\n"
+        b"///\n"
+    )
+    config = _public_config(cache_path)
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    live = KeggClient(
+        config,
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    network_result = live.get(request)
+    cached_result = KeggClient(
+        config,
+        transport=BombTransport(),
+        clock=_clock(_NOW + timedelta(seconds=1)),
+    ).get(
+        request,
+        options=KeggRequestOptions(refresh=False, cache_only=True),
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/hsa:10458+gn:hsa"]
+    assert network_result.missing_entries == ()
+    network_document = network_result.documents[0]
+    assert isinstance(network_document, KeggFlatFileDocument)
+    assert [entry.identifier for entry in network_document.entries] == [
+        "10458",
+        "T01001",
+    ]
+    assert cached_result.missing_entries == ()
+    assert [
+        entry.identifier
+        for document in cached_result.documents
+        if isinstance(document, KeggFlatFileDocument)
+        for entry in document.entries
+    ] == ["10458", "T01001"]
+
+
+def test_genome_record_loader_reuses_split_entry_cache_with_exact_batch_indexes(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "genome-loader-cache.sqlite3"
+    body = (
+        b"ENTRY       T01001            Complete  Genome\n"
+        b"NAME        Homo sapiens\n"
+        b"ORG_CODE    hsa\n"
+        b"LINEAGE     Eukaryotes; Animals\n"
+        b"///\n"
+        b"ENTRY       T01002            Complete  Genome\n"
+        b"NAME        Mus musculus\n"
+        b"ORG_CODE    mmu\n"
+        b"LINEAGE     Eukaryotes; Animals\n"
+        b"///\n"
+    )
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    client = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+    recorded_batches: list[int] = []
+
+    first = load_genome_records(
+        ("hsa", "mmu"),
+        client=client,
+        options=KeggRequestOptions(refresh=False),
+        before_batch=lambda: None,
+        record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
+    )
+    second = load_genome_records(
+        ("hsa", "mmu"),
+        client=client,
+        options=KeggRequestOptions(refresh=False),
+        before_batch=lambda: None,
+        record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/gn:hsa+gn:mmu"]
+    assert len(first.batches) == 1
+    assert first.batch_index_by_alias == {
+        "T01001": 0,
+        "hsa": 0,
+        "T01002": 0,
+        "mmu": 0,
+    }
+    assert len(second.batches) == 2
+    assert second.batch_index_by_alias == {
+        "T01001": 0,
+        "hsa": 0,
+        "T01002": 1,
+        "mmu": 1,
+    }
+    assert recorded_batches == [1, 2]
+
+
+def test_search_service_prefers_fresh_cache_by_default(
+    tmp_path: Path,
+) -> None:
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=b"ko:K00844\thexokinase [EC:2.7.1.1]\n",
+            )
+        ]
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "search-service-cache.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+    request = SearchKeggEntriesRequest(
+        database=KeggSearchDatabase.KO,
+        query="hexokinase",
+    )
+
+    first = search_kegg_entries(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "first-search-results.sqlite3"),
+        scope_id="scope",
+    )
+    second = search_kegg_entries(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "second-search-results.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/find/ko/hexokinase"]
+    assert first.provenance[0].origin is ResponseOrigin.NETWORK
+    assert second.provenance[0].origin is ResponseOrigin.CACHE
+
+
+def test_gene_resolver_reuses_positive_and_negative_split_entry_cache(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "gene-resolver-cache.sqlite3"
+    body = (
+        b"ENTRY       1                 CDS       T01001\n"
+        b"NAME        Synthetic gene 1\n"
+        b"ORGANISM    hsa  Homo sapiens\n"
+        b"///\n"
+    )
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    client = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+    request = GeneResolutionRequest(
+        kind="gene",
+        source_namespace=GeneIdentifierNamespace.KEGG_GENE,
+        identifiers=("hsa:1", "hsa:2"),
+    )
+
+    first = resolve_kegg_entities(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "first-results.sqlite3"),
+        scope_id="scope",
+    )
+    second = resolve_kegg_entities(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "second-results.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/hsa:1+hsa:2"]
+    assert [item.status for item in first.resolutions] == [
+        MappingStatus.ONE_TO_ONE,
+        MappingStatus.UNMAPPED,
+    ]
+    assert [item.status for item in second.resolutions] == [
+        MappingStatus.ONE_TO_ONE,
+        MappingStatus.UNMAPPED,
+    ]
+    assert {
+        candidate.canonical_entity.kind
+        for resolution in second.resolutions
+        for candidate in resolution.candidates
+    } == {KeggEntityKind.GENE}
+    assert len(first.provenance) == 1
+    assert len(second.provenance) == 2
+
+
+def test_gene_resolver_treats_a_single_get_404_as_a_cached_unmapped_identifier(
+    tmp_path: Path,
+) -> None:
+    transport = QueueTransport([TransportResponse(status_code=404, body=b"not retained")])
+    client = KeggClient(
+        _public_config(tmp_path / "missing-gene-cache.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+    request = GeneResolutionRequest(
+        kind="gene",
+        source_namespace=GeneIdentifierNamespace.KEGG_GENE,
+        identifiers=("hsa:999999",),
+    )
+
+    first = resolve_kegg_entities(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "first-missing-results.sqlite3"),
+        scope_id="scope",
+    )
+    second = resolve_kegg_entities(
+        request,
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "second-missing-results.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/hsa:999999"]
+    assert first.resolutions[0].status is MappingStatus.UNMAPPED
+    assert second.resolutions[0].status is MappingStatus.UNMAPPED
+    assert first.provenance[0].origin is ResponseOrigin.NETWORK
+    assert second.provenance[0].origin is ResponseOrigin.CACHE
+
+
+def test_gene_resolver_uses_genome_identity_for_t_number_organism_filtering(
+    tmp_path: Path,
+) -> None:
+    genome_body = (
+        b"ENTRY       T01001            Complete  Genome\n"
+        b"NAME        Homo sapiens\n"
+        b"ORG_CODE    hsa\n"
+        b"LINEAGE     Eukaryotes; Animals\n"
+        b"///\n"
+    )
+    gene_body = (
+        b"ENTRY       10458             CDS       T01001\n"
+        b"NAME        Synthetic human gene\n"
+        b"ORGANISM    hsa  Homo sapiens\n"
+        b"///\n"
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(status_code=200, body=genome_body),
+            TransportResponse(status_code=200, body=gene_body),
+        ]
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "gene-organism-identity-cache.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = resolve_kegg_entities(
+        GeneResolutionRequest(
+            kind="gene",
+            source_namespace=GeneIdentifierNamespace.KEGG_GENE,
+            identifiers=("T01001:10458", "T01002:10458"),
+            organism="hsa",
+        ),
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "gene-organism-identity-results.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert transport.urls == [
+        "https://rest.kegg.jp/get/gn:hsa",
+        "https://rest.kegg.jp/get/T01001:10458",
+    ]
+    assert [item.status for item in result.resolutions] == [
+        MappingStatus.ONE_TO_ONE,
+        MappingStatus.ORGANISM_MISMATCH,
+    ]
+    assert len(result.provenance) == 2
+
+
+def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
+    tmp_path: Path,
+) -> None:
+    genome_body = (
+        b"ENTRY       T00007            Complete  Genome\n"
+        b"NAME        Escherichia coli K-12 MG1655\n"
+        b"ORG_CODE    eco\n"
+        b"LINEAGE     Bacteria; Gammaproteobacteria\n"
+        b"///\n"
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=b"taxid:562\tgn:eco\ntaxid:562\tgn:T00007\n",
+            ),
+            TransportResponse(status_code=200, body=genome_body),
+            TransportResponse(status_code=200, body=genome_body),
+            TransportResponse(status_code=200, body=b""),
+            TransportResponse(status_code=200, body=b"gn:eco\ttaxid:562\n"),
+        ]
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "taxonomy-alias-cache.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = resolve_kegg_entities(
+        OrganismResolutionRequest(
+            kind="organism",
+            source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+            identifiers=("562",),
+            taxonomy_rank=TaxonomyResolutionRank.SPECIES,
+        ),
+        client=client,
+        result_store=SQLiteResultStore(tmp_path / "taxonomy-alias-results.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert transport.urls == [
+        "https://rest.kegg.jp/link/genome/taxid:562/species",
+        "https://rest.kegg.jp/get/gn:eco",
+        "https://rest.kegg.jp/get/gn:T00007",
+        "https://rest.kegg.jp/list/pathway/eco",
+        "https://rest.kegg.jp/link/taxonomy/gn:eco",
+    ]
+    assert result.resolutions[0].status is MappingStatus.ONE_TO_ONE
+    assert result.resolutions[0].candidates[0].canonical_entity.identifier == "eco"
+    assert len(result.provenance) == 5
+
+
+@pytest.mark.parametrize(
+    ("relationship", "source_identifier", "body"),
+    [
+        (KeggLinkRelationship.GENE_TO_KO, "hsa:10458", b"hsa:10458\tko:K05627\n"),
+        (
+            KeggLinkRelationship.GENE_TO_PATHWAY,
+            "hsa:10458",
+            b"hsa:10458\tpath:hsa04520\n",
+        ),
+        (
+            KeggLinkRelationship.ENZYME_TO_REACTION,
+            "1.1.1.1",
+            b"ec:1.1.1.1\trn:R00623\n",
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_ENZYME,
+            "R00001",
+            b"rn:R00001\tec:1.1.1.1\n",
+        ),
+        (KeggLinkRelationship.REACTION_TO_KO, "R00001", b"rn:R00001\tko:K00001\n"),
+        (
+            KeggLinkRelationship.REACTION_TO_COMPOUND,
+            "R00001",
+            b"rn:R00001\tcpd:C00031\n",
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_PATHWAY,
+            "R00001",
+            b"rn:R00001\tpath:map00010\n",
+        ),
+        (
+            KeggLinkRelationship.COMPOUND_TO_REACTION,
+            "C00031",
+            b"cpd:C00031\trn:R00001\n",
+        ),
+        (
+            KeggLinkRelationship.COMPOUND_TO_PATHWAY,
+            "C00031",
+            b"cpd:C00031\tpath:map00010\n",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_REACTION,
+            "map00010",
+            b"path:map00010\trn:R00001\n",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_COMPOUND,
+            "map00010",
+            b"path:map00010\tcpd:C00031\n",
+        ),
+        (
+            KeggLinkRelationship.GENOME_TO_TAXONOMY,
+            "hsa",
+            b"gn:hsa\ttaxid:9606\n",
+        ),
+        (
+            KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            "taxid:9606",
+            b"taxid:9606\tgn:hsa\n",
+        ),
+    ],
+)
+def test_extended_selected_link_relationships_use_the_typed_client_surface(
+    tmp_path: Path,
+    relationship: KeggLinkRelationship,
+    source_identifier: str,
+    body: bytes,
+) -> None:
+    client = KeggClient(
+        _public_config(tmp_path / f"{relationship.value}.sqlite3"),
+        transport=QueueTransport([TransportResponse(status_code=200, body=body)]),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.link(
+        LinkRequest(
+            relationship=relationship,
+            source_identifiers=(source_identifier,),
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].source_id == body.decode().split("\t", maxsplit=1)[0]
+    assert result.batches[0].operation is KeggOperation.LINK
+
+
+def test_t_number_genome_link_accepts_an_empty_success_response(tmp_path: Path) -> None:
+    # Official KEGG returned an empty 200 for selected gn:T01001 on 2026-07-30.
+    client = KeggClient(
+        _public_config(tmp_path / "genome-t-number.sqlite3"),
+        transport=QueueTransport([TransportResponse(status_code=200, body=b"")]),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.GENOME_TO_TAXONOMY,
+            source_identifiers=("T01001",),
+        )
+    )
+
+    assert result.rows == ()
+    assert len(result.batches) == 1
+
+
+def test_taxonomy_species_rank_uses_a_distinct_suffix_and_accepts_code_or_t_number_targets(
+    tmp_path: Path,
+) -> None:
+    # Official KEGG returned empty exact-rank output for taxid:562 and multiple
+    # strain genomes with the /species suffix on 2026-07-30.
+    transport = QueueTransport(
+        [
+            TransportResponse(status_code=200, body=b""),
+            TransportResponse(
+                status_code=200,
+                body=b"taxid:562\tgn:eco\ntaxid:562\tgn:T00007\n",
+            ),
+        ]
+    )
+    client = KeggClient(
+        _public_config(tmp_path / "taxonomy-rank.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    exact = client.link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            source_identifiers=("taxid:562",),
+        )
+    )
+    species = client.link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            taxonomy_rank=KeggTaxonomyRank.SPECIES,
+            source_identifiers=("taxid:562",),
+        )
+    )
+
+    assert exact.rows == ()
+    assert [row.target_id for row in species.rows] == ["gn:eco", "gn:T00007"]
+    assert transport.urls == [
+        "https://rest.kegg.jp/link/genome/taxid:562",
+        "https://rest.kegg.jp/link/genome/taxid:562/species",
+    ]
 
 
 def test_link_rows_record_their_batch_index(tmp_path: Path) -> None:

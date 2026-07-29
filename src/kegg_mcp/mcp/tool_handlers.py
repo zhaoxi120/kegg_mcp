@@ -9,26 +9,33 @@ from typing import cast
 from pydantic import BaseModel
 
 from kegg_mcp import __version__
-from kegg_mcp.kegg import GetRequest, KeggLinkRelationship, LinkRequest
+from kegg_mcp.kegg import GetRequest
 from kegg_mcp.mcp.contracts import (
     AnalyzeKoAnnotationsInput,
     AnalyzeModulesInput,
     AnalyzePathwaysInput,
+    AuditAnnotationMappingInput,
     CompareKoSetsInput,
     DeleteAnalysisResultInput,
     GetKeggEntriesInput,
     GetServerStatusInput,
-    KoMappingTarget,
     ListAnalysisResultsInput,
-    MapKoIdsInput,
+    MapBriteHierarchyInput,
     NormalizeKoAnnotationsInput,
     ProbeKeggConnectivityInput,
+    ResolveKeggEntitiesInput,
+    SearchKeggEntriesInput,
+    TraceKeggRelationsInput,
 )
 from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
+from kegg_mcp.services.annotation_audit import audit_annotation_mapping
+from kegg_mcp.services.brite_hierarchy import map_brite_hierarchy
 from kegg_mcp.services.comparison import compare_annotation_sets
-from kegg_mcp.services.kegg_mapping import map_ko_identifiers, retrieve_kegg_entries
+from kegg_mcp.services.entity_resolution import resolve_kegg_entities
+from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
+from kegg_mcp.services.kegg_search import search_kegg_entries
 from kegg_mcp.services.models import NormalizeAnnotationsRequest
 from kegg_mcp.services.module_analysis import analyze_module_targets
 from kegg_mcp.services.normalization import normalize_annotations
@@ -39,7 +46,7 @@ from kegg_mcp.services.operational import (
     probe_kegg_connectivity_service,
 )
 from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
-from kegg_mcp.services.reference_budget import KeggConnectivityClient
+from kegg_mcp.services.relation_tracing import trace_kegg_relations
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,21 +147,99 @@ def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
     )
 
 
-def map_identifiers(context: ToolContext, model: BaseModel) -> ToolOutcome:
-    request = cast(MapKoIdsInput, model)
+def search_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(SearchKeggEntriesInput, model)
     runtime = context.runtime
-    result = map_ko_identifiers(
-        LinkRequest(
-            relationship=_relationship(request.target),
-            source_identifiers=request.ko_ids,
-        ),
+    result = search_kegg_entries(
+        request,
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
     )
     return ToolOutcome(
         result,
-        f"Mapped selected K numbers to {request.target.value}; full rows are retained.",
+        (
+            f"Returned {result.returned_count} bounded endpoint candidates; "
+            "no best match or relevance score was inferred."
+        ),
+        result.result.result_id,
+    )
+
+
+def resolve_entities(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(ResolveKeggEntitiesInput, model)
+    runtime = context.runtime
+    result = resolve_kegg_entities(
+        request.root,
+        client=runtime.client,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+    )
+    return ToolOutcome(
+        result,
+        (
+            f"Resolved {result.mapped_input_count} of {result.input_count} inputs while "
+            "preserving ambiguous and unmapped outcomes."
+        ),
+        result.result.result_id,
+    )
+
+
+def trace_relations(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(TraceKeggRelationsInput, model)
+    runtime = context.runtime
+    result = trace_kegg_relations(
+        request,
+        client=runtime.client,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+    )
+    return ToolOutcome(
+        result,
+        (
+            f"Traced {result.edge_count} bounded typed KEGG cross-reference edges; "
+            "no causal or activity inference was made."
+        ),
+        result.result.result_id,
+    )
+
+
+def map_brite(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(MapBriteHierarchyInput, model)
+    runtime = context.runtime
+    result = map_brite_hierarchy(
+        request,
+        client=runtime.client,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+    )
+    return ToolOutcome(
+        result,
+        (
+            f"Evaluated {result.entity_count} supplied entities across "
+            f"{result.resolved_brite_count} retrieved BRITE hierarchies; complete paths are "
+            "retained."
+        ),
+        result.result.result_id,
+    )
+
+
+def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(AuditAnnotationMappingInput, model)
+    runtime = context.runtime
+    result = audit_annotation_mapping(
+        request.source,
+        client=runtime.client,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+        quality_context=request.quality_context,
+    )
+    return ToolOutcome(
+        result,
+        (
+            "Audited strict and lenient annotation evidence and five fixed KEGG "
+            "relationship mapping yields."
+        ),
         result.result.result_id,
     )
 
@@ -216,7 +301,7 @@ def compare_sets(context: ToolContext, model: BaseModel) -> ToolOutcome:
 
 def probe_connectivity(context: ToolContext, model: BaseModel) -> ToolOutcome:
     cast(ProbeKeggConnectivityInput, model)
-    result = probe_kegg_connectivity_service(cast(KeggConnectivityClient, context.runtime.client))
+    result = probe_kegg_connectivity_service(context.runtime.client)
     return ToolOutcome(
         result,
         f"KEGG connectivity preflight completed: {result.state.value}.",
@@ -262,16 +347,6 @@ def get_status(context: ToolContext, model: BaseModel) -> ToolOutcome:
     return ToolOutcome(result, "Returned redacted local server status.")
 
 
-def _relationship(target: KoMappingTarget) -> KeggLinkRelationship:
-    return {
-        KoMappingTarget.PATHWAY: KeggLinkRelationship.KO_TO_PATHWAY,
-        KoMappingTarget.MODULE: KeggLinkRelationship.KO_TO_MODULE,
-        KoMappingTarget.REACTION: KeggLinkRelationship.KO_TO_REACTION,
-        KoMappingTarget.EC: KeggLinkRelationship.KO_TO_ENZYME,
-        KoMappingTarget.BRITE: KeggLinkRelationship.KO_TO_BRITE,
-    }[target]
-
-
 __all__ = [
     "ToolContext",
     "ToolHandler",
@@ -279,12 +354,16 @@ __all__ = [
     "analyze_annotations",
     "analyze_modules",
     "analyze_pathways",
+    "audit_mapping",
     "compare_sets",
     "delete_result",
     "get_entries",
     "get_status",
     "list_results",
-    "map_identifiers",
+    "map_brite",
     "normalize",
     "probe_connectivity",
+    "resolve_entities",
+    "search_entries",
+    "trace_relations",
 ]

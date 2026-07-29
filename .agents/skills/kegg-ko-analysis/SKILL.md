@@ -1,6 +1,6 @@
 ---
 name: kegg-ko-analysis
-description: Normalize existing K numbers or KO annotation tables, retrieve bounded KEGG references, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use when the user already has KO evidence, a DeepKOALA detailed CSV, or asks a KO, MODULE, pathway, metabolic reconstruction, or deterministic KO-set question. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment, flux inference, or non-KEGG ontology analysis.
+description: Search bounded KEGG entries, resolve gene or organism identifiers, trace typed KEGG relations, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment, flux inference, or non-KEGG ontology analysis.
 ---
 
 # KEGG KO analysis
@@ -34,8 +34,22 @@ upstream or rendering MCP.
   reference pathways by unique selected-KO overlap.
 - For Top-N detected pathways, supply `pathway_selection={"top_n":N}`. Let the server map,
   canonicalize `ko`/`map` views, rank, batch, and summarize.
-- Use `normalize_ko_annotations`, `get_kegg_entries`, `map_ko_ids`, `analyze_modules`,
-  `analyze_pathways`, or `compare_ko_sets` only for the corresponding narrower request.
+- Use `search_kegg_entries` for bounded endpoint candidates. Never describe a candidate as the
+  selected best match, invent a relevance score, or call an exact-mass hit a compound
+  identification.
+- Use `resolve_kegg_entities` for gene or organism crosswalks. Preserve every reported ambiguous
+  candidate, require organism context for gene symbols, and treat unmapped results as mapping
+  outcomes rather than biological absence. Treat organism pathway directories as KEGG reference
+  availability, never as pathway presence, completeness, activity, flux, or phenotype.
+- Use `trace_kegg_relations` for one- or two-level allowlisted cross-references. Do not interpret
+  returned edges as regulation, causality, mechanism, activity, or phenotype.
+- Use `map_brite_hierarchy` for complete BRITE paths and descriptive unique-input counts; never
+  call those counts enrichment or dominant function.
+- Use `audit_annotation_mapping` to summarize evidence status, strict/lenient mapping yield,
+  ambiguity, provenance, and optional assembly-quality warnings without correcting scores or
+  filling missing K numbers.
+- Use `normalize_ko_annotations`, `get_kegg_entries`, `analyze_modules`, `analyze_pathways`, or
+  `compare_ko_sets` only for the corresponding narrower request.
 - Call `get_server_status` when deployment state matters. If live access is enabled and
   connectivity is unknown, call `probe_kegg_connectivity` before network-dependent analysis.
   Treat access or connectivity failure as a technical deployment result, not biological absence.

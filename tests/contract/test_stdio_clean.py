@@ -51,7 +51,15 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
         assert initialized.serverInfo.name == "kegg-mcp"
         assert initialized.instructions == SERVER_INSTRUCTIONS
         tools = await session.list_tools()
-        assert len(tools.tools) == 11
+        tool_names = {tool.name for tool in tools.tools}
+        assert len(tool_names) == 15
+        assert {
+            "search_kegg_entries",
+            "resolve_kegg_entities",
+            "trace_kegg_relations",
+            "map_brite_hierarchy",
+            "audit_annotation_mapping",
+        } <= tool_names
         normalized = await session.call_tool("normalize_ko_annotations", {"text": "K00844"})
         assert normalized.isError is False
 

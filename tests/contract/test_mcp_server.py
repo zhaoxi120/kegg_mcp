@@ -7,6 +7,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -53,6 +54,7 @@ from kegg_mcp.mcp.server import (
     McpRuntime,
     create_server,
 )
+from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
@@ -322,7 +324,7 @@ def _runtime(
 
 def _fake_runtime(tmp_path: Path, *, scope_id: str = "contract-scope") -> McpRuntime:
     return McpRuntime(
-        client=_FakeReferenceClient(),
+        client=cast(KeggMcpClient, _FakeReferenceClient()),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id=scope_id,
         allowed_roots=(str(tmp_path.resolve()),),
@@ -366,7 +368,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         for tool in tools:
             assert tool.title
             assert tool.description
-            assert tool.inputSchema.get("additionalProperties") is False
+            if tool.name == "resolve_kegg_entities":
+                assert tool.inputSchema["type"] == "object"
+                assert len(tool.inputSchema["oneOf"]) == 2
+                assert all(
+                    branch["additionalProperties"] is False for branch in tool.inputSchema["oneOf"]
+                )
+            else:
+                assert tool.inputSchema.get("additionalProperties") is False
             Draft202012Validator.check_schema(tool.inputSchema)
             assert "$defs" not in tool.inputSchema
             assert '"$ref"' not in json.dumps(tool.inputSchema, separators=(",", ":"))
@@ -385,7 +394,11 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         for name in (
             "analyze_ko_annotations",
             "get_kegg_entries",
-            "map_ko_ids",
+            "search_kegg_entries",
+            "resolve_kegg_entities",
+            "trace_kegg_relations",
+            "map_brite_hierarchy",
+            "audit_annotation_mapping",
             "analyze_modules",
             "analyze_pathways",
             "compare_ko_sets",
@@ -418,8 +431,25 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         )
         for internal_field in ("limits", "refresh", "allow_stale"):
             assert internal_field not in normalize_properties
-        mapping_schema = _tool_by_name(tools, "map_ko_ids").inputSchema
-        assert set(mapping_schema["properties"]) == {"ko_ids", "target"}
+        search_schema = _tool_by_name(tools, "search_kegg_entries").inputSchema
+        assert set(search_schema["properties"]) == {
+            "database",
+            "query",
+            "mode",
+            "max_results",
+        }
+        assert search_schema["properties"]["max_results"]["maximum"] == 100
+        resolution_schema = _tool_by_name(tools, "resolve_kegg_entities").inputSchema
+        assert resolution_schema["discriminator"] == {"propertyName": "kind"}
+        assert {branch["properties"]["kind"]["const"] for branch in resolution_schema["oneOf"]} == {
+            "gene",
+            "organism",
+        }
+        assert all("kind" in branch["required"] for branch in resolution_schema["oneOf"])
+        trace_schema = _tool_by_name(tools, "trace_kegg_relations").inputSchema
+        assert trace_schema["properties"]["max_depth"]["maximum"] == 2
+        assert trace_schema["properties"]["max_nodes"]["maximum"] == 200
+        assert trace_schema["properties"]["max_edges"]["maximum"] == 500
         analysis_schema = _tool_by_name(tools, "analyze_ko_annotations").inputSchema
         analysis_properties = analysis_schema["properties"]
         assert "pathway_selection" in analysis_properties
@@ -460,14 +490,22 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
 
         for name in (
             "get_kegg_entries",
+            "search_kegg_entries",
+            "resolve_kegg_entities",
+            "trace_kegg_relations",
+            "map_brite_hierarchy",
+            "audit_annotation_mapping",
             "analyze_modules",
             "analyze_pathways",
             "compare_ko_sets",
         ):
-            properties = _tool_by_name(tools, name).inputSchema["properties"]
-            assert "refresh" not in properties
-            assert "allow_stale" not in properties
-            assert "limits" not in properties
+            input_schema = _tool_by_name(tools, name).inputSchema
+            variants = input_schema.get("oneOf", (input_schema,))
+            for variant in variants:
+                properties = variant["properties"]
+                assert "refresh" not in properties
+                assert "allow_stale" not in properties
+                assert "limits" not in properties
 
         entries_output_defs = entries_output_schema["$defs"]
         assert (
@@ -540,11 +578,21 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert pathway_properties["pathway_previews"]["maxItems"] == 25
         assert "module_previews" not in pathway_properties
 
-        mapping_output = _tool_by_name(tools, "map_ko_ids").outputSchema
-        assert mapping_output is not None
-        mapping_properties = mapping_output["$defs"]["KoMappingServiceResult"]["properties"]
-        assert mapping_properties["row_preview"]["maxItems"] == 200
-        assert mapping_properties["provenance"]["maxItems"] == 10
+        search_output = _tool_by_name(tools, "search_kegg_entries").outputSchema
+        assert search_output is not None
+        search_properties = search_output["$defs"]["SearchKeggEntriesResult"]["properties"]
+        assert search_properties["candidates"]["maxItems"] == 100
+        resolution_output = _tool_by_name(tools, "resolve_kegg_entities").outputSchema
+        assert resolution_output is not None
+        resolution_properties = resolution_output["$defs"]["ResolveKeggEntitiesResult"][
+            "properties"
+        ]
+        assert resolution_properties["resolutions"]["maxItems"] == 50
+        trace_output = _tool_by_name(tools, "trace_kegg_relations").outputSchema
+        assert trace_output is not None
+        trace_properties = trace_output["$defs"]["TraceKeggRelationsResult"]["properties"]
+        assert trace_properties["nodes"]["maxItems"] == 200
+        assert trace_properties["edges"]["maxItems"] == 500
 
         comparison_output = _tool_by_name(tools, "compare_ko_sets").outputSchema
         assert comparison_output is not None
@@ -696,13 +744,17 @@ async def test_offline_status_and_probe_are_network_disabled_without_transport_u
 
 
 @pytest.mark.asyncio
-async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path: Path) -> None:
+async def test_recoverable_execution_errors_are_typed_and_schema_valid(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     server = create_server(_runtime(tmp_path))
     async with create_connected_server_and_client_session(server) as session:
         tools = (await session.list_tools()).tools
+        malicious_unknown_field = "/home/alice/.env?token=sk-proj-secret"
         invalid = await session.call_tool(
             "normalize_ko_annotations",
-            {"text": "K00844", "unexpected": True},
+            {"text": "K00844", malicious_unknown_field: True},
         )
         _validate_result(_tool_by_name(tools, "normalize_ko_annotations"), invalid)
         assert invalid.isError is True
@@ -714,7 +766,85 @@ async def test_recoverable_execution_errors_are_typed_and_schema_valid(tmp_path:
             for item in invalid.structuredContent["error"]["safe_details"]
         }
         assert invalid_details["stage"] == "input_validation"
-        assert invalid_details["field_path"] == "unexpected"
+        assert invalid_details["field_path"] == "$.<unknown_field>"
+        assert malicious_unknown_field not in json.dumps(invalid.model_dump(mode="json"))
+        assert malicious_unknown_field not in capsys.readouterr().err
+
+        missing_resolution_kind = await session.call_tool(
+            "resolve_kegg_entities",
+            {
+                "source_namespace": "taxonomy",
+                "identifiers": ["562"],
+            },
+        )
+        _validate_result(
+            _tool_by_name(tools, "resolve_kegg_entities"),
+            missing_resolution_kind,
+        )
+        assert missing_resolution_kind.isError is True
+        assert missing_resolution_kind.structuredContent is not None
+        assert (
+            missing_resolution_kind.structuredContent["error"]["code"]
+            == "ANALYSIS_CONFIGURATION_INVALID"
+        )
+        missing_kind_details = {
+            item["name"]: item["value"]
+            for item in missing_resolution_kind.structuredContent["error"]["safe_details"]
+        }
+        assert missing_kind_details["stage"] == "input_validation"
+        assert missing_kind_details["issue_type"] == "union_tag_not_found"
+
+        invalid_mass = await session.call_tool(
+            "search_kegg_entries",
+            {
+                "database": "compound",
+                "query": "nan",
+                "mode": "exact_mass",
+            },
+        )
+        _validate_result(_tool_by_name(tools, "search_kegg_entries"), invalid_mass)
+        assert invalid_mass.isError is True
+        assert invalid_mass.structuredContent is not None
+        assert invalid_mass.structuredContent["error"]["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+
+        invalid_identifier_calls = (
+            (
+                "resolve_kegg_entities",
+                {
+                    "kind": "organism",
+                    "source_namespace": "taxonomy",
+                    "identifiers": ["taxid:00562"],
+                },
+            ),
+            (
+                "resolve_kegg_entities",
+                {
+                    "kind": "gene",
+                    "source_namespace": "ncbi_geneid",
+                    "identifiers": ["0001"],
+                },
+            ),
+            (
+                "trace_kegg_relations",
+                {
+                    "seeds": [
+                        {
+                            "kind": "taxonomy",
+                            "identifier": "taxid:00562",
+                        }
+                    ],
+                    "edge_types": ["taxonomy_to_genome"],
+                },
+            ),
+        )
+        for tool_name, arguments in invalid_identifier_calls:
+            invalid_identifier = await session.call_tool(tool_name, arguments)
+            _validate_result(_tool_by_name(tools, tool_name), invalid_identifier)
+            assert invalid_identifier.isError is True
+            assert invalid_identifier.structuredContent is not None
+            assert invalid_identifier.structuredContent["error"]["code"] == (
+                "ANALYSIS_CONFIGURATION_INVALID"
+            )
 
         request_failure = await session.call_tool(
             "get_kegg_entries",
@@ -821,7 +951,7 @@ async def test_unexpected_internal_failure_uses_safe_correlation_id(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runtime = McpRuntime(
-        client=_InternalFailureClient(),
+        client=cast(KeggMcpClient, _InternalFailureClient()),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id="internal-failure-scope",
     )
@@ -1383,7 +1513,7 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
 ) -> None:
     client = _LargeRankingReferenceClient()
     runtime = McpRuntime(
-        client=client,
+        client=cast(KeggMcpClient, client),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id="top-one-contract",
         allowed_roots=(str(tmp_path.resolve()),),
@@ -1514,7 +1644,7 @@ async def test_automatic_top_five_excludes_special_maps_and_fills_from_later_ran
 ) -> None:
     client = _SpecialMapsFirstReferenceClient()
     runtime = McpRuntime(
-        client=client,
+        client=cast(KeggMcpClient, client),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id="special-map-exclusion-contract",
         allowed_roots=(str(tmp_path.resolve()),),
@@ -1686,26 +1816,6 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert entries_data["provenance_truncated"] is False
         assert len(entries_data["previews"][0]["field_names"]) == 64
         assert entries_data["previews"][0]["field_names_truncated"] is True
-
-        mapping = await session.call_tool(
-            "map_ko_ids",
-            {"ko_ids": ["K00001"], "target": "pathway"},
-        )
-        _validate_result(_tool_by_name(tools, "map_ko_ids"), mapping)
-        assert mapping.isError is False
-        assert mapping.structuredContent is not None
-        mapping_data = mapping.structuredContent["result"]["data"]
-        assert mapping_data["raw_relationship_row_count"] == 1
-        assert mapping_data["unique_reference_pathway_number_count"] == 1
-        assert mapping_data["available_ko_reference_view_count"] == 1
-        assert mapping_data["available_map_reference_view_count"] == 1
-        assert mapping_data["row_preview"][0] == {
-            "source_ko_id": "K00001",
-            "target_id": "ko00001",
-            "pathway_number": "00001",
-            "namespace": "ko",
-            "paired_reference_id": "map00001",
-        }
 
         modules = await session.call_tool(
             "analyze_modules",
@@ -1895,6 +2005,26 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         parser_version=PARSER_VERSION,
         database_release="cached-contract-release",
     )
+    gene_request = GetRequest(
+        entries=(KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:10458"),)
+    )
+    gene_prepared = prepare_get(gene_request, config.limits)[0]
+    SQLiteKeggCache(cache_path).write(
+        KeggOperation.GET,
+        gene_prepared.normalized_request_key,
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=(
+            b"ENTRY       10458             CDS       T01001\n"
+            b"NAME        BAIX2, C15orf4, TIP39\n"
+            b"ORGANISM    hsa  Homo sapiens\n"
+            b"///\n"
+        ),
+        retrieved_at=_NOW,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        parser_version=PARSER_VERSION,
+        database_release="cached-contract-release",
+    )
     runtime = McpRuntime(
         client=KeggClient(config),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
@@ -1910,6 +2040,13 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         assert value["returned_count"] == 1
         assert value["provenance"][0]["origin"] == "cache"
         assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
+        gene_resource = await session.read_resource(AnyUrl("kegg-cache://entries/gene/hsa:10458"))
+        gene_content = gene_resource.contents[0]
+        assert isinstance(gene_content, types.TextResourceContents)
+        gene_value = json.loads(gene_content.text)
+        assert gene_value["returned_count"] == 1
+        assert gene_value["previews"][0]["database"] == "gene"
+        assert gene_value["previews"][0]["identifier"] == "10458"
 
         cache_info = await session.read_resource(AnyUrl("ko-analysis://cache/info"))
         info_content = cache_info.contents[0]

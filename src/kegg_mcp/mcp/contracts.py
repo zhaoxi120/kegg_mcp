@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeVar, cast
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection
-from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel, KNumber, ModuleId
+from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel, ModuleId
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
 from kegg_mcp.kegg import KeggEntryRef
+from kegg_mcp.services.annotation_audit import (
+    AnnotationMappingAuditResult,
+    AnnotationQualityContext,
+)
+from kegg_mcp.services.brite_hierarchy import (
+    MapBriteHierarchyRequest,
+    MapBriteHierarchyResult,
+)
 from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
     AnalyzeKoAnnotationsResult,
@@ -28,12 +35,19 @@ from kegg_mcp.services.models import (
     DatasetSource,
     GenericDecisionPolicy,
     KeggEntriesServiceResult,
-    KoMappingServiceResult,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
     ServerStatusResult,
 )
 from kegg_mcp.services.output_bundle import ManifestPathMode
+from kegg_mcp.services.query_models import (
+    ResolveKeggEntitiesRequest,
+    ResolveKeggEntitiesResult,
+    SearchKeggEntriesRequest,
+    SearchKeggEntriesResult,
+    TraceKeggRelationsRequest,
+    TraceKeggRelationsResult,
+)
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
     canonicalize_pathway_specs,
@@ -48,7 +62,6 @@ from kegg_mcp.services.result_store import (
 )
 
 T = TypeVar("T")
-KoId = KNumber
 ResultUri = Annotated[
     str,
     Field(pattern=rf"^ko-analysis://results/{RESULT_ID_FRAGMENT}$"),
@@ -212,27 +225,22 @@ class GetKeggEntriesInput(FrozenModel):
     entries: Annotated[tuple[KeggEntryRef, ...], Field(min_length=1, max_length=50)]
 
 
-class KoMappingTarget(StrEnum):
-    """Approved KO relationship targets; unrestricted gene expansion is absent."""
-
-    PATHWAY = "pathway"
-    MODULE = "module"
-    REACTION = "reaction"
-    EC = "ec"
-    BRITE = "brite"
+SearchKeggEntriesInput = SearchKeggEntriesRequest
 
 
-class MapKoIdsInput(FrozenModel):
-    """Bounded selected-KO mapping input."""
+class ResolveKeggEntitiesInput(RootModel[ResolveKeggEntitiesRequest]):
+    """Direct discriminated gene-or-organism resolution input."""
 
-    ko_ids: Annotated[tuple[KoId, ...], Field(min_length=1, max_length=100)]
-    target: KoMappingTarget
 
-    @model_validator(mode="after")
-    def require_unique_kos(self) -> Self:
-        if len(self.ko_ids) != len(set(self.ko_ids)):
-            raise ValueError("ko_ids must be unique")
-        return self
+TraceKeggRelationsInput = TraceKeggRelationsRequest
+MapBriteHierarchyInput = MapBriteHierarchyRequest
+
+
+class AuditAnnotationMappingInput(FrozenModel):
+    """Audit one inline or retained normalized annotation dataset."""
+
+    source: DatasetSource
+    quality_context: AnnotationQualityContext | None = None
 
 
 class AnalyzeModulesInput(FrozenModel):
@@ -357,7 +365,11 @@ class CacheInfoResource(FrozenModel):
 
 NormalizeToolEnvelope = ToolEnvelope[NormalizeAnnotationsResult]
 EntriesToolEnvelope = ToolEnvelope[KeggEntriesServiceResult]
-MappingToolEnvelope = ToolEnvelope[KoMappingServiceResult]
+SearchEntriesToolEnvelope = ToolEnvelope[SearchKeggEntriesResult]
+ResolveEntitiesToolEnvelope = ToolEnvelope[ResolveKeggEntitiesResult]
+TraceRelationsToolEnvelope = ToolEnvelope[TraceKeggRelationsResult]
+BriteHierarchyToolEnvelope = ToolEnvelope[MapBriteHierarchyResult]
+AnnotationAuditToolEnvelope = ToolEnvelope[AnnotationMappingAuditResult]
 AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
 AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
 AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]
@@ -470,7 +482,10 @@ __all__ = [
     "AnalyzeModulesToolEnvelope",
     "AnalyzePathwaysInput",
     "AnalyzePathwaysToolEnvelope",
+    "AnnotationAuditToolEnvelope",
     "ArtifactRangeEnvelope",
+    "AuditAnnotationMappingInput",
+    "BriteHierarchyToolEnvelope",
     "CacheInfoResource",
     "CompareKoSetsInput",
     "CompareToolEnvelope",
@@ -480,20 +495,24 @@ __all__ = [
     "EntriesToolEnvelope",
     "GetKeggEntriesInput",
     "GetServerStatusInput",
-    "KoMappingTarget",
     "ListAnalysisResultsInput",
     "ListResultsToolEnvelope",
-    "MapKoIdsInput",
-    "MappingToolEnvelope",
+    "MapBriteHierarchyInput",
     "NormalizeAnnotationsRequest",
     "NormalizeKoAnnotationsInput",
     "NormalizeToolEnvelope",
     "OversizedArtifactNotice",
     "ProbeKeggConnectivityInput",
+    "ResolveEntitiesToolEnvelope",
+    "ResolveKeggEntitiesInput",
     "ResultResourceIndex",
+    "SearchEntriesToolEnvelope",
+    "SearchKeggEntriesInput",
     "StatusToolEnvelope",
     "ToolEnvelope",
     "ToolPayload",
+    "TraceKeggRelationsInput",
+    "TraceRelationsToolEnvelope",
     "constrain_mcp_input_schema",
     "constrain_mcp_output_schema",
 ]

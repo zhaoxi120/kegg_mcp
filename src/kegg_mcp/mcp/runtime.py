@@ -9,7 +9,7 @@ from anyio import CapacityLimiter
 
 from kegg_mcp.kegg import KeggClient
 from kegg_mcp.mcp.config import McpRuntimeConfig, load_runtime_config
-from kegg_mcp.services.reference_budget import KeggPrimitiveClient
+from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.result_store import SQLiteResultStore
 
 
@@ -17,7 +17,7 @@ from kegg_mcp.services.result_store import SQLiteResultStore
 class McpRuntime:
     """Injected services and one opaque stdio result scope."""
 
-    client: KeggPrimitiveClient
+    client: KeggMcpClient
     result_store: SQLiteResultStore
     scope_id: str
     allowed_roots: tuple[str, ...] = ()
