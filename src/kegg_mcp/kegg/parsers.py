@@ -6,15 +6,25 @@ from typing import Literal, NoReturn
 
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.kegg.contracts import (
+    MAX_FIND_MATCH_TEXT_CHARACTERS,
     KeggBriteHtextDocument,
+    KeggFindDatabase,
+    KeggFindDocument,
+    KeggFindRow,
     KeggFlatFileDocument,
     KeggFlatFileEntry,
     KeggFlatFileField,
     KeggInfoDatabase,
     KeggInfoDocument,
+    KeggOrganismPathwayDocument,
+    KeggOrganismPathwayRow,
     KeggPairDocument,
     KeggPairRow,
+    is_ec_number,
     is_kegg_brite_identifier,
+    is_kegg_gene_identifier,
+    is_kegg_organism_code,
+    is_kegg_pathway_identifier,
 )
 
 _INFO_RELEASE = re.compile(r"(?:^|\s)Release\s+(?P<release>\S.*?)(?:\s*)$")
@@ -30,6 +40,25 @@ _HTEXT_LEGACY_ROOT = re.compile(r"^A(?:\s|[0-9<])")
 _HTEXT_COMPACT_ROOT = re.compile(r"^A\S")
 _FIELD_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _ENTRY_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,99}$")
+_FIND_NUMBERED_IDENTIFIERS = {
+    KeggFindDatabase.KO: re.compile(r"^K[0-9]{5}$"),
+    KeggFindDatabase.REACTION: re.compile(r"^R[0-9]{5}$"),
+    KeggFindDatabase.COMPOUND: re.compile(r"^C[0-9]{5}$"),
+    KeggFindDatabase.GENOME: re.compile(r"^T[0-9]{5}$"),
+    KeggFindDatabase.ORGANISM: re.compile(r"^T[0-9]{5}$"),
+}
+_FIND_NAMESPACES = {
+    KeggFindDatabase.KO: frozenset({"ko"}),
+    KeggFindDatabase.PATHWAY: frozenset({"path", "pathway"}),
+    KeggFindDatabase.MODULE: frozenset({"md", "module"}),
+    KeggFindDatabase.REACTION: frozenset({"rn", "reaction"}),
+    KeggFindDatabase.ENZYME: frozenset({"ec", "enzyme"}),
+    KeggFindDatabase.COMPOUND: frozenset({"cpd", "compound"}),
+    KeggFindDatabase.GENOME: frozenset({"gn", "genome"}),
+    KeggFindDatabase.ORGANISM: frozenset({"gn", "genome"}),
+}
+_FIND_REFERENCE_MODULE = re.compile(r"^M[0-9]{5}$")
+_FIND_ORGANISM_MODULE = re.compile(r"^(?P<organism>(?:[a-z]{3,4}|T[0-9]{5}))_M[0-9]{5}$")
 
 
 @dataclass
@@ -131,6 +160,118 @@ def parse_info_response(body: bytes, database: KeggInfoDatabase) -> KeggInfoDocu
         linked_databases=tuple(linked_databases),
         lines=lines,
     )
+
+
+def parse_organism_pathway_list_response(
+    body: bytes,
+    organism: str,
+) -> KeggOrganismPathwayDocument:
+    """Parse the pathway directory for one canonical KEGG organism code."""
+    if not is_kegg_organism_code(organism):
+        raise ValueError("organism must be one canonical KEGG organism code")
+    text = _decode_response(body, parser="organism_pathway_list")
+    expected_identifier = re.compile(rf"^(?:path|pathway):{re.escape(organism)}[0-9]{{5}}$")
+    rows: list[KeggOrganismPathwayRow] = []
+    seen_identifiers: set[str] = set()
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        columns = line.split("\t")
+        if len(columns) != 2:
+            _parse_error(
+                "organism_pathway_list",
+                "expected_two_columns",
+                line_number=line_number,
+            )
+        pathway_id, name = columns
+        if expected_identifier.fullmatch(pathway_id) is None:
+            _parse_error(
+                "organism_pathway_list",
+                "unexpected_identifier",
+                line_number=line_number,
+            )
+        canonical_pathway_id = pathway_id.replace("pathway:", "path:", 1)
+        if canonical_pathway_id in seen_identifiers:
+            _parse_error(
+                "organism_pathway_list",
+                "duplicate_identifier",
+                line_number=line_number,
+            )
+        seen_identifiers.add(canonical_pathway_id)
+        if not name.strip() or len(name) > MAX_FIND_MATCH_TEXT_CHARACTERS:
+            _parse_error(
+                "organism_pathway_list",
+                "invalid_name",
+                line_number=line_number,
+            )
+        rows.append(
+            KeggOrganismPathwayRow(
+                line_number=line_number,
+                pathway_id=canonical_pathway_id,
+                name=name,
+            )
+        )
+    return KeggOrganismPathwayDocument(organism=organism, rows=tuple(rows))
+
+
+def parse_find_response(
+    body: bytes,
+    database: KeggFindDatabase,
+    *,
+    organism: str | None = None,
+) -> KeggFindDocument:
+    """Parse ordered two-column FIND candidates for one expected database."""
+    text = _decode_response(body, parser="find_table")
+    rows: list[KeggFindRow] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        columns = line.split("\t")
+        if len(columns) != 2:
+            _parse_error("find_table", "expected_two_columns", line_number=line_number)
+        identifier, matched_text = columns
+        if not _find_identifier_matches(database, identifier, organism=organism):
+            _parse_error("find_table", "unexpected_identifier", line_number=line_number)
+        if not matched_text.strip() or len(matched_text) > MAX_FIND_MATCH_TEXT_CHARACTERS:
+            _parse_error("find_table", "invalid_matched_text", line_number=line_number)
+        rows.append(
+            KeggFindRow(
+                line_number=line_number,
+                identifier=identifier,
+                matched_text=matched_text,
+            )
+        )
+    return KeggFindDocument(rows=tuple(rows))
+
+
+def _find_identifier_matches(
+    database: KeggFindDatabase,
+    identifier: str,
+    *,
+    organism: str | None,
+) -> bool:
+    if database is KeggFindDatabase.GENES:
+        if not is_kegg_gene_identifier(identifier):
+            return False
+        return organism is None or identifier.partition(":")[0] == organism
+    namespace, separator, value = identifier.partition(":")
+    if separator != ":" or namespace not in _FIND_NAMESPACES[database]:
+        return False
+    if database is KeggFindDatabase.PATHWAY:
+        return is_kegg_pathway_identifier(value)
+    if database is KeggFindDatabase.MODULE:
+        if _FIND_REFERENCE_MODULE.fullmatch(value) is not None:
+            return True
+        match = _FIND_ORGANISM_MODULE.fullmatch(value)
+        if match is None:
+            return False
+        organism = match.group("organism")
+        return organism is not None and (
+            organism.startswith("T") or is_kegg_organism_code(organism)
+        )
+    if database is KeggFindDatabase.ENZYME:
+        return is_ec_number(value)
+    return _FIND_NUMBERED_IDENTIFIERS[database].fullmatch(value) is not None
 
 
 def parse_pair_response(body: bytes) -> KeggPairDocument:

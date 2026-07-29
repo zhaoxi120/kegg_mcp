@@ -4,7 +4,9 @@ import hashlib
 import ipaddress
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, Self
@@ -20,6 +22,10 @@ ENDPOINT_LABEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
 PARSER_VERSION = "4"
 MAX_GET_ENTRIES_PER_BATCH = 10
 MAX_CONFIGURED_IDENTIFIERS = 1_000
+MAX_FIND_QUERY_CHARACTERS = 4_096
+MAX_FIND_MATCH_TEXT_CHARACTERS = 10_000
+MAX_REQUEST_KEY_CHARACTERS = 65_536
+MAX_REQUEST_URL_BYTES = 65_536
 DEFAULT_CACHE_MAX_ENTRIES = 10_000
 DEFAULT_CACHE_MAX_PAYLOAD_BYTES = 512 * 1024 * 1024
 DEFAULT_CACHE_MAX_DATABASE_BYTES = 640 * 1024 * 1024
@@ -219,7 +225,12 @@ class KeggClientLimits(FrozenModel):
     )
     relation_batch_size: int = Field(default=10, strict=True, gt=0, le=100)
     link_batch_size: int = Field(default=100, strict=True, gt=0, le=100)
-    max_url_bytes: int = Field(default=8_192, strict=True, ge=256, le=65_536)
+    max_url_bytes: int = Field(
+        default=8_192,
+        strict=True,
+        ge=256,
+        le=MAX_REQUEST_URL_BYTES,
+    )
 
 
 class RetryPolicy(FrozenModel):
@@ -314,9 +325,11 @@ class KeggClientConfig(FrozenModel):
 
 
 class KeggOperation(StrEnum):
-    """Typed operations implemented in Milestone 2."""
+    """Typed KEGG operations implemented by the bounded client."""
 
     INFO = "info"
+    LIST = "list"
+    FIND = "find"
     GET = "get"
     LINK = "link"
     CONV = "conv"
@@ -337,8 +350,38 @@ class KeggInfoDatabase(StrEnum):
     ENZYME = "enzyme"
 
 
+class KeggFindDatabase(StrEnum):
+    """Bounded FIND database allowlist."""
+
+    KO = "ko"
+    PATHWAY = "pathway"
+    MODULE = "module"
+    REACTION = "reaction"
+    ENZYME = "enzyme"
+    COMPOUND = "compound"
+    GENOME = "genome"
+    ORGANISM = "organism"
+    GENES = "genes"
+
+    @property
+    def wire_database(self) -> str:
+        """Return the approved KEGG database name used on the wire."""
+        if self is KeggFindDatabase.ORGANISM:
+            return KeggFindDatabase.GENOME.value
+        return self.value
+
+
+class KeggFindMode(StrEnum):
+    """Approved KEGG FIND query modes."""
+
+    KEYWORD = "keyword"
+    FORMULA = "formula"
+    EXACT_MASS = "exact_mass"
+    MOL_WEIGHT = "mol_weight"
+
+
 class KeggGetDatabase(StrEnum):
-    """Textual GET databases supported by the MVP."""
+    """Textual GET database allowlist."""
 
     KO = "ko"
     MODULE = "module"
@@ -347,6 +390,8 @@ class KeggGetDatabase(StrEnum):
     ENZYME = "enzyme"
     COMPOUND = "compound"
     BRITE = "brite"
+    GENE = "gene"
+    GENOME = "genome"
 
 
 class KeggBriteEntryKind(StrEnum):
@@ -397,6 +442,16 @@ def is_kegg_gene_identifier(value: str) -> bool:
         or _KEGG_T_NUMBER.fullmatch(prefix) is not None
         or is_kegg_organism_code(prefix)
     )
+
+
+def is_kegg_genome_identifier(value: str) -> bool:
+    """Return whether a value is one canonical genome T number or organism code."""
+    return _KEGG_T_NUMBER.fullmatch(value) is not None or is_kegg_organism_code(value)
+
+
+def is_kegg_taxonomy_identifier(value: str) -> bool:
+    """Return whether a value is one positive database-qualified taxonomy identifier."""
+    return re.fullmatch(r"^taxid:[1-9][0-9]*$", value) is not None
 
 
 def _split_numbered_identifier(value: str) -> tuple[str, str] | None:
@@ -463,6 +518,10 @@ class KeggEntryRef(FrozenModel):
             valid_identifier = is_kegg_brite_identifier(self.identifier)
         elif self.database is KeggGetDatabase.ENZYME:
             valid_identifier = is_ec_number(self.identifier)
+        elif self.database is KeggGetDatabase.GENE:
+            valid_identifier = is_kegg_gene_identifier(self.identifier)
+        elif self.database is KeggGetDatabase.GENOME:
+            valid_identifier = is_kegg_genome_identifier(self.identifier)
         else:
             valid_identifier = _ENTRY_PATTERNS[self.database].fullmatch(self.identifier) is not None
         if not valid_identifier:
@@ -480,6 +539,8 @@ class KeggEntryRef(FrozenModel):
             return f"ec:{self.identifier}"
         if self.database is KeggGetDatabase.BRITE:
             return f"br:{self.identifier}"
+        if self.database is KeggGetDatabase.GENOME:
+            return f"gn:{self.identifier}"
         return self.identifier
 
 
@@ -487,6 +548,72 @@ class InfoRequest(FrozenModel):
     """Retrieve release/statistics text for one approved database."""
 
     database: KeggInfoDatabase
+
+
+class OrganismPathwayListRequest(FrozenModel):
+    """List pathways for one canonical KEGG organism code only."""
+
+    organism: str = Field(min_length=3, max_length=4)
+
+    @field_validator("organism")
+    @classmethod
+    def validate_organism(cls, value: str) -> str:
+        if not is_kegg_organism_code(value):
+            raise ValueError("organism must be one canonical KEGG organism code")
+        return value
+
+
+_FIND_FORMULA_QUERY = re.compile(r"^(?:[A-Z][a-z]?(?:[1-9][0-9]*)?)+$")
+_FIND_MASS_VALUE = r"(?:0|[1-9][0-9]{0,19})(?:\.[0-9]{1,12})?"
+_FIND_MASS_QUERY = re.compile(
+    rf"^(?P<lower>{_FIND_MASS_VALUE})(?:-(?P<upper>{_FIND_MASS_VALUE}))?$"
+)
+
+
+class FindRequest(FrozenModel):
+    """Search one approved KEGG database with one bounded query."""
+
+    database: KeggFindDatabase
+    query: str = Field(min_length=1, max_length=MAX_FIND_QUERY_CHARACTERS)
+    mode: KeggFindMode = KeggFindMode.KEYWORD
+    organism: str | None = Field(default=None, min_length=3, max_length=4)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query_text(cls, value: str) -> str:
+        validate_utf8_text(value, field_name="FIND query")
+        if value != value.strip():
+            raise ValueError("FIND query must not contain outer whitespace")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("FIND query must not contain control characters")
+        if any(character in "/\\?#" for character in value) or value in {".", ".."}:
+            raise ValueError("FIND query must not contain URL-structural path characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_query_mode(self) -> Self:
+        if self.organism is not None:
+            if self.database is not KeggFindDatabase.GENES:
+                raise ValueError("organism-scoped FIND is valid only for the genes database")
+            if not is_kegg_organism_code(self.organism):
+                raise ValueError("organism must be one canonical KEGG organism code")
+        if self.mode is KeggFindMode.KEYWORD:
+            return self
+        if self.database is not KeggFindDatabase.COMPOUND:
+            raise ValueError("chemical FIND modes are valid only for the compound database")
+        if self.mode is KeggFindMode.FORMULA:
+            if _FIND_FORMULA_QUERY.fullmatch(self.query) is None:
+                raise ValueError("formula FIND queries must use bounded molecular-formula syntax")
+            return self
+        match = _FIND_MASS_QUERY.fullmatch(self.query)
+        if match is None:
+            raise ValueError("mass FIND queries must use one positive decimal or an ordered range")
+        lower = Decimal(match.group("lower"))
+        upper_text = match.group("upper")
+        upper = Decimal(upper_text) if upper_text is not None else None
+        if lower <= 0 or (upper is not None and (upper <= 0 or upper < lower)):
+            raise ValueError("mass FIND queries must use one positive decimal or an ordered range")
+        return self
 
 
 class GetRequest(FrozenModel):
@@ -514,12 +641,155 @@ class KeggLinkRelationship(StrEnum):
     KO_TO_ENZYME = "ko_to_enzyme"
     KO_TO_BRITE = "ko_to_brite"
     PATHWAY_TO_KO = "pathway_to_ko"
+    GENE_TO_KO = "gene_to_ko"
+    GENE_TO_PATHWAY = "gene_to_pathway"
+    ENZYME_TO_REACTION = "enzyme_to_reaction"
+    REACTION_TO_ENZYME = "reaction_to_enzyme"
+    REACTION_TO_KO = "reaction_to_ko"
+    REACTION_TO_COMPOUND = "reaction_to_compound"
+    REACTION_TO_PATHWAY = "reaction_to_pathway"
+    COMPOUND_TO_REACTION = "compound_to_reaction"
+    COMPOUND_TO_PATHWAY = "compound_to_pathway"
+    PATHWAY_TO_REACTION = "pathway_to_reaction"
+    PATHWAY_TO_COMPOUND = "pathway_to_compound"
+    GENOME_TO_TAXONOMY = "genome_to_taxonomy"
+    TAXONOMY_TO_GENOME = "taxonomy_to_genome"
+
+
+class KeggTaxonomyRank(StrEnum):
+    """Approved taxonomy scopes for selected taxonomy-to-genome LINK requests."""
+
+    EXACT = "exact"
+    SPECIES = "species"
+
+    @property
+    def wire_suffix(self) -> str:
+        """Return the fixed optional KEGG LINK path suffix for this scope."""
+        if self is KeggTaxonomyRank.SPECIES:
+            return "/species"
+        return ""
+
+
+class LinkSourceKind(StrEnum):
+    """Validated source identifier kinds used by the LINK relation contract."""
+
+    KO = "ko"
+    PATHWAY = "pathway"
+    GENE = "gene"
+    ENZYME = "enzyme"
+    REACTION = "reaction"
+    COMPOUND = "compound"
+    GENOME = "genome"
+    TAXONOMY = "taxonomy"
+
+
+@dataclass(frozen=True, slots=True)
+class LinkRelationContract:
+    """One authoritative selected-entry LINK direction contract."""
+
+    source_kind: LinkSourceKind
+    target_database: str
+    source_wire_prefix: str | None
+    response_source_prefix: str | None
+
+    def source_identifier_matches(self, identifier: str) -> bool:
+        """Return whether one caller-facing source identifier matches this direction."""
+        if self.source_kind is LinkSourceKind.KO:
+            return _ENTRY_PATTERNS[KeggGetDatabase.KO].fullmatch(identifier) is not None
+        if self.source_kind is LinkSourceKind.PATHWAY:
+            return is_kegg_pathway_identifier(identifier)
+        if self.source_kind is LinkSourceKind.GENE:
+            return is_kegg_gene_identifier(identifier)
+        if self.source_kind is LinkSourceKind.ENZYME:
+            return is_ec_number(identifier)
+        if self.source_kind is LinkSourceKind.REACTION:
+            return _ENTRY_PATTERNS[KeggGetDatabase.REACTION].fullmatch(identifier) is not None
+        if self.source_kind is LinkSourceKind.COMPOUND:
+            return _ENTRY_PATTERNS[KeggGetDatabase.COMPOUND].fullmatch(identifier) is not None
+        if self.source_kind is LinkSourceKind.GENOME:
+            return is_kegg_genome_identifier(identifier)
+        return is_kegg_taxonomy_identifier(identifier)
+
+    def wire_source_identifier(self, identifier: str) -> str:
+        """Return one validated source identifier in selected-entry URL form."""
+        if self.source_wire_prefix is None:
+            return identifier
+        return f"{self.source_wire_prefix}:{identifier}"
+
+    def response_source_identifier(self, identifier: str) -> str:
+        """Return the canonical source identifier expected in a LINK response."""
+        if self.response_source_prefix is None:
+            return identifier
+        return f"{self.response_source_prefix}:{identifier}"
+
+
+_LINK_RELATION_CONTRACTS = {
+    KeggLinkRelationship.KO_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.KO, "pathway", None, "ko"
+    ),
+    KeggLinkRelationship.KO_TO_MODULE: LinkRelationContract(
+        LinkSourceKind.KO, "module", None, "ko"
+    ),
+    KeggLinkRelationship.KO_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.KO, "reaction", None, "ko"
+    ),
+    KeggLinkRelationship.KO_TO_ENZYME: LinkRelationContract(
+        LinkSourceKind.KO, "enzyme", None, "ko"
+    ),
+    KeggLinkRelationship.KO_TO_BRITE: LinkRelationContract(LinkSourceKind.KO, "brite", None, "ko"),
+    KeggLinkRelationship.PATHWAY_TO_KO: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "ko", None, "path"
+    ),
+    KeggLinkRelationship.GENE_TO_KO: LinkRelationContract(LinkSourceKind.GENE, "ko", None, None),
+    KeggLinkRelationship.GENE_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.GENE, "pathway", None, None
+    ),
+    KeggLinkRelationship.ENZYME_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.ENZYME, "reaction", "ec", "ec"
+    ),
+    KeggLinkRelationship.REACTION_TO_ENZYME: LinkRelationContract(
+        LinkSourceKind.REACTION, "enzyme", None, "rn"
+    ),
+    KeggLinkRelationship.REACTION_TO_KO: LinkRelationContract(
+        LinkSourceKind.REACTION, "ko", None, "rn"
+    ),
+    KeggLinkRelationship.REACTION_TO_COMPOUND: LinkRelationContract(
+        LinkSourceKind.REACTION, "compound", None, "rn"
+    ),
+    KeggLinkRelationship.REACTION_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.REACTION, "pathway", None, "rn"
+    ),
+    KeggLinkRelationship.COMPOUND_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.COMPOUND, "reaction", None, "cpd"
+    ),
+    KeggLinkRelationship.COMPOUND_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.COMPOUND, "pathway", None, "cpd"
+    ),
+    KeggLinkRelationship.PATHWAY_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "reaction", None, "path"
+    ),
+    KeggLinkRelationship.PATHWAY_TO_COMPOUND: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "compound", None, "path"
+    ),
+    KeggLinkRelationship.GENOME_TO_TAXONOMY: LinkRelationContract(
+        LinkSourceKind.GENOME, "taxonomy", "gn", "gn"
+    ),
+    KeggLinkRelationship.TAXONOMY_TO_GENOME: LinkRelationContract(
+        LinkSourceKind.TAXONOMY, "genome", None, None
+    ),
+}
+
+
+def link_relation_contract(relationship: KeggLinkRelationship) -> LinkRelationContract:
+    """Return the single authoritative contract for an approved LINK direction."""
+    return _LINK_RELATION_CONTRACTS[relationship]
 
 
 class LinkRequest(FrozenModel):
     """Retrieve one bounded, explicitly approved KEGG relationship."""
 
     relationship: KeggLinkRelationship
+    taxonomy_rank: KeggTaxonomyRank = KeggTaxonomyRank.EXACT
     source_identifiers: Annotated[
         tuple[KeggIdentifier, ...],
         Field(min_length=1, max_length=MAX_CONFIGURED_IDENTIFIERS),
@@ -527,19 +797,19 @@ class LinkRequest(FrozenModel):
 
     @model_validator(mode="after")
     def validate_source_identifiers(self) -> Self:
-        if self.relationship is KeggLinkRelationship.PATHWAY_TO_KO:
-            identifiers_are_valid = all(
-                is_kegg_pathway_identifier(identifier) for identifier in self.source_identifiers
-            )
-        else:
-            pattern = _ENTRY_PATTERNS[KeggGetDatabase.KO]
-            identifiers_are_valid = all(
-                pattern.fullmatch(identifier) is not None for identifier in self.source_identifiers
-            )
+        contract = link_relation_contract(self.relationship)
+        identifiers_are_valid = all(
+            contract.source_identifier_matches(identifier) for identifier in self.source_identifiers
+        )
         if not identifiers_are_valid:
             raise ValueError("LINK source identifier is incompatible with the relationship")
         if len(self.source_identifiers) != len(set(self.source_identifiers)):
             raise ValueError("LINK source identifiers must be unique")
+        if (
+            self.taxonomy_rank is not KeggTaxonomyRank.EXACT
+            and self.relationship is not KeggLinkRelationship.TAXONOMY_TO_GENOME
+        ):
+            raise ValueError("non-default taxonomy_rank is valid only for taxonomy-to-genome LINK")
         return self
 
 
@@ -650,7 +920,11 @@ class KeggBatchProvenance(FrozenModel):
     """Serializable provenance for one network/cache batch."""
 
     operation: KeggOperation
-    request_key: str = Field(default="unavailable", min_length=1, max_length=4_096)
+    request_key: str = Field(
+        default="unavailable",
+        min_length=1,
+        max_length=MAX_REQUEST_KEY_CHARACTERS,
+    )
     access_mode: AccessMode
     retrieval_endpoint_class: RetrievalEndpointClass
     endpoint_label: str = Field(pattern=ENDPOINT_LABEL_PATTERN, min_length=1, max_length=100)
@@ -743,6 +1017,47 @@ class KeggPairDocument(FrozenModel):
     rows: tuple[KeggPairRow, ...]
 
 
+class KeggFindRow(FrozenModel):
+    """One ordered KEGG FIND candidate with the source text preserved."""
+
+    line_number: PositiveCount
+    identifier: str = Field(min_length=1, max_length=256)
+    matched_text: str = Field(min_length=1, max_length=MAX_FIND_MATCH_TEXT_CHARACTERS)
+
+
+class KeggFindDocument(FrozenModel):
+    """Ordered rows from one bounded KEGG FIND response."""
+
+    rows: tuple[KeggFindRow, ...]
+
+
+class KeggOrganismPathwayRow(FrozenModel):
+    """One organism-specific pathway directory row."""
+
+    line_number: PositiveCount
+    pathway_id: str = Field(min_length=13, max_length=14)
+    name: str = Field(min_length=1, max_length=MAX_FIND_MATCH_TEXT_CHARACTERS)
+
+
+class KeggOrganismPathwayDocument(FrozenModel):
+    """Complete bounded pathway directory for one requested organism."""
+
+    organism: str = Field(min_length=3, max_length=4)
+    rows: tuple[KeggOrganismPathwayRow, ...]
+
+    @model_validator(mode="after")
+    def validate_directory_scope(self) -> Self:
+        if not is_kegg_organism_code(self.organism):
+            raise ValueError("organism must be one canonical KEGG organism code")
+        expected = re.compile(rf"^path:{re.escape(self.organism)}[0-9]{{5}}$")
+        pathway_ids = tuple(row.pathway_id for row in self.rows)
+        if any(expected.fullmatch(pathway_id) is None for pathway_id in pathway_ids):
+            raise ValueError("pathway rows must match the requested organism")
+        if len(pathway_ids) != len(set(pathway_ids)):
+            raise ValueError("organism pathway rows must be unique")
+        return self
+
+
 class KeggFlatFileField(FrozenModel):
     """One field occurrence with canonical nesting and continuation lines preserved."""
 
@@ -801,6 +1116,22 @@ class InfoResult(FrozenModel):
 
     request: InfoRequest
     document: KeggInfoDocument
+    batch: KeggBatchProvenance
+
+
+class FindResult(FrozenModel):
+    """Parsed FIND candidates and batch provenance."""
+
+    request: FindRequest
+    document: KeggFindDocument
+    batch: KeggBatchProvenance
+
+
+class OrganismPathwayListResult(FrozenModel):
+    """Parsed organism pathway directory and batch provenance."""
+
+    request: OrganismPathwayListRequest
+    document: KeggOrganismPathwayDocument
     batch: KeggBatchProvenance
 
 

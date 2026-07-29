@@ -5,11 +5,13 @@ from collections.abc import Callable
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
-from kegg_mcp.kegg.contracts import KeggInfoDatabase
+from kegg_mcp.kegg.contracts import KeggFindDatabase, KeggInfoDatabase
 from kegg_mcp.kegg.parsers import (
     parse_brite_htext_response,
+    parse_find_response,
     parse_flat_file_response,
     parse_info_response,
+    parse_organism_pathway_list_response,
     parse_pair_response,
 )
 
@@ -105,6 +107,174 @@ def test_info_parser_rejects_conflicting_counts() -> None:
 def test_info_parser_rejects_invalid_utf8() -> None:
     _assert_parse_error(
         lambda: parse_info_response(b"ko invalid \xff", KeggInfoDatabase.KO),
+        reason="invalid_utf8",
+    )
+
+
+def test_organism_pathway_list_parser_preserves_the_bounded_directory() -> None:
+    document = parse_organism_pathway_list_response(
+        b"path:hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
+        b"path:hsa04012\tErbB signaling pathway - Homo sapiens (human)\n",
+        "hsa",
+    )
+
+    assert document.organism == "hsa"
+    assert [row.pathway_id for row in document.rows] == ["path:hsa00010", "path:hsa04012"]
+    assert document.rows[0].line_number == 1
+    assert document.rows[0].name.startswith("Glycolysis")
+
+
+def test_organism_pathway_list_parser_accepts_an_empty_directory() -> None:
+    assert parse_organism_pathway_list_response(b"", "hsa").rows == ()
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (b"path:mmu00010\tWrong organism\n", "unexpected_identifier"),
+        (b"path:hsa00010\tName\textra\n", "expected_two_columns"),
+        (b"path:hsa00010\t\n", "invalid_name"),
+        (
+            b"path:hsa00010\tName\npathway:hsa00010\tDuplicate alias\n",
+            "duplicate_identifier",
+        ),
+    ],
+)
+def test_organism_pathway_list_parser_rejects_unexpected_rows(
+    body: bytes,
+    reason: str,
+) -> None:
+    _assert_parse_error(
+        lambda: parse_organism_pathway_list_response(body, "hsa"),
+        reason=reason,
+    )
+
+
+def test_find_parser_preserves_order_duplicates_text_and_source_line_numbers() -> None:
+    # Two-column FIND output shape verified against the KEGG API manual on 2026-07-30.
+    body = (
+        "ko:K00844\thexokinase [EC:2.7.1.1]\n"
+        "\n"
+        "ko:K12407\tglucokinase, β-D-glucose candidate\n"
+        "ko:K00844\thexokinase [EC:2.7.1.1]\n"
+    ).encode()
+
+    document = parse_find_response(body, KeggFindDatabase.KO)
+
+    assert [row.line_number for row in document.rows] == [1, 3, 4]
+    assert [(row.identifier, row.matched_text) for row in document.rows] == [
+        ("ko:K00844", "hexokinase [EC:2.7.1.1]"),
+        ("ko:K12407", "glucokinase, β-D-glucose candidate"),
+        ("ko:K00844", "hexokinase [EC:2.7.1.1]"),
+    ]
+
+
+@pytest.mark.parametrize("body", [b"", b" \n\t\r\n"])
+def test_find_parser_accepts_an_empty_success_response(body: bytes) -> None:
+    assert parse_find_response(body, KeggFindDatabase.KO).rows == ()
+
+
+@pytest.mark.parametrize(
+    ("database", "identifier"),
+    [
+        (KeggFindDatabase.KO, "ko:K00001"),
+        (KeggFindDatabase.PATHWAY, "path:map00010"),
+        (KeggFindDatabase.PATHWAY, "path:hsa00010"),
+        (KeggFindDatabase.MODULE, "md:M00001"),
+        (KeggFindDatabase.MODULE, "md:hsa_M00001"),
+        (KeggFindDatabase.MODULE, "md:T01001_M00001"),
+        (KeggFindDatabase.REACTION, "rn:R00001"),
+        (KeggFindDatabase.ENZYME, "ec:1.1.1.-"),
+        (KeggFindDatabase.COMPOUND, "cpd:C00031"),
+        (KeggFindDatabase.GENOME, "gn:T00007"),
+        (KeggFindDatabase.ORGANISM, "gn:T00007"),
+        (KeggFindDatabase.GENES, "hsa:10458"),
+    ],
+)
+def test_find_parser_accepts_only_identifiers_in_the_expected_database(
+    database: KeggFindDatabase,
+    identifier: str,
+) -> None:
+    document = parse_find_response(
+        f"{identifier}\tSynthetic match\n".encode(),
+        database,
+    )
+
+    assert document.rows[0].identifier == identifier
+
+
+def test_find_parser_requires_gene_results_to_match_the_requested_organism() -> None:
+    document = parse_find_response(
+        b"hsa:7157\tTP53; tumor protein p53\n",
+        KeggFindDatabase.GENES,
+        organism="hsa",
+    )
+
+    assert document.rows[0].identifier == "hsa:7157"
+    _assert_parse_error(
+        lambda: parse_find_response(
+            b"mmu:22059\tTrp53; transformation related protein 53\n",
+            KeggFindDatabase.GENES,
+            organism="hsa",
+        ),
+        reason="unexpected_identifier",
+    )
+
+
+@pytest.mark.parametrize(
+    ("database", "identifier"),
+    [
+        (KeggFindDatabase.KO, "path:map00010"),
+        (KeggFindDatabase.PATHWAY, "path:module00010"),
+        (KeggFindDatabase.MODULE, "md:abcde_M00001"),
+        (KeggFindDatabase.REACTION, "rn:K00001"),
+        (KeggFindDatabase.ENZYME, "ec:8.1.1.1"),
+        (KeggFindDatabase.COMPOUND, "cpd:D00001"),
+        (KeggFindDatabase.GENOME, "gn:K00001"),
+        (KeggFindDatabase.ORGANISM, "genome:T0000"),
+    ],
+)
+def test_find_parser_rejects_unexpected_or_malformed_identifiers(
+    database: KeggFindDatabase,
+    identifier: str,
+) -> None:
+    _assert_parse_error(
+        lambda: parse_find_response(
+            f"{identifier}\tSynthetic match\n".encode(),
+            database,
+        ),
+        reason="unexpected_identifier",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"ko:K00001\n",
+        b"ko:K00001\tdefinition\textra\n",
+    ],
+)
+def test_find_parser_requires_exactly_two_tab_columns(body: bytes) -> None:
+    _assert_parse_error(
+        lambda: parse_find_response(body, KeggFindDatabase.KO),
+        reason="expected_two_columns",
+    )
+
+
+@pytest.mark.parametrize("matched_text", ["", " ", "a" * 10_001])
+def test_find_parser_rejects_empty_or_oversized_match_text(matched_text: str) -> None:
+    _assert_parse_error(
+        lambda: parse_find_response(
+            f"ko:K00001\t{matched_text}\n".encode(),
+            KeggFindDatabase.KO,
+        ),
+        reason="invalid_matched_text",
+    )
+
+
+def test_find_parser_rejects_invalid_utf8() -> None:
+    _assert_parse_error(
+        lambda: parse_find_response(b"ko:K00001\t\xff", KeggFindDatabase.KO),
         reason="invalid_utf8",
     )
 

@@ -15,6 +15,8 @@ from kegg_mcp.kegg.contracts import (
     CacheLookupState,
     ConvRequest,
     ConvResult,
+    FindRequest,
+    FindResult,
     GetRequest,
     GetResult,
     InfoRequest,
@@ -23,17 +25,21 @@ from kegg_mcp.kegg.contracts import (
     KeggBriteHtextDocument,
     KeggClientConfig,
     KeggEntryRef,
+    KeggFindDocument,
     KeggFlatFileDocument,
     KeggFlatFileEntry,
     KeggGetDatabase,
     KeggGetDocument,
     KeggInfoDocument,
+    KeggOrganismPathwayDocument,
     KeggPairDocument,
     KeggPairRow,
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
     OfflineCacheAccess,
+    OrganismPathwayListRequest,
+    OrganismPathwayListResult,
     PublicAcademicAccess,
     RetrievalEndpointClass,
     endpoint_fingerprint,
@@ -41,10 +47,13 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.kegg.executor import ExecutedBatch, KeggRequestExecutor, RateLimiter
 from kegg_mcp.kegg.operations import (
     PreparedRequest,
+    get_entry_matches,
     prepare_conv,
+    prepare_find,
     prepare_get,
     prepare_info,
     prepare_link,
+    prepare_organism_pathway_list,
 )
 from kegg_mcp.kegg.pathway_asset_client import PathwayAssetClient
 from kegg_mcp.kegg.pathway_assets import (
@@ -57,7 +66,7 @@ from kegg_mcp.kegg.transport import HttpsTransport, Transport
 
 
 class KeggClient:
-    """Execute the Milestone 2 KEGG operations through typed service methods."""
+    """Execute bounded KEGG operations through typed service methods."""
 
     def __init__(
         self,
@@ -143,6 +152,27 @@ class KeggClient:
             raise AssertionError("INFO preparation selected an incompatible parser")
         return InfoResult(request=request, document=executed.document, batch=executed.provenance)
 
+    def list_organism_pathways(
+        self,
+        request: OrganismPathwayListRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> OrganismPathwayListResult:
+        """Retrieve the bounded pathway directory for one canonical organism."""
+        prepared = prepare_organism_pathway_list(
+            request,
+            self._config.limits,
+            url_prefix_bytes=len(self._endpoint.encode("ascii")),
+        )
+        executed = self._executor.execute(prepared, self._effective_options(options))
+        if not isinstance(executed.document, KeggOrganismPathwayDocument):
+            raise AssertionError("organism pathway LIST selected an incompatible parser")
+        return OrganismPathwayListResult(
+            request=request,
+            document=executed.document,
+            batch=executed.provenance,
+        )
+
     def get(
         self,
         request: GetRequest,
@@ -157,16 +187,18 @@ class KeggClient:
 
         for prepared, executed in zip(prepared_batches, executed_batches, strict=True):
             document = executed.document
-            expected_by_identifier = {
-                entry.identifier: entry for entry in prepared.requested_entries
-            }
             if isinstance(document, KeggFlatFileDocument):
-                returned_by_identifier: dict[str, KeggFlatFileEntry] = {}
+                returned_by_key: dict[
+                    tuple[KeggGetDatabase, str],
+                    KeggFlatFileEntry,
+                ] = {}
                 for entry in document.entries:
-                    if (
-                        entry.identifier not in expected_by_identifier
-                        or entry.identifier in returned_by_identifier
-                    ):
+                    matches = tuple(
+                        requested_entry
+                        for requested_entry in prepared.requested_entries
+                        if get_entry_matches(requested_entry, entry)
+                    )
+                    if len(matches) != 1:
                         fail(
                             ErrorCode.KEGG_PARSE_FAILED,
                             "The KEGG GET response did not match the bounded request.",
@@ -178,13 +210,26 @@ class KeggClient:
                                 SafeDetail(name="reason", value="unexpected_or_duplicate_entry"),
                             ),
                         )
-                    returned_by_identifier[entry.identifier] = entry
-                    requested_entry = expected_by_identifier[entry.identifier]
-                    returned_keys.add((requested_entry.database, requested_entry.identifier))
+                    requested_entry = matches[0]
+                    key = (requested_entry.database, requested_entry.identifier)
+                    if key in returned_by_key:
+                        fail(
+                            ErrorCode.KEGG_PARSE_FAILED,
+                            "The KEGG GET response did not match the bounded request.",
+                            suggested_action=(
+                                "Refresh the response or verify the configured endpoint "
+                                "compatibility."
+                            ),
+                            safe_details=(
+                                SafeDetail(name="reason", value="unexpected_or_duplicate_entry"),
+                            ),
+                        )
+                    returned_by_key[key] = entry
+                    returned_keys.add(key)
                 ordered_entries = tuple(
-                    returned_by_identifier[entry.identifier]
+                    returned_by_key[(entry.database, entry.identifier)]
                     for entry in prepared.requested_entries
-                    if entry.identifier in returned_by_identifier
+                    if (entry.database, entry.identifier) in returned_by_key
                 )
                 documents.append(document.model_copy(update={"entries": ordered_entries}))
             elif isinstance(document, KeggBriteHtextDocument):
@@ -207,6 +252,27 @@ class KeggClient:
             documents=tuple(documents),
             missing_entries=missing_entries,
             batches=tuple(batch.provenance for batch in executed_batches),
+        )
+
+    def find(
+        self,
+        request: FindRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> FindResult:
+        """Search one allowlisted KEGG database with one bounded query."""
+        prepared = prepare_find(
+            request,
+            self._config.limits,
+            url_prefix_bytes=len(self._endpoint.encode("ascii")),
+        )[0]
+        executed = self._executor.execute(prepared, self._effective_options(options))
+        if not isinstance(executed.document, KeggFindDocument):
+            raise AssertionError("FIND preparation selected an incompatible parser")
+        return FindResult(
+            request=request,
+            document=executed.document,
+            batch=executed.provenance,
         )
 
     def get_pathway_asset(
@@ -339,19 +405,30 @@ class KeggClient:
         )
         if len(chunks) != len(document.entries):
             return
-        requested_by_identifier = {entry.identifier: entry for entry in prepared.requested_entries}
         provenance = executed.provenance
+        bodies_by_requested_entry: dict[tuple[KeggGetDatabase, str], bytes] = {}
         for parsed_entry, body in zip(document.entries, chunks, strict=True):
-            requested_entry = requested_by_identifier.get(parsed_entry.identifier)
-            if requested_entry is None:
-                continue
+            matches = tuple(
+                requested_entry
+                for requested_entry in prepared.requested_entries
+                if get_entry_matches(requested_entry, parsed_entry)
+            )
+            if len(matches) != 1:
+                return
+            requested_entry = matches[0]
+            key = (requested_entry.database, requested_entry.identifier)
+            if key in bodies_by_requested_entry:
+                return
+            bodies_by_requested_entry[key] = body
+        for requested_entry in prepared.requested_entries:
+            key = (requested_entry.database, requested_entry.identifier)
             single = prepare_get(GetRequest(entries=(requested_entry,)), self._config.limits)[0]
             self._cache.write(
                 single.operation,
                 single.normalized_request_key,
                 self._retrieval_endpoint_class,
                 self._endpoint_fingerprint,
-                body=body,
+                body=bodies_by_requested_entry.get(key, b""),
                 retrieved_at=provenance.retrieved_at,
                 expires_at=provenance.expires_at,
                 parser_version=provenance.parser_version,

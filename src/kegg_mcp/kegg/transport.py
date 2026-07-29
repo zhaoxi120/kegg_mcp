@@ -27,6 +27,15 @@ from kegg_mcp import __version__
 from kegg_mcp.kegg.contracts import MAX_HTTP_METADATA_ITEMS, HttpMetadata
 
 _ALLOWED_METADATA_HEADERS = ("content-type", "etag", "last-modified", "date")
+_UPPER_HEXADECIMAL_CHARACTERS = frozenset("0123456789ABCDEF")
+_FORBIDDEN_PERCENT_ENCODED_PATH_BYTES = frozenset(
+    {
+        ord("/"),
+        ord("\\"),
+        ord("?"),
+        ord("#"),
+    }
+)
 
 
 USER_AGENT = f"kegg-mcp/{__version__}"
@@ -257,6 +266,7 @@ class HttpsTransport:
             url.encode("ascii")
             parsed = urlsplit(url)
             parsed_port = parsed.port
+            decoded_path = HttpsTransport._decode_canonical_path(parsed.path)
         except (UnicodeEncodeError, ValueError):
             raise TransportError(
                 TransportErrorKind.INVALID_REQUEST,
@@ -270,12 +280,38 @@ class HttpsTransport:
             or parsed.query
             or parsed.fragment
             or (parsed_port is not None and not 1 <= parsed_port <= 65535)
-            or "%" in url
+            or "%" in parsed.netloc
             or "\\" in url
             or any(ord(character) < 33 or ord(character) == 127 for character in url)
-            or any(segment in {".", ".."} for segment in parsed.path.split("/"))
+            or any(segment in {".", ".."} for segment in decoded_path.split("/"))
         ):
             raise TransportError(TransportErrorKind.INVALID_REQUEST, transient=False)
+
+    @staticmethod
+    def _decode_canonical_path(path: str) -> str:
+        """Decode canonical uppercase percent escapes without admitting path delimiters."""
+        encoded_path = bytearray()
+        position = 0
+        while position < len(path):
+            character = path[position]
+            if character != "%":
+                encoded_path.append(ord(character))
+                position += 1
+                continue
+            if position + 2 >= len(path):
+                raise ValueError("incomplete percent escape")
+            hexadecimal = path[position + 1 : position + 3]
+            if any(character not in _UPPER_HEXADECIMAL_CHARACTERS for character in hexadecimal):
+                raise ValueError("non-canonical percent escape")
+            value = int(hexadecimal, 16)
+            if value in _FORBIDDEN_PERCENT_ENCODED_PATH_BYTES:
+                raise ValueError("encoded path delimiter")
+            encoded_path.append(value)
+            position += 3
+        decoded_path = encoded_path.decode("utf-8", errors="strict")
+        if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in decoded_path):
+            raise ValueError("decoded path contains a control character")
+        return decoded_path
 
     @classmethod
     def _read_response(
