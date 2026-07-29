@@ -170,7 +170,7 @@ def parse_organism_pathway_list_response(
     if not is_kegg_organism_code(organism):
         raise ValueError("organism must be one canonical KEGG organism code")
     text = _decode_response(body, parser="organism_pathway_list")
-    expected_identifier = re.compile(rf"^(?:path|pathway):{re.escape(organism)}[0-9]{{5}}$")
+    expected_identifier = re.compile(rf"^(?P<identifier>{re.escape(organism)}[0-9]{{5}})$")
     rows: list[KeggOrganismPathwayRow] = []
     seen_identifiers: set[str] = set()
     for line_number, line in enumerate(text.splitlines(), start=1):
@@ -184,13 +184,14 @@ def parse_organism_pathway_list_response(
                 line_number=line_number,
             )
         pathway_id, name = columns
-        if expected_identifier.fullmatch(pathway_id) is None:
+        identifier_match = expected_identifier.fullmatch(pathway_id)
+        if identifier_match is None:
             _parse_error(
                 "organism_pathway_list",
                 "unexpected_identifier",
                 line_number=line_number,
             )
-        canonical_pathway_id = pathway_id.replace("pathway:", "path:", 1)
+        canonical_pathway_id = f"path:{identifier_match.group('identifier')}"
         if canonical_pathway_id in seen_identifiers:
             _parse_error(
                 "organism_pathway_list",

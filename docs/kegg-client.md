@@ -173,12 +173,12 @@ canonical three- or four-letter KEGG organism code. It prepares
 `/list/pathway/<organism>`; callers cannot select another database, rank, group, URL, or
 whole-database listing.
 
-The parser accepts only an ordered two-column tab table whose identifiers use the requested
-organism-specific `path:<organism>NNNNN` namespace and whose names are non-empty bounded UTF-8
-text. An empty successful response remains an empty directory. The complete response stays under
-the configured response-byte limit. The organism resolver uses the row count and a bounded preview;
-it does not infer pathway presence, completeness, activity, or phenotype from directory
-availability.
+The wire parser accepts only an ordered two-column tab table whose identifiers use the official
+simplified organism-specific `<organism>NNNNN` form and whose names are non-empty bounded UTF-8
+text. Typed rows normalize those identifiers to `path:<organism>NNNNN`. An empty successful
+response remains an empty directory. The complete response stays under the configured response-byte
+limit. The organism resolver uses the row count and a bounded preview; it does not infer pathway
+presence, completeness, activity, or phenotype from directory availability.
 
 ### FIND
 

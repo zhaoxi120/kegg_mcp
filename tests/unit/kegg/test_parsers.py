@@ -112,9 +112,10 @@ def test_info_parser_rejects_invalid_utf8() -> None:
 
 
 def test_organism_pathway_list_parser_preserves_the_bounded_directory() -> None:
+    # Simplified LIST identifiers verified against /list/pathway/hsa on 2026-07-30.
     document = parse_organism_pathway_list_response(
-        b"path:hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
-        b"path:hsa04012\tErbB signaling pathway - Homo sapiens (human)\n",
+        b"hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
+        b"hsa04012\tErbB signaling pathway - Homo sapiens (human)\n",
         "hsa",
     )
 
@@ -131,11 +132,13 @@ def test_organism_pathway_list_parser_accepts_an_empty_directory() -> None:
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
-        (b"path:mmu00010\tWrong organism\n", "unexpected_identifier"),
-        (b"path:hsa00010\tName\textra\n", "expected_two_columns"),
-        (b"path:hsa00010\t\n", "invalid_name"),
+        (b"mmu00010\tWrong organism\n", "unexpected_identifier"),
+        (b"path:hsa00010\tPrefixed identifier\n", "unexpected_identifier"),
+        (b"pathway:hsa00010\tPrefixed identifier\n", "unexpected_identifier"),
+        (b"hsa00010\tName\textra\n", "expected_two_columns"),
+        (b"hsa00010\t\n", "invalid_name"),
         (
-            b"path:hsa00010\tName\npathway:hsa00010\tDuplicate alias\n",
+            b"hsa00010\tName\nhsa00010\tDuplicate identifier\n",
             "duplicate_identifier",
         ),
     ],

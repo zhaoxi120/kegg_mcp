@@ -1436,8 +1436,8 @@ def test_find_uses_typed_parsing_provenance_and_cache_reuse(tmp_path: Path) -> N
 def test_organism_pathway_list_uses_typed_parsing_and_cache_reuse(tmp_path: Path) -> None:
     cache_path = tmp_path / "organism-pathways.sqlite3"
     body = (
-        b"path:hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
-        b"path:hsa04012\tErbB signaling pathway - Homo sapiens (human)\n"
+        b"hsa00010\tGlycolysis / Gluconeogenesis - Homo sapiens (human)\n"
+        b"hsa04012\tErbB signaling pathway - Homo sapiens (human)\n"
     )
     transport = QueueTransport([TransportResponse(status_code=200, body=body)])
     request = OrganismPathwayListRequest(organism="hsa")

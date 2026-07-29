@@ -96,11 +96,11 @@ class _RouteTransport:
             )
         if path == "/list/pathway/eco":
             return b"".join(
-                (f"path:eco{index:05d}\tSynthetic E. coli pathway {index}\n").encode()
+                (f"eco{index:05d}\tSynthetic E. coli pathway {index}\n").encode()
                 for index in range(1, 22)
             )
         if path == "/list/pathway/ece":
-            return b"path:ece00010\tSynthetic O157 pathway\n"
+            return b"ece00010\tSynthetic O157 pathway\n"
         if path == "/link/taxonomy/gn:ece+gn:eco":
             return b"gn:ece\ttaxid:562\ngn:eco\ttaxid:562\n"
         if path == "/conv/genes/uniprot:P00533":
