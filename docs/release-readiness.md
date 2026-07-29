@@ -48,7 +48,7 @@ biological data, cache databases, or retained results.
 Run the full core profile from the exact candidate:
 
 ```bash
-uv sync --frozen
+uv sync --locked
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen pyright
@@ -64,7 +64,7 @@ Validate the companions independently:
 
 ```bash
 cd companions/deepkoala-mcp
-uv sync --frozen
+uv sync --locked
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen pyright
@@ -72,7 +72,7 @@ uv run --frozen pytest
 uv build --no-sources
 
 cd ../kegg-render-mcp
-uv sync --frozen --all-groups
+uv sync --locked --all-groups
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen pyright
