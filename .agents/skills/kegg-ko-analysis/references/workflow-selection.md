@@ -1,6 +1,64 @@
 # Workflow selection
 
-Choose only from KO evidence already supplied. This Skill never runs an annotator or renderer.
+Choose the smallest Core route for a bounded KEGG query or supplied KO evidence. This Skill never
+runs an annotator or renderer. Let the server validate identifiers, perform endpoint batching,
+deduplicate relationships, and retain complete bounded detail. Do not replace those deterministic
+steps with LLM ranking, ad hoc chunk merging, or inferred database content.
+
+## Search terms and compound candidates
+
+- Use `search_kegg_entries` when the user supplies a name, keyword, formula, exact mass, or
+  molecular weight instead of a canonical KEGG identifier.
+- Return the endpoint-ordered candidates without inventing a relevance score or selecting a best
+  match. An exact-mass result is a compound candidate, not a compound identification.
+- Ask for disambiguating context only when the next requested step requires one canonical entity.
+  Do not silently carry one search candidate into resolution, relation tracing, or analysis.
+
+## Gene and organism identifiers
+
+- Use `resolve_kegg_entities` for a KEGG gene, NCBI GeneID, NCBI Protein ID, UniProt accession,
+  organism code, genome T number, NCBI Taxonomy ID, or organism name.
+- A gene symbol requires explicit organism context. Preserve all reported candidates and all
+  one-to-one, one-to-many, many-to-one, organism-mismatch, and unmapped outcomes; never choose one
+  from biological familiarity.
+- Leave `include_pathway_directory` false unless the user explicitly asks which organism-specific
+  pathway references KEGG provides. A returned directory describes reference availability, not
+  pathway presence, completeness, activity, flux, or phenotype.
+- The direct response contains counts and bounded resolution and candidate previews. When complete
+  crosswalks, projected entities, pathway-directory rows, or provenance are needed, follow the
+  returned resource URI in the same stdio session.
+
+## Typed relation questions
+
+- Use `trace_kegg_relations` only when the user supplies typed KEGG seeds and asks for an
+  allowlisted relationship. Keep the default one-level trace unless the question requires the
+  supported second level.
+- Treat every edge as a KEGG database cross-reference. Do not infer regulation, causality,
+  mechanism, activity, phenotype, centrality, shortest paths, or communities.
+- The direct response contains node and edge counts plus bounded previews. Read the returned
+  resource URI for complete retained nodes, edges, and provenance; do not manually batch and merge
+  a replacement graph.
+
+## BRITE hierarchy questions
+
+- Use `map_brite_hierarchy` for hierarchy membership or classification. Preserve every returned
+  path and multi-parent membership requested by the user.
+- Report counts as descriptive unique supplied-entity counts, never as enrichment, abundance,
+  dominance, activity, or functional importance.
+
+## Annotation mapping audit
+
+- Use `audit_annotation_mapping` for evidence status, duplicate or conflicting assignments,
+  strict/lenient KO views, selected KEGG mapping yields, provenance completeness, or optional
+  assembly-quality warnings.
+- Supply only the relationship classes required by the question in `mapping_targets`. Use an empty
+  list for an evidence-only audit with no KEGG relationship requests.
+- For a large plain-KO set that needs one relationship class, select that single mapping target and
+  let the audit service batch, de-duplicate, and retain the complete relationship rows. Do not split
+  the set through graph traces or merge shards in the LLM.
+- Evidence auditing remains complete when relationship mapping reports `skipped_request_limit`.
+  Report the requested and skipped targets and the request-limit reason; do not discard the
+  evidence result, infer biological absence, or fill missing K numbers.
 
 ## Plain K numbers
 

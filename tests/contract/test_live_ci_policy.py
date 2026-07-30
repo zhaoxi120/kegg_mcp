@@ -45,9 +45,27 @@ def test_live_suite_is_opt_in_configurable_bounded_and_rate_limited() -> None:
 
     assert "pytest.mark.live_kegg" in suite
     assert "KEGG_MCP_RUN_LIVE_TESTS" in suite
-    assert suite.count("range(live_requests_per_operation):") == 6
+    assert suite.count("for request in _rotated_requests(") == 6
+    for matrix_name in (
+        "_INFO_REQUESTS",
+        "_LIST_REQUESTS",
+        "_FIND_REQUESTS",
+        "_GET_REQUESTS",
+        "_LINK_REQUESTS",
+        "_CONV_REQUESTS",
+    ):
+        assert matrix_name in suite
     assert "list_organism_pathways" in suite
-    assert 'OrganismPathwayListRequest(organism="hsa")' in suite
+    assert '("hsa", "eco")' in suite
+    for mode in ("FORMULA", "EXACT_MASS", "MOL_WEIGHT"):
+        assert f"KeggFindMode.{mode}" in suite
+    for relationship in (
+        "KO_TO_BRITE",
+        "GENE_TO_PATHWAY",
+        "COMPOUND_TO_REACTION",
+        "TAXONOMY_TO_GENOME",
+    ):
+        assert f"KeggLinkRelationship.{relationship}" in suite
     assert "_REFRESH = KeggRequestOptions(refresh=True)" in suite
     assert "_DEFAULT_REQUESTS_PER_OPERATION = 20" in controls
     assert "_MAX_REQUESTS_PER_OPERATION = 20" in controls

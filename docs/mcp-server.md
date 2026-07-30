@@ -105,23 +105,34 @@ The server exposes fifteen tools:
   flag, and retains every batch in the scoped `detail` artifact. It is not an arbitrary URL proxy.
 - `search_kegg_entries`: search one allowlisted database by keyword, or search compounds by
   formula, exact mass, or molecular weight. It returns bounded endpoint candidates without an
-  invented relevance score or automatic best-match selection. Exact-mass results are candidates,
-  not compound identifications.
+  invented relevance score, canonical-name claim, or automatic best-match selection. The endpoint
+  match text remains explicit. Exact-mass results are candidates, not compound identifications.
 - `resolve_kegg_entities`: resolve a discriminated gene or organism request through typed FIND,
-  GET, CONV, LINK, and organism-pathway LIST steps. Gene symbols require organism context;
-  organism mismatches and all ambiguous candidates remain explicit. Unmapped identifiers are not
-  treated as absent entities, and pathway directory entries are references rather than evidence of
-  pathway presence, completeness, activity, flux, or phenotype.
+  GET, CONV, and LINK steps. Gene symbols require organism context; organism mismatches and all
+  ambiguous candidates remain explicit. Organism-specific pathway LIST retrieval is disabled by
+  default and runs only when `include_pathway_directory=true`. The direct result returns at most
+  five input previews, two candidates per input, five projected entities per candidate, three
+  taxonomy labels, and two pathway entries, plus compact retrieval counts. Candidate, lineage, and
+  pathway text clipping has explicit field-level flags; the complete bounded crosswalk and
+  provenance remain in the scoped `detail` artifact. Unmapped identifiers are not treated as
+  absent entities, and pathway directory entries are references rather than evidence of pathway
+  presence, completeness, activity, flux, or phenotype.
 - `trace_kegg_relations`: traverse one or two levels over a fixed relation allowlist with at most
-  200 nodes and 500 edges. Typed edges are database cross-references, not evidence of regulation,
-  causality, activity, flux, phenotype, or mechanism.
+  200 nodes and 500 edges. The direct result returns retrieval counts and at most 25 node and 25
+  edge previews; the complete bounded graph, provenance, and edge provenance indexes remain
+  retained. Typed edges are database cross-references, not evidence of regulation, causality,
+  activity, flux, phenotype, or mechanism.
 - `map_brite_hierarchy`: preserve all matched BRITE paths, multi-parent memberships, unmatched
   entities, and descriptive unique-input classification counts. It does not calculate enrichment
   or dominant function.
-- `audit_annotation_mapping`: summarize source evidence, strict and lenient KO views, mapping yield
-  across pathway, MODULE, reaction, enzyme, and BRITE relations, mapping-degree distributions,
-  retrieval provenance, and optional assembly-quality warnings. It never corrects scores or fills
-  missing K numbers.
+- `audit_annotation_mapping`: summarize source evidence, strict and lenient KO views, mapping
+  yields, mapping-degree distributions, retrieval provenance, and optional assembly-quality
+  warnings. `mapping_targets` selects any subset of pathway, MODULE, reaction, enzyme, and BRITE;
+  it defaults to all five and an empty list requests an evidence-only audit. The server preflights
+  exact LINK batches. If the selected mapping would exceed the 100-request audit budget, it reports
+  `skipped_request_limit` while preserving the complete local evidence audit instead of failing the
+  whole call. It never corrects scores, fills missing K numbers, or interprets an unmapped KO as
+  biological absence.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
@@ -170,6 +181,9 @@ Minimal taxonomy-to-organism resolution that preserves all species candidates:
 }
 ```
 
+Set `"include_pathway_directory": true` only when the caller needs each resolved organism's
+available KEGG pathway-reference directory. Omitting it performs no organism-pathway LIST request.
+
 Minimal one-level typed relation trace:
 
 ```json
@@ -177,6 +191,19 @@ Minimal one-level typed relation trace:
   "seeds": [{"kind":"ko","identifier":"K00844"}],
   "edge_types": ["ko_to_reaction"],
   "max_depth": 1
+}
+```
+
+Resolver and trace direct JSON are independently limited to 64 KiB. A projection that violates
+that bound fails closed and compensates the newly created retained result; callers use the returned
+scoped resource to read complete bounded detail when the projection succeeds.
+
+Minimal single-relationship mapping audit:
+
+```json
+{
+  "source": {"ko_text":"K00844\nK01810"},
+  "mapping_targets": ["pathway"]
 }
 ```
 

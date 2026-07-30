@@ -3,9 +3,21 @@
 Pull-request CI makes 120 serialized requests: 20 each for `INFO`, organism-pathway `LIST`, `FIND`,
 `GET`, `LINK`, and `CONV`.
 Local pytest skips this suite unless the operator explicitly enables it.
-The campaign covers KO `INFO`, a canonical human organism-pathway `LIST`, KO keyword `FIND`, BRITE
-`GET`, KO-to-pathway `LINK`, and selected gene-to-UniProt `CONV` cases; injected-transport tests
-cover broader parameter boundaries.
+Within each 20-request operation budget, the campaign rotates a fixed small matrix rather than
+repeating one request:
+
+- `INFO`: KO, compound, genome, and BRITE;
+- organism-pathway `LIST`: `hsa` and `eco`;
+- `FIND`: KO and compound keywords plus compound formula, exact-mass, and molecular-weight modes;
+- `GET`: two BRITE hierarchy htext entries;
+- `LINK`: KO-to-pathway, KO-to-BRITE, gene-to-pathway, compound-to-reaction, and
+  species-scoped taxonomy-to-genome; and
+- `CONV`: selected KEGG-gene-to-UniProt, KEGG-gene-to-NCBI-Protein, NCBI-Gene-to-KEGG-gene, and
+  UniProt-to-KEGG-gene directions.
+
+Assertions cover response structure and request namespaces without freezing names, release labels,
+row counts, or exact relationship sets. Injected-transport tests cover broader parameter and
+failure boundaries.
 
 The client is limited to one request per second without burst and zero retries. A transport wrapper
 enforces the configured wire budget and opens its circuit after any transport or non-200 response.

@@ -87,7 +87,7 @@ The three repository Skills have one MCP dependency each:
 | Skill | MCP dependency | Responsibility |
 | --- | --- | --- |
 | `deepkoala-annotation` | `deepkoala-mcp` | Protein FASTA annotation and stable detailed-CSV delivery |
-| `kegg-ko-analysis` | `kegg-mcp` | Existing KO evidence, MODULE/pathway analysis, and KO-set comparison |
+| `kegg-ko-analysis` | `kegg-mcp` | Bounded KEGG query and evidence routing, existing-KO analysis, and KO-set comparison |
 | `kegg-pathway-rendering` | `kegg-render-mcp` | Static rendering from an existing compatible handoff |
 
 Skills contain instructions, not deterministic implementation code. They do not launch
@@ -187,9 +187,11 @@ Cache behavior is deployment-owned:
 
 The default local test profile performs no live KEGG requests. Pull-request CI runs one serialized
 campaign of 20 `INFO`, 20 organism-pathway `LIST`, 20 `FIND`, 20 `GET`, 20 `LINK`, and 20 `CONV`
-requests at one request per second with zero retries and no uploaded KEGG payloads. The workflow
-has no merge-push repetition. This campaign is an access and compatibility check, not permission
-to redistribute responses.
+requests at one request per second with zero retries and no uploaded KEGG payloads. Each
+operation's fixed 20-request budget rotates several stable typed cases, including all four public
+Core FIND modes and multiple P0 relation directions; it does not repeat one request twenty times.
+The workflow has no merge-push repetition. This campaign is an access and compatibility check, not
+permission to redistribute responses.
 
 ## Bounded query and evidence routing
 
@@ -198,16 +200,19 @@ The Core query layer exposes five focused capabilities:
 - `search_kegg_entries` performs bounded keyword search and approved compound candidate searches.
   Results preserve KEGG match text and never invent a relevance score or confirmed identity.
 - `resolve_kegg_entities` resolves gene or organism identifiers through typed FIND, GET, CONV,
-  LINK, and organism-pathway LIST steps. It reports unmapped, one-to-one, one-to-many, many-to-one,
-  and organism-mismatch outcomes and never silently chooses among ambiguous candidates.
+  and LINK steps. Organism-pathway LIST retrieval is an explicit opt-in projection. It reports
+  unmapped, one-to-one, one-to-many, many-to-one, and organism-mismatch outcomes and never silently
+  chooses among ambiguous candidates.
 - `trace_kegg_relations` follows an explicit allowlist of typed KEGG relationship directions for
   one or two hops under fixed seed, node, edge, row, response-byte, and provenance bounds.
 - `map_brite_hierarchy` maps supplied typed entities into source-backed BRITE paths, preserves
   multiple memberships when requested, reports unmatched entities, and uses descriptive
   unique-input counts without enrichment or abundance weighting.
 - `audit_annotation_mapping` summarizes normalized evidence, duplicate and conflicting
-  assignments, strict and lenient mapping yields across fixed KEGG relationship classes, unmapped
-  K numbers, retrieval provenance, and missing or mixed source metadata warnings.
+  assignments, strict and lenient mapping yields across caller-selected fixed KEGG relationship
+  classes, unmapped K numbers, retrieval provenance, and missing or mixed source metadata warnings.
+  Its separable remote mapping phase may be omitted or skipped at a preflight request limit without
+  discarding the local evidence audit.
 
 These functions are query and evidence-routing operations. A search candidate is not an identified
 entity, a relationship edge is not a regulatory or causal mechanism, a BRITE count is not
@@ -220,6 +225,11 @@ Query detail is retained through the same scope-isolated result store used by an
 but it does not become a second annotation model. BRITE paths and mapping-audit artifacts are Core
 query results; they are not passed into `deepkoala-mcp`, added to the renderer handoff, or
 recomputed by `kegg-render-mcp`.
+
+Resolver and relation-trace direct results are fixed compact projections with explicit counts and
+truncation flags. Their complete bounded crosswalks, steps, nodes, edges, and provenance remain in
+the scoped retained resource. The LLM selects projections and interprets summaries; it does not
+perform server batching, merge relationship shards, or reconstruct discarded detail.
 
 ## MODULE, pathway, and comparison semantics
 

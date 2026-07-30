@@ -69,19 +69,24 @@ not calculate relevance, choose a best match, or claim compound identification.
 `resolve_kegg_entities` uses a discriminated gene or organism request. Gene resolution accepts
 typed external or KEGG namespaces and an explicit organism where required; organism resolution
 accepts code, genome, taxonomy, or name inputs. The service retains all candidates and reports
-mapping yield, ambiguity, many-to-one mappings, organism mismatches, and the FIND, GET, CONV, LINK,
-and LIST operations used. When a gene request supplies an organism code, a bounded typed GENOME GET
-establishes its code/T-number identity before direct or converted gene prefixes are filtered; a
-lexical prefix difference alone is not treated as a cross-organism mismatch. Each source-backed
-organism candidate also reports the complete count
-and at most twenty ordered entries from its organism-specific pathway directory; the full typed
-LIST response remains in the retained artifact. That directory describes available KEGG
-references, not pathway presence, completeness, activity, flux, or phenotype. Mapping failure is
-not evidence that an entity does not exist.
+mapping yield, ambiguity, many-to-one mappings, organism mismatches, and the typed operations used.
+When a gene request supplies an organism code, a bounded typed GENOME GET establishes its
+code/T-number identity before direct or converted gene prefixes are filtered; a lexical prefix
+difference alone is not treated as a cross-organism mismatch. Organism pathway-directory retrieval
+is a separate opt-in projection: `include_pathway_directory=false` performs no LIST request, while
+`true` retains the complete typed LIST response for every source-backed canonical candidate. The
+direct result contains counts plus at most five input previews, two candidates per input, five
+projected entities per candidate, three taxonomy labels, and two pathway entries. Text clipping has
+explicit field-level flags. The direct retrieval summary contains only counts, response bytes, and
+an explicitly truncated preview of distinct release labels; complete provenance remains retained.
+The directory describes available KEGG references, not pathway presence, completeness, activity,
+flux, or phenotype. Mapping failure is not evidence that an entity does not exist.
 
 `trace_kegg_relations` traverses an allowlist of typed KEGG LINK directions for one or two hops.
 Seeds, edge types, nodes, edges, raw relationship rows, response bytes, and provenance are bounded.
-Every edge contains sorted indexes into the result-level provenance sequence for the LINK and any
+The direct result contains retrieval counts plus at most 25 nodes and 25 edges, without embedding
+complete provenance batches. The retained graph is complete within the service bounds, and every
+retained edge contains sorted indexes into its complete provenance sequence for the LINK and any
 required genome-alias GET batches that support it. The service preserves endpoint-returned nodes
 and edges; it does not calculate centrality, shortest paths, communities, regulation, causality,
 or mechanism.
@@ -100,11 +105,16 @@ unmatched entities, and retains complete bounded JSON and TSV artifacts behind a
 Classification counts are unique supplied-entity counts without abundance weighting or
 statistical enrichment.
 
-`audit_annotation_mapping` reuses the imported immutable annotation dataset and the fixed KO
-relationship mappings. It reports evidence-state counts, duplicate and conflicting assignments,
-strict and lenient mapping yields, one-to-many and unmapped K numbers, source-provenance warnings,
-and KEGG cache, release, and retrieval summaries. The audit does not alter source decisions, fill
-missing K numbers, compare incompatible scores, or infer biological absence.
+`audit_annotation_mapping` reuses the imported immutable annotation dataset and selected fixed KO
+relationship mappings. The caller may select any subset of pathway, MODULE, reaction, enzyme, and
+BRITE targets; all five are the default, while an empty selection performs an evidence-only audit
+without KEGG calls. Before mapping, the service uses the same typed LINK preparation as execution
+to count exact endpoint batches. If the selection would exceed the 100-request audit budget,
+`mapping_execution.status` is `skipped_request_limit`: no relationship request runs, but the local
+evidence audit and explicit skipped-target metadata are still returned. A completed mapping reports
+strict and lenient yields, one-to-many and unmapped K numbers, source-provenance warnings, and KEGG
+cache, release, and retrieval summaries. The audit does not alter source decisions, fill missing K
+numbers, compare incompatible scores, or infer biological absence.
 
 These services are query and evidence-routing paths, not extensions of the annotator or renderer.
 Their retained BRITE and audit artifacts do not enter `render_input.json`, and neither companion
@@ -118,6 +128,12 @@ Retained artifacts preserve complete bounded provenance, parameters, candidates,
 hierarchy paths, audit metrics, rankings, relationships, and evaluations. Public response fields
 and retrieval behavior are specified only in
 [Core MCP server](mcp-server.md#tools).
+
+Resolver and relation-trace services enforce a separate 64 KiB serialized direct-result bound after
+constructing their fixed previews. A projection-model or byte-bound failure compensates the newly
+created retained result instead of leaving an inaccessible artifact. Full candidate crosswalks,
+resolution steps, graph nodes, graph edges, and provenance remain retained and are never rebuilt by
+the LLM.
 
 ## Report artifacts
 

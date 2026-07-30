@@ -3,12 +3,13 @@ name: kegg-ko-analysis
 description: Search bounded KEGG entries, resolve gene or organism identifiers, trace typed KEGG relations, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment, flux inference, or non-KEGG ontology analysis.
 ---
 
-# KEGG KO analysis
+# KEGG query and KO analysis
 
 ## Select a core-only route
 
-1. Inspect the supplied KO list or annotation table and identify the analysis unit when possible.
-   If the only input is protein FASTA, follow the out-of-scope route in
+1. Identify whether the starting point is a search term, an external identifier, a typed KEGG
+   entity, an annotation table, or supplied KO evidence. For annotation evidence, also identify the
+   analysis unit when possible. If the only input is protein FASTA, follow the out-of-scope route in
    [workflow-selection.md](references/workflow-selection.md) and stop before a core call.
    Never call `deepkoala-mcp` or any annotator MCP from this Skill.
 2. Read [workflow-selection.md](references/workflow-selection.md) and choose the smallest core
@@ -39,15 +40,23 @@ upstream or rendering MCP.
   identification.
 - Use `resolve_kegg_entities` for gene or organism crosswalks. Preserve every reported ambiguous
   candidate, require organism context for gene symbols, and treat unmapped results as mapping
-  outcomes rather than biological absence. Treat organism pathway directories as KEGG reference
-  availability, never as pathway presence, completeness, activity, flux, or phenotype.
+  outcomes rather than biological absence. Request `include_pathway_directory=true` only when the
+  user explicitly asks which organism-specific pathway references KEGG provides. Treat that
+  directory as reference availability, never as pathway presence, completeness, activity, flux, or
+  phenotype.
 - Use `trace_kegg_relations` for one- or two-level allowlisted cross-references. Do not interpret
   returned edges as regulation, causality, mechanism, activity, or phenotype.
+- Resolver and relation-trace direct responses are bounded previews. Read the returned resource URI
+  only when the complete retained crosswalk, nodes, edges, or provenance are needed; do not
+  reconstruct an authoritative result by manually batching and merging calls.
 - Use `map_brite_hierarchy` for complete BRITE paths and descriptive unique-input counts; never
   call those counts enrichment or dominant function.
 - Use `audit_annotation_mapping` to summarize evidence status, strict/lenient mapping yield,
   ambiguity, provenance, and optional assembly-quality warnings without correcting scores or
-  filling missing K numbers.
+  filling missing K numbers. Set `mapping_targets` to the relationship classes required by the
+  question; an empty list requests an evidence-only audit. If relationship mapping is skipped by a
+  request limit, retain and report the complete evidence audit instead of treating the skipped
+  mapping as missing biology.
 - Use `normalize_ko_annotations`, `get_kegg_entries`, `analyze_modules`, `analyze_pathways`, or
   `compare_ko_sets` only for the corresponding narrower request.
 - Call `get_server_status` when deployment state matters. If live access is enabled and
@@ -57,9 +66,11 @@ upstream or rendering MCP.
   per-task qualification confirmation, endpoint, secret, workflow digest, or artifact hash.
 - Follow discovered schemas and field-level errors. Do not fabricate identifiers, parameters,
   successful retrievals, resource URIs, or unsupported results.
-- Prefer output-bundle files for durable handoff. A result identifier is opaque and valid only in
-  the current stdio process. Use `list_analysis_results` for bounded discovery within the current
-  scope, then use a result identifier only for same-session retrieval or requested cleanup.
+- Prefer output-bundle files for durable KO-analysis handoff. Query and audit resources are
+  same-session retained detail, not durable cross-process files. A result identifier is opaque and
+  valid only in the current stdio process. Use `list_analysis_results` for bounded discovery within
+  the current scope, then use a result identifier only for same-session retrieval or requested
+  cleanup.
 - Call `delete_analysis_result` only after all required sections and bundle files are committed and
   only when the user requests immediate cleanup.
 
@@ -71,7 +82,8 @@ upstream or rendering MCP.
    output. Treat automatic MODULE ranking only as target selection, never as completion or
    enrichment. Keep exact completion separate from block coverage and descriptive pathway coverage.
 3. Apply [reporting-policy.md](references/reporting-policy.md) to the user-facing result.
-4. Surface the analysis unit, original input path, normalization policy, retrieval/cache
+4. Surface the fields relevant to the selected route: query or input identity, ambiguity and
+   mapping status, analysis unit and normalization policy when applicable, retrieval/cache
    provenance, unsupported content, warnings, and truncation.
 5. Never infer a K number from a sequence, product name, or unsupported identifier, and never
    implement import, HTTP, MODULE logic, ranking, or normalization inside this Skill.

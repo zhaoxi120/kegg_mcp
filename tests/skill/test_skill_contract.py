@@ -81,6 +81,11 @@ def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None
     assert keys == ["name", "description"]
     assert "name: kegg-ko-analysis" in frontmatter
     for fragment in (
+        "Search bounded KEGG entries",
+        "resolve gene or organism identifiers",
+        "trace typed KEGG relations",
+        "map BRITE hierarchies",
+        "audit KO mappings",
         "existing K numbers",
         "KO annotation tables",
         "MODULE logic",
@@ -103,6 +108,13 @@ def test_ko_analysis_metadata_declares_only_core_stdio_dependency() -> None:
     assert 'value: "deepkoala-mcp"' not in metadata
     assert 'value: "kegg-render-mcp"' not in metadata
     assert "allow_implicit_invocation: true" in metadata
+    for fragment in (
+        'display_name: "KEGG Query and KO Analysis"',
+        "Search KEGG entities",
+        "smallest bounded KEGG query or KO-analysis route",
+        "Local bounded KEGG query and KO analysis MCP server",
+    ):
+        assert fragment in metadata
 
 
 def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
@@ -140,6 +152,46 @@ def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
     assert "no explicit selection are supplied" in corpus
     assert "`pathway_selection`" in corpus
     assert "Top-5 MODULEs and Top-5 canonical KO" in corpus
+
+
+def test_ko_analysis_routes_all_bounded_query_starting_points() -> None:
+    workflow = (SKILL_ROOT / "references" / "workflow-selection.md").read_text(encoding="utf-8")
+    for heading in (
+        "## Search terms and compound candidates",
+        "## Gene and organism identifiers",
+        "## Typed relation questions",
+        "## BRITE hierarchy questions",
+        "## Annotation mapping audit",
+    ):
+        assert heading in workflow
+    for fragment in (
+        "`search_kegg_entries`",
+        "`resolve_kegg_entities`",
+        "`trace_kegg_relations`",
+        "`map_brite_hierarchy`",
+        "`audit_annotation_mapping`",
+        "include_pathway_directory",
+        "`mapping_targets`",
+        "`skipped_request_limit`",
+        "returned resource URI",
+        "do not manually batch and merge",
+    ):
+        assert fragment in workflow
+
+
+def test_ko_analysis_query_reporting_preserves_conservative_semantics() -> None:
+    reporting = (SKILL_ROOT / "references" / "reporting-policy.md").read_text(encoding="utf-8")
+    normalized = " ".join(reporting.split())
+    for fragment in (
+        "candidate, not a compound identification",
+        "not biological absence",
+        "available KEGG references only",
+        "database cross-references",
+        "not enrichment or dominant function",
+        "does not invalidate the complete evidence audit",
+        "bounded direct previews",
+    ):
+        assert fragment in normalized
 
 
 def test_ko_analysis_routes_explicit_ko01100_outside_regular_pipeline() -> None:

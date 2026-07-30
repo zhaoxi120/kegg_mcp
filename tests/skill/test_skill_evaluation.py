@@ -7,11 +7,72 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = ROOT / ".agents" / "skills" / "kegg-ko-analysis"
 CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROOT.rglob("*.md")))
+NORMALIZED_CORPUS = " ".join(CORPUS.split())
 
 
 @pytest.mark.parametrize(
     ("prompt", "required"),
     [
+        (
+            "Search KEGG compounds near this exact mass.",
+            (
+                "Use `search_kegg_entries`",
+                "compound candidate, not a compound identification",
+                "without inventing a relevance score",
+            ),
+        ),
+        (
+            "Resolve this ambiguous gene symbol.",
+            (
+                "A gene symbol requires explicit organism context",
+                "Preserve all reported candidates",
+                "never choose one from biological familiarity",
+            ),
+        ),
+        (
+            "Resolve this organism name but do not retrieve its pathway directory.",
+            (
+                "Leave `include_pathway_directory` false",
+                "explicitly asks which organism-specific",
+                "reference availability",
+            ),
+        ),
+        (
+            "Trace this KO through two KEGG relation levels.",
+            (
+                "Use `trace_kegg_relations`",
+                "database cross-reference",
+                "returned resource URI",
+                "do not manually batch and merge",
+            ),
+        ),
+        (
+            "Classify these K numbers in BRITE.",
+            (
+                "Use `map_brite_hierarchy`",
+                "Preserve every returned",
+                "never as enrichment",
+            ),
+        ),
+        (
+            "Audit this annotation table without KEGG relationship mapping.",
+            (
+                "Use an empty",
+                "evidence-only audit",
+                "`mapping_targets`",
+                "`skipped_request_limit`",
+                "Evidence auditing remains complete",
+            ),
+        ),
+        (
+            "Map this large plain-KO set only to pathways.",
+            (
+                "select that single mapping target",
+                "let the audit service batch, de-duplicate",
+                "Do not split the set through graph traces",
+                "merge shards in the LLM",
+            ),
+        ),
         (
             "Here is detailed DeepKOALA output; analyze KEGG modules.",
             ("controlled absolute path", "analyze_ko_annotations", "Do not parse"),
@@ -48,11 +109,16 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
 )
 def test_ko_analysis_guidance_covers_real_routes(prompt: str, required: tuple[str, ...]) -> None:
     assert prompt
-    assert all(fragment in CORPUS for fragment in required)
+    assert all(fragment in NORMALIZED_CORPUS for fragment in required)
 
 
 def test_ko_analysis_preserves_scientific_and_process_boundaries() -> None:
     for fragment in (
+        "candidate, not a compound identification",
+        "organism-mismatch",
+        "database cross-reference",
+        "descriptive unique supplied-entity counts",
+        "skipped by the request limit",
         "Use accepted K numbers only for strict analysis",
         "Source-rejected",
         "exact completion",
@@ -61,10 +127,10 @@ def test_ko_analysis_preserves_scientific_and_process_boundaries() -> None:
         "result identifier is opaque",
         "Never infer a K number",
     ):
-        assert fragment in CORPUS
-    assert "python3 -m deepkoala" not in CORPUS
-    assert "prepare_deepkoala_job" not in CORPUS
-    assert "render_analysis_bundle" not in CORPUS
+        assert fragment in NORMALIZED_CORPUS
+    assert "python3 -m deepkoala" not in NORMALIZED_CORPUS
+    assert "prepare_deepkoala_job" not in NORMALIZED_CORPUS
+    assert "render_analysis_bundle" not in NORMALIZED_CORPUS
 
 
 def test_preceding_annotation_handoff_is_consumed_without_user_repetition() -> None:
