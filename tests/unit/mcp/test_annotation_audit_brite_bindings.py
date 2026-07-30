@@ -23,6 +23,7 @@ from kegg_mcp.services.annotation_audit import (
     AnnotationMappingAuditResult,
     AnnotationMappingExecution,
     AnnotationMappingExecutionStatus,
+    AnnotationMappingLimitKind,
     AnnotationMappingTarget,
 )
 from kegg_mcp.services.brite_hierarchy import MapBriteHierarchyResult
@@ -80,20 +81,45 @@ def _mapping_execution(
         skipped = ()
         planned = 1
         limit = 100
-    else:
+    elif status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT:
         requested = (AnnotationMappingTarget.PATHWAY,)
         completed = ()
         skipped = requested
         planned = 2
         limit = 1
+    else:
+        requested = (AnnotationMappingTarget.PATHWAY,)
+        completed = ()
+        skipped = ()
+        planned = 1
+        limit = 100
+    incomplete_target = (
+        AnnotationMappingTarget.PATHWAY
+        if status
+        in {
+            AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT,
+            AnnotationMappingExecutionStatus.INCOMPLETE_RESPONSE_LIMIT,
+        }
+        else None
+    )
+    if status is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT:
+        limit_kind = AnnotationMappingLimitKind.ROW_COUNT
+    elif status is AnnotationMappingExecutionStatus.INCOMPLETE_RESPONSE_LIMIT:
+        limit_kind = AnnotationMappingLimitKind.RESPONSE_BYTES
+    else:
+        limit_kind = None
     return AnnotationMappingExecution(
         status=status,
         requested_targets=requested,
         completed_targets=completed,
         skipped_targets=skipped,
+        incomplete_target=incomplete_target,
         selected_unique_ko_count=0,
         planned_request_count=planned,
         request_limit=limit,
+        limit_kind=limit_kind,
+        limit_observed=2 if limit_kind is not None else None,
+        limit_value=1 if limit_kind is not None else None,
     )
 
 
@@ -218,6 +244,22 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
             (
                 "Completed the annotation evidence audit; KEGG relationship mapping was skipped "
                 "before network access because the planned request count exceeded the limit."
+            ),
+        ),
+        (
+            AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT,
+            (
+                "Completed the annotation evidence audit and retained only fully completed KEGG "
+                "relationship mappings; an in-progress target exceeded the relationship-row "
+                "limit, so no partial mapping yield was reported for it."
+            ),
+        ),
+        (
+            AnnotationMappingExecutionStatus.INCOMPLETE_RESPONSE_LIMIT,
+            (
+                "Completed the annotation evidence audit and retained only fully completed KEGG "
+                "relationship mappings; an in-progress target exceeded the response-byte limit, "
+                "so no partial mapping yield was reported for it."
             ),
         ),
     ],

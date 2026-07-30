@@ -252,10 +252,25 @@ def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
         summary = (
             "Completed the annotation evidence audit; no KEGG relationship mapping was requested."
         )
-    else:
+    elif (
+        result.mapping_execution.status
+        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+    ):
         summary = (
             "Completed the annotation evidence audit; KEGG relationship mapping was skipped "
             "before network access because the planned request count exceeded the limit."
+        )
+    else:
+        limit_label = (
+            "relationship-row"
+            if result.mapping_execution.status
+            is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT
+            else "response-byte"
+        )
+        summary = (
+            "Completed the annotation evidence audit and retained only fully completed KEGG "
+            f"relationship mappings; an in-progress target exceeded the {limit_label} limit, "
+            "so no partial mapping yield was reported for it."
         )
     return ToolOutcome(
         result,
