@@ -149,8 +149,8 @@ TOOL_SPECS = (
         "Resolve KEGG entities",
         (
             "Resolve bounded gene or organism identifiers through typed FIND, GET, CONV, LINK, "
-            "and organism-pathway LIST steps while preserving ambiguity, mismatch, and unmapped "
-            "outcomes."
+            "and optional organism-pathway LIST steps while preserving ambiguity, mismatch, and "
+            "unmapped outcomes."
         ),
         ResolveKeggEntitiesInput,
         ResolveEntitiesToolEnvelope,
@@ -185,8 +185,8 @@ TOOL_SPECS = (
         "audit_annotation_mapping",
         "Audit annotation mapping",
         (
-            "Audit strict and lenient KO evidence and descriptive mapping yields across fixed "
-            "KEGG pathway, MODULE, reaction, enzyme, and BRITE relationships."
+            "Audit strict and lenient KO evidence and optional descriptive mapping yields for "
+            "selected KEGG pathway, MODULE, reaction, enzyme, and BRITE relationships."
         ),
         AuditAnnotationMappingInput,
         AnnotationAuditToolEnvelope,

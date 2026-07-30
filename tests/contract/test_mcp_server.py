@@ -446,10 +446,30 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "organism",
         }
         assert all("kind" in branch["required"] for branch in resolution_schema["oneOf"])
+        organism_resolution_schema = next(
+            branch
+            for branch in resolution_schema["oneOf"]
+            if branch["properties"]["kind"]["const"] == "organism"
+        )
+        pathway_directory_schema = organism_resolution_schema["properties"][
+            "include_pathway_directory"
+        ]
+        assert pathway_directory_schema["type"] == "boolean"
+        assert pathway_directory_schema["default"] is False
         trace_schema = _tool_by_name(tools, "trace_kegg_relations").inputSchema
         assert trace_schema["properties"]["max_depth"]["maximum"] == 2
         assert trace_schema["properties"]["max_nodes"]["maximum"] == 200
         assert trace_schema["properties"]["max_edges"]["maximum"] == 500
+        audit_schema = _tool_by_name(tools, "audit_annotation_mapping").inputSchema
+        mapping_targets_schema = audit_schema["properties"]["mapping_targets"]
+        assert mapping_targets_schema["maxItems"] == 5
+        assert mapping_targets_schema["default"] == [
+            "pathway",
+            "module",
+            "reaction",
+            "enzyme",
+            "brite",
+        ]
         analysis_schema = _tool_by_name(tools, "analyze_ko_annotations").inputSchema
         analysis_properties = analysis_schema["properties"]
         assert "pathway_selection" in analysis_properties
@@ -582,17 +602,50 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert search_output is not None
         search_properties = search_output["$defs"]["SearchKeggEntriesResult"]["properties"]
         assert search_properties["candidates"]["maxItems"] == 100
+        search_candidate_properties = search_output["$defs"]["KeggSearchCandidate"]["properties"]
+        assert set(search_candidate_properties) == {"entity", "raw_match"}
         resolution_output = _tool_by_name(tools, "resolve_kegg_entities").outputSchema
         assert resolution_output is not None
         resolution_properties = resolution_output["$defs"]["ResolveKeggEntitiesResult"][
             "properties"
         ]
-        assert resolution_properties["resolutions"]["maxItems"] == 50
+        assert resolution_properties["resolution_previews"]["maxItems"] == 5
+        resolution_defs = resolution_output["$defs"]
+        resolution_preview_properties = resolution_defs["EntityResolutionPreview"]["properties"]
+        assert resolution_preview_properties["candidate_preview"]["maxItems"] == 2
+        candidate_preview_properties = resolution_defs["ResolvedEntityCandidatePreview"][
+            "properties"
+        ]
+        assert candidate_preview_properties["entity_preview"]["maxItems"] == 5
+        assert candidate_preview_properties["organism_pathway_preview"]["maxItems"] == 2
+        assert "name_truncated" in candidate_preview_properties
+        assert "taxonomy_lineage_text_truncated" in candidate_preview_properties
+        pathway_preview_properties = resolution_defs["OrganismPathwayDirectPreviewEntry"][
+            "properties"
+        ]
+        assert "name_truncated" in pathway_preview_properties
         trace_output = _tool_by_name(tools, "trace_kegg_relations").outputSchema
         assert trace_output is not None
         trace_properties = trace_output["$defs"]["TraceKeggRelationsResult"]["properties"]
-        assert trace_properties["nodes"]["maxItems"] == 200
-        assert trace_properties["edges"]["maxItems"] == 500
+        assert trace_properties["node_preview"]["maxItems"] == 25
+        assert trace_properties["edge_preview"]["maxItems"] == 25
+        retrieval_properties = trace_output["$defs"]["QueryRetrievalSummary"]["properties"]
+        assert "provenance_preview" not in retrieval_properties
+        assert "provenance_truncated" not in retrieval_properties
+        assert retrieval_properties["database_release_count"]["maximum"] == 200
+        assert retrieval_properties["database_releases"]["maxItems"] == 25
+        assert "database_releases_truncated" in retrieval_properties
+        audit_output = _tool_by_name(tools, "audit_annotation_mapping").outputSchema
+        assert audit_output is not None
+        audit_detail_properties = audit_output["$defs"]["AnnotationAuditDetail"]["properties"]
+        assert audit_detail_properties["mappings"]["maxItems"] == 5
+        execution_properties = audit_output["$defs"]["AnnotationMappingExecution"]["properties"]
+        assert execution_properties["request_limit"]["minimum"] == 1
+        assert set(audit_output["$defs"]["AnnotationMappingExecutionStatus"]["enum"]) == {
+            "completed",
+            "not_requested",
+            "skipped_request_limit",
+        }
 
         comparison_output = _tool_by_name(tools, "compare_ko_sets").outputSchema
         assert comparison_output is not None

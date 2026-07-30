@@ -289,31 +289,32 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
                     "source_namespace": "taxonomy",
                     "identifiers": ["562"],
                     "taxonomy_rank": "species",
+                    "include_pathway_directory": True,
                     "ambiguity_policy": "report_all",
                 },
             )
         )
         assert resolved["kind"] == "organism"
         assert resolved["ambiguous_input_count"] == 1
-        assert resolved["resolutions"][0]["status"] == "one_to_many"
+        assert resolved["resolution_previews"][0]["status"] == "one_to_many"
         assert {
             candidate["canonical_entity"]["identifier"]
-            for candidate in resolved["resolutions"][0]["candidates"]
+            for candidate in resolved["resolution_previews"][0]["candidate_preview"]
         } == {"eco", "ece"}
         organism_candidates = {
             candidate["canonical_entity"]["identifier"]: candidate
-            for candidate in resolved["resolutions"][0]["candidates"]
+            for candidate in resolved["resolution_previews"][0]["candidate_preview"]
         }
-        eco_pathways = organism_candidates["eco"]["organism_pathways"]
-        assert eco_pathways["total_count"] == 21
-        assert len(eco_pathways["preview"]) == 20
-        assert eco_pathways["preview"][0]["pathway"] == {
+        eco_pathways = organism_candidates["eco"]
+        assert eco_pathways["organism_pathway_count"] == 21
+        assert len(eco_pathways["organism_pathway_preview"]) == 2
+        assert eco_pathways["organism_pathway_preview"][0]["pathway"] == {
             "kind": "pathway",
             "identifier": "eco00001",
         }
-        assert eco_pathways["truncated"] is True
-        assert organism_candidates["ece"]["organism_pathways"]["total_count"] == 1
-        assert "list" in resolved["resolutions"][0]["operations_used"]
+        assert eco_pathways["organism_pathways_truncated"] is True
+        assert organism_candidates["ece"]["organism_pathway_count"] == 1
+        assert "list" in resolved["resolution_previews"][0]["operations_used"]
         assert any(
             "without automatic selection" in caveat for caveat in resolved["interpretation_caveats"]
         )
@@ -344,20 +345,20 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
             )
         )
         assert gene_resolution["kind"] == "gene"
-        assert gene_resolution["resolutions"][0]["status"] == "one_to_one"
-        gene_candidate = gene_resolution["resolutions"][0]["candidates"][0]
+        assert gene_resolution["resolution_previews"][0]["status"] == "one_to_one"
+        gene_candidate = gene_resolution["resolution_previews"][0]["candidate_preview"][0]
         assert gene_candidate["canonical_entity"] == {
             "kind": "gene",
             "identifier": "hsa:1956",
         }
         assert {
-            (entity["kind"], entity["identifier"]) for entity in gene_candidate["entities"]
+            (entity["kind"], entity["identifier"]) for entity in gene_candidate["entity_preview"]
         } == {
             ("gene", "hsa:1956"),
             ("ko", "K04361"),
             ("pathway", "hsa04012"),
         }
-        assert gene_resolution["resolutions"][0]["operations_used"] == [
+        assert gene_resolution["resolution_previews"][0]["operations_used"] == [
             "conv",
             "get",
             "link",
@@ -380,12 +381,12 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
             )
         )
         assert traced["edge_count"] == 1
-        assert traced["edges"][0]["target"] == {
+        assert traced["edge_preview"][0]["target"] == {
             "kind": "reaction",
             "identifier": "R01786",
         }
-        assert traced["edges"][0]["provenance_batch_indexes"] == [0]
-        assert len(traced["provenance"]) == 1
+        assert traced["edge_preview"][0]["provenance_batch_indexes"] == [0]
+        assert traced["retrieval"]["batch_count"] == 1
         assert any(
             "not evidence of regulation" in caveat for caveat in traced["interpretation_caveats"]
         )
@@ -441,6 +442,7 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         detail = audited["detail"]
         assert detail["evidence"]["strict_unique_ko_count"] == 1
         assert detail["evidence"]["lenient_unique_ko_count"] == 2
+        assert detail["mapping_execution"]["status"] == "completed"
         assert detail["lenient_only_ko_preview"] == ["K01810"]
         assert detail["mappings"][0]["strict"]["mapped_unique_ko_count"] == 1
         assert detail["mappings"][0]["lenient"]["mapped_unique_ko_count"] == 2

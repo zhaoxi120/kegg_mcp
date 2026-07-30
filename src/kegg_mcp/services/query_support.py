@@ -6,6 +6,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
+from pydantic import BaseModel
+
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.kegg import (
     GetRequest,
@@ -13,6 +15,7 @@ from kegg_mcp.kegg import (
     KeggGetDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
+    ResponseOrigin,
 )
 from kegg_mcp.kegg.contracts import (
     KeggBatchProvenance,
@@ -21,15 +24,18 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.services.query_models import (
     MAX_QUERY_PROVENANCE_BATCHES,
+    MAX_QUERY_RELEASE_PREVIEW,
     KeggEntityKind,
     KeggEntityRef,
     KeggRelationType,
+    QueryRetrievalSummary,
     ResolutionOperation,
 )
 from kegg_mcp.services.reference_budget import KeggQueryClient
 from kegg_mcp.services.result_builders import _json_bytes
 
 MAX_QUERY_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_QUERY_DIRECT_BYTES = 64 * 1024
 MAX_GENOME_GET_ENTRIES_PER_CALL = 10
 
 
@@ -255,9 +261,32 @@ def require_provenance_bound(
     if len(tuple(provenance)) > MAX_QUERY_PROVENANCE_BATCHES:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
-            "Query provenance exceeded the direct-result batch bound.",
+            "Query provenance exceeded the fixed retained-result batch bound.",
             suggested_action="Request fewer identifiers or relationship types.",
         )
+
+
+def summarize_query_retrieval(
+    provenance: Iterable[KeggBatchProvenance],
+) -> QueryRetrievalSummary:
+    """Return compact retrieval accounting while retaining full provenance elsewhere."""
+    batches = tuple(provenance)
+    require_provenance_bound(batches)
+    database_releases = tuple(
+        sorted({batch.database_release for batch in batches if batch.database_release})
+    )
+    return QueryRetrievalSummary(
+        batch_count=len(batches),
+        network_request_count=sum(
+            batch.attempt_count for batch in batches if batch.origin is ResponseOrigin.NETWORK
+        ),
+        cache_hit_count=sum(batch.origin is ResponseOrigin.CACHE for batch in batches),
+        stale_batch_count=sum(batch.is_stale for batch in batches),
+        response_bytes=sum(batch.response_bytes for batch in batches),
+        database_release_count=len(database_releases),
+        database_releases=database_releases[:MAX_QUERY_RELEASE_PREVIEW],
+        database_releases_truncated=len(database_releases) > MAX_QUERY_RELEASE_PREVIEW,
+    )
 
 
 def bounded_query_payload(value: object) -> bytes:
@@ -273,6 +302,21 @@ def bounded_query_payload(value: object) -> bytes:
             ),
         )
     return payload
+
+
+def require_bounded_query_direct_result(value: BaseModel) -> None:
+    """Fail closed when a supposedly compact direct projection exceeds 64 KiB."""
+    payload = _json_bytes(value.model_dump(mode="json"))
+    if len(payload) > MAX_QUERY_DIRECT_BYTES:
+        fail(
+            ErrorCode.OUTPUT_LIMIT_EXCEEDED,
+            "The direct query projection exceeded its fixed output-size bound.",
+            suggested_action="Use the retained resource for complete query details.",
+            safe_details=(
+                SafeDetail(name="observed_bytes", value=str(len(payload))),
+                SafeDetail(name="limit_bytes", value=str(MAX_QUERY_DIRECT_BYTES)),
+            ),
+        )
 
 
 def fail_unexpected_relation_row() -> NoReturn:
@@ -293,6 +337,7 @@ def fail_unexpected_genome_document() -> NoReturn:
 
 __all__ = [
     "MAX_QUERY_ARTIFACT_BYTES",
+    "MAX_QUERY_DIRECT_BYTES",
     "GenomeRecord",
     "GenomeRecordLoad",
     "bounded_query_payload",
@@ -304,5 +349,7 @@ __all__ = [
     "link_relationship",
     "load_genome_records",
     "pair_entity",
+    "require_bounded_query_direct_result",
     "require_provenance_bound",
+    "summarize_query_retrieval",
 ]

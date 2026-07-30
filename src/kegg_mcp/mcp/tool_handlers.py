@@ -233,13 +233,11 @@ def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
         quality_context=request.quality_context,
+        mapping_targets=request.mapping_targets,
     )
     return ToolOutcome(
         result,
-        (
-            "Audited strict and lenient annotation evidence and five fixed KEGG "
-            "relationship mapping yields."
-        ),
+        "Audited strict and lenient annotation evidence and the selected KEGG relationships.",
         result.result.result_id,
     )
 

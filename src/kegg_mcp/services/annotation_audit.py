@@ -23,7 +23,10 @@ from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 from kegg_mcp.kegg import KeggLinkRelationship, KeggRequestOptions, ResponseOrigin
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
-from kegg_mcp.services.kegg_relations import bounded_relation_batches
+from kegg_mcp.services.kegg_relations import (
+    bounded_relation_batches,
+    planned_relation_request_count,
+)
 from kegg_mcp.services.models import DETAIL_SECTION, DatasetSource
 from kegg_mcp.services.reference_budget import KeggRelationClient, effective_query_options
 from kegg_mcp.services.result_builders import (
@@ -39,7 +42,7 @@ from kegg_mcp.services.result_store import (
     compensate_created_result,
 )
 
-MAX_AUDIT_KOS = 500
+MAX_AUDIT_DEGREE_BUCKETS = 512
 MAX_AUDIT_UNMAPPED_PREVIEW = 50
 MAX_AUDIT_PROVENANCE_PREVIEW = 25
 MAX_AUDIT_RELATIONSHIP_ROWS = 50_000
@@ -50,13 +53,78 @@ MAX_AUDIT_WARNINGS = 25
 
 
 class AnnotationMappingTarget(StrEnum):
-    """KEGG relationship classes included in the fixed audit."""
+    """Allowlisted KEGG relationship classes available to the audit."""
 
     PATHWAY = "pathway"
     MODULE = "module"
     REACTION = "reaction"
     ENZYME = "enzyme"
     BRITE = "brite"
+
+
+class AnnotationMappingExecutionStatus(StrEnum):
+    """Whether the optional KEGG mapping phase ran within its request budget."""
+
+    COMPLETED = "completed"
+    NOT_REQUESTED = "not_requested"
+    SKIPPED_REQUEST_LIMIT = "skipped_request_limit"
+
+
+class AnnotationMappingExecution(FrozenModel):
+    """Explicit status for the separable remote mapping phase."""
+
+    status: AnnotationMappingExecutionStatus
+    requested_targets: Annotated[
+        tuple[AnnotationMappingTarget, ...],
+        Field(max_length=len(AnnotationMappingTarget)),
+    ]
+    completed_targets: Annotated[
+        tuple[AnnotationMappingTarget, ...],
+        Field(max_length=len(AnnotationMappingTarget)),
+    ]
+    skipped_targets: Annotated[
+        tuple[AnnotationMappingTarget, ...],
+        Field(max_length=len(AnnotationMappingTarget)),
+    ]
+    selected_unique_ko_count: int = Field(strict=True, ge=0)
+    planned_request_count: int = Field(strict=True, ge=0)
+    request_limit: int = Field(strict=True, ge=1)
+
+    @model_validator(mode="after")
+    def validate_execution(self) -> AnnotationMappingExecution:
+        for values in (
+            self.requested_targets,
+            self.completed_targets,
+            self.skipped_targets,
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError("mapping execution target lists must be unique")
+            if values != tuple(target for target in AnnotationMappingTarget if target in values):
+                raise ValueError("mapping execution targets must use stable enum order")
+        if self.status is AnnotationMappingExecutionStatus.COMPLETED:
+            if (
+                not self.requested_targets
+                or self.completed_targets != self.requested_targets
+                or self.skipped_targets
+                or self.planned_request_count > self.request_limit
+            ):
+                raise ValueError("completed mapping execution must cover every requested target")
+        elif self.status is AnnotationMappingExecutionStatus.NOT_REQUESTED:
+            if (
+                self.requested_targets
+                or self.completed_targets
+                or self.skipped_targets
+                or self.planned_request_count
+            ):
+                raise ValueError("not-requested mapping execution cannot contain target work")
+        elif (
+            not self.requested_targets
+            or self.completed_targets
+            or self.skipped_targets != self.requested_targets
+            or self.planned_request_count <= self.request_limit
+        ):
+            raise ValueError("request-limit skips must report every requested target")
+        return self
 
 
 class AnnotationAuditWarningCode(StrEnum):
@@ -178,7 +246,7 @@ class EvidenceModeMappingAudit(FrozenModel):
     one_to_many_ko_count: int = Field(strict=True, ge=0)
     target_degree_distribution: Annotated[
         tuple[MappingDegreeCount, ...],
-        Field(max_length=MAX_AUDIT_KOS),
+        Field(max_length=MAX_AUDIT_DEGREE_BUCKETS),
     ]
     unmapped_ko_count: int = Field(strict=True, ge=0)
     unmapped_ko_preview: Annotated[tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)]
@@ -250,20 +318,26 @@ class AnnotationAuditDetail(FrozenModel):
     evidence: AnnotationEvidenceAudit
     mappings: Annotated[
         tuple[AnnotationTargetMappingAudit, ...],
-        Field(
-            min_length=len(AnnotationMappingTarget),
-            max_length=len(AnnotationMappingTarget),
-        ),
+        Field(max_length=len(AnnotationMappingTarget)),
     ]
+    mapping_execution: AnnotationMappingExecution
     lenient_only_ko_count: int = Field(strict=True, ge=0)
     lenient_only_ko_preview: Annotated[
         tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
     ]
-    strict_without_any_audited_relationship_count: int = Field(strict=True, ge=0)
+    strict_without_any_audited_relationship_count: int | None = Field(
+        default=None,
+        strict=True,
+        ge=0,
+    )
     strict_without_any_audited_relationship_preview: Annotated[
         tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
     ]
-    lenient_without_any_audited_relationship_count: int = Field(strict=True, ge=0)
+    lenient_without_any_audited_relationship_count: int | None = Field(
+        default=None,
+        strict=True,
+        ge=0,
+    )
     lenient_without_any_audited_relationship_preview: Annotated[
         tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
     ]
@@ -271,24 +345,36 @@ class AnnotationAuditDetail(FrozenModel):
     quality_context: AnnotationQualityContext | None = None
     warning_count: int = Field(strict=True, ge=0, le=MAX_AUDIT_WARNINGS)
     warnings: Annotated[tuple[AnnotationAuditWarning, ...], Field(max_length=MAX_AUDIT_WARNINGS)]
-    interpretation_caveats: Annotated[tuple[str, ...], Field(min_length=2, max_length=4)] = (
-        (
-            "The no-relationship counts cover only pathway, MODULE, reaction, enzyme, and BRITE "
-            "relationships audited here; missing links are not evidence of biological absence."
-        ),
-        "Mapping yield is descriptive and is not enrichment, validation, activity, or phenotype.",
-    )
+    interpretation_caveats: Annotated[tuple[str, ...], Field(min_length=2, max_length=4)]
 
     @model_validator(mode="after")
     def validate_detail(self) -> AnnotationAuditDetail:
-        if tuple(item.target for item in self.mappings) != tuple(AnnotationMappingTarget):
-            raise ValueError("mappings must contain every fixed audit target in stable order")
+        if tuple(item.target for item in self.mappings) != (
+            self.mapping_execution.completed_targets
+        ):
+            raise ValueError("mappings must match completed targets in stable order")
         if self.lenient_only_ko_count != (
             self.evidence.lenient_unique_ko_count - self.evidence.strict_unique_ko_count
         ):
             raise ValueError("lenient-only count must match strict and lenient evidence counts")
+        if self.mapping_execution.selected_unique_ko_count != self.evidence.lenient_unique_ko_count:
+            raise ValueError("mapping execution must use the lenient unique-KO denominator")
         if self.warning_count != len(self.warnings):
             raise ValueError("warning_count must match warnings")
+        mapping_completed = (
+            self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
+        )
+        without_counts = (
+            self.strict_without_any_audited_relationship_count,
+            self.lenient_without_any_audited_relationship_count,
+        )
+        if mapping_completed != all(value is not None for value in without_counts):
+            raise ValueError("no-relationship counts are available only after completed mapping")
+        if not mapping_completed and (
+            self.strict_without_any_audited_relationship_preview
+            or self.lenient_without_any_audited_relationship_preview
+        ):
+            raise ValueError("skipped mapping cannot provide no-relationship previews")
         return self
 
 
@@ -316,26 +402,51 @@ def audit_annotation_mapping(
     result_store: SQLiteResultStore,
     scope_id: str,
     quality_context: AnnotationQualityContext | None = None,
+    mapping_targets: tuple[AnnotationMappingTarget, ...] = tuple(AnnotationMappingTarget),
     options: KeggRequestOptions | None = None,
 ) -> AnnotationMappingAuditResult:
-    """Audit normalized evidence and five fixed KEGG mapping yields without inference."""
+    """Audit normalized evidence and selected KEGG mapping yields without inference."""
     options = effective_query_options(options)
+    mapping_targets = _canonical_mapping_targets(mapping_targets)
     dataset = _resolve_dataset(source, result_store=result_store, scope_id=scope_id)
     evidence_view = build_ko_evidence_view(dataset)
     strict_kos = select_ko_ids(evidence_view, EvidenceMode.STRICT)
     lenient_kos = select_ko_ids(evidence_view, EvidenceMode.LENIENT)
-    if len(lenient_kos) > MAX_AUDIT_KOS:
-        fail(
-            ErrorCode.INPUT_LIMIT_EXCEEDED,
-            "The annotation audit KO set exceeds the fixed unbiased mapping bound.",
-            suggested_action=(
-                f"Audit a dataset with no more than {MAX_AUDIT_KOS} lenient unique K numbers."
-            ),
-            safe_details=(
-                SafeDetail(name="selected_unique_ko_count", value=str(len(lenient_kos))),
-                SafeDetail(name="maximum_unique_ko_count", value=str(MAX_AUDIT_KOS)),
-            ),
+    planned_request_count = sum(
+        planned_relation_request_count(
+            lenient_kos,
+            relationship=_RELATIONSHIPS[target],
+            client=client,
         )
+        for target in mapping_targets
+    )
+    if not mapping_targets:
+        mapping_status = AnnotationMappingExecutionStatus.NOT_REQUESTED
+    elif planned_request_count > MAX_AUDIT_KEGG_REQUESTS:
+        mapping_status = AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+    else:
+        mapping_status = AnnotationMappingExecutionStatus.COMPLETED
+    completed_targets = (
+        mapping_targets if mapping_status is AnnotationMappingExecutionStatus.COMPLETED else ()
+    )
+    skipped_targets = (
+        mapping_targets
+        if mapping_status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+        else ()
+    )
+    mapping_execution = AnnotationMappingExecution(
+        status=mapping_status,
+        requested_targets=mapping_targets,
+        completed_targets=completed_targets,
+        skipped_targets=skipped_targets,
+        selected_unique_ko_count=len(lenient_kos),
+        planned_request_count=(
+            0
+            if mapping_status is AnnotationMappingExecutionStatus.NOT_REQUESTED
+            else planned_request_count
+        ),
+        request_limit=MAX_AUDIT_KEGG_REQUESTS,
+    )
 
     mappings: list[AnnotationTargetMappingAudit] = []
     all_batches: list[KeggBatchProvenance] = []
@@ -346,7 +457,7 @@ def audit_annotation_mapping(
     remaining_bytes = MAX_AUDIT_RESPONSE_BYTES
     remaining_requests = MAX_AUDIT_KEGG_REQUESTS
 
-    for target in AnnotationMappingTarget:
+    for target in completed_targets:
         if lenient_kos:
             mapped = bounded_relation_batches(
                 lenient_kos,
@@ -405,8 +516,16 @@ def audit_annotation_mapping(
         tuple(all_batches),
         quality_context=quality_context,
     )
-    strict_without_any = tuple(sorted(set(strict_kos) - mapped_strict_any))
-    lenient_without_any = tuple(sorted(set(lenient_kos) - mapped_lenient_any))
+    strict_without_any = (
+        tuple(sorted(set(strict_kos) - mapped_strict_any))
+        if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+        else ()
+    )
+    lenient_without_any = (
+        tuple(sorted(set(lenient_kos) - mapped_lenient_any))
+        if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+        else ()
+    )
     lenient_only = tuple(sorted(set(lenient_kos) - set(strict_kos)))
     evidence = AnnotationEvidenceAudit(
         dataset_id=dataset.dataset_id,
@@ -442,13 +561,22 @@ def audit_annotation_mapping(
     detail = AnnotationAuditDetail(
         evidence=evidence,
         mappings=tuple(mappings),
+        mapping_execution=mapping_execution,
         lenient_only_ko_count=len(lenient_only),
         lenient_only_ko_preview=lenient_only[:MAX_AUDIT_UNMAPPED_PREVIEW],
-        strict_without_any_audited_relationship_count=len(strict_without_any),
+        strict_without_any_audited_relationship_count=(
+            len(strict_without_any)
+            if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+            else None
+        ),
         strict_without_any_audited_relationship_preview=strict_without_any[
             :MAX_AUDIT_UNMAPPED_PREVIEW
         ],
-        lenient_without_any_audited_relationship_count=len(lenient_without_any),
+        lenient_without_any_audited_relationship_count=(
+            len(lenient_without_any)
+            if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+            else None
+        ),
         lenient_without_any_audited_relationship_preview=lenient_without_any[
             :MAX_AUDIT_UNMAPPED_PREVIEW
         ],
@@ -456,6 +584,7 @@ def audit_annotation_mapping(
         quality_context=quality_context,
         warning_count=len(warnings),
         warnings=warnings,
+        interpretation_caveats=_audit_caveats(mapping_execution),
     )
     payload = _json_bytes(
         {
@@ -535,6 +664,38 @@ def _mode_mapping_audit(
     )
 
 
+def _canonical_mapping_targets(
+    targets: tuple[AnnotationMappingTarget, ...],
+) -> tuple[AnnotationMappingTarget, ...]:
+    if len(targets) != len(set(targets)):
+        raise ValueError("annotation mapping targets must be unique")
+    return tuple(target for target in AnnotationMappingTarget if target in targets)
+
+
+def _audit_caveats(
+    execution: AnnotationMappingExecution,
+) -> tuple[str, ...]:
+    if execution.status is AnnotationMappingExecutionStatus.COMPLETED:
+        mapping_scope = (
+            "The no-relationship counts cover only the selected audited relationships; "
+            "missing links are not evidence of biological absence."
+        )
+    elif execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED:
+        mapping_scope = (
+            "KEGG relationship mapping was not requested; the evidence audit remains complete "
+            "and no relationship absence was assessed."
+        )
+    else:
+        mapping_scope = (
+            "KEGG relationship mapping was skipped before network access because its planned "
+            "request count exceeded the audit limit; the evidence audit remains complete."
+        )
+    return (
+        mapping_scope,
+        "Mapping yield is descriptive and is not enrichment, validation, activity, or phenotype.",
+    )
+
+
 def _audit_warnings(
     sources: tuple[SourceProvenance, ...],
     batches: tuple[KeggBatchProvenance, ...],
@@ -565,7 +726,12 @@ def _audit_warnings(
         ),
     )
     for code, field_name, message in missing_fields:
-        count = sum(getattr(source, field_name) is None for source in sources)
+        applicable_sources = (
+            tuple(source for source in sources if source.importer_name != "plain_ko")
+            if field_name in {"model_name", "model_version"}
+            else sources
+        )
+        count = sum(getattr(source, field_name) is None for source in applicable_sources)
         if count:
             warnings.append(
                 AnnotationAuditWarning(
@@ -655,6 +821,8 @@ __all__ = [
     "AnnotationAuditWarningCode",
     "AnnotationEvidenceAudit",
     "AnnotationMappingAuditResult",
+    "AnnotationMappingExecution",
+    "AnnotationMappingExecutionStatus",
     "AnnotationMappingTarget",
     "AnnotationQualityContext",
     "AnnotationTargetMappingAudit",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.services import annotation_audit
 from kegg_mcp.services.annotation_audit import (
     AnnotationAuditWarningCode,
+    AnnotationMappingExecution,
+    AnnotationMappingExecutionStatus,
     AnnotationMappingTarget,
     AnnotationQualityContext,
     GenomeType,
@@ -69,6 +72,19 @@ def test_quality_context_normalizes_outer_whitespace() -> None:
     assert context.gene_caller == "Prodigal"
 
 
+def test_completed_mapping_execution_requires_at_least_one_target() -> None:
+    with pytest.raises(ValidationError):
+        AnnotationMappingExecution(
+            status=AnnotationMappingExecutionStatus.COMPLETED,
+            requested_targets=(),
+            completed_targets=(),
+            skipped_targets=(),
+            selected_unique_ko_count=0,
+            planned_request_count=0,
+            request_limit=100,
+        )
+
+
 def _provenance(marker: int) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=KeggOperation.LINK,
@@ -100,8 +116,15 @@ _TARGET_IDS = {
 
 
 class _AuditClient:
-    def __init__(self, *, released_call_count: int = 0) -> None:
-        self._config = KeggClientConfig.model_validate({"limits": {"max_identifiers": 2}})
+    def __init__(
+        self,
+        *,
+        released_call_count: int = 0,
+        max_identifiers: int = 2,
+    ) -> None:
+        self._config = KeggClientConfig.model_validate(
+            {"limits": {"max_identifiers": max_identifiers}}
+        )
         self._released_call_count = released_call_count
         self.requests: list[LinkRequest] = []
 
@@ -274,26 +297,91 @@ def test_audit_warns_for_each_mapping_batch_without_a_database_release(
         for item in result.detail.warnings
         if item.code is AnnotationAuditWarningCode.KEGG_RELEASE_UNAVAILABLE
     )
+    warning_codes = {item.code for item in result.detail.warnings}
     assert len(client.requests) == 5
     assert warning.affected_count == 4
+    assert AnnotationAuditWarningCode.MISSING_MODEL_NAME not in warning_codes
+    assert AnnotationAuditWarningCode.MISSING_MODEL_VERSION not in warning_codes
 
 
-def test_audit_fails_before_mapping_when_lenient_ko_set_exceeds_fixed_bound(
+def test_audit_preserves_evidence_when_planned_mapping_exceeds_request_bound(
     tmp_path: Path,
 ) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     client = _AuditClient()
     ko_text = "\n".join(f"K{index:05d}" for index in range(1, 502))
 
-    with pytest.raises(KeggMcpError) as captured:
-        audit_annotation_mapping(
-            DatasetSource(ko_text=ko_text),
-            client=client,
-            result_store=store,
-            scope_id="audit-limit-scope",
-        )
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text=ko_text),
+        client=client,
+        result_store=store,
+        scope_id="audit-limit-scope",
+    )
 
-    assert captured.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    assert result.detail.evidence.lenient_unique_ko_count == 501
+    assert (
+        result.detail.mapping_execution.status
+        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+    )
+    assert result.detail.mappings == ()
+    assert result.detail.strict_without_any_audited_relationship_count is None
+    assert client.requests == []
+
+
+def test_audit_maps_more_than_500_kos_for_one_selected_target(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "selected-target.sqlite3")
+    client = _AuditClient(max_identifiers=100)
+    ko_text = "\n".join(f"K{index:05d}" for index in range(1, 502))
+
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text=ko_text),
+        client=client,
+        result_store=store,
+        scope_id="selected-target-scope",
+        mapping_targets=(AnnotationMappingTarget.PATHWAY,),
+    )
+
+    assert result.detail.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
+    assert result.detail.mapping_execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
+    assert tuple(item.target for item in result.detail.mappings) == (
+        AnnotationMappingTarget.PATHWAY,
+    )
+    assert len(client.requests) == 6
+    assert {request.relationship for request in client.requests} == {
+        KeggLinkRelationship.KO_TO_PATHWAY
+    }
+    retained = json.loads(
+        store.read_artifact(
+            "selected-target-scope",
+            result.result.result_id,
+            "detail",
+            limit=store.limits.max_range_bytes,
+        ).content
+    )
+    assert set(retained["complete_relationship_rows"]) == {"pathway"}
+    assert retained["detail"]["mapping_execution"]["requested_targets"] == ["pathway"]
+
+
+def test_audit_can_run_evidence_only_without_kegg_mapping(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "evidence-only.sqlite3")
+    client = _AuditClient()
+
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text="K00001\nK00002"),
+        client=client,
+        result_store=store,
+        scope_id="evidence-only-scope",
+        mapping_targets=(),
+    )
+
+    assert result.detail.mapping_execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED
+    assert result.detail.evidence.strict_unique_ko_count == 2
+    assert result.detail.mappings == ()
+    assert result.detail.strict_without_any_audited_relationship_count is None
     assert client.requests == []
 
 
@@ -319,25 +407,25 @@ def test_audit_fails_before_retention_when_artifact_exceeds_bound(
     assert store.list_results(scope_id).total_items == result_count_before
 
 
-def test_audit_request_budget_stops_before_the_next_endpoint_batch(
+def test_audit_request_budget_skip_is_reported_before_network_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     scope_id = "audit-request-limit-scope"
     result_id = _normalized_result(store, scope_id)
-    result_count_before = store.list_results(scope_id).total_items
     client = _AuditClient()
     monkeypatch.setattr(annotation_audit, "MAX_AUDIT_KEGG_REQUESTS", 1)
 
-    with pytest.raises(KeggMcpError) as captured:
-        audit_annotation_mapping(
-            DatasetSource(result_id=result_id),
-            client=client,
-            result_store=store,
-            scope_id=scope_id,
-        )
+    result = audit_annotation_mapping(
+        DatasetSource(result_id=result_id),
+        client=client,
+        result_store=store,
+        scope_id=scope_id,
+    )
 
-    assert captured.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
-    assert len(client.requests) == 1
-    assert store.list_results(scope_id).total_items == result_count_before
+    assert (
+        result.detail.mapping_execution.status
+        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+    )
+    assert client.requests == []

@@ -13,7 +13,7 @@ from kegg_mcp.kegg import (
     LinkRequest,
 )
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggPairRow
-from kegg_mcp.kegg.operations import prepare_link
+from kegg_mcp.kegg.operations import PreparedRequest, prepare_link
 from kegg_mcp.services.reference_budget import KeggRelationClient
 
 DEFAULT_MAX_RELATION_REQUESTS = 100
@@ -50,80 +50,117 @@ def bounded_relation_batches(
     if not source_identifiers:
         return BoundedRelationResult(rows=(), batches=())
 
-    maximum_per_call = min(
-        MAX_RELATION_IDENTIFIERS_PER_CALL,
-        client.config.limits.max_identifiers,
-    )
     rows: list[KeggPairRow] = []
     batches: list[KeggBatchProvenance] = []
     response_bytes = 0
     request_count = 0
-    endpoint_bytes = len(client.config.access.endpoint.encode("ascii"))
-    for start in range(0, len(source_identifiers), maximum_per_call):
-        coarse_request = LinkRequest(
+    for prepared in _prepared_relation_batches(
+        source_identifiers,
+        relationship=relationship,
+        client=client,
+        taxonomy_rank=taxonomy_rank,
+    ):
+        next_request_count = request_count + 1
+        if next_request_count > max_total_requests:
+            _limit_exceeded(
+                "relationship_request_count",
+                next_request_count,
+                max_total_requests,
+            )
+        result = client.link(
+            LinkRequest(
+                relationship=relationship,
+                taxonomy_rank=taxonomy_rank,
+                source_identifiers=prepared.requested_identifiers,
+            ),
+            options=options,
+        )
+        if len(result.batches) != 1:
+            fail(
+                ErrorCode.KEGG_PARSE_FAILED,
+                "A selected-entry relationship call returned an unexpected batch count.",
+                suggested_action=("Retry with the typed KEGG client and unchanged request limits."),
+            )
+        next_row_count = len(rows) + len(result.rows)
+        next_response_bytes = response_bytes + result.batches[0].response_bytes
+        if next_row_count > max_total_rows:
+            _limit_exceeded(
+                "relationship_row_count",
+                next_row_count,
+                max_total_rows,
+            )
+        if next_response_bytes > max_total_response_bytes:
+            _limit_exceeded(
+                "relationship_response_bytes",
+                next_response_bytes,
+                max_total_response_bytes,
+            )
+        if record_batch is not None:
+            record_batch(len(result.rows), result.batches)
+        batch_offset = len(batches)
+        rows.extend(
+            KeggPairRow(
+                batch_index=row.batch_index + batch_offset,
+                line_number=row.line_number,
+                source_id=row.source_id,
+                target_id=row.target_id,
+            )
+            for row in result.rows
+        )
+        batches.extend(result.batches)
+        request_count = next_request_count
+        response_bytes = next_response_bytes
+    return BoundedRelationResult(rows=tuple(rows), batches=tuple(batches))
+
+
+def planned_relation_request_count(
+    source_identifiers: tuple[str, ...],
+    *,
+    relationship: KeggLinkRelationship,
+    client: KeggRelationClient,
+    taxonomy_rank: KeggTaxonomyRank = KeggTaxonomyRank.EXACT,
+) -> int:
+    """Count exact prepared LINK batches without performing a KEGG request."""
+    if len(source_identifiers) != len(set(source_identifiers)):
+        raise ValueError("source_identifiers must be unique")
+    if not source_identifiers:
+        return 0
+    return len(
+        _prepared_relation_batches(
+            source_identifiers,
             relationship=relationship,
+            client=client,
             taxonomy_rank=taxonomy_rank,
-            source_identifiers=source_identifiers[start : start + maximum_per_call],
         )
-        prepared_batches = prepare_link(
-            coarse_request,
-            client.config.limits,
-            url_prefix_bytes=endpoint_bytes,
-        )
-        for prepared in prepared_batches:
-            next_request_count = request_count + 1
-            if next_request_count > max_total_requests:
-                _limit_exceeded(
-                    "relationship_request_count",
-                    next_request_count,
-                    max_total_requests,
-                )
-            result = client.link(
+    )
+
+
+def _prepared_relation_batches(
+    source_identifiers: tuple[str, ...],
+    *,
+    relationship: KeggLinkRelationship,
+    client: KeggRelationClient,
+    taxonomy_rank: KeggTaxonomyRank,
+) -> tuple[PreparedRequest, ...]:
+    maximum_per_call = min(
+        MAX_RELATION_IDENTIFIERS_PER_CALL,
+        client.config.limits.max_identifiers,
+    )
+    endpoint_bytes = len(client.config.access.endpoint.encode("ascii"))
+    prepared: list[PreparedRequest] = []
+    for start in range(0, len(source_identifiers), maximum_per_call):
+        prepared.extend(
+            prepare_link(
                 LinkRequest(
                     relationship=relationship,
                     taxonomy_rank=taxonomy_rank,
-                    source_identifiers=prepared.requested_identifiers,
+                    source_identifiers=source_identifiers[start : start + maximum_per_call],
                 ),
-                options=options,
+                client.config.limits,
+                url_prefix_bytes=endpoint_bytes,
             )
-            if len(result.batches) != 1:
-                fail(
-                    ErrorCode.KEGG_PARSE_FAILED,
-                    "A selected-entry relationship call returned an unexpected batch count.",
-                    suggested_action=(
-                        "Retry with the typed KEGG client and unchanged request limits."
-                    ),
-                )
-            next_row_count = len(rows) + len(result.rows)
-            next_response_bytes = response_bytes + result.batches[0].response_bytes
-            if next_row_count > max_total_rows:
-                _limit_exceeded(
-                    "relationship_row_count",
-                    next_row_count,
-                    max_total_rows,
-                )
-            if next_response_bytes > max_total_response_bytes:
-                _limit_exceeded(
-                    "relationship_response_bytes",
-                    next_response_bytes,
-                    max_total_response_bytes,
-                )
-            if record_batch is not None:
-                record_batch(len(result.rows), result.batches)
-            batch_offset = len(batches)
-            rows.extend(
-                KeggPairRow(
-                    batch_index=row.batch_index + batch_offset,
-                    line_number=row.line_number,
-                    source_id=row.source_id,
-                    target_id=row.target_id,
-                )
-                for row in result.rows
-            )
-            batches.extend(result.batches)
-            request_count = next_request_count
-            response_bytes = next_response_bytes
-    return BoundedRelationResult(rows=tuple(rows), batches=tuple(batches))
+        )
+    return tuple(prepared)
 
 
 def _limit_exceeded(name: str, observed: int, limit: int) -> None:
@@ -145,4 +182,5 @@ __all__ = [
     "DEFAULT_MAX_RELATION_ROWS",
     "BoundedRelationResult",
     "bounded_relation_batches",
+    "planned_relation_request_count",
 ]

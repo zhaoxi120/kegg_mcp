@@ -17,6 +17,7 @@ from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
 from kegg_mcp.kegg import KeggEntryRef
 from kegg_mcp.services.annotation_audit import (
     AnnotationMappingAuditResult,
+    AnnotationMappingTarget,
     AnnotationQualityContext,
 )
 from kegg_mcp.services.brite_hierarchy import (
@@ -241,6 +242,20 @@ class AuditAnnotationMappingInput(FrozenModel):
 
     source: DatasetSource
     quality_context: AnnotationQualityContext | None = None
+    mapping_targets: Annotated[
+        tuple[AnnotationMappingTarget, ...],
+        Field(max_length=len(AnnotationMappingTarget)),
+    ] = tuple(AnnotationMappingTarget)
+
+    @field_validator("mapping_targets")
+    @classmethod
+    def canonicalize_mapping_targets(
+        cls,
+        value: tuple[AnnotationMappingTarget, ...],
+    ) -> tuple[AnnotationMappingTarget, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("mapping_targets must be unique")
+        return tuple(target for target in AnnotationMappingTarget if target in value)
 
 
 class AnalyzeModulesInput(FrozenModel):

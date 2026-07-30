@@ -87,6 +87,7 @@ def _provenance(
     marker: int,
     *,
     response_bytes: int = 100,
+    database_release: str | None = "Release synthetic",
 ) -> KeggBatchProvenance:
     return KeggBatchProvenance(
         operation=operation,
@@ -102,7 +103,7 @@ def _provenance(
         response_bytes=response_bytes,
         parser_name=f"synthetic_{operation.value}",
         parser_version=PARSER_VERSION,
-        database_release="Release synthetic",
+        database_release=database_release,
         attempt_count=1,
         is_stale=False,
     )
@@ -472,14 +473,34 @@ def test_search_preserves_raw_candidates_without_scores_and_retains_all_rows(
     assert result.returned_count == 2
     assert result.truncated is True
     assert result.candidates[0].raw_match == "hexokinase [EC:2.7.1.1]"
-    assert result.candidates[0].name == result.candidates[0].raw_match
+    assert set(result.candidates[0].model_dump()) == {"entity", "raw_match"}
     assert "score" not in result.candidates[0].model_dump()
     assert "not relevance-ranked" in result.interpretation_caveats[0]
-    assert "not compound identifications" in result.interpretation_caveats[1]
+    assert len(result.interpretation_caveats) == 1
     retained = _artifact(store, result.result.result_id)
     find_result = cast(dict[str, object], retained["find_result"])
     document = cast(dict[str, object], find_result["document"])
     assert len(cast(list[object], document["rows"])) == 3
+
+
+def test_exact_mass_caveat_is_emitted_only_for_exact_mass_search(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+
+    result = search_kegg_entries(
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.COMPOUND,
+            query="180.063",
+            mode=KeggSearchMode.EXACT_MASS,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "exact-mass.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert len(result.interpretation_caveats) == 2
+    assert "not compound identifications" in result.interpretation_caveats[1]
 
 
 def test_resolution_discriminator_is_required_in_schema_and_at_runtime() -> None:
@@ -589,6 +610,24 @@ def test_direct_gene_and_taxonomy_identifiers_fit_downstream_bounds() -> None:
         )
 
 
+def test_query_retrieval_summary_bounds_distinct_release_labels() -> None:
+    batches = tuple(
+        _provenance(
+            KeggOperation.LINK,
+            index,
+            database_release=f"Release {index:03d}",
+        )
+        for index in range(30)
+    )
+
+    summary = query_support.summarize_query_retrieval(batches)
+
+    assert summary.batch_count == 30
+    assert summary.database_release_count == 30
+    assert len(summary.database_releases) == 25
+    assert summary.database_releases_truncated is True
+
+
 @pytest.mark.parametrize(
     ("namespace", "identifier", "conv_source", "find_key", "expected_operations"),
     [
@@ -664,14 +703,16 @@ def test_gene_resolver_supports_each_namespace(
         scope_id="scope",
     )
 
-    resolution = result.resolutions[0]
+    resolution = result.resolution_previews[0]
     assert resolution.status is MappingStatus.ONE_TO_ONE
     assert resolution.operations_used == expected_operations
-    assert resolution.candidates[0].canonical_entity == _entity(
+    assert resolution.candidate_preview[0].canonical_entity == _entity(
         KeggEntityKind.GENE,
         "hsa:1",
     )
-    assert resolution.candidates[0].entities == (_entity(KeggEntityKind.GENE, "hsa:1"),)
+    assert resolution.candidate_preview[0].entity_preview == (
+        _entity(KeggEntityKind.GENE, "hsa:1"),
+    )
 
 
 def test_direct_gene_missing_from_kegg_is_unmapped(tmp_path: Path) -> None:
@@ -689,9 +730,9 @@ def test_direct_gene_missing_from_kegg_is_unmapped(tmp_path: Path) -> None:
         scope_id="scope",
     )
 
-    assert result.resolutions[0].status is MappingStatus.UNMAPPED
-    assert result.resolutions[0].candidates == ()
-    assert result.resolutions[0].operations_used == (
+    assert result.resolution_previews[0].status is MappingStatus.UNMAPPED
+    assert result.resolution_previews[0].candidate_preview == ()
+    assert result.resolution_previews[0].operations_used == (
         ResolutionOperation.DIRECT,
         ResolutionOperation.GET,
     )
@@ -728,7 +769,7 @@ def test_gene_resolver_reports_many_to_one_and_organism_mismatch(
         scope_id="scope",
     )
 
-    assert [resolution.status for resolution in result.resolutions] == [
+    assert [resolution.status for resolution in result.resolution_previews] == [
         MappingStatus.MANY_TO_ONE,
         MappingStatus.MANY_TO_ONE,
         MappingStatus.ORGANISM_MISMATCH,
@@ -736,7 +777,7 @@ def test_gene_resolver_reports_many_to_one_and_organism_mismatch(
     assert result.mapping_yield == pytest.approx(2 / 3)
     assert result.many_to_one_input_count == 2
     assert result.mismatch_input_count == 1
-    assert result.resolutions[2].discarded_organism_mismatch_count == 1
+    assert result.resolution_previews[2].discarded_organism_mismatch_count == 1
     assert "not evidence" in result.interpretation_caveats[0]
     assert "without automatic selection" in result.interpretation_caveats[1]
     retained = _artifact(store, result.result.result_id)
@@ -767,11 +808,11 @@ def test_gene_organism_filter_accepts_the_matching_t_number_and_rejects_other_sp
         scope_id="scope",
     )
 
-    assert [resolution.status for resolution in result.resolutions] == [
+    assert [resolution.status for resolution in result.resolution_previews] == [
         MappingStatus.ONE_TO_ONE,
         MappingStatus.ORGANISM_MISMATCH,
     ]
-    assert result.resolutions[0].candidates[0].canonical_entity == _entity(
+    assert result.resolution_previews[0].candidate_preview[0].canonical_entity == _entity(
         KeggEntityKind.GENE,
         "T01001:10458",
     )
@@ -781,7 +822,7 @@ def test_gene_organism_filter_accepts_the_matching_t_number_and_rejects_other_sp
         ("hsa",),
         ("T01001:10458",),
     ]
-    assert len(result.provenance) == 2
+    assert result.retrieval.batch_count == 2
 
 
 def test_gene_conversion_accepts_a_t_number_for_the_requested_organism(
@@ -809,16 +850,16 @@ def test_gene_conversion_accepts_a_t_number_for_the_requested_organism(
         scope_id="scope",
     )
 
-    assert result.resolutions[0].status is MappingStatus.ONE_TO_ONE
-    assert result.resolutions[0].operations_used == (
+    assert result.resolution_previews[0].status is MappingStatus.ONE_TO_ONE
+    assert result.resolution_previews[0].operations_used == (
         ResolutionOperation.CONV,
         ResolutionOperation.GET,
     )
-    assert result.resolutions[0].candidates[0].canonical_entity == _entity(
+    assert result.resolution_previews[0].candidate_preview[0].canonical_entity == _entity(
         KeggEntityKind.GENE,
         "T01001:10458",
     )
-    assert len(result.provenance) == 2
+    assert result.retrieval.batch_count == 2
 
 
 def test_many_to_one_counts_candidates_inside_overlapping_one_to_many_groups(
@@ -842,7 +883,7 @@ def test_many_to_one_counts_candidates_inside_overlapping_one_to_many_groups(
         scope_id="scope",
     )
 
-    assert [resolution.status for resolution in result.resolutions] == [
+    assert [resolution.status for resolution in result.resolution_previews] == [
         MappingStatus.ONE_TO_MANY,
         MappingStatus.MANY_TO_ONE,
     ]
@@ -878,7 +919,13 @@ def test_gene_conversion_is_split_into_single_low_level_batches(
         1,
     ]
     assert result.mapped_input_count == 21
+    assert len(result.resolution_previews) == 5
+    assert result.resolutions_truncated is True
+    assert len(json.dumps(result.model_dump(mode="json")).encode("utf-8")) <= (
+        query_support.MAX_QUERY_DIRECT_BYTES
+    )
     retained = _artifact(store, result.result.result_id)
+    assert len(cast(list[object], retained["resolutions"])) == 21
     budget = cast(dict[str, object], retained["budget"])
     assert budget["kegg_requests"] == 3
 
@@ -955,16 +1002,19 @@ def test_gene_targets_preserve_direct_organism_pathway_context(
         scope_id="scope",
     )
 
-    entities = result.resolutions[0].candidates[0].entities
+    entities = result.resolution_previews[0].candidate_preview[0].entity_preview
     assert _entity(KeggEntityKind.PATHWAY, "hsa00010") in entities
     assert _entity(KeggEntityKind.KO, "K00001") in entities
     assert _entity(KeggEntityKind.MODULE, "M00001") in entities
     assert _entity(KeggEntityKind.REACTION, "R00001") in entities
-    assert _entity(KeggEntityKind.ENZYME, "1.1.1.1") in entities
+    assert result.resolution_previews[0].candidate_preview[0].entity_count == 6
+    assert result.resolution_previews[0].candidate_preview[0].entities_truncated is True
+    retained = _artifact(store, result.result.result_id)
+    assert '"identifier": "1.1.1.1"' in json.dumps(retained)
     relationships = [request.relationship for request in client.link_requests]
     assert KeggLinkRelationship.GENE_TO_PATHWAY in relationships
     assert KeggLinkRelationship.KO_TO_PATHWAY not in relationships
-    assert result.resolutions[0].operations_used == (
+    assert result.resolution_previews[0].operations_used == (
         ResolutionOperation.DIRECT,
         ResolutionOperation.GET,
         ResolutionOperation.LINK,
@@ -1036,23 +1086,24 @@ def test_organism_resolver_returns_code_t_number_taxonomy_name_and_lineage(
             result_store=SQLiteResultStore(tmp_path / f"organism-{index}.sqlite3"),
             scope_id="scope",
         )
-        candidate = result.resolutions[0].candidates[0]
+        candidate = result.resolution_previews[0].candidate_preview[0]
         assert candidate.canonical_entity == _entity(KeggEntityKind.ORGANISM, "hsa")
-        assert {(entity.kind, entity.identifier) for entity in candidate.entities} == {
+        assert {(entity.kind, entity.identifier) for entity in candidate.entity_preview} == {
             (KeggEntityKind.ORGANISM, "hsa"),
             (KeggEntityKind.GENOME, "T01001"),
             (KeggEntityKind.TAXONOMY, "taxid:9606"),
         }
         assert candidate.name == "Homo sapiens (human)"
-        assert candidate.taxonomy_lineage == (
+        assert candidate.name_truncated is False
+        assert candidate.taxonomy_lineage_preview == (
             "Eukaryotes",
             "Animals",
             "Vertebrates",
         )
-        assert candidate.organism_pathways is not None
-        assert candidate.organism_pathways.total_count == 0
-        assert candidate.organism_pathways.preview == ()
-        assert candidate.organism_pathways.truncated is False
+        assert candidate.taxonomy_lineage_text_truncated is False
+        assert candidate.organism_pathway_count is None
+        assert candidate.organism_pathway_preview == ()
+        assert candidate.organism_pathways_truncated is None
 
     ambiguous = resolve_kegg_entities(
         OrganismResolutionRequest(
@@ -1064,14 +1115,16 @@ def test_organism_resolver_returns_code_t_number_taxonomy_name_and_lineage(
         result_store=SQLiteResultStore(tmp_path / "ambiguous.sqlite3"),
         scope_id="scope",
     )
-    assert ambiguous.resolutions[0].status is MappingStatus.ONE_TO_MANY
+    assert ambiguous.resolution_previews[0].status is MappingStatus.ONE_TO_MANY
     assert {
-        candidate.canonical_entity.identifier for candidate in ambiguous.resolutions[0].candidates
+        candidate.canonical_entity.identifier
+        for candidate in ambiguous.resolution_previews[0].candidate_preview
     } == {"eco", "ece"}
-    assert {candidate.name for candidate in ambiguous.resolutions[0].candidates} == {
+    assert {candidate.name for candidate in ambiguous.resolution_previews[0].candidate_preview} == {
         "Escherichia coli K-12 MG1655",
         "Escherichia coli O157:H7",
     }
+    assert client.organism_pathway_requests == []
 
 
 @pytest.mark.parametrize(
@@ -1097,9 +1150,9 @@ def test_missing_organism_code_or_genome_is_unmapped(
         scope_id="scope",
     )
 
-    assert result.resolutions[0].status is MappingStatus.UNMAPPED
-    assert result.resolutions[0].candidates == ()
-    assert ResolutionOperation.GET in result.resolutions[0].operations_used
+    assert result.resolution_previews[0].status is MappingStatus.UNMAPPED
+    assert result.resolution_previews[0].candidate_preview == ()
+    assert ResolutionOperation.GET in result.resolution_previews[0].operations_used
 
 
 def test_organism_pathway_summary_is_bounded_and_retains_complete_list(
@@ -1123,13 +1176,14 @@ def test_organism_pathway_summary_is_bounded_and_retains_complete_list(
             kind="organism",
             source_namespace=OrganismIdentifierNamespace.CODE,
             identifiers=("hsa",),
+            include_pathway_directory=True,
         ),
         client=cast(KeggQueryClient, client),
         result_store=store,
         scope_id="scope",
     )
 
-    resolution = result.resolutions[0]
+    resolution = result.resolution_previews[0]
     assert resolution.status is MappingStatus.ONE_TO_ONE
     assert client.find_requests == []
     assert resolution.operations_used == (
@@ -1139,16 +1193,16 @@ def test_organism_pathway_summary_is_bounded_and_retains_complete_list(
         ResolutionOperation.LINK,
     )
     assert ResolutionOperation.LIST in resolution.operations_used
-    summary = resolution.candidates[0].organism_pathways
-    assert summary is not None
-    assert summary.total_count == 25
-    assert len(summary.preview) == 20
-    assert summary.preview[0].pathway == _entity(
+    summary = resolution.candidate_preview[0]
+    assert summary.organism_pathway_count == 25
+    assert len(summary.organism_pathway_preview) == 2
+    assert summary.organism_pathway_preview[0].pathway == _entity(
         KeggEntityKind.PATHWAY,
         "hsa00001",
     )
-    assert summary.preview[0].name == "Synthetic pathway 1"
-    assert summary.truncated is True
+    assert summary.organism_pathway_preview[0].name == "Synthetic pathway 1"
+    assert summary.organism_pathway_preview[0].name_truncated is False
+    assert summary.organism_pathways_truncated is True
 
     retained = _artifact(store, result.result.result_id)
     list_steps = [
@@ -1160,6 +1214,63 @@ def test_organism_pathway_summary_is_bounded_and_retains_complete_list(
     list_result = cast(dict[str, object], list_steps[0]["result"])
     document = cast(dict[str, object], list_result["document"])
     assert len(cast(list[object], document["rows"])) == 25
+
+
+def test_organism_direct_preview_reports_field_level_text_truncation(
+    tmp_path: Path,
+) -> None:
+    long_name = "N" * 200
+    long_lineage = "L" * 200
+    long_pathway_name = "P" * 200
+    client = _QueryClient()
+    _add_genome(
+        client,
+        t_number="T00001",
+        code="abc",
+        name=long_name,
+        lineage=(long_lineage,),
+    )
+    client.organism_pathways["abc"] = (("path:abc00001", long_pathway_name),)
+    store = SQLiteResultStore(tmp_path / "text-truncation.sqlite3")
+
+    result = resolve_kegg_entities(
+        OrganismResolutionRequest(
+            kind="organism",
+            source_namespace=OrganismIdentifierNamespace.CODE,
+            identifiers=("abc",),
+            include_pathway_directory=True,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=store,
+        scope_id="scope",
+    )
+
+    candidate = result.resolution_previews[0].candidate_preview[0]
+    assert candidate.name == "N" * 128
+    assert candidate.name_truncated is True
+    assert candidate.taxonomy_lineage_preview == ("L" * 128,)
+    assert candidate.taxonomy_lineage_truncated is False
+    assert candidate.taxonomy_lineage_text_truncated is True
+    pathway = candidate.organism_pathway_preview[0]
+    assert pathway.name == "P" * 128
+    assert pathway.name_truncated is True
+
+    retained = _artifact(store, result.result.result_id)
+    retained_resolutions = cast(list[dict[str, object]], retained["resolutions"])
+    retained_candidates = cast(
+        list[dict[str, object]],
+        retained_resolutions[0]["candidates"],
+    )
+    retained_candidate = retained_candidates[0]
+    assert retained_candidate["name"] == long_name
+    assert retained_candidate["taxonomy_lineage"] == [long_lineage]
+    retained_pathways = cast(dict[str, object], retained_candidate["organism_pathways"])
+    retained_pathway_preview = cast(
+        list[dict[str, object]],
+        retained_pathways["preview"],
+    )
+    assert retained_pathway_preview[0]["name"] == long_pathway_name
+    assert len(cast(list[object], retained["provenance"])) == result.retrieval.batch_count
 
 
 def test_organism_name_resolution_rejects_a_find_get_code_mismatch(
@@ -1217,6 +1328,7 @@ def test_organism_pathway_list_counts_toward_resolver_budget(
                 kind="organism",
                 source_namespace=OrganismIdentifierNamespace.CODE,
                 identifiers=("hsa",),
+                include_pathway_directory=True,
             ),
             client=cast(KeggQueryClient, client),
             result_store=store,
@@ -1284,7 +1396,7 @@ def test_taxonomy_rank_preserves_exact_empty_species_candidates_and_t_targets(
         result_store=SQLiteResultStore(tmp_path / "exact.sqlite3"),
         scope_id="scope",
     )
-    assert exact.resolutions[0].status is MappingStatus.UNMAPPED
+    assert exact.resolution_previews[0].status is MappingStatus.UNMAPPED
 
     species = resolve_kegg_entities(
         OrganismResolutionRequest(
@@ -1297,9 +1409,10 @@ def test_taxonomy_rank_preserves_exact_empty_species_candidates_and_t_targets(
         result_store=SQLiteResultStore(tmp_path / "species.sqlite3"),
         scope_id="scope",
     )
-    assert species.resolutions[0].status is MappingStatus.ONE_TO_MANY
+    assert species.resolution_previews[0].status is MappingStatus.ONE_TO_MANY
     assert {
-        candidate.canonical_entity.identifier for candidate in species.resolutions[0].candidates
+        candidate.canonical_entity.identifier
+        for candidate in species.resolution_previews[0].candidate_preview
     } == {"eco", "ece"}
     assert client.link_requests[-2].taxonomy_rank is KeggTaxonomyRank.SPECIES
     with pytest.raises(ValidationError):
@@ -1344,8 +1457,12 @@ def test_organism_genome_get_is_chunked_and_recorded_per_low_level_batch(
     assert [len(request.entries) for request in client.get_requests] == [10, 1]
     retained = _artifact(store, result.result.result_id)
     budget = cast(dict[str, object], retained["budget"])
-    assert budget["kegg_requests"] == 15
-    assert result.resolutions[0].status is MappingStatus.ONE_TO_MANY
+    assert budget["kegg_requests"] == 4
+    assert result.resolution_previews[0].status is MappingStatus.ONE_TO_MANY
+    assert result.resolution_previews[0].candidate_count == 11
+    assert len(result.resolution_previews[0].candidate_preview) == 2
+    assert result.resolution_previews[0].candidates_truncated is True
+    assert client.organism_pathway_requests == []
 
 
 def test_organism_get_respects_lower_max_identifiers(tmp_path: Path) -> None:
@@ -1424,13 +1541,20 @@ def test_trace_is_typed_retained_and_supports_depth_two(tmp_path: Path) -> None:
         scope_id="scope",
     )
 
-    assert [edge.depth for edge in result.edges] == [1, 2]
-    assert [edge.provenance_batch_indexes for edge in result.edges] == [(0,), (1,)]
-    assert result.edges[1].target == _entity(KeggEntityKind.COMPOUND, "C00001")
+    assert [edge.depth for edge in result.edge_preview] == [1, 2]
+    assert [edge.provenance_batch_indexes for edge in result.edge_preview] == [(0,), (1,)]
+    assert result.edge_preview[1].target == _entity(KeggEntityKind.COMPOUND, "C00001")
     assert "not evidence of regulation" in result.interpretation_caveats[0]
     assert "does not establish activity" in result.interpretation_caveats[1]
+    assert len(json.dumps(result.model_dump(mode="json")).encode("utf-8")) <= (
+        query_support.MAX_QUERY_DIRECT_BYTES
+    )
     retained = _artifact(store, result.result.result_id)
     assert len(cast(list[object], retained["steps"])) == 2
+    retained_edges = cast(list[dict[str, object]], retained["edges"])
+    retained_provenance = cast(list[dict[str, object]], retained["provenance"])
+    assert retained_edges[1]["provenance_batch_indexes"] == [1]
+    assert retained_provenance[1]["operation"] == KeggOperation.LINK.value
     budget = cast(dict[str, object], retained["budget"])
     assert budget["kegg_requests"] == 2
 
@@ -1479,13 +1603,13 @@ def test_trace_genome_taxonomy_bridge_preserves_public_t_number_nodes(
         result_store=SQLiteResultStore(tmp_path / "forward.sqlite3"),
         scope_id="scope",
     )
-    assert forward.edges[0].source == _entity(KeggEntityKind.GENOME, "T01001")
-    assert forward.edges[0].target == _entity(
+    assert forward.edge_preview[0].source == _entity(KeggEntityKind.GENOME, "T01001")
+    assert forward.edge_preview[0].target == _entity(
         KeggEntityKind.TAXONOMY,
         "taxid:9606",
     )
-    assert forward.edges[0].provenance_batch_indexes == (0, 1)
-    assert len(forward.provenance) == 2
+    assert forward.edge_preview[0].provenance_batch_indexes == (0, 1)
+    assert forward.retrieval.batch_count == 2
     assert client.link_requests[-1].source_identifiers == ("hsa",)
 
     reverse = trace_kegg_relations(
@@ -1497,13 +1621,13 @@ def test_trace_genome_taxonomy_bridge_preserves_public_t_number_nodes(
         result_store=SQLiteResultStore(tmp_path / "reverse.sqlite3"),
         scope_id="scope",
     )
-    assert reverse.edges[0].source == _entity(
+    assert reverse.edge_preview[0].source == _entity(
         KeggEntityKind.TAXONOMY,
         "taxid:9606",
     )
-    assert reverse.edges[0].target == _entity(KeggEntityKind.GENOME, "T01001")
-    assert reverse.edges[0].provenance_batch_indexes == (0, 1)
-    assert len(reverse.provenance) == 2
+    assert reverse.edge_preview[0].target == _entity(KeggEntityKind.GENOME, "T01001")
+    assert reverse.edge_preview[0].provenance_batch_indexes == (0, 1)
+    assert reverse.retrieval.batch_count == 2
     assert client.get_requests[-1].entries[0].identifier == "hsa"
 
 
@@ -1548,7 +1672,7 @@ def test_trace_genome_taxonomy_edges_reference_only_their_own_get_batch(
         result_store=SQLiteResultStore(tmp_path / "forward-exact.sqlite3"),
         scope_id="scope",
     )
-    assert [edge.provenance_batch_indexes for edge in forward.edges] == [
+    assert [edge.provenance_batch_indexes for edge in forward.edge_preview] == [
         (0, 2),
         (1, 3),
     ]
@@ -1565,7 +1689,7 @@ def test_trace_genome_taxonomy_edges_reference_only_their_own_get_batch(
         result_store=SQLiteResultStore(tmp_path / "reverse-exact.sqlite3"),
         scope_id="scope",
     )
-    assert [edge.provenance_batch_indexes for edge in reverse.edges] == [
+    assert [edge.provenance_batch_indexes for edge in reverse.edge_preview] == [
         (0, 2),
         (1, 3),
     ]
@@ -1593,8 +1717,8 @@ def test_trace_edges_reference_their_exact_link_batches(tmp_path: Path) -> None:
         scope_id="scope",
     )
 
-    assert len(result.provenance) == 2
-    assert [edge.provenance_batch_indexes for edge in result.edges] == [(0,), (1,)]
+    assert result.retrieval.batch_count == 2
+    assert [edge.provenance_batch_indexes for edge in result.edge_preview] == [(0,), (1,)]
 
 
 def test_trace_enforces_global_raw_row_and_response_byte_budgets(
@@ -1795,4 +1919,42 @@ def test_retained_result_model_failures_are_compensated(
                 result_store=trace_store,
                 scope_id="scope",
             )
+    assert trace_store.list_results("scope").total_items == 0
+
+
+def test_direct_query_cap_compensates_the_retained_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(query_support, "MAX_QUERY_DIRECT_BYTES", 1)
+    store = SQLiteResultStore(tmp_path / "direct-cap.sqlite3")
+
+    with pytest.raises(KeggMcpError) as captured:
+        resolve_kegg_entities(
+            GeneResolutionRequest(
+                kind="gene",
+                source_namespace=GeneIdentifierNamespace.KEGG_GENE,
+                identifiers=("hsa:1",),
+            ),
+            client=cast(KeggQueryClient, _QueryClient()),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert captured.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+    assert store.list_results("scope").total_items == 0
+
+    trace_store = SQLiteResultStore(tmp_path / "trace-direct-cap.sqlite3")
+    with pytest.raises(KeggMcpError) as trace_error:
+        trace_kegg_relations(
+            TraceKeggRelationsRequest(
+                seeds=(_entity(KeggEntityKind.KO, "K00001"),),
+                edge_types=(KeggRelationType.KO_TO_PATHWAY,),
+            ),
+            client=cast(KeggQueryClient, _QueryClient()),
+            result_store=trace_store,
+            scope_id="scope",
+        )
+
+    assert trace_error.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
     assert trace_store.list_results("scope").total_items == 0

@@ -16,6 +16,8 @@ from kegg_mcp.services.kegg_relations import (
 )
 from kegg_mcp.services.models import DETAIL_SECTION
 from kegg_mcp.services.query_models import (
+    MAX_TRACE_EDGE_PREVIEW,
+    MAX_TRACE_NODE_PREVIEW,
     KeggEntityKind,
     KeggEntityRef,
     KeggRelationEdge,
@@ -33,7 +35,9 @@ from kegg_mcp.services.query_support import (
     link_relationship,
     load_genome_records,
     pair_entity,
+    require_bounded_query_direct_result,
     require_provenance_bound,
+    summarize_query_retrieval,
 )
 from kegg_mcp.services.reference_budget import KeggQueryClient, effective_query_options
 from kegg_mcp.services.result_builders import _artifact_metadata
@@ -226,6 +230,7 @@ def trace_kegg_relations(
             "nodes": [node.model_dump(mode="json") for node in nodes],
             "edges": [edge.model_dump(mode="json") for edge in edges],
             "steps": steps,
+            "provenance": [batch.model_dump(mode="json") for batch in provenance],
             "budget": {
                 "kegg_requests": budget.requests,
                 "raw_relation_rows": budget.rows,
@@ -244,16 +249,20 @@ def trace_kegg_relations(
         ),
     )
     try:
-        return TraceKeggRelationsResult(
+        result = TraceKeggRelationsResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
             seed_count=len(request.seeds),
             node_count=len(nodes),
             edge_count=len(edges),
-            nodes=tuple(nodes),
-            edges=tuple(edges),
-            provenance=tuple(provenance),
+            node_preview=tuple(nodes[:MAX_TRACE_NODE_PREVIEW]),
+            nodes_truncated=len(nodes) > MAX_TRACE_NODE_PREVIEW,
+            edge_preview=tuple(edges[:MAX_TRACE_EDGE_PREVIEW]),
+            edges_truncated=len(edges) > MAX_TRACE_EDGE_PREVIEW,
+            retrieval=summarize_query_retrieval(provenance),
         )
+        require_bounded_query_direct_result(result)
+        return result
     except BaseException:
         compensate_created_result(
             result_store,

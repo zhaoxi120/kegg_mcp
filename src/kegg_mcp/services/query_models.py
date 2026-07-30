@@ -30,6 +30,15 @@ MAX_TRACE_SEEDS = 50
 MAX_TRACE_NODES = 200
 MAX_TRACE_EDGES = 500
 MAX_QUERY_PROVENANCE_BATCHES = 200
+MAX_QUERY_RELEASE_PREVIEW = 25
+MAX_RESOLUTION_INPUT_PREVIEW = 5
+MAX_RESOLUTION_CANDIDATE_PREVIEW = 2
+MAX_RESOLUTION_ENTITY_PREVIEW = 5
+MAX_RESOLUTION_TAXONOMY_PREVIEW = 3
+MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW = 2
+MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS = 128
+MAX_TRACE_NODE_PREVIEW = 25
+MAX_TRACE_EDGE_PREVIEW = 25
 MAX_MATCH_TEXT_CHARACTERS = 10_000
 MAX_ORGANISM_NAME_CHARACTERS = 2_000
 MAX_TAXONOMY_LINEAGE_DEPTH = 64
@@ -164,13 +173,10 @@ class KeggSearchCandidate(FrozenModel):
 
     entity: KeggEntityRef
     raw_match: str = Field(min_length=1, max_length=MAX_MATCH_TEXT_CHARACTERS)
-    name: str | None = Field(default=None, max_length=MAX_MATCH_TEXT_CHARACTERS)
 
-    @field_validator("raw_match", "name")
+    @field_validator("raw_match")
     @classmethod
-    def validate_match_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def validate_match_text(cls, value: str) -> str:
         return validate_utf8_text(value, field_name="search match")
 
 
@@ -188,13 +194,10 @@ class SearchKeggEntriesResult(FrozenModel):
     provenance: Annotated[
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_QUERY_PROVENANCE_BATCHES)
     ]
-    interpretation_caveats: tuple[
-        Literal["Candidates are endpoint matches, not relevance-ranked or selected best matches."],
-        Literal["Exact-mass matches are compound candidates, not compound identifications."],
-    ] = (
-        "Candidates are endpoint matches, not relevance-ranked or selected best matches.",
-        "Exact-mass matches are compound candidates, not compound identifications.",
-    )
+    interpretation_caveats: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=256)], ...],
+        Field(min_length=1, max_length=2),
+    ]
 
     @model_validator(mode="after")
     def validate_projection_counts(self) -> Self:
@@ -204,6 +207,9 @@ class SearchKeggEntriesResult(FrozenModel):
             raise ValueError("observed_count cannot be smaller than returned_count")
         if self.truncated != (self.observed_count > self.returned_count):
             raise ValueError("truncated must match the candidate projection")
+        expected_caveat_count = 2 if self.mode is KeggSearchMode.EXACT_MASS else 1
+        if len(self.interpretation_caveats) != expected_caveat_count:
+            raise ValueError("search caveats must match the selected query mode")
         return self
 
 
@@ -333,6 +339,7 @@ class OrganismResolutionRequest(FrozenModel):
         Field(min_length=1, max_length=MAX_RESOLUTION_IDENTIFIERS),
     ]
     taxonomy_rank: TaxonomyResolutionRank = TaxonomyResolutionRank.EXACT
+    include_pathway_directory: bool = False
     ambiguity_policy: Literal[AmbiguityPolicy.REPORT_ALL] = AmbiguityPolicy.REPORT_ALL
 
     @field_validator("identifiers")
@@ -517,8 +524,173 @@ class EntityResolution(FrozenModel):
         return self
 
 
+class OrganismPathwayDirectPreviewEntry(FrozenModel):
+    """One compact pathway directory entry for the direct resolver response."""
+
+    pathway: KeggEntityRef
+    name: str = Field(
+        min_length=1,
+        max_length=MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS,
+    )
+    name_truncated: bool
+
+    @model_validator(mode="after")
+    def require_pathway_entity(self) -> Self:
+        if self.pathway.kind is not KeggEntityKind.PATHWAY:
+            raise ValueError("organism pathway previews require pathway entities")
+        validate_utf8_text(self.name, field_name="organism pathway name")
+        if self.name_truncated and len(self.name) != MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS:
+            raise ValueError("truncated pathway names must fill the direct text bound")
+        return self
+
+
+class ResolvedEntityCandidatePreview(FrozenModel):
+    """Compact direct projection of one retained resolution candidate."""
+
+    canonical_entity: KeggEntityRef
+    entity_count: int = Field(strict=True, ge=0, le=MAX_RESOLUTION_ENTITIES)
+    entity_preview: Annotated[
+        tuple[KeggEntityRef, ...],
+        Field(max_length=MAX_RESOLUTION_ENTITY_PREVIEW),
+    ] = ()
+    entities_truncated: bool
+    name: str | None = Field(
+        default=None,
+        max_length=MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS,
+    )
+    name_truncated: bool = False
+    taxonomy_lineage_count: int = Field(
+        default=0,
+        strict=True,
+        ge=0,
+        le=MAX_TAXONOMY_LINEAGE_DEPTH,
+    )
+    taxonomy_lineage_preview: Annotated[
+        tuple[
+            Annotated[
+                str,
+                Field(
+                    min_length=1,
+                    max_length=MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS,
+                ),
+            ],
+            ...,
+        ],
+        Field(max_length=MAX_RESOLUTION_TAXONOMY_PREVIEW),
+    ] = ()
+    taxonomy_lineage_truncated: bool = False
+    taxonomy_lineage_text_truncated: bool = False
+    organism_pathway_count: int | None = Field(default=None, strict=True, ge=0)
+    organism_pathway_preview: Annotated[
+        tuple[OrganismPathwayDirectPreviewEntry, ...],
+        Field(max_length=MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW),
+    ] = ()
+    organism_pathways_truncated: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_preview_counts(self) -> Self:
+        if self.entity_count < len(self.entity_preview):
+            raise ValueError("entity_count cannot be smaller than entity_preview")
+        if self.entities_truncated != (self.entity_count > len(self.entity_preview)):
+            raise ValueError("entities_truncated must match the entity preview")
+        if self.taxonomy_lineage_count < len(self.taxonomy_lineage_preview):
+            raise ValueError(
+                "taxonomy_lineage_count cannot be smaller than taxonomy_lineage_preview"
+            )
+        if self.taxonomy_lineage_truncated != (
+            self.taxonomy_lineage_count > len(self.taxonomy_lineage_preview)
+        ):
+            raise ValueError("taxonomy_lineage_truncated must match the lineage preview")
+        if self.name is None and self.name_truncated:
+            raise ValueError("a missing candidate name cannot be text-truncated")
+        if self.name_truncated and len(self.name or "") != MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS:
+            raise ValueError("truncated candidate names must fill the direct text bound")
+        if self.taxonomy_lineage_text_truncated and not any(
+            len(label) == MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS
+            for label in self.taxonomy_lineage_preview
+        ):
+            raise ValueError("truncated lineage text must fill at least one direct text bound")
+        pathway_count = self.organism_pathway_count
+        pathway_truncated = self.organism_pathways_truncated
+        pathway_requested = pathway_count is not None
+        if pathway_requested != (pathway_truncated is not None):
+            raise ValueError("organism pathway count and truncation must be present together")
+        if not pathway_requested and self.organism_pathway_preview:
+            raise ValueError("an unrequested organism pathway directory cannot have a preview")
+        if pathway_count is not None and pathway_truncated is not None:
+            if pathway_count < len(self.organism_pathway_preview):
+                raise ValueError("organism_pathway_count cannot be smaller than its direct preview")
+            if pathway_truncated != (pathway_count > len(self.organism_pathway_preview)):
+                raise ValueError("organism_pathways_truncated must match the direct preview")
+        return self
+
+
+class EntityResolutionPreview(FrozenModel):
+    """Compact direct status and bounded candidates for one caller identifier."""
+
+    input_identifier: str = Field(min_length=1, max_length=256)
+    status: MappingStatus
+    candidate_count: int = Field(strict=True, ge=0, le=MAX_RESOLUTION_ENTITIES)
+    candidate_preview: Annotated[
+        tuple[ResolvedEntityCandidatePreview, ...],
+        Field(max_length=MAX_RESOLUTION_CANDIDATE_PREVIEW),
+    ] = ()
+    candidates_truncated: bool
+    discarded_organism_mismatch_count: int = Field(default=0, strict=True, ge=0)
+    operations_used: Annotated[
+        tuple[ResolutionOperation, ...],
+        Field(min_length=1, max_length=len(ResolutionOperation)),
+    ]
+
+    @model_validator(mode="after")
+    def validate_preview(self) -> Self:
+        if self.candidate_count < len(self.candidate_preview):
+            raise ValueError("candidate_count cannot be smaller than candidate_preview")
+        if self.candidates_truncated != (self.candidate_count > len(self.candidate_preview)):
+            raise ValueError("candidates_truncated must match the candidate preview")
+        if self.status in {MappingStatus.UNMAPPED, MappingStatus.ORGANISM_MISMATCH}:
+            if self.candidate_count != 0:
+                raise ValueError("unmapped and mismatch previews cannot contain candidates")
+        elif self.status in {MappingStatus.ONE_TO_ONE, MappingStatus.MANY_TO_ONE}:
+            if self.candidate_count != 1:
+                raise ValueError("one-to-one and many-to-one previews require one candidate")
+        elif self.candidate_count < 2:
+            raise ValueError("one-to-many previews require at least two candidates")
+        return self
+
+
+class QueryRetrievalSummary(FrozenModel):
+    """Compact retrieval accounting; complete batch provenance remains retained."""
+
+    batch_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
+    network_request_count: int = Field(strict=True, ge=0)
+    cache_hit_count: int = Field(strict=True, ge=0)
+    stale_batch_count: int = Field(strict=True, ge=0)
+    response_bytes: int = Field(strict=True, ge=0)
+    database_release_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
+    database_releases: Annotated[
+        tuple[str, ...],
+        Field(max_length=MAX_QUERY_RELEASE_PREVIEW),
+    ]
+    database_releases_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> Self:
+        if self.cache_hit_count > self.batch_count or self.stale_batch_count > self.batch_count:
+            raise ValueError("retrieval batch subsets cannot exceed the batch count")
+        if self.database_release_count > self.batch_count:
+            raise ValueError("distinct database releases cannot exceed the batch count")
+        if self.database_release_count < len(self.database_releases):
+            raise ValueError("database release count cannot be smaller than its preview")
+        if self.database_releases_truncated != (
+            self.database_release_count > len(self.database_releases)
+        ):
+            raise ValueError("database_releases_truncated must match its preview")
+        return self
+
+
 class ResolveKeggEntitiesResult(FrozenModel):
-    """Complete retained crosswalk and bounded per-input mapping statuses."""
+    """Compact direct resolution preview with a complete retained crosswalk."""
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
@@ -535,51 +707,35 @@ class ResolveKeggEntitiesResult(FrozenModel):
         ge=0,
         le=MAX_RESOLUTION_ENTITIES,
     )
-    resolutions: Annotated[
-        tuple[EntityResolution, ...], Field(min_length=1, max_length=MAX_RESOLUTION_IDENTIFIERS)
+    resolution_previews: Annotated[
+        tuple[EntityResolutionPreview, ...],
+        Field(min_length=1, max_length=MAX_RESOLUTION_INPUT_PREVIEW),
     ]
-    provenance: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_QUERY_PROVENANCE_BATCHES)
+    resolutions_truncated: bool
+    retrieval: QueryRetrievalSummary
+    interpretation_caveats: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=256)], ...],
+        Field(min_length=2, max_length=3),
     ]
-    interpretation_caveats: tuple[
-        Literal["Unmapped identifiers are not evidence that the biological entity does not exist."],
-        Literal["Ambiguous candidates are reported without automatic selection."],
-        Literal[
-            "Organism-specific pathway directory entries are KEGG references and do not establish "
-            "pathway presence, completeness, activity, flux, or phenotype."
-        ],
-    ] = (
-        "Unmapped identifiers are not evidence that the biological entity does not exist.",
-        "Ambiguous candidates are reported without automatic selection.",
-        "Organism-specific pathway directory entries are KEGG references and do not establish "
-        "pathway presence, completeness, activity, flux, or phenotype.",
-    )
 
     @model_validator(mode="after")
     def validate_resolution_counts(self) -> Self:
-        if self.input_count != len(self.resolutions):
-            raise ValueError("input_count must match resolutions")
-        mapped = sum(
-            item.status
-            in {
-                MappingStatus.ONE_TO_ONE,
-                MappingStatus.ONE_TO_MANY,
-                MappingStatus.MANY_TO_ONE,
-            }
-            for item in self.resolutions
-        )
-        ambiguous = sum(item.status is MappingStatus.ONE_TO_MANY for item in self.resolutions)
-        many_to_one = sum(item.status is MappingStatus.MANY_TO_ONE for item in self.resolutions)
-        mismatches = sum(item.discarded_organism_mismatch_count > 0 for item in self.resolutions)
-        if (
-            self.mapped_input_count != mapped
-            or self.ambiguous_input_count != ambiguous
-            or self.many_to_one_input_count != many_to_one
-            or self.mismatch_input_count != mismatches
-        ):
-            raise ValueError("resolution summary counts do not match resolutions")
-        if self.mapping_yield != mapped / self.input_count:
+        if self.input_count < len(self.resolution_previews):
+            raise ValueError("input_count cannot be smaller than resolution_previews")
+        if self.resolutions_truncated != (self.input_count > len(self.resolution_previews)):
+            raise ValueError("resolutions_truncated must match the input preview")
+        if self.mapping_yield != self.mapped_input_count / self.input_count:
             raise ValueError("mapping_yield must match mapped_input_count / input_count")
+        if any(
+            count > self.input_count
+            for count in (
+                self.mapped_input_count,
+                self.ambiguous_input_count,
+                self.many_to_one_input_count,
+                self.mismatch_input_count,
+            )
+        ):
+            raise ValueError("resolution summary subsets cannot exceed input_count")
         return self
 
 
@@ -675,18 +831,24 @@ class KeggRelationEdge(FrozenModel):
 
 
 class TraceKeggRelationsResult(FrozenModel):
-    """Complete retained trace and bounded typed node/edge projection."""
+    """Compact direct trace preview with complete retained nodes and edges."""
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
     seed_count: int = Field(strict=True, ge=1, le=MAX_TRACE_SEEDS)
     node_count: int = Field(strict=True, ge=1, le=MAX_TRACE_NODES)
     edge_count: int = Field(strict=True, ge=0, le=MAX_TRACE_EDGES)
-    nodes: Annotated[tuple[KeggEntityRef, ...], Field(min_length=1, max_length=MAX_TRACE_NODES)]
-    edges: Annotated[tuple[KeggRelationEdge, ...], Field(max_length=MAX_TRACE_EDGES)]
-    provenance: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_QUERY_PROVENANCE_BATCHES)
+    node_preview: Annotated[
+        tuple[KeggEntityRef, ...],
+        Field(min_length=1, max_length=MAX_TRACE_NODE_PREVIEW),
     ]
+    nodes_truncated: bool
+    edge_preview: Annotated[
+        tuple[KeggRelationEdge, ...],
+        Field(max_length=MAX_TRACE_EDGE_PREVIEW),
+    ]
+    edges_truncated: bool
+    retrieval: QueryRetrievalSummary
     interpretation_caveats: tuple[
         Literal[
             "KEGG relationships are database cross-references, not evidence of regulation, "
@@ -707,14 +869,17 @@ class TraceKeggRelationsResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_trace_counts(self) -> Self:
-        if self.node_count != len(self.nodes) or self.edge_count != len(self.edges):
-            raise ValueError("trace counts must match the direct node and edge projections")
+        if self.node_count < len(self.node_preview) or self.edge_count < len(self.edge_preview):
+            raise ValueError("trace counts cannot be smaller than direct previews")
+        if self.nodes_truncated != (self.node_count > len(self.node_preview)):
+            raise ValueError("nodes_truncated must match the node preview")
+        if self.edges_truncated != (self.edge_count > len(self.edge_preview)):
+            raise ValueError("edges_truncated must match the edge preview")
         if self.seed_count > self.node_count:
             raise ValueError("seed_count cannot exceed node_count")
-        node_keys = tuple((node.kind, node.identifier) for node in self.nodes)
+        node_keys = tuple((node.kind, node.identifier) for node in self.node_preview)
         if len(node_keys) != len(set(node_keys)):
-            raise ValueError("trace nodes must be unique")
-        known_nodes = set(node_keys)
+            raise ValueError("trace node previews must be unique")
         edge_keys = tuple(
             (
                 edge.relationship,
@@ -723,22 +888,18 @@ class TraceKeggRelationsResult(FrozenModel):
                 edge.target.kind,
                 edge.target.identifier,
             )
-            for edge in self.edges
+            for edge in self.edge_preview
         )
         if len(edge_keys) != len(set(edge_keys)):
-            raise ValueError("trace edges must be unique")
+            raise ValueError("trace edge previews must be unique")
         if any(
-            (edge.source.kind, edge.source.identifier) not in known_nodes
-            or (edge.target.kind, edge.target.identifier) not in known_nodes
-            for edge in self.edges
-        ):
-            raise ValueError("trace edge endpoints must appear in nodes")
-        if any(
-            index >= len(self.provenance)
-            for edge in self.edges
+            index >= self.retrieval.batch_count
+            for edge in self.edge_preview
             for index in edge.provenance_batch_indexes
         ):
-            raise ValueError("edge provenance_batch_indexes must reference result provenance")
+            raise ValueError(
+                "edge provenance_batch_indexes must reference retained full provenance"
+            )
         return self
 
 
@@ -773,14 +934,24 @@ def _bare_gene_label(value: str) -> bool:
 __all__ = [
     "MAX_ORGANISM_PATHWAY_PREVIEW",
     "MAX_QUERY_PROVENANCE_BATCHES",
+    "MAX_QUERY_RELEASE_PREVIEW",
+    "MAX_RESOLUTION_CANDIDATE_PREVIEW",
+    "MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS",
     "MAX_RESOLUTION_ENTITIES",
+    "MAX_RESOLUTION_ENTITY_PREVIEW",
     "MAX_RESOLUTION_IDENTIFIERS",
+    "MAX_RESOLUTION_INPUT_PREVIEW",
+    "MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW",
+    "MAX_RESOLUTION_TAXONOMY_PREVIEW",
     "MAX_SEARCH_RESULTS",
     "MAX_TRACE_EDGES",
+    "MAX_TRACE_EDGE_PREVIEW",
     "MAX_TRACE_NODES",
+    "MAX_TRACE_NODE_PREVIEW",
     "MAX_TRACE_SEEDS",
     "AmbiguityPolicy",
     "EntityResolution",
+    "EntityResolutionPreview",
     "GeneIdentifierNamespace",
     "GeneResolutionRequest",
     "GeneResolutionTarget",
@@ -793,13 +964,16 @@ __all__ = [
     "KeggSearchMode",
     "MappingStatus",
     "OrganismIdentifierNamespace",
+    "OrganismPathwayDirectPreviewEntry",
     "OrganismPathwayPreviewEntry",
     "OrganismPathwaySummary",
     "OrganismResolutionRequest",
+    "QueryRetrievalSummary",
     "ResolutionOperation",
     "ResolveKeggEntitiesRequest",
     "ResolveKeggEntitiesResult",
     "ResolvedEntityCandidate",
+    "ResolvedEntityCandidatePreview",
     "SearchKeggEntriesRequest",
     "SearchKeggEntriesResult",
     "TaxonomyResolutionRank",

@@ -51,7 +51,6 @@ def search_kegg_entries(
         KeggSearchCandidate(
             entity=_find_entity(request.database, row.identifier),
             raw_match=row.matched_text,
-            name=row.matched_text if request.mode is KeggSearchMode.KEYWORD else None,
         )
         for row in fetched.document.rows[: request.max_results]
     )
@@ -82,6 +81,7 @@ def search_kegg_entries(
             candidates=candidates,
             truncated=len(candidates) < len(fetched.document.rows),
             provenance=(fetched.batch,),
+            interpretation_caveats=_search_caveats(request.mode),
         )
     except BaseException:
         compensate_created_result(
@@ -98,6 +98,13 @@ def _find_entity(
     identifier: str,
 ) -> KeggEntityRef:
     return pair_entity(_SEARCH_ENTITY_KINDS[database], identifier)
+
+
+def _search_caveats(mode: KeggSearchMode) -> tuple[str, ...]:
+    caveats = ["Candidates are endpoint matches, not relevance-ranked or selected best matches."]
+    if mode is KeggSearchMode.EXACT_MASS:
+        caveats.append("Exact-mass matches are compound candidates, not compound identifications.")
+    return tuple(caveats)
 
 
 __all__ = ["search_kegg_entries"]

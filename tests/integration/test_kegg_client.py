@@ -1698,36 +1698,48 @@ def test_gene_resolver_reuses_positive_and_negative_split_entry_cache(
         source_namespace=GeneIdentifierNamespace.KEGG_GENE,
         identifiers=("hsa:1", "hsa:2"),
     )
+    first_store = SQLiteResultStore(tmp_path / "first-results.sqlite3")
+    second_store = SQLiteResultStore(tmp_path / "second-results.sqlite3")
 
     first = resolve_kegg_entities(
         request,
         client=client,
-        result_store=SQLiteResultStore(tmp_path / "first-results.sqlite3"),
+        result_store=first_store,
         scope_id="scope",
     )
     second = resolve_kegg_entities(
         request,
         client=client,
-        result_store=SQLiteResultStore(tmp_path / "second-results.sqlite3"),
+        result_store=second_store,
         scope_id="scope",
     )
 
     assert transport.urls == ["https://rest.kegg.jp/get/hsa:1+hsa:2"]
-    assert [item.status for item in first.resolutions] == [
+    assert [item.status for item in first.resolution_previews] == [
         MappingStatus.ONE_TO_ONE,
         MappingStatus.UNMAPPED,
     ]
-    assert [item.status for item in second.resolutions] == [
+    assert [item.status for item in second.resolution_previews] == [
         MappingStatus.ONE_TO_ONE,
         MappingStatus.UNMAPPED,
     ]
     assert {
         candidate.canonical_entity.kind
-        for resolution in second.resolutions
-        for candidate in resolution.candidates
+        for resolution in second.resolution_previews
+        for candidate in resolution.candidate_preview
     } == {KeggEntityKind.GENE}
-    assert len(first.provenance) == 1
-    assert len(second.provenance) == 2
+    assert first.retrieval.batch_count == 1
+    assert second.retrieval.batch_count == 2
+    retained = json.loads(
+        second_store.read_artifact(
+            "scope",
+            second.result.result_id,
+            "detail",
+            limit=1_000_000,
+        ).content
+    )
+    assert len(retained["resolutions"]) == 2
+    assert len(retained["steps"]) == 1
 
 
 def test_gene_resolver_treats_a_single_get_404_as_a_cached_unmapped_identifier(
@@ -1760,10 +1772,12 @@ def test_gene_resolver_treats_a_single_get_404_as_a_cached_unmapped_identifier(
     )
 
     assert transport.urls == ["https://rest.kegg.jp/get/hsa:999999"]
-    assert first.resolutions[0].status is MappingStatus.UNMAPPED
-    assert second.resolutions[0].status is MappingStatus.UNMAPPED
-    assert first.provenance[0].origin is ResponseOrigin.NETWORK
-    assert second.provenance[0].origin is ResponseOrigin.CACHE
+    assert first.resolution_previews[0].status is MappingStatus.UNMAPPED
+    assert second.resolution_previews[0].status is MappingStatus.UNMAPPED
+    assert first.retrieval.network_request_count == 1
+    assert first.retrieval.cache_hit_count == 0
+    assert second.retrieval.network_request_count == 0
+    assert second.retrieval.cache_hit_count == 1
 
 
 def test_gene_resolver_uses_genome_identity_for_t_number_organism_filtering(
@@ -1811,11 +1825,11 @@ def test_gene_resolver_uses_genome_identity_for_t_number_organism_filtering(
         "https://rest.kegg.jp/get/gn:hsa",
         "https://rest.kegg.jp/get/T01001:10458",
     ]
-    assert [item.status for item in result.resolutions] == [
+    assert [item.status for item in result.resolution_previews] == [
         MappingStatus.ONE_TO_ONE,
         MappingStatus.ORGANISM_MISMATCH,
     ]
-    assert len(result.provenance) == 2
+    assert result.retrieval.batch_count == 2
 
 
 def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
@@ -1836,7 +1850,6 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
             ),
             TransportResponse(status_code=200, body=genome_body),
             TransportResponse(status_code=200, body=genome_body),
-            TransportResponse(status_code=200, body=b""),
             TransportResponse(status_code=200, body=b"gn:eco\ttaxid:562\n"),
         ]
     )
@@ -1863,12 +1876,11 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
         "https://rest.kegg.jp/link/genome/taxid:562/species",
         "https://rest.kegg.jp/get/gn:eco",
         "https://rest.kegg.jp/get/gn:T00007",
-        "https://rest.kegg.jp/list/pathway/eco",
         "https://rest.kegg.jp/link/taxonomy/gn:eco",
     ]
-    assert result.resolutions[0].status is MappingStatus.ONE_TO_ONE
-    assert result.resolutions[0].candidates[0].canonical_entity.identifier == "eco"
-    assert len(result.provenance) == 5
+    assert result.resolution_previews[0].status is MappingStatus.ONE_TO_ONE
+    assert result.resolution_previews[0].candidate_preview[0].canonical_entity.identifier == "eco"
+    assert result.retrieval.batch_count == 4
 
 
 @pytest.mark.parametrize(

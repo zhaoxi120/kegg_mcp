@@ -221,40 +221,41 @@ def resolve_organism_request(
         if entity.kind is KeggEntityKind.ORGANISM
     )
     pathway_summaries: dict[str, OrganismPathwaySummary] = {}
-    for organism in all_organism_codes:
-        require_resolver_request_capacity(budget)
-        listed = client.list_organism_pathways(
-            OrganismPathwayListRequest(organism=organism.identifier),
-            options=options,
-        )
-        budget.record(
-            row_count=len(listed.document.rows),
-            batches=(listed.batch,),
-        )
-        provenance.append(listed.batch)
-        steps.append(
-            {
-                "operation": ResolutionOperation.LIST.value,
-                "database": "pathway",
-                "organism": organism.identifier,
-                "result": listed.model_dump(mode="json"),
-            }
-        )
-        preview = tuple(
-            OrganismPathwayPreviewEntry(
-                pathway=pair_entity(KeggEntityKind.PATHWAY, row.pathway_id),
-                name=row.name,
+    if request.include_pathway_directory:
+        for organism in all_organism_codes:
+            require_resolver_request_capacity(budget)
+            listed = client.list_organism_pathways(
+                OrganismPathwayListRequest(organism=organism.identifier),
+                options=options,
             )
-            for row in listed.document.rows[:MAX_ORGANISM_PATHWAY_PREVIEW]
-        )
-        pathway_summaries[organism.identifier] = OrganismPathwaySummary(
-            total_count=len(listed.document.rows),
-            preview=preview,
-            truncated=len(preview) < len(listed.document.rows),
-        )
-    for index, groups in enumerate(candidate_identities):
-        if groups:
-            operations_by_input[index].append(ResolutionOperation.LIST)
+            budget.record(
+                row_count=len(listed.document.rows),
+                batches=(listed.batch,),
+            )
+            provenance.append(listed.batch)
+            steps.append(
+                {
+                    "operation": ResolutionOperation.LIST.value,
+                    "database": "pathway",
+                    "organism": organism.identifier,
+                    "result": listed.model_dump(mode="json"),
+                }
+            )
+            preview = tuple(
+                OrganismPathwayPreviewEntry(
+                    pathway=pair_entity(KeggEntityKind.PATHWAY, row.pathway_id),
+                    name=row.name,
+                )
+                for row in listed.document.rows[:MAX_ORGANISM_PATHWAY_PREVIEW]
+            )
+            pathway_summaries[organism.identifier] = OrganismPathwaySummary(
+                total_count=len(listed.document.rows),
+                preview=preview,
+                truncated=len(preview) < len(listed.document.rows),
+            )
+        for index, groups in enumerate(candidate_identities):
+            if groups:
+                operations_by_input[index].append(ResolutionOperation.LIST)
 
     if all_organism_codes:
         linked_taxonomies = bounded_resolver_link(

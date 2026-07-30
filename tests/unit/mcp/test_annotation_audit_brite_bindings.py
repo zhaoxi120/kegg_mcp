@@ -19,7 +19,10 @@ from kegg_mcp.mcp.contracts import (
 )
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_handlers import ToolContext
-from kegg_mcp.services.annotation_audit import AnnotationMappingAuditResult
+from kegg_mcp.services.annotation_audit import (
+    AnnotationMappingAuditResult,
+    AnnotationMappingTarget,
+)
 from kegg_mcp.services.brite_hierarchy import MapBriteHierarchyResult
 from kegg_mcp.services.models import DatasetSource
 from kegg_mcp.services.query_models import KeggEntityKind, KeggEntityRef
@@ -90,7 +93,20 @@ def test_registry_uses_typed_open_world_client_contracts() -> None:
         "include_unmatched",
         "preview_limit",
     }
-    assert set(audit_input_schema["properties"]) == {"source", "quality_context"}
+    assert set(audit_input_schema["properties"]) == {
+        "source",
+        "quality_context",
+        "mapping_targets",
+    }
+    assert audit_input_schema["properties"]["mapping_targets"]["maxItems"] == 5
+    with pytest.raises(ValidationError, match="mapping_targets must be unique"):
+        AuditAnnotationMappingInput(
+            source=DatasetSource(ko_text="K00001"),
+            mapping_targets=(
+                AnnotationMappingTarget.PATHWAY,
+                AnnotationMappingTarget.PATHWAY,
+            ),
+        )
     assert "MapBriteHierarchyResult" in brite_output_schema["$defs"]
     assert "AnnotationMappingAuditResult" in audit_output_schema["$defs"]
 
@@ -150,6 +166,7 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
         result_store: SQLiteResultStore,
         scope_id: str,
         quality_context: object,
+        mapping_targets: object,
     ) -> AnnotationMappingAuditResult:
         captured["audit"] = (
             source,
@@ -157,6 +174,7 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
             result_store,
             scope_id,
             quality_context,
+            mapping_targets,
         )
         return audit_result
 
@@ -186,6 +204,7 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
         result_store,
         "binding-scope",
         None,
+        audit_request.mapping_targets,
     )
     assert brite_outcome.data is brite_result
     assert audit_outcome.data is audit_result
