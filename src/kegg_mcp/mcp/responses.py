@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sys
+from typing import cast
 
 from mcp import types
 from pydantic import AnyUrl, BaseModel, ValidationError
@@ -38,7 +39,7 @@ def success(
             types.ResourceLink(
                 type="resource_link",
                 name=f"result-{result_id}",
-                title="Retained KEGG analysis result",
+                title="Retained KEGG result",
                 uri=AnyUrl(uri),
                 description="Scoped metadata and bounded section links.",
                 mimeType="application/json",
@@ -62,11 +63,20 @@ def error_result(detail: ErrorDetail) -> types.CallToolResult:
     )
 
 
-def validation_error(error: ValidationError) -> ErrorDetail:
+def validation_error(
+    error: ValidationError,
+    *,
+    input_model: type[BaseModel],
+) -> ErrorDetail:
     details = [SafeDetail(name="stage", value="input_validation")]
+    safe_field_names = _schema_field_names(input_model)
     for issue in error.errors(include_input=False, include_url=False)[:8]:
-        location = ".".join(str(part) for part in issue.get("loc", ())) or "$"
         issue_type = str(issue.get("type", "invalid"))[:1_000]
+        location = _safe_validation_location(
+            issue.get("loc", ()),
+            issue_type=issue_type,
+            safe_field_names=safe_field_names,
+        )
         safe_conflict_fields: tuple[str, ...] = ()
         context = issue.get("ctx")
         if issue_type == _NESTED_CONTEXT_CONFLICT and isinstance(context, dict):
@@ -88,6 +98,44 @@ def validation_error(error: ValidationError) -> ErrorDetail:
         suggested_action="Correct the supplied fields using the tool input schema.",
         safe_details=tuple(details),
     )
+
+
+def _schema_field_names(model: type[BaseModel]) -> frozenset[str]:
+    names: set[str] = set()
+    pending: list[object] = [model.model_json_schema(mode="validation")]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            mapping = cast(dict[object, object], node)
+            properties = mapping.get("properties")
+            if isinstance(properties, dict):
+                property_mapping = cast(dict[object, object], properties)
+                names.update(name for name in property_mapping if isinstance(name, str))
+            pending.extend(mapping.values())
+        elif isinstance(node, list):
+            pending.extend(cast(list[object], node))
+    return frozenset(names)
+
+
+def _safe_validation_location(
+    raw_location: object,
+    *,
+    issue_type: str,
+    safe_field_names: frozenset[str],
+) -> str:
+    if issue_type == "extra_forbidden":
+        return "$.<unknown_field>"
+    if not isinstance(raw_location, tuple):
+        return "$.<invalid_component>"
+    components: list[str] = []
+    for component in cast(tuple[object, ...], raw_location):
+        if isinstance(component, int) and not isinstance(component, bool) and component >= 0:
+            components.append(str(component))
+        elif isinstance(component, str) and component in safe_field_names:
+            components.append(component)
+        else:
+            components.append("<invalid_component>")
+    return ".".join(components) or "$"
 
 
 def internal_error(exception: Exception, *, stage: str) -> ErrorDetail:

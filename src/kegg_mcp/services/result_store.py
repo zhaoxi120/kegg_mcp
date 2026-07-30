@@ -7,7 +7,8 @@ import re
 import secrets
 import sqlite3
 import stat
-from contextlib import closing
+from collections.abc import Generator
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, NoReturn, Self, cast
@@ -1208,7 +1209,7 @@ class SQLiteResultStore:
         return path
 
 
-def compensate_created_result(
+def _compensate_created_result(
     result_store: SQLiteResultStore,
     scope_id: str,
     result_id: str,
@@ -1219,6 +1220,26 @@ def compensate_created_result(
         result_store.delete(scope_id, result_id, now=created_at)
     except Exception as error:
         raise RuntimeError("retained-result compensation failed") from error
+
+
+@contextmanager
+def create_retained_result(
+    result_store: SQLiteResultStore,
+    scope_id: str,
+    artifacts: tuple[ResultArtifactInput, ...],
+) -> Generator[ResultMetadata, None, None]:
+    """Create a result and remove it if dependent work inside the context fails."""
+    result = result_store.create(scope_id, artifacts)
+    try:
+        yield result
+    except BaseException:
+        _compensate_created_result(
+            result_store,
+            scope_id,
+            result.result_id,
+            result.created_at,
+        )
+        raise
 
 
 def _validate_scope_id(value: object) -> str:
@@ -1444,5 +1465,5 @@ __all__ = [
     "ResultStoreLimits",
     "SQLiteResultStore",
     "ScopeDeletionSummary",
-    "compensate_created_result",
+    "create_retained_result",
 ]

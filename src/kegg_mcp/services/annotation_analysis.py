@@ -38,7 +38,6 @@ from kegg_mcp.execution import (
 from kegg_mcp.kegg import (
     KeggLinkRelationship,
     KeggRequestOptions,
-    LinkRequest,
     ResponseOrigin,
 )
 from kegg_mcp.kegg.contracts import (
@@ -46,6 +45,7 @@ from kegg_mcp.kegg.contracts import (
     KeggPairRow,
 )
 from kegg_mcp.reporting import ReportInput, ReportLimits, render_report
+from kegg_mcp.services.kegg_relations import bounded_relation_batches
 from kegg_mcp.services.models import (
     MAX_DIRECT_ANALYSIS_TARGETS,
     AnalyzeKoAnnotationsResult,
@@ -85,7 +85,7 @@ from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     ResultArtifactMetadata,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 # Current KEGG Global, Overview, and higher-level Overview KO reference maps.
@@ -375,10 +375,9 @@ def analyze_annotation_targets(
                 )
             )
             artifact_metadata.append(_artifact_metadata(section, "application/json", content))
-    result = result_store.create(scope_id, tuple(stored_inputs))
-    output_bundle = None
-    started = time.perf_counter_ns()
-    try:
+    with create_retained_result(result_store, scope_id, tuple(stored_inputs)) as result:
+        output_bundle = None
+        started = time.perf_counter_ns()
         if output_directory is not None:
             summary_artifact = next(
                 artifact for artifact in rendered.artifacts if artifact.section.value == "summary"
@@ -397,14 +396,6 @@ def analyze_annotation_targets(
                 manifest_path_mode=request.manifest_path_mode,
                 remove_created_directory_on_failure=remove_created_output_on_failure,
             )
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            result.result_id,
-            result.created_at,
-        )
-        raise
     stage_elapsed[ExecutionStage.BUNDLE_WRITE] = _elapsed_ms(started)
     artifacts = tuple(artifact_metadata)
     caveats = ["K-number assignments are annotation evidence, not experimental validation."]
@@ -504,29 +495,13 @@ def _map_selected_ko_relationships(
             "Automatic target ranking requires at least one selected K number.",
             suggested_action="Provide selected KO evidence or explicit MODULE/pathway targets.",
         )
-    maximum_per_call = min(100, client.config.limits.max_identifiers)
-    rows: list[KeggPairRow] = []
-    provenance: list[KeggBatchProvenance] = []
-    for start in range(0, len(selected_ko_ids), maximum_per_call):
-        result = client.link(
-            LinkRequest(
-                relationship=relationship,
-                source_identifiers=selected_ko_ids[start : start + maximum_per_call],
-            ),
-            options=options,
-        )
-        batch_offset = len(provenance)
-        rows.extend(
-            KeggPairRow(
-                batch_index=row.batch_index + batch_offset,
-                line_number=row.line_number,
-                source_id=row.source_id,
-                target_id=row.target_id,
-            )
-            for row in result.rows
-        )
-        provenance.extend(result.batches)
-    return tuple(rows), tuple(provenance)
+    result = bounded_relation_batches(
+        selected_ko_ids,
+        relationship=relationship,
+        client=client,
+        options=options,
+    )
+    return result.rows, result.batches
 
 
 def _pathway_ranking_execution(

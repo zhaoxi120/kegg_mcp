@@ -8,21 +8,24 @@ The repository contains three independently packaged local stdio MCP servers and
 repository Skills. All three distributions support Linux with CPython 3.11.x only. Wider Python or
 operating-system support requires separate compatibility work.
 
-Last architecture and document-ownership review: 2026-07-23.
+Last architecture and document-ownership review: 2026-07-30.
 
 ## Product boundary
 
-KEGG MCP converts supplied KO annotation evidence into traceable KEGG relationships, conservative
-MODULE evaluation, descriptive pathway coverage, deterministic KO-set comparisons, and bounded
-static visualizations. It does not infer experimental validation, expression, activity, flux,
-phenotype, or statistical significance.
+KEGG MCP converts supplied KO annotation evidence and bounded entity queries into traceable KEGG
+relationships, conservative MODULE evaluation, descriptive pathway coverage, deterministic KO-set
+comparisons, and bounded static visualizations. Its query surface returns candidates, typed
+crosswalks, relation traces, BRITE classifications, and annotation mapping audits. It does not
+infer experimental validation, expression, activity, flux, phenotype, or statistical significance.
 
 The supported input routes are:
 
 - a plain list of K numbers;
 - a generic CSV or TSV annotation table with an explicit or unambiguous column mapping;
 - previously generated DeepKOALA detailed output;
-- a protein FASTA processed by the separately installed `deepkoala-mcp` companion; and
+- a protein FASTA processed by the separately installed `deepkoala-mcp` companion;
+- bounded search terms, external gene or organism identifiers, and typed KEGG entity seeds supplied
+  directly to the core query services; and
 - an existing compatible `render_input.json` passed directly to `kegg-render-mcp`.
 
 The common FASTA-to-image workflow is:
@@ -47,19 +50,23 @@ the core remains stopped until a selected route supplies supported KO evidence.
 The current product does not provide:
 
 - annotator execution, model loading, KGML parsing, or image generation inside the core server;
-- nucleotide gene prediction, translation, sequence alignment, or unrestricted KO-to-gene search;
+- nucleotide gene prediction, translation, sequence alignment, or unrestricted genome-wide or
+  cross-organism gene discovery;
 - abundance analysis, enrichment, differential abundance, confidence intervals, or replicate-aware
   statistics;
 - metabolic modeling, flux inference, or phenotype prediction;
+- arbitrary graph traversal, centrality, shortest-path, community, or causal-network analysis;
 - remote HTTP transport, public hosting, user accounts, or multi-user result storage;
 - a web UI, interactive HTML, browser automation, or active SVG content;
 - public plugin marketplace distribution or automatic update services;
 - KEGG dataset mirroring or redistribution; or
 - automatic installation of later DeepKOALA weights, multi-domain resources, or KOfam profiles.
 
-Organism-scoped gene discovery, abundance-aware methods, statistical enrichment, global or overview
-pathway line overlays, Streamable HTTP, non-KEGG backends, and wider platform support require
-separately assigned work. They must not leak into current interfaces as speculative options.
+Bounded organism-scoped gene-symbol lookup is candidate discovery and preserves every match; it is
+not genome annotation or automatic identity selection. Abundance-aware methods, statistical
+enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, and wider
+platform support require separately assigned work. They must not leak into current interfaces as
+speculative options.
 
 ## Process, package, and Skill architecture
 
@@ -67,7 +74,7 @@ The repository keeps three process boundaries:
 
 | Process | Responsibility | Explicit exclusions |
 | --- | --- | --- |
-| `kegg-mcp` | Import KO evidence, retrieve typed KEGG references, analyze, retain results, and produce renderer handoffs | Running an annotator, parsing KGML, or rendering images |
+| `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and produce renderer handoffs | Running an annotator, parsing KGML, rendering images, or performing enrichment or arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
 | `kegg-render-mcp` | Validate a version 3 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
@@ -80,7 +87,7 @@ The three repository Skills have one MCP dependency each:
 | Skill | MCP dependency | Responsibility |
 | --- | --- | --- |
 | `deepkoala-annotation` | `deepkoala-mcp` | Protein FASTA annotation and stable detailed-CSV delivery |
-| `kegg-ko-analysis` | `kegg-mcp` | Existing KO evidence, MODULE/pathway analysis, and KO-set comparison |
+| `kegg-ko-analysis` | `kegg-mcp` | Bounded KEGG query and evidence routing, existing-KO analysis, and KO-set comparison |
 | `kegg-pathway-rendering` | `kegg-render-mcp` | Static rendering from an existing compatible handoff |
 
 Skills contain instructions, not deterministic implementation code. They do not launch
@@ -90,7 +97,11 @@ allowed output directories connect stages. Process-scoped job and result identif
 optimizations, not cross-process authorization or durable handoff tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
-MCP transport. MCP handlers call public service functions and do not duplicate domain logic.
+MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
+limits, rate limiting, caching, strict parsing, and retrieval provenance. Query services compose
+only those typed primitives into bounded search, resolution, relation tracing, BRITE mapping, and
+annotation audit results. MCP handlers validate transport models and call public service functions;
+they do not duplicate client, query, or domain logic.
 
 ### Document ownership
 
@@ -153,9 +164,13 @@ at most ten entries. Single-pathway PNG and KGML retrieval uses one asset per re
 operations use typed allowlists, bounded identifiers and responses, timeouts, bounded retries for
 transient failures, and no retry for deterministic client errors.
 
-The client exposes bounded typed `info`, selected `get`, selected `link`, and selected `conv`
-operations. It is not an arbitrary URL proxy. `list`, `find`, whole-database conversion, broad gene
-discovery, and unrestricted `link/genes/<KO>` expansion are absent from the public surface.
+The client exposes bounded typed `info`, organism-pathway `list`, `find`, selected `get`, selected
+`link`, and selected `conv` operations. It is not an arbitrary URL proxy. The only `list` form is
+one canonical organism's pathway directory; whole-database listing is unavailable. `find` returns
+database-validated candidates without assigning an identity; the Core resolver uses its internal
+gene route only when an organism code is explicit. Whole-database conversion or relationship
+expansion, arbitrary database pairs, and unrestricted `link/genes/<KO>` expansion are absent from
+the public surface.
 
 Cache behavior is deployment-owned:
 
@@ -170,10 +185,48 @@ Cache behavior is deployment-owned:
 - status reads do not create or open SQLite merely to collect statistics and report
   `inspection_status=not_probed` for uninspected counts.
 
-The default local test profile performs no live KEGG requests. Pull-request CI runs one serialized
-campaign of 30 `INFO`, 30 `GET`, 30 `LINK`, and 30 `CONV` requests at one request per second with
-zero retries and no uploaded KEGG payloads. The workflow has no merge-push repetition. This campaign
-is an access and compatibility check, not permission to redistribute responses.
+The default local test profile performs no live KEGG requests. The governed pull-request
+compatibility campaign is defined only in [the live-test guide](../tests/live/README.md). It is an
+access and compatibility check, not permission to redistribute responses.
+
+## Bounded query and evidence routing
+
+The Core query layer exposes five focused capabilities:
+
+- `search_kegg_entries` performs bounded keyword search and approved compound candidate searches.
+  Results preserve KEGG match text and never invent a relevance score or confirmed identity.
+- `resolve_kegg_entities` resolves gene or organism identifiers through typed FIND, GET, CONV,
+  and LINK steps. Organism-pathway LIST retrieval is an explicit opt-in projection. It reports
+  unmapped, one-to-one, one-to-many, many-to-one, and organism-mismatch outcomes and never silently
+  chooses among ambiguous candidates.
+- `trace_kegg_relations` follows an explicit allowlist of typed KEGG relationship directions for
+  one or two hops under fixed seed, node, edge, row, response-byte, and provenance bounds.
+- `map_brite_hierarchy` maps supplied typed entities into source-backed BRITE paths, preserves
+  multiple memberships when requested, reports unmatched entities, and uses descriptive
+  unique-input counts without enrichment or abundance weighting.
+- `audit_annotation_mapping` summarizes normalized evidence, duplicate and conflicting
+  assignments, strict and lenient mapping yields across caller-selected fixed KEGG relationship
+  classes, unmapped K numbers, retrieval provenance, and missing or mixed source metadata warnings.
+  Its separable remote mapping phase may be omitted or skipped at a preflight request limit without
+  discarding the local evidence audit.
+
+These functions are query and evidence-routing operations. A search candidate is not an identified
+entity, a relationship edge is not a regulatory or causal mechanism, a BRITE count is not
+enrichment, an organism pathway directory is not evidence of pathway presence or activity, and an
+audit yield is not evidence of biological presence or absence. The Core does not add p-values,
+significance tests, pathway activity, flux, centrality, shortest paths, communities, or other
+arbitrary graph interpretation.
+
+Query detail is retained through the same scope-isolated result store used by analysis services,
+but it does not become a second annotation model. BRITE paths and mapping-audit artifacts are Core
+query results; they are not passed into `deepkoala-mcp`, added to the renderer handoff, or
+recomputed by `kegg-render-mcp`.
+
+All five P0 query and audit direct results are fixed compact projections with explicit counts and
+truncation flags under a shared 64 KiB serialized bound. Complete search matches, crosswalks,
+steps, graph data, BRITE paths, audit distributions, relationship rows, and provenance remain in
+the scoped retained resource. The LLM selects projections and interprets summaries; it does not
+perform server batching, merge relationship shards, or reconstruct discarded detail.
 
 ## MODULE, pathway, and comparison semantics
 
@@ -237,6 +290,11 @@ bounded optional Top-N selection, loads only required references, evaluates requ
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
 reuse the same service and domain functions.
 
+The bounded search, resolver, relation-trace, BRITE, and mapping-audit tools are separate
+transport-independent service workflows. They reuse the same typed client, access policy,
+retrieval provenance, and scoped result storage without being folded into
+`analyze_ko_annotations`.
+
 Ordinary tool inputs expose only analysis choices. Eligibility, endpoints, cache policy, allowed
 roots, storage, rate limits, and hard service limits remain deployment configuration. Connectivity
 probing is explicit and open-world. Status is side-effect-free, redacted, and does not imply that
@@ -260,6 +318,10 @@ DeepKOALA is an external, independently versioned annotation tool. The core serv
 previously generated detailed table and never loads its models or runs its CLI. Only
 `deepkoala-mcp` may launch the configured external checkout.
 
+The annotator neither performs Core entity search, identifier resolution, relation tracing, BRITE
+classification, or annotation mapping audit nor consumes their retained artifacts. Its stable
+detailed CSV remains immutable source evidence at the Core importer boundary.
+
 The companion owns allowed-root FASTA validation, one deployment-wide runner lease, fixed direct
 subprocess arguments, explicit CPU/CUDA policy, bounded polling and cleanup, and stable
 `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves detailed
@@ -276,6 +338,9 @@ The renderer consumes the Core's immutable `render_input.json` schema version 3 
 `AnalysisExecutionProvenance` version 3. It never normalizes annotations, chooses a second KO
 policy, or recomputes MODULE completion, block coverage, pathway denominators, or coverage ratios.
 It produces bounded static regular-pathway overlays and project-owned MODULE logic diagrams.
+
+BRITE hierarchy results and annotation mapping audits are not renderer inputs. The renderer does
+not query or visualize those artifacts, traverse their relationships, or recompute their counts.
 
 The [visualization architecture](visualization-architecture.md) owns the handoff, typed pathway
 asset boundary, rendering semantics, graphics security, and data-rights rules. The
@@ -343,8 +408,8 @@ the [Codex Skill evaluation](skill-evaluation.md) supplies its mandatory manual 
 External facts are time-sensitive. Recheck a source when a change affects a parser, schema, fixture,
 access rule, or acceptance test, and record the new retrieval date in the same tracked change.
 
-KEGG service, data-format, MODULE, pathway, and rights sources were reviewed on 2026-07-14, with the
-visualization-specific API and legal boundary reviewed again on 2026-07-16:
+KEGG service, FIND, relationship, data-format, MODULE, pathway, and rights sources were reviewed on
+2026-07-30, with the visualization-specific API and legal boundary reviewed again on 2026-07-30:
 
 - [KEGG REST overview](https://www.kegg.jp/kegg/rest/),
   [API manual](https://www.kegg.jp/kegg/rest/keggapi.html), and

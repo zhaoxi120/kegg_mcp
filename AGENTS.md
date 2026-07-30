@@ -3,9 +3,10 @@
 ## Purpose and current state
 
 This repository provides three independently packaged local stdio MCP servers and three focused
-Codex Skills for KEGG-aware KO analysis:
+Codex Skills for bounded KEGG entity queries and KO analysis:
 
-- `kegg-mcp` normalizes annotation evidence and performs authoritative KEGG analysis;
+- `kegg-mcp` performs bounded typed KEGG query and evidence routing, normalizes annotation
+  evidence, and performs authoritative KEGG analysis;
 - `deepkoala-mcp` optionally runs an explicitly configured local DeepKOALA installation; and
 - `kegg-render-mcp` renders the core's typed handoff as bounded static graphics.
 
@@ -63,6 +64,13 @@ schema, parser, fixture, or acceptance test.
 
 ## Biological interpretation
 
+- A KEGG search result is a candidate, not an automatically selected identity. Do not invent a
+  relevance score, and do not describe an exact-mass compound candidate as an identification.
+- Identifier resolution preserves every reported ambiguous candidate, organism mismatch, and
+  unmapped outcome. Mapping failure is not evidence that an entity is absent.
+- A typed KEGG relationship is a database cross-reference, not evidence of regulation, causality,
+  mechanism, activity, or phenotype. BRITE counts and annotation mapping yields are descriptive;
+  do not call them enrichment, dominant function, validation, presence, or absence.
 - A K-number assignment is annotation evidence, not experimental validation. A source-rejected
   prediction is not evidence that the function is absent.
 - Strict analysis uses accepted K numbers only. Lenient analysis adds only records explicitly

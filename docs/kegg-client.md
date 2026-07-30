@@ -8,10 +8,11 @@ layers are documented separately.
 
 ## Official service facts and eligibility
 
-The external facts that affect this contract were retrieved on 2026-07-14. The
+The external facts that affect this contract were retrieved on 2026-07-30. The
 [KEGG REST overview](https://www.kegg.jp/kegg/rest/) identifies the official REST service, and the
 [KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html) documents the supported operations,
-response forms, status codes, and the limit of ten entries in one `get` request. The
+response forms, status codes, organism-scoped pathway LIST form, FIND query modes, selected-entry
+LINK forms, and the limit of ten entries in one `get` request. The
 [KEGG PATHWAY database page](https://www.kegg.jp/kegg/pathway.html) defines the supported
 reference, organism-specific, virus, and virus-extension pathway identifier forms. The
 [KEGG organism catalog](https://www.kegg.jp/kegg/catalog/org_list.html) and the
@@ -115,11 +116,17 @@ authorizing the configured service.
 | --- | ---: | --- |
 | `requests_per_second` | `2.0` | From `1/60` through `3.0`, inclusive |
 | `timeout_seconds` | `15.0` | Per-request timeout, at most 120 seconds |
-| `max_response_bytes` | `5_000_000` | Checked before and while reading a response |
+| `max_response_bytes` | `5_000_000` | Checked before and while reading; hard maximum 50,000,000 |
 | `max_identifiers` | `100` | Per public operation before batching |
 | `relation_batch_size` | `10` | Maximum CONV identifiers per prepared batch |
 | `link_batch_size` | `100` | Maximum LINK identifiers per prepared batch; URL packing may lower it |
-| `max_url_bytes` | `8_192` | Bound on each prepared path and complete request URL |
+| `max_url_bytes` | `8_192` | Prepared request bound; FIND/LINK include the endpoint; hard maximum 65,536 |
+
+The readable normalized request key is limited to 65,536 characters, matching the maximum
+configured URL bound and the cache key limit. This prevents a request that passed URL preparation
+and cache storage from failing later only when provenance is constructed. FIND queries are
+separately limited to 4,096 Unicode characters, and percent encoding is accounted for against the
+complete URL-byte limit.
 
 Rate limiting is deployment-wide for one endpoint fingerprint. Core and Renderer use the same
 owner-only state root, `${XDG_CACHE_HOME:-~/.cache}/kegg-mcp/rate-limit`, unless
@@ -159,15 +166,63 @@ models and fixed operation mappings.
 line and conservatively extracts a release string, entry count, and linked database names when the
 document supplies an unambiguous form.
 
+### LIST
+
+`OrganismPathwayListRequest` exposes exactly one bounded LIST form for the pathway directory of one
+canonical three- or four-letter KEGG organism code. It prepares
+`/list/pathway/<organism>`; callers cannot select another database, rank, group, URL, or
+whole-database listing.
+
+The wire parser accepts only an ordered two-column tab table whose identifiers use the official
+simplified organism-specific `<organism>NNNNN` form and whose names are non-empty bounded UTF-8
+text. Typed rows normalize those identifiers to `path:<organism>NNNNN`. An empty successful
+response remains an empty directory. The complete response stays under the configured response-byte
+limit. The organism resolver uses the row count and a bounded preview; it does not infer pathway
+presence, completeness, activity, or phenotype from directory availability.
+
+### FIND
+
+`FindRequest` exposes one bounded candidate search, not an arbitrary database query. Keyword mode
+accepts only `ko`, `pathway`, `module`, `reaction`, `enzyme`, `compound`, and `genome`; the
+high-level `organism` alias uses `genome` on the wire. Formula, exact-mass, and molecular-weight
+modes are valid only for `compound` and use the official `formula`, `exact_mass`, and `mol_weight`
+wire options. Formula and mass values use strict bounded syntax, including an ordered numeric range
+for the two mass modes.
+
+The query must be non-empty valid UTF-8 without outer whitespace or control characters. Slash,
+backslash, question-mark, fragment, and dot-segment path forms are rejected at the typed boundary.
+Spaces, plus signs, percent signs, and non-ASCII text are then encoded as one canonical uppercase
+percent-encoded UTF-8 path segment. The HTTPS transport decodes that segment strictly for
+validation and rejects malformed escapes, encoded structural delimiters, controls, and traversal.
+FIND has no low-level
+`max_results` URL parameter: the transport reads one response under the configured
+5,000,000-byte default, the parser retains its complete ordered rows, and the calling service
+applies its own smaller result-preview bound.
+
+The internal gene resolver may use the additional typed `genes` FIND database with an explicit
+canonical three- or four-letter organism code. That scope becomes the wire database, for example
+`/find/hsa/...`, and every returned canonical KEGG gene identifier must have the same organism
+prefix before the response is cached. The generic public search operation does not expose this
+internal gene-search route.
+
+Each FIND row retains the database-validated simplified KEGG identifier and raw matched text
+returned by KEGG. Gene FIND rows retain their organism-qualified gene identifier. Higher-level
+services convert those source identifiers into typed `KeggEntityRef` values. Rows are candidates
+only. A keyword, formula, exact-mass, or molecular-weight match does not establish a unique identity,
+annotation, biological role, or experimental validation, and the client does not manufacture a
+relevance score or select a best match.
+
 ### GET
 
 `GetRequest` contains ordered, unique `KeggEntryRef` values for `ko`, `module`, `pathway`,
-`reaction`, `enzyme`, `compound`, or `brite`. Each identifier is checked against its selected
-database. Pathway identifiers accept the fixed `map`, `ko`, `ec`, `rn`, `vg`, and `vx` prefixes
-or a three- or four-letter organism code. The configured total identifier limit is enforced before
-preparation. Enzyme identifiers require an EC class from 1 through 7 and four dot-separated
-elements. A partial EC number may replace only a continuous trailing sequence of elements with a
-single `-` per element.
+`reaction`, `enzyme`, `compound`, `brite`, `gene`, or `genome`. Each identifier is checked against
+its selected database. A gene entry requires a canonical database-qualified KEGG gene identifier
+such as `hsa:10458`. A genome entry accepts either a T number or a canonical organism code and is
+sent in the qualified `gn:<identifier>` form. Pathway identifiers accept the fixed `map`, `ko`,
+`ec`, `rn`, `vg`, and `vx` prefixes or a three- or four-letter organism code. The configured total
+identifier limit is enforced before preparation. Enzyme identifiers require an EC class from 1
+through 7 and four dot-separated elements. A partial EC number may replace only a continuous
+trailing sequence of elements with a single `-` per element.
 
 The project does not bundle or mirror the KEGG organism catalog. Organism-code validation checks
 the documented three- or four-letter wire syntax and excludes fixed database prefixes that are
@@ -175,19 +230,29 @@ ambiguous in the same identifier position; it does not assert current catalog me
 operation names are not globally reserved because valid collisions such as `ddi` exist. Entry
 existence remains an endpoint response decision.
 
-Non-BRITE entries are sent in batches of at most ten, regardless of broader configuration. BRITE
-hierarchy htext entries are isolated into one request each because their response format differs.
+Non-BRITE entries are sent in batches of at most ten, regardless of broader configuration.
+Potential genome code/T-number aliases and gene identifiers with the same suffix under different
+prefixes are isolated into separate batches so one flat-file entry cannot satisfy two requested
+references. BRITE hierarchy htext entries are isolated into one request each because their response
+format differs.
 The caller must set `brite_kind=KeggBriteEntryKind.HIERARCHY`; BRITE HTML table files are not
 supported because their identifier syntax does not distinguish them safely from
 hierarchy files. Misclassified content fails parsing rather than being returned as hierarchy data.
 The result echoes the typed request; documents and provenance follow prepared batch order, while
 explicit missing entries follow caller request order.
 
+KEGG gene flat files return an unqualified `ENTRY` value, and a genome requested by organism code
+returns its T number in `ENTRY`. Before caching, the client therefore reconciles gene results
+against `ENTRY` plus `ORGANISM`, and genome aliases against `ENTRY` plus `ORG_CODE`. Each returned
+entry must match exactly one requested typed reference. The same reconciliation controls result
+ordering and entry-level cache splitting; ambiguous, duplicate, or cross-organism content fails
+closed.
+
 ### Pathway assets
 
-The implemented renderer integration provides a typed single-pathway asset interface reviewed against the
-official KEGG API manual on 2026-07-16. `PathwayAssetRequest` accepts one canonical pathway
-identifier and exactly one fixed kind: `image`, `image2x`, or `kgml`. It cannot accept a URL.
+The implemented renderer integration provides a typed single-pathway asset interface reviewed
+against the official KEGG API manual on 2026-07-30. `PathwayAssetRequest` accepts one canonical
+pathway identifier and exactly one fixed kind: `image`, `image2x`, or `kgml`. It cannot accept a URL.
 `KeggClient.get_pathway_asset` reuses the same access gate, endpoint-scoped no-burst limiter,
 retry policy, HTTPS transport, response-size bound, local cache, and retrieval provenance as the
 text operations.
@@ -197,7 +262,7 @@ counts, canonical critical-chunk ordering, valid CRC values, and one complete zl
 scanlines match the IHDR contract. The core applies only bounded UTF-8, declaration-policy, and
 obvious `pathway` root-prefix preflight checks to KGML bytes; it does not parse XML, require a
 well-formed complete document, or assert pathway identity. KGML may omit a DOCTYPE or contain the
-single inert KEGG KGML v0.7.2 HTTPS `SYSTEM` declaration observed on 2026-07-21 in the XML prolog.
+single inert KEGG KGML v0.7.2 HTTPS `SYSTEM` declaration observed on 2026-07-30 in the XML prolog.
 Other DTD declarations and all entity declarations are rejected, and the accepted system identifier
 is never resolved or fetched. The independent renderer owns bounded XML structure parsing,
 pathway-identity checks, and PNG/KGML dimension compatibility. Cached assets are validator-versioned
@@ -212,18 +277,42 @@ and is intentionally not exposed as a core MCP tool.
 - KO to module;
 - KO to reaction;
 - KO to enzyme;
-- KO to BRITE; and
-- pathway to KO.
+- KO to BRITE;
+- pathway to KO, reaction, or compound;
+- gene to KO or pathway;
+- enzyme to reaction;
+- reaction to enzyme, KO, compound, or pathway;
+- compound to reaction or pathway;
+- genome to taxonomy; and
+- taxonomy to genome.
 
-Source identifiers must match the selected direction and must be unique. Broad gene expansion is
-not part of this contract. LINK preparation canonicalizes the identifier order and greedily packs
-the largest next batch that satisfies the configured identifier count, LINK-batch ceiling, and
-complete URL-byte limit. The transport independently enforces the response-byte limit. Thus 73
-ordinary K numbers fit in one default KO-to-pathway request, while longer or future identifiers
-split deterministically when the URL boundary requires it. Equivalent identifier sets produce the
-same batches and cache keys regardless of caller order; raw response-row order is preserved.
-Successful response rows are checked before caching: every source must belong to its prepared batch
-and every target must match the selected relationship namespace.
+These 19 directions are defined by one authoritative relation contract. It binds each direction to
+one source identifier kind, one fixed wire formatter, the exact source namespace expected in the
+response, and one target namespace validator. Source identifiers must match the selected direction
+and must be unique. Gene sources use canonical KEGG gene identifiers; enzyme sources use
+caller-facing EC numbers that are qualified with `ec:` on the wire; reaction and compound sources
+use R and C numbers; genome sources accept an organism code or T number and are qualified with
+`gn:`; taxonomy sources require `taxid:<positive integer>`. Taxonomy-to-genome targets may be an
+organism-code or T-number form under the fixed `gn:` namespace.
+
+`LinkRequest.taxonomy_rank` is a strict `exact` or `species` selector and defaults to `exact`.
+Only taxonomy-to-genome accepts the non-default `species` value. Exact lookup uses
+`/link/genome/<taxid>`, while species lookup appends the fixed `/species` suffix; the suffix is
+included in URL-size validation and the cache key. The client never retries an empty exact result
+as species automatically. On 2026-07-30, the official endpoint returned an empty exact result for
+`taxid:562` and multiple strain genomes for its species-ranked request, so callers must select the
+intended taxonomy semantics explicitly.
+
+Every LINK call remains selected-entry and bounded; database-to-database expansion is not exposed.
+Preparation canonicalizes identifier order and greedily packs the largest next batch that satisfies
+the configured identifier count, LINK-batch ceiling, and complete URL-byte limit. The transport
+independently enforces the response-byte limit. Thus 73 ordinary K numbers fit in one default
+KO-to-pathway request, while longer identifiers split deterministically when the URL boundary
+requires it. Equivalent identifier sets produce the same batches and cache keys regardless of
+caller order; raw response-row order is preserved. Successful response rows are checked before
+caching: every source must belong to its prepared batch and every target must match the selected
+relationship namespace. An empty successful response, including one for a syntactically valid
+genome T-number source, remains an empty relation result and is not interpreted as absence.
 
 ### CONV
 
@@ -232,10 +321,14 @@ one of `ncbi-geneid`, `ncbi-proteinid`, or `uniprot`. Both source and target dat
 and source identifiers must include the matching namespace prefix. KEGG gene identifiers may use
 a three- or four-letter organism code, an official T number, or the bounded KEGG GENES collection
 prefixes `ag`, `vg`, and `vp`. Response sources and target namespaces are reconciled before caching.
-Whole-database conversion and open-ended gene discovery are not exposed.
+Whole-database conversion is not exposed. Organism-scoped candidate gene discovery uses the
+separate typed FIND contract and does not widen CONV.
 
-`list`, `find`, arbitrary database pairs, and arbitrary endpoint paths are not public client
-operations.
+Other `LIST` forms, arbitrary database pairs, arbitrary endpoint paths, and operations whose
+contract is whole-database enumeration are not public client operations. The one
+organism-pathway LIST form is not a generic listing API, and typed FIND is a bounded candidate
+search rather than a replacement for such an API. The client does not download, mirror, package,
+or redistribute a KEGG database. Whole-database CONV and LINK forms remain unavailable.
 
 ## Text parsing
 
@@ -246,6 +339,13 @@ silently reinterpret malformed output:
   `linked db` block, including its `<org>` placeholder, is parsed separately from database
   statistics. Unknown non-empty lines remain available even when no known metadata can be
   extracted.
+- Organism-pathway LIST output is an ordered two-column tab table. Each identifier must be an
+  organism-specific pathway for the exact requested code, each name must be non-empty, and an
+  empty successful response is a valid empty directory.
+- FIND output is an ordered two-column tab table containing a typed candidate identifier and raw
+  matched text. An empty successful response is a valid empty candidate document. The identifier
+  must match the requested database, and an organism-scoped gene response must match the requested
+  organism before caching.
 - LINK and CONV output is an ordered two-column tab table. An empty successful response is a valid
   empty document. Non-empty rows must contain exactly two non-empty identifiers. Row order and
   duplicates are preserved.
@@ -290,23 +390,28 @@ share a cache namespace even when their labels differ, while distinct licensed e
 isolated even when an operator gives them the same label. Neither the endpoint nor its label is
 stored in a cache key.
 
-Each stored successful response includes its raw bytes, retrieval and expiry times, parser version,
-KEGG release when known, and allowlisted HTTP metadata. Reads verify the schema, timestamp ordering,
-parser version, metadata shape, and parser compatibility before returning a payload. A malformed
-row is `CACHE_FAILED`, never a cache miss or biological absence.
+Each stored parsed response includes its normalized bytes, retrieval and expiry times, parser
+version, KEGG release when known, and allowlisted HTTP metadata. A typed GET 404 is normalized to
+an empty document so the requested entries remain explicit in `missing_entries` with network
+provenance. Reads verify the schema, timestamp ordering, parser version, metadata shape, and parser
+compatibility before returning a payload. A malformed row is `CACHE_FAILED`, never a cache miss or
+biological absence.
 
 Multi-entry flat-file GET responses are also split into entry-level cache records after successful
-parsing and identifier reconciliation. A later single-entry GET or cached subset is reconstructed
-from those records. For a partially cached ordered request, only contiguous cache misses are sent
-to KEGG, while cached entries and returned flat-file entries are merged back into caller order. The
-live request still obeys KEGG's maximum of ten GET entries.
+parsing and identifier reconciliation. Returned entries retain their parsed bytes; omitted entries
+receive bounded empty negative-cache records for the same TTL. A later single-entry GET or cached
+subset is reconstructed from those records. For a partially cached ordered request, only contiguous
+cache misses are sent to KEGG, while cached entries and returned flat-file entries are merged back
+into caller order. The live request still obeys KEGG's maximum of ten GET entries.
 
-The response parser contract version is `4`. LINK request keys are canonical unprefixed request
-paths produced after adaptive packing. The parser records nested flat-file field indentation,
-accepts documented BRITE root forms only within a complete htext metadata envelope, and applies
-the current identifier reconciliation rules before cache use. Cache rows produced under an
-incompatible parser version fail closed instead of being silently reinterpreted. A cache created
-for a different schema is incompatible and should be replaced rather than migrated implicitly.
+The response parser contract version is `4`. Normalized request keys are readable canonical
+unprefixed request paths and are bounded to 65,536 characters. LINK keys are produced after
+adaptive packing; FIND keys contain the canonical percent-encoded query segment. The parser records
+nested flat-file field indentation, accepts documented BRITE root forms only within a complete
+htext metadata envelope, and applies the current identifier reconciliation rules before cache use.
+Cache rows produced under an incompatible parser version fail closed instead of being silently
+reinterpreted. A cache created for a different schema is incompatible and should be replaced rather
+than migrated implicitly.
 
 `CachePolicy` defaults to a seven-day TTL, 10,000 rows, 512 MiB of response payloads, and a
 640 MiB SQLite main-database limit. Before each write, expired rows are removed. Fresh rows are
@@ -338,6 +443,10 @@ At lookup time:
 - a stale response is served only when `allow_stale=True`;
 - `cache_only=True` requires `refresh=False`, never calls the HTTP transport, and returns
   `CACHE_ENTRY_NOT_FOUND` on a miss or disallowed stale entry.
+
+The five high-level P0 query and audit services supply `refresh=False` when no explicit options are
+provided. This preserves the low-level public default while making repeated MCP calls fresh-cache
+first. An explicit `KeggRequestOptions(refresh=True)` still forces a bounded live refresh.
 
 Network responses are parsed and reconciled with their typed request before being committed to the
 cache. The active response-size bound is rechecked for both injected transports and cached payloads,
@@ -373,17 +482,18 @@ safe details, and a suggested action:
 | --- | --- |
 | `INPUT_LIMIT_EXCEEDED` | Identifier count or prepared request size exceeds a configured bound. |
 | `CACHE_ENTRY_NOT_FOUND` | No permitted cached response can satisfy an explicit cache-only read. |
-| `KEGG_ENTRY_NOT_FOUND` | The endpoint returned a deterministic not-found response. |
+| `KEGG_ENTRY_NOT_FOUND` | A non-GET endpoint returned a deterministic not-found response. |
 | `KEGG_RATE_LIMITED` | Bounded retries ended with a rate-limit response. |
 | `KEGG_REQUEST_FAILED` | A deterministic request error or exhausted transport retry could not produce a response. |
 | `KEGG_PARSE_FAILED` | Successful response bytes do not conform to the selected strict parser. |
 | `CACHE_FAILED` | Cache I/O, schema, metadata, or parser-version validation failed. |
 
-HTTP 400 and 404 responses are not retried. A successful multi-entry GET may return only some
-requested entries; those are represented by `missing_entries` rather than fabricated records. A
-successful empty LINK or CONV response remains an empty mapping result. Callers must preserve these
-distinctions and must not convert cache, transport, or parser errors into evidence of biological
-absence.
+HTTP 400 and 404 responses are not retried. A GET 404 becomes an empty typed batch with provenance,
+and a multi-entry GET may return only some requested entries; both cases are represented by
+`missing_entries` rather than fabricated records. Other endpoint 404 responses remain
+`KEGG_ENTRY_NOT_FOUND`. A successful FIND may return no candidates, and a successful empty LINK or
+CONV response remains an empty mapping result. Callers must preserve these distinctions and must
+not convert cache, transport, or parser errors into evidence of biological absence.
 
 ## Minimal client example
 
@@ -424,8 +534,7 @@ behavior.
 
 ## Test policy
 
-Local pytest skips the live compatibility campaign by default. Pull-request CI explicitly runs
-30 real requests for each of `INFO`, `GET`, `LINK`, and `CONV`, for 120 total, using one request
-per second, zero retries, a temporary cache, and no uploaded KEGG payloads. Authorized manual runs
-may configure 1 through 30 requests per operation. Other unit and integration network behavior
-uses injected transports or local mock servers.
+Local pytest skips the governed live compatibility campaign by default. Its authoritative request
+matrix, limits, CI behavior, and opt-in local command are defined in
+[the live-test guide](../tests/live/README.md). Other unit and integration network behavior uses
+injected transports or local mock servers.

@@ -5,26 +5,35 @@ import pytest
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg.contracts import (
     ConvRequest,
+    FindRequest,
     GetRequest,
     InfoRequest,
     KeggBriteEntryKind,
     KeggClientLimits,
     KeggConvDatabase,
     KeggEntryRef,
+    KeggFindDatabase,
+    KeggFindMode,
     KeggGetDatabase,
     KeggInfoDatabase,
     KeggLinkRelationship,
+    KeggTaxonomyRank,
     LinkRequest,
+    OrganismPathwayListRequest,
 )
 from kegg_mcp.kegg.operations import (
     PairTargetDatabase,
     ResponseParser,
+    get_entry_matches,
     pair_target_matches,
     prepare_conv,
+    prepare_find,
     prepare_get,
     prepare_info,
     prepare_link,
+    prepare_organism_pathway_list,
 )
+from kegg_mcp.kegg.parsers import parse_flat_file_response
 
 
 def _ko(number: int) -> KeggEntryRef:
@@ -37,6 +46,103 @@ def test_info_preparation_uses_only_the_typed_database() -> None:
     assert len(batches) == 1
     assert batches[0].path == "/info/ko"
     assert batches[0].parser is ResponseParser.INFO
+
+
+def test_organism_pathway_list_preparation_has_one_fixed_typed_route() -> None:
+    prepared = prepare_organism_pathway_list(
+        OrganismPathwayListRequest(organism="hsa"),
+        KeggClientLimits(),
+    )
+
+    assert prepared.operation.value == "list"
+    assert prepared.path == "/list/pathway/hsa"
+    assert prepared.normalized_request_key == prepared.path
+    assert prepared.parser is ResponseParser.ORGANISM_PATHWAY_LIST
+    assert prepared.list_organism == "hsa"
+
+
+def test_find_preparation_percent_encodes_the_query_as_one_path_segment() -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.COMPOUND,
+        query="β-D-glucose + water \u6c34 100%",
+    )
+
+    prepared = prepare_find(request, KeggClientLimits())[0]
+
+    assert prepared.operation.value == "find"
+    assert prepared.path == ("/find/compound/%CE%B2-D-glucose%20%2B%20water%20%E6%B0%B4%20100%25")
+    assert prepared.normalized_request_key == prepared.path
+    assert prepared.parser is ResponseParser.FIND_TABLE
+    assert prepared.find_database is KeggFindDatabase.COMPOUND
+
+
+def test_find_preparation_maps_the_organism_alias_to_genome_on_the_wire() -> None:
+    prepared = prepare_find(
+        FindRequest(database=KeggFindDatabase.ORGANISM, query="Escherichia coli"),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == "/find/genome/Escherichia%20coli"
+    assert prepared.find_database is KeggFindDatabase.ORGANISM
+
+
+def test_gene_find_preparation_uses_the_typed_organism_as_the_wire_database() -> None:
+    prepared = prepare_find(
+        FindRequest(
+            database=KeggFindDatabase.GENES,
+            query="tumor protein p53",
+            organism="hsa",
+        ),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == "/find/hsa/tumor%20protein%20p53"
+    assert prepared.find_database is KeggFindDatabase.GENES
+    assert prepared.find_organism == "hsa"
+
+
+@pytest.mark.parametrize(
+    ("mode", "suffix"),
+    [
+        (KeggFindMode.FORMULA, "formula"),
+        (KeggFindMode.EXACT_MASS, "exact_mass"),
+        (KeggFindMode.MOL_WEIGHT, "mol_weight"),
+    ],
+)
+def test_compound_find_preparation_uses_only_allowlisted_mode_suffixes(
+    mode: KeggFindMode,
+    suffix: str,
+) -> None:
+    query = "C7H10O5" if mode is KeggFindMode.FORMULA else "174.05"
+    prepared = prepare_find(
+        FindRequest(database=KeggFindDatabase.COMPOUND, query=query, mode=mode),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == f"/find/compound/{query}/{suffix}"
+
+
+def test_find_preparation_accounts_for_the_endpoint_in_the_url_bound() -> None:
+    request = FindRequest(database=KeggFindDatabase.KO, query="a" * 240)
+
+    with pytest.raises(KeggMcpError) as caught:
+        prepare_find(
+            request,
+            KeggClientLimits(max_url_bytes=256),
+            url_prefix_bytes=len("https://rest.kegg.jp"),
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+
+
+def test_find_request_key_can_exceed_the_old_provenance_limit_within_the_url_bound() -> None:
+    request = FindRequest(database=KeggFindDatabase.KO, query="a" * 4_096)
+    limits = KeggClientLimits(max_url_bytes=8_192)
+
+    prepared = prepare_find(request, limits)[0]
+
+    assert len(prepared.normalized_request_key) > 4_096
+    assert len(prepared.normalized_request_key.encode("ascii")) <= limits.max_url_bytes
 
 
 def test_get_never_batches_more_than_ten_entries() -> None:
@@ -71,6 +177,69 @@ def test_get_isolates_brite_htext_from_flat_file_batches() -> None:
     assert batches[1].path == "/get/br:br08901"
 
 
+def test_get_preparation_uses_selected_gene_and_qualified_genome_wire_identifiers() -> None:
+    request = GetRequest(
+        entries=(
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:10458"),
+            KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="hsa"),
+            KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="T01001"),
+        )
+    )
+
+    prepared = prepare_get(request, KeggClientLimits())
+
+    assert [batch.path for batch in prepared] == [
+        "/get/hsa:10458+gn:hsa",
+        "/get/gn:T01001",
+    ]
+
+
+def test_get_separates_gene_aliases_with_the_same_suffix() -> None:
+    request = GetRequest(
+        entries=(
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:10458"),
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="T01001:10458"),
+        )
+    )
+
+    prepared = prepare_get(request, KeggClientLimits())
+
+    assert [batch.path for batch in prepared] == [
+        "/get/hsa:10458",
+        "/get/T01001:10458",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("requested", "body"),
+    [
+        (
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:10458"),
+            b"ENTRY       10458             CDS       T01001\nORGANISM    hsa  Homo sapiens\n///\n",
+        ),
+        (
+            KeggEntryRef(database=KeggGetDatabase.GENE, identifier="T01001:10458"),
+            b"ENTRY       10458             CDS       T01001\nORGANISM    hsa  Homo sapiens\n///\n",
+        ),
+        (
+            KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="hsa"),
+            b"ENTRY       T01001            Complete  Genome\nORG_CODE    hsa\n///\n",
+        ),
+        (
+            KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="T01001"),
+            b"ENTRY       T01001            Complete  Genome\nORG_CODE    hsa\n///\n",
+        ),
+    ],
+)
+def test_get_entry_matching_reconciles_gene_and_genome_flat_file_identifiers(
+    requested: KeggEntryRef,
+    body: bytes,
+) -> None:
+    returned = parse_flat_file_response(body).entries[0]
+
+    assert get_entry_matches(requested, returned)
+
+
 def test_link_uses_bounded_selected_identifier_batches() -> None:
     request = LinkRequest(
         relationship=KeggLinkRelationship.KO_TO_MODULE,
@@ -87,6 +256,210 @@ def test_link_uses_bounded_selected_identifier_batches() -> None:
     assert batches[0].path == "/link/module/K00001+K00002"
     assert batches[0].expected_pair_source_ids == frozenset({"ko:K00001", "ko:K00002"})
     assert batches[0].pair_target_database is PairTargetDatabase.MODULE
+
+
+@pytest.mark.parametrize(
+    ("relationship", "source", "path", "expected_source", "target_database"),
+    [
+        (
+            KeggLinkRelationship.KO_TO_PATHWAY,
+            "K00001",
+            "/link/pathway/K00001",
+            "ko:K00001",
+            PairTargetDatabase.PATHWAY,
+        ),
+        (
+            KeggLinkRelationship.KO_TO_MODULE,
+            "K00001",
+            "/link/module/K00001",
+            "ko:K00001",
+            PairTargetDatabase.MODULE,
+        ),
+        (
+            KeggLinkRelationship.KO_TO_REACTION,
+            "K00001",
+            "/link/reaction/K00001",
+            "ko:K00001",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.KO_TO_ENZYME,
+            "K00001",
+            "/link/enzyme/K00001",
+            "ko:K00001",
+            PairTargetDatabase.ENZYME,
+        ),
+        (
+            KeggLinkRelationship.KO_TO_BRITE,
+            "K00001",
+            "/link/brite/K00001",
+            "ko:K00001",
+            PairTargetDatabase.BRITE,
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_KO,
+            "map00010",
+            "/link/ko/map00010",
+            "path:map00010",
+            PairTargetDatabase.KO,
+        ),
+        (
+            KeggLinkRelationship.GENE_TO_KO,
+            "hsa:10458",
+            "/link/ko/hsa:10458",
+            "hsa:10458",
+            PairTargetDatabase.KO,
+        ),
+        (
+            KeggLinkRelationship.GENE_TO_PATHWAY,
+            "hsa:10458",
+            "/link/pathway/hsa:10458",
+            "hsa:10458",
+            PairTargetDatabase.PATHWAY,
+        ),
+        (
+            KeggLinkRelationship.ENZYME_TO_REACTION,
+            "1.1.1.1",
+            "/link/reaction/ec:1.1.1.1",
+            "ec:1.1.1.1",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_ENZYME,
+            "R00001",
+            "/link/enzyme/R00001",
+            "rn:R00001",
+            PairTargetDatabase.ENZYME,
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_KO,
+            "R00001",
+            "/link/ko/R00001",
+            "rn:R00001",
+            PairTargetDatabase.KO,
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_COMPOUND,
+            "R00001",
+            "/link/compound/R00001",
+            "rn:R00001",
+            PairTargetDatabase.COMPOUND,
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_PATHWAY,
+            "R00001",
+            "/link/pathway/R00001",
+            "rn:R00001",
+            PairTargetDatabase.PATHWAY,
+        ),
+        (
+            KeggLinkRelationship.COMPOUND_TO_REACTION,
+            "C00031",
+            "/link/reaction/C00031",
+            "cpd:C00031",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.COMPOUND_TO_PATHWAY,
+            "C00031",
+            "/link/pathway/C00031",
+            "cpd:C00031",
+            PairTargetDatabase.PATHWAY,
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_REACTION,
+            "map00010",
+            "/link/reaction/map00010",
+            "path:map00010",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_COMPOUND,
+            "map00010",
+            "/link/compound/map00010",
+            "path:map00010",
+            PairTargetDatabase.COMPOUND,
+        ),
+        (
+            KeggLinkRelationship.GENOME_TO_TAXONOMY,
+            "T01001",
+            "/link/taxonomy/gn:T01001",
+            "gn:T01001",
+            PairTargetDatabase.TAXONOMY,
+        ),
+        (
+            KeggLinkRelationship.GENOME_TO_TAXONOMY,
+            "hsa",
+            "/link/taxonomy/gn:hsa",
+            "gn:hsa",
+            PairTargetDatabase.TAXONOMY,
+        ),
+        (
+            KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            "taxid:9606",
+            "/link/genome/taxid:9606",
+            "taxid:9606",
+            PairTargetDatabase.GENOME,
+        ),
+    ],
+)
+def test_link_preparation_uses_the_authoritative_relation_contract(
+    relationship: KeggLinkRelationship,
+    source: str,
+    path: str,
+    expected_source: str,
+    target_database: PairTargetDatabase,
+) -> None:
+    prepared = prepare_link(
+        LinkRequest(relationship=relationship, source_identifiers=(source,)),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == path
+    assert prepared.expected_pair_source_ids == frozenset({expected_source})
+    assert prepared.pair_target_database is target_database
+
+
+def test_taxonomy_species_link_appends_the_typed_rank_suffix() -> None:
+    prepared = prepare_link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            taxonomy_rank=KeggTaxonomyRank.SPECIES,
+            source_identifiers=("taxid:562",),
+        ),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == "/link/genome/taxid:562/species"
+    assert prepared.normalized_request_key == prepared.path
+    assert prepared.expected_pair_source_ids == frozenset({"taxid:562"})
+    assert prepared.pair_target_database is PairTargetDatabase.GENOME
+
+
+def test_taxonomy_species_suffix_is_included_in_the_url_size_bound() -> None:
+    taxid = f"taxid:{'1' * 230}"
+    limits = KeggClientLimits(max_url_bytes=256)
+
+    exact = prepare_link(
+        LinkRequest(
+            relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            source_identifiers=(taxid,),
+        ),
+        limits,
+    )[0]
+
+    assert len(exact.path.encode("ascii")) <= limits.max_url_bytes
+    with pytest.raises(KeggMcpError) as caught:
+        prepare_link(
+            LinkRequest(
+                relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+                taxonomy_rank=KeggTaxonomyRank.SPECIES,
+                source_identifiers=(taxid,),
+            ),
+            limits,
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
 
 
 def test_link_greedily_packs_seventy_three_kos_into_one_default_request() -> None:
@@ -176,6 +549,10 @@ def test_conv_never_prepares_a_whole_database_conversion() -> None:
         (PairTargetDatabase.GENES, "ag:ENTRY1"),
         (PairTargetDatabase.NCBI_GENEID, "ncbi-geneid:948364"),
         (PairTargetDatabase.UNIPROT, "up:P12345"),
+        (PairTargetDatabase.COMPOUND, "cpd:C00031"),
+        (PairTargetDatabase.GENOME, "gn:hsa"),
+        (PairTargetDatabase.GENOME, "gn:T01001"),
+        (PairTargetDatabase.TAXONOMY, "taxid:9606"),
     ],
 )
 def test_pair_target_contract_accepts_expected_namespaces(
@@ -205,6 +582,11 @@ def test_pair_target_contract_rejects_a_wrong_relationship_namespace() -> None:
         (PairTargetDatabase.GENES, "vtax:1234"),
         (PairTargetDatabase.NCBI_GENEID, "ncbi-geneid:not-a-number"),
         (PairTargetDatabase.NCBI_GENEID, "ncbi-geneid:0"),
+        (PairTargetDatabase.COMPOUND, "cpd:R00001"),
+        (PairTargetDatabase.GENOME, "gn:ko"),
+        (PairTargetDatabase.GENOME, "gn:T1001"),
+        (PairTargetDatabase.TAXONOMY, "taxid:0"),
+        (PairTargetDatabase.TAXONOMY, "taxonomy:not-a-number"),
     ],
 )
 def test_pair_target_contract_rejects_invalid_internal_namespaces(

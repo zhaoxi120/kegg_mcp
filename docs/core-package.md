@@ -4,8 +4,9 @@ This document is the package description for the independently installable `kegg
 distribution. The repository-level [README](../README.md) describes the complete three-server
 suite and its Codex installer.
 
-`kegg-mcp` is a local, Linux-only stdio MCP server for traceable KEGG-aware analysis of supplied
-KEGG Orthology (KO) evidence. The release-supported runtime is CPython 3.11.x.
+`kegg-mcp` is a local, Linux-only stdio MCP server for bounded KEGG entity queries and traceable
+analysis of supplied KEGG Orthology (KO) evidence. The release-supported runtime is CPython
+3.11.x.
 
 ## Core capabilities
 
@@ -14,14 +15,19 @@ DeepKOALA detailed output. It:
 
 - preserves source decisions, scores, thresholds, multiple assignments, and provenance;
 - derives accepted-only strict and policy-defined lenient evidence views;
-- retrieves bounded KEGG `INFO`, `GET`, `LINK`, and `CONV` references through a local cache;
+- retrieves bounded KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
+  references through a local cache;
+- searches endpoint candidates, resolves gene or organism identifiers, and traces allowlisted
+  typed relations without hiding ambiguity or inferring causality;
+- maps BRITE hierarchy paths and audits fixed KO relationship classes descriptively;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit reference type and denominator;
 - compares KO sets deterministically; and
 - produces bounded structured results, reports, output bundles, and a typed renderer handoff.
 
-A K-number assignment is annotation evidence, not experimental validation. Pathway KO coverage
-does not establish pathway presence, completeness, expression, activity, flux, or phenotype.
+A K-number assignment is annotation evidence, not experimental validation. Search hits are
+candidates and database relationships are cross-references. Pathway KO coverage does not establish
+pathway presence, completeness, expression, activity, flux, or phenotype.
 
 ## Distribution boundary
 

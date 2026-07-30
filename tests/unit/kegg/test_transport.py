@@ -118,6 +118,28 @@ def test_transport_sends_fixed_safe_headers_and_retains_only_allowlisted_metadat
     ]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://rest.kegg.jp/find/genome/Escherichia%20coli",
+        "https://rest.kegg.jp/find/compound/%E8%91%A1%E8%90%84%E7%B3%96",
+        "https://rest.kegg.jp/find/compound/glucose%20%2B%20water%20100%25",
+    ],
+)
+def test_transport_allows_canonical_percent_encoded_utf8_find_paths(url: str) -> None:
+    opener = FakeOpener(FakeResponse(b"candidate"))
+
+    result = HttpsTransport(opener=opener).request(
+        url,
+        timeout_seconds=5.0,
+        max_response_bytes=100,
+    )
+
+    assert result.body == b"candidate"
+    assert len(opener.requests) == 1
+    assert opener.requests[0].full_url == url
+
+
 def test_transport_rejects_excess_repeated_allowlisted_metadata_without_values() -> None:
     headers: Message[str, str] = Message()
     private_value = "private-header-marker"
@@ -324,6 +346,21 @@ def test_transport_traceback_suppresses_sensitive_low_level_failure_context() ->
         "https://rest.kegg.jp/info/kegg#fragment",
         "https://rest.kegg.jp/info/../private",
         "https://rest.kegg.jp/info/%2e%2e/private",
+        "https://rest.kegg.jp/info/%2E/private",
+        "https://rest.kegg.jp/info/.%2E/private",
+        "https://rest.kegg.jp/find/ko/incomplete%",
+        "https://rest.kegg.jp/find/ko/incomplete%2",
+        "https://rest.kegg.jp/find/ko/not%GGhex",
+        "https://rest.kegg.jp/find/ko/noncanonical%2bescape",
+        "https://rest.kegg.jp/find/ko/encoded%2Fslash",
+        "https://rest.kegg.jp/find/ko/encoded%5Cbackslash",
+        "https://rest.kegg.jp/find/ko/encoded%3Fquery",
+        "https://rest.kegg.jp/find/ko/encoded%23fragment",
+        "https://rest.kegg.jp/find/ko/encoded%00control",
+        "https://rest.kegg.jp/find/ko/encoded%C2%80control",
+        "https://rest.kegg.jp/find/ko/invalid%FFutf8",
+        "https://rest.kegg.jp/find/ko/incomplete%E6%B0utf8",
+        "https://rest%2Ekegg.jp/info/kegg",
         "https://rest.kegg.jp:70000/info/kegg",
         "https://rest.kegg.jp/info/kegg\n",
         "https://rest.kegg.jp/info/keggé",

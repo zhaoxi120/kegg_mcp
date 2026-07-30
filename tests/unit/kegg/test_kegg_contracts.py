@@ -9,16 +9,23 @@ from kegg_mcp.kegg.contracts import (
     PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
     CachePolicy,
     ConvRequest,
+    FindRequest,
+    KeggBatchProvenance,
     KeggBriteEntryKind,
     KeggClientConfig,
+    KeggClientLimits,
     KeggConvDatabase,
     KeggEntryRef,
+    KeggFindDatabase,
+    KeggFindMode,
     KeggGetDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
+    KeggTaxonomyRank,
     LicensedAccess,
     LinkRequest,
     OfflineCacheAccess,
+    OrganismPathwayListRequest,
     PublicAcademicAccess,
     RateLimitPolicy,
     RetrievalEndpointClass,
@@ -38,6 +45,14 @@ def test_request_options_default_to_network_refresh() -> None:
 
     assert options.refresh is True
     assert options.cache_only is False
+
+
+def test_organism_pathway_list_requires_a_canonical_organism_code() -> None:
+    assert OrganismPathwayListRequest(organism="hsa").organism == "hsa"
+
+    for invalid in ("hs", "human", "HSA", "hsa/../ko"):
+        with pytest.raises(ValidationError):
+            OrganismPathwayListRequest(organism=invalid)
 
 
 def test_offline_cache_access_defaults_to_the_public_endpoint_namespace() -> None:
@@ -77,6 +92,149 @@ def test_client_limits_reject_rates_below_the_persisted_cross_process_minimum() 
 def test_cache_only_requests_reject_network_refresh() -> None:
     with pytest.raises(ValidationError):
         KeggRequestOptions(cache_only=True)
+
+
+@pytest.mark.parametrize(
+    ("database", "wire_database"),
+    [
+        (KeggFindDatabase.KO, "ko"),
+        (KeggFindDatabase.PATHWAY, "pathway"),
+        (KeggFindDatabase.MODULE, "module"),
+        (KeggFindDatabase.REACTION, "reaction"),
+        (KeggFindDatabase.ENZYME, "enzyme"),
+        (KeggFindDatabase.COMPOUND, "compound"),
+        (KeggFindDatabase.GENOME, "genome"),
+        (KeggFindDatabase.ORGANISM, "genome"),
+        (KeggFindDatabase.GENES, "genes"),
+    ],
+)
+def test_find_keyword_database_allowlist_has_an_explicit_wire_database(
+    database: KeggFindDatabase,
+    wire_database: str,
+) -> None:
+    request = FindRequest(database=database, query="glucose metabolism")
+
+    assert request.mode is KeggFindMode.KEYWORD
+    assert request.database.wire_database == wire_database
+    assert "max_results" not in FindRequest.model_fields
+
+
+def test_find_keyword_query_accepts_unicode_spaces_plus_and_percent() -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.COMPOUND,
+        query="β-D-glucose + water \u6c34 100%",
+    )
+
+    assert request.query == "β-D-glucose + water \u6c34 100%"
+
+
+def test_gene_find_accepts_one_canonical_organism_scope() -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.GENES,
+        query="TP53",
+        organism="hsa",
+    )
+
+    assert request.organism == "hsa"
+
+
+@pytest.mark.parametrize("organism", ["HSA", "ko", "abcde", "T01001", "../hsa"])
+def test_gene_find_rejects_a_noncanonical_organism_scope(organism: str) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(
+            database=KeggFindDatabase.GENES,
+            query="TP53",
+            organism=organism,
+        )
+
+
+def test_non_gene_find_rejects_an_organism_scope() -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(
+            database=KeggFindDatabase.KO,
+            query="TP53",
+            organism="hsa",
+        )
+
+
+@pytest.mark.parametrize("query", ["", " glucose", "glucose ", "glucose\twater", "bad\x7ftext"])
+def test_find_query_rejects_blank_outer_whitespace_or_control_characters(query: str) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(database=KeggFindDatabase.KO, query=query)
+
+
+@pytest.mark.parametrize("query", ["a/b", "a\\b", "a?b", "a#b", ".", ".."])
+def test_find_query_rejects_url_structural_path_characters(query: str) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(database=KeggFindDatabase.KO, query=query)
+
+
+def test_find_query_rejects_text_that_cannot_be_encoded_as_utf8() -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(database=KeggFindDatabase.KO, query="\ud800")
+
+
+@pytest.mark.parametrize("query", ["C7H10O5", "O5C7", "NaCl", "CH4"])
+def test_compound_formula_find_accepts_bounded_molecular_formula_syntax(query: str) -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.COMPOUND,
+        query=query,
+        mode=KeggFindMode.FORMULA,
+    )
+
+    assert request.query == query
+
+
+@pytest.mark.parametrize("query", ["C0", "c6H12O6", "C6 H12 O6", "(CH2)n", "C6/../H12"])
+def test_compound_formula_find_rejects_non_formula_syntax(query: str) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(
+            database=KeggFindDatabase.COMPOUND,
+            query=query,
+            mode=KeggFindMode.FORMULA,
+        )
+
+
+@pytest.mark.parametrize("query", ["174.05", "300-310", "0.1", "300.0-310.000"])
+@pytest.mark.parametrize("mode", [KeggFindMode.EXACT_MASS, KeggFindMode.MOL_WEIGHT])
+def test_compound_mass_find_accepts_one_positive_value_or_ordered_range(
+    query: str,
+    mode: KeggFindMode,
+) -> None:
+    request = FindRequest(
+        database=KeggFindDatabase.COMPOUND,
+        query=query,
+        mode=mode,
+    )
+
+    assert request.query == query
+
+
+@pytest.mark.parametrize("query", ["0", "-1", "310-300", "1e3", ".5", "1.", "01"])
+def test_compound_mass_find_rejects_ambiguous_or_non_positive_syntax(query: str) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(
+            database=KeggFindDatabase.COMPOUND,
+            query=query,
+            mode=KeggFindMode.EXACT_MASS,
+        )
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [KeggFindMode.FORMULA, KeggFindMode.EXACT_MASS, KeggFindMode.MOL_WEIGHT],
+)
+def test_chemical_find_modes_are_restricted_to_compound(mode: KeggFindMode) -> None:
+    with pytest.raises(ValidationError):
+        FindRequest(database=KeggFindDatabase.KO, query="174.05", mode=mode)
+
+
+def test_request_key_bound_matches_the_hard_url_bound() -> None:
+    provenance_schema = KeggBatchProvenance.model_json_schema()
+    limits_schema = KeggClientLimits.model_json_schema()
+
+    assert provenance_schema["properties"]["request_key"]["maxLength"] == 65_536
+    assert limits_schema["properties"]["max_url_bytes"]["maximum"] == 65_536
 
 
 @pytest.mark.parametrize("state_root", ["relative", "../rate-limit"])
@@ -335,6 +493,95 @@ def test_non_brite_get_rejects_a_brite_content_kind() -> None:
             database=KeggGetDatabase.KO,
             identifier="K00001",
             brite_kind=KeggBriteEntryKind.HIERARCHY,
+        )
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["hsa:10458", "T01001:10458", "ag:ENTRY1", "vg:ENTRY1", "vp:ENTRY1"],
+)
+def test_gene_get_accepts_canonical_database_qualified_identifiers(identifier: str) -> None:
+    entry = KeggEntryRef(database=KeggGetDatabase.GENE, identifier=identifier)
+
+    assert entry.wire_identifier == identifier
+
+
+@pytest.mark.parametrize("identifier", ["P12345", "ko:K00001", "hsa:bad/value"])
+def test_gene_get_rejects_unqualified_or_non_gene_identifiers(identifier: str) -> None:
+    with pytest.raises(ValidationError):
+        KeggEntryRef(database=KeggGetDatabase.GENE, identifier=identifier)
+
+
+@pytest.mark.parametrize("identifier", ["T01001", "hsa", "ddi"])
+def test_genome_get_accepts_t_numbers_and_canonical_organism_codes(identifier: str) -> None:
+    entry = KeggEntryRef(database=KeggGetDatabase.GENOME, identifier=identifier)
+
+    assert entry.wire_identifier == f"gn:{identifier}"
+
+
+@pytest.mark.parametrize("identifier", ["gn:T01001", "T1001", "HSA", "ko"])
+def test_genome_get_rejects_wire_forms_or_non_genome_identifiers(identifier: str) -> None:
+    with pytest.raises(ValidationError):
+        KeggEntryRef(database=KeggGetDatabase.GENOME, identifier=identifier)
+
+
+@pytest.mark.parametrize(
+    ("relationship", "source_identifier"),
+    [
+        (KeggLinkRelationship.GENE_TO_KO, "K00001"),
+        (KeggLinkRelationship.ENZYME_TO_REACTION, "ec:1.1.1.1"),
+        (KeggLinkRelationship.REACTION_TO_KO, "C00031"),
+        (KeggLinkRelationship.COMPOUND_TO_REACTION, "R00001"),
+        (KeggLinkRelationship.PATHWAY_TO_COMPOUND, "module00010"),
+        (KeggLinkRelationship.GENOME_TO_TAXONOMY, "gn:T01001"),
+        (KeggLinkRelationship.TAXONOMY_TO_GENOME, "9606"),
+    ],
+)
+def test_link_relationships_reject_cross_kind_or_wire_form_sources(
+    relationship: KeggLinkRelationship,
+    source_identifier: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        LinkRequest(
+            relationship=relationship,
+            source_identifiers=(source_identifier,),
+        )
+
+
+def test_taxonomy_to_genome_link_defaults_to_exact_taxonomy_rank() -> None:
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+        source_identifiers=("taxid:562",),
+    )
+
+    assert request.taxonomy_rank is KeggTaxonomyRank.EXACT
+
+
+def test_taxonomy_to_genome_link_accepts_the_typed_species_rank() -> None:
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+        taxonomy_rank=KeggTaxonomyRank.SPECIES,
+        source_identifiers=("taxid:562",),
+    )
+
+    assert request.taxonomy_rank is KeggTaxonomyRank.SPECIES
+
+
+def test_non_taxonomy_link_rejects_a_non_default_taxonomy_rank() -> None:
+    with pytest.raises(ValidationError, match="taxonomy_rank"):
+        LinkRequest(
+            relationship=KeggLinkRelationship.KO_TO_PATHWAY,
+            taxonomy_rank=KeggTaxonomyRank.SPECIES,
+            source_identifiers=("K00001",),
+        )
+
+
+def test_link_request_rejects_an_untyped_taxonomy_rank() -> None:
+    with pytest.raises(ValidationError):
+        LinkRequest(
+            relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            taxonomy_rank="species",  # type: ignore[arg-type]
+            source_identifiers=("taxid:562",),
         )
 
 

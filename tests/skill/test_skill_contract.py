@@ -19,7 +19,11 @@ CORE_TOOLS = {
     "analyze_ko_annotations",
     "normalize_ko_annotations",
     "get_kegg_entries",
-    "map_ko_ids",
+    "search_kegg_entries",
+    "resolve_kegg_entities",
+    "trace_kegg_relations",
+    "map_brite_hierarchy",
+    "audit_annotation_mapping",
     "analyze_modules",
     "analyze_pathways",
     "compare_ko_sets",
@@ -27,15 +31,6 @@ CORE_TOOLS = {
     "get_server_status",
     "list_analysis_results",
     "delete_analysis_result",
-}
-
-CORE_RESOURCES = {
-    "ko-analysis://status",
-    "ko-analysis://cache/info",
-    "ko-analysis://results/{result_id}",
-    "ko-analysis://results/{result_id}/{section}",
-    "ko-analysis://results/{result_id}/{section}/{offset}/{limit}",
-    "kegg-cache://entries/{database}/{identifier}",
 }
 
 
@@ -77,6 +72,11 @@ def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None
     assert keys == ["name", "description"]
     assert "name: kegg-ko-analysis" in frontmatter
     for fragment in (
+        "Search bounded KEGG entries",
+        "resolve gene or organism identifiers",
+        "trace typed KEGG relations",
+        "map BRITE hierarchies",
+        "audit KO mappings",
         "existing K numbers",
         "KO annotation tables",
         "MODULE logic",
@@ -99,12 +99,18 @@ def test_ko_analysis_metadata_declares_only_core_stdio_dependency() -> None:
     assert 'value: "deepkoala-mcp"' not in metadata
     assert 'value: "kegg-render-mcp"' not in metadata
     assert "allow_implicit_invocation: true" in metadata
+    for fragment in (
+        'display_name: "KEGG Query and KO Analysis"',
+        "Search KEGG entities",
+        "smallest bounded KEGG query or KO-analysis route",
+        "Local bounded KEGG query and KO analysis MCP server",
+    ):
+        assert fragment in metadata
 
 
 def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
     corpus = _corpus()
     assert all(tool in corpus for tool in CORE_TOOLS)
-    assert all(resource in corpus for resource in CORE_RESOURCES)
     for forbidden in (
         "run_deepkoala_job",
         "prepare_deepkoala_job",

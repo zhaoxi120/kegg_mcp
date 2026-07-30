@@ -14,6 +14,7 @@ from deepkoala_mcp.jobs import DeepKoalaJobManager
 from deepkoala_mcp.server import create_server as create_deepkoala_server
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.server import create_server as create_core_server
+from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION, RenderInput
 from kegg_mcp.services.result_store import SQLiteResultStore
 from mcp.shared.memory import create_connected_server_and_client_session
@@ -89,7 +90,7 @@ async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
 
     reference_client = _FakeReferenceClient()
     core_runtime = McpRuntime(
-        client=reference_client,
+        client=cast(KeggMcpClient, reference_client),
         result_store=SQLiteResultStore(tmp_path / "core-results.sqlite3"),
         scope_id="synthetic-three-mcp-pipeline",
         allowed_roots=(str(tmp_path.resolve()),),

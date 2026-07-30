@@ -14,7 +14,12 @@ from kegg_mcp.services.models import NormalizeAnnotationsRequest
 from kegg_mcp.services.normalization import normalize_annotations
 from kegg_mcp.services.reference_budget import KeggPrimitiveClient
 from kegg_mcp.services.reference_loading import PathwaySpec
-from kegg_mcp.services.result_store import ResultStoreError, SQLiteResultStore
+from kegg_mcp.services.result_store import (
+    ResultArtifactInput,
+    ResultStoreError,
+    SQLiteResultStore,
+    create_retained_result,
+)
 
 
 def _request() -> NormalizeAnnotationsRequest:
@@ -66,6 +71,22 @@ def test_result_create_failure_occurs_before_any_bundle_write(
         )
 
     assert not output.exists()
+
+
+def test_retained_result_context_compensates_base_exception(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+
+    with (
+        pytest.raises(KeyboardInterrupt),
+        create_retained_result(
+            store,
+            "scope",
+            (ResultArtifactInput(section="detail", mime_type="application/json", content=b"{}"),),
+        ),
+    ):
+        raise KeyboardInterrupt
+
+    assert store.list_results("scope").total_items == 0
 
 
 def test_bundle_failure_compensates_the_retained_result(tmp_path: Path) -> None:

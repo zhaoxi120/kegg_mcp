@@ -1,13 +1,13 @@
 interface:
-  display_name: "KEGG KO Analysis"
-  short_description: "Analyze existing KO evidence with cautious KEGG logic"
-  default_prompt: "Use $kegg-ko-analysis to normalize this existing KO evidence and evaluate the requested KEGG MODULEs or pathways."
+  display_name: "KEGG Query and KO Analysis"
+  short_description: "Search KEGG entities and analyze existing KO evidence"
+  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query or KO-analysis route for this request."
 
 dependencies:
   tools:
     - type: "mcp"
       value: "kegg-mcp"
-      description: "Local KEGG KO analysis MCP server"
+      description: "Local bounded KEGG query and KO analysis MCP server"
       transport: "stdio"
 policy:
   allow_implicit_invocation: true

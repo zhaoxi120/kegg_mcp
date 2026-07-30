@@ -31,8 +31,8 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.errors import ErrorCode
 from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvenanceInput
-from kegg_mcp.kegg import AccessMode, KeggGetDatabase, KeggLinkRelationship
-from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggPairRow, RetrievalEndpointClass
+from kegg_mcp.kegg import AccessMode, KeggGetDatabase
+from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
 from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle
 from kegg_mcp.services.result_store import (
@@ -54,8 +54,6 @@ MAX_ENTRY_PREVIEW_CHARACTERS = 2_000
 MAX_ENTRY_PREVIEW_FIELDS = 64
 MAX_GET_ENTRY_PREVIEWS = 50
 MAX_GET_PROVENANCE_BATCHES = 5
-MAX_MAPPING_PREVIEW_ROWS = 200
-MAX_MAPPING_PROVENANCE_BATCHES = 10
 MAX_DIRECT_WARNINGS = 25
 MAX_DIRECT_WARNING_CHARACTERS = 1_000
 MAX_DIRECT_ANALYSIS_TARGETS = 25
@@ -406,33 +404,6 @@ class CachedKeggEntryServiceResult(FrozenModel):
     ]
 
 
-class PathwayMappingRow(FrozenModel):
-    source_ko_id: str = Field(pattern=r"^K[0-9]{5}$")
-    target_id: str = Field(pattern=r"^(?:ko|map)[0-9]{5}$")
-    pathway_number: str = Field(pattern=r"^[0-9]{5}$")
-    namespace: Literal["ko", "map"]
-    paired_reference_id: str = Field(pattern=r"^(?:ko|map)[0-9]{5}$")
-
-
-class KoMappingServiceResult(FrozenModel):
-    result: ResultMetadata
-    artifact: ResultArtifactMetadata
-    relationship: KeggLinkRelationship
-    source_identifier_count: int = Field(strict=True, ge=1, le=100)
-    row_count: int = Field(strict=True, ge=0)
-    raw_relationship_row_count: int = Field(strict=True, ge=0)
-    unique_reference_pathway_number_count: int = Field(default=0, strict=True, ge=0)
-    available_ko_reference_view_count: int = Field(default=0, strict=True, ge=0)
-    available_map_reference_view_count: int = Field(default=0, strict=True, ge=0)
-    row_preview: Annotated[
-        tuple[KeggPairRow | PathwayMappingRow, ...], Field(max_length=MAX_MAPPING_PREVIEW_ROWS)
-    ]
-    preview_truncated: bool
-    provenance: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_MAPPING_PROVENANCE_BATCHES)
-    ]
-
-
 class CompareDatasetSource(FrozenModel):
     label: str = Field(min_length=1, max_length=128)
     source: DatasetSource
@@ -548,8 +519,6 @@ __all__ = [
     "MAX_ENTRY_PREVIEW_FIELDS",
     "MAX_GET_ENTRY_PREVIEWS",
     "MAX_GET_PROVENANCE_BATCHES",
-    "MAX_MAPPING_PREVIEW_ROWS",
-    "MAX_MAPPING_PROVENANCE_BATCHES",
     "MAX_NORMALIZATION_PREVIEW",
     "MAX_SELECTED_MODULE_SUMMARIES",
     "MAX_SELECTED_PATHWAY_SUMMARIES",
@@ -574,11 +543,9 @@ __all__ = [
     "GenericDecisionPolicy",
     "KeggEntriesServiceResult",
     "KeggEntryPreview",
-    "KoMappingServiceResult",
     "KoSetComparisonPreview",
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",
-    "PathwayMappingRow",
     "SelectedModuleSummary",
     "SelectedPathwaySummary",
     "ServerStatusResult",

@@ -18,18 +18,28 @@ from kegg_mcp.kegg.contracts import (
     KeggBatchProvenance,
     KeggBriteHtextDocument,
     KeggClientConfig,
+    KeggFindDocument,
     KeggFlatFileDocument,
     KeggInfoDocument,
+    KeggOperation,
+    KeggOrganismPathwayDocument,
     KeggPairDocument,
     KeggRequestOptions,
     ResponseOrigin,
     RetrievalEndpointClass,
 )
-from kegg_mcp.kegg.operations import PreparedRequest, ResponseParser, pair_target_matches
+from kegg_mcp.kegg.operations import (
+    PreparedRequest,
+    ResponseParser,
+    get_entry_matches,
+    pair_target_matches,
+)
 from kegg_mcp.kegg.parsers import (
     parse_brite_htext_response,
+    parse_find_response,
     parse_flat_file_response,
     parse_info_response,
+    parse_organism_pathway_list_response,
     parse_pair_response,
 )
 from kegg_mcp.kegg.transport import Transport, TransportError, TransportResponse
@@ -37,7 +47,12 @@ from kegg_mcp.kegg.transport import Transport, TransportError, TransportResponse
 _TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 500, 502, 503, 504})
 
 ParsedDocument: TypeAlias = (
-    KeggInfoDocument | KeggFlatFileDocument | KeggBriteHtextDocument | KeggPairDocument
+    KeggInfoDocument
+    | KeggOrganismPathwayDocument
+    | KeggFindDocument
+    | KeggFlatFileDocument
+    | KeggBriteHtextDocument
+    | KeggPairDocument
 )
 PayloadT = TypeVar("PayloadT")
 
@@ -371,6 +386,15 @@ class KeggRequestExecutor:
             if response.status_code == 200:
                 return response, attempt
             if response.status_code == 404:
+                if prepared.operation is KeggOperation.GET:
+                    return (
+                        TransportResponse(
+                            status_code=response.status_code,
+                            body=b"",
+                            http_metadata=response.http_metadata,
+                        ),
+                        attempt,
+                    )
                 fail(
                     ErrorCode.KEGG_ENTRY_NOT_FOUND,
                     "KEGG returned no entry for the bounded request.",
@@ -476,13 +500,39 @@ class KeggRequestExecutor:
             if info_request is None:
                 raise AssertionError("INFO parsing requires its typed request")
             return parse_info_response(body, info_request.database)
+        if prepared.parser is ResponseParser.ORGANISM_PATHWAY_LIST:
+            if prepared.list_organism is None:
+                raise AssertionError(
+                    "organism pathway list parsing requires its canonical organism"
+                )
+            return parse_organism_pathway_list_response(body, prepared.list_organism)
+        if prepared.parser is ResponseParser.FIND_TABLE:
+            if prepared.find_database is None:
+                raise AssertionError("FIND parsing requires its expected database")
+            return parse_find_response(
+                body,
+                prepared.find_database,
+                organism=prepared.find_organism,
+            )
         if prepared.parser is ResponseParser.FLAT_FILE:
             document = parse_flat_file_response(body)
-            expected_identifiers = {entry.identifier for entry in prepared.requested_entries}
-            returned_identifiers = [entry.identifier for entry in document.entries]
-            if len(returned_identifiers) != len(set(returned_identifiers)) or any(
-                identifier not in expected_identifiers for identifier in returned_identifiers
-            ):
+            matched_entries: set[tuple[object, str]] = set()
+            response_matches_request = True
+            for returned_entry in document.entries:
+                matches = tuple(
+                    requested_entry
+                    for requested_entry in prepared.requested_entries
+                    if get_entry_matches(requested_entry, returned_entry)
+                )
+                if len(matches) != 1:
+                    response_matches_request = False
+                    break
+                matched_key = (matches[0].database, matches[0].identifier)
+                if matched_key in matched_entries:
+                    response_matches_request = False
+                    break
+                matched_entries.add(matched_key)
+            if not response_matches_request:
                 fail(
                     ErrorCode.KEGG_PARSE_FAILED,
                     "The KEGG GET response did not match the bounded request.",

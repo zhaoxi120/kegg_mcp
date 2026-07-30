@@ -38,6 +38,7 @@ from kegg_mcp.mcp.contracts import NormalizeKoAnnotationsInput
 from kegg_mcp.mcp.input_validation import validate_tool_input
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.server import create_server as create_core_server
+from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.result_store import SQLiteResultStore
 
 _SMALL_DETAILED_CSV = (
@@ -146,7 +147,7 @@ def _ready_probe(
 
 def _core_runtime(root: Path) -> McpRuntime:
     return McpRuntime(
-        client=_OfflineOnlyKeggClient(),
+        client=cast(KeggMcpClient, _OfflineOnlyKeggClient()),
         result_store=SQLiteResultStore(root / "core-results.sqlite3"),
         scope_id="deepkoala-cross-server-contract",
         allowed_roots=(str(root.resolve()),),

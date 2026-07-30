@@ -33,7 +33,7 @@ from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 
@@ -48,15 +48,15 @@ def normalize_annotations(
     """Normalize one inline payload and retain its complete typed dataset."""
     dataset = _import_dataset(request)
     content = dataset.model_dump_json().encode("utf-8")
-    metadata = result_store.create(
+    with create_retained_result(
+        result_store,
         scope_id,
         (
             ResultArtifactInput(
                 section=DATASET_SECTION, mime_type="application/json", content=content
             ),
         ),
-    )
-    try:
+    ) as metadata:
         output_bundle = (
             write_normalization_bundle(
                 dataset,
@@ -67,14 +67,6 @@ def normalize_annotations(
             if output_directory is not None
             else None
         )
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            metadata.result_id,
-            metadata.created_at,
-        )
-        raise
     artifact = _artifact_metadata(DATASET_SECTION, "application/json", content)
     preview = tuple(
         _annotation_record_preview(record) for record in dataset.records[: request.preview_limit]

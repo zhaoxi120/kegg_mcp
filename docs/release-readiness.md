@@ -11,9 +11,9 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Contract |
 | --- | --- | --- |
-| `kegg-mcp` | `0.5.0` | Core analysis server and `RenderInput` producer |
+| `kegg-mcp` | `0.6.0` | Core analysis and bounded KEGG query server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.4.0` | Optional controlled detailed-CSV handoff |
-| `kegg-render-mcp` | `0.3.0` | Optional renderer requiring `kegg-mcp>=0.5,<0.6` |
+| `kegg-render-mcp` | `0.3.1` | Optional renderer requiring `kegg-mcp>=0.5,<0.7` |
 
 All distributions support Linux with Python 3.11.x. They remain independently packaged, locked,
 installed, and executed as separate stdio processes. The suite installer provisions them together
@@ -55,10 +55,9 @@ uv run --frozen pyright
 uv run --frozen pytest
 ```
 
-Pull-request CI keeps one serialized live campaign with 30 requests each for `INFO`, `GET`, `LINK`,
-and `CONV`, one request per second, zero retries, and no uploaded KEGG payloads. The workflow has no
-`push` trigger. If a live campaign is not authorized, record it as not run; never substitute
-unauthorized access.
+Run the governed pull-request compatibility campaign exactly as defined in
+[the live-test guide](../tests/live/README.md). If a live campaign is not authorized, record it as
+not run; never substitute unauthorized access.
 
 Validate the companions independently:
 

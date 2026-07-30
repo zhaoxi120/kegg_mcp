@@ -17,6 +17,9 @@ from kegg_mcp.mcp.contracts import (
     AnalyzeModulesToolEnvelope,
     AnalyzePathwaysInput,
     AnalyzePathwaysToolEnvelope,
+    AnnotationAuditToolEnvelope,
+    AuditAnnotationMappingInput,
+    BriteHierarchyToolEnvelope,
     CompareKoSetsInput,
     CompareToolEnvelope,
     ConnectivityToolEnvelope,
@@ -27,12 +30,17 @@ from kegg_mcp.mcp.contracts import (
     GetServerStatusInput,
     ListAnalysisResultsInput,
     ListResultsToolEnvelope,
-    MapKoIdsInput,
-    MappingToolEnvelope,
+    MapBriteHierarchyInput,
     NormalizeKoAnnotationsInput,
     NormalizeToolEnvelope,
     ProbeKeggConnectivityInput,
+    ResolveEntitiesToolEnvelope,
+    ResolveKeggEntitiesInput,
+    SearchEntriesToolEnvelope,
+    SearchKeggEntriesInput,
     StatusToolEnvelope,
+    TraceKeggRelationsInput,
+    TraceRelationsToolEnvelope,
     constrain_mcp_input_schema,
     constrain_mcp_output_schema,
 )
@@ -45,14 +53,18 @@ from kegg_mcp.mcp.tool_handlers import (
     analyze_annotations,
     analyze_modules,
     analyze_pathways,
+    audit_mapping,
     compare_sets,
     delete_result,
     get_entries,
     get_status,
     list_results,
-    map_identifiers,
+    map_brite,
     normalize,
     probe_connectivity,
+    resolve_entities,
+    search_entries,
+    trace_relations,
 )
 from kegg_mcp.services.result_store import ResultStoreError
 
@@ -121,13 +133,65 @@ TOOL_SPECS = (
         get_entries,
     ),
     ToolSpec(
-        "map_ko_ids",
-        "Map KO identifiers",
-        "Map selected K numbers to pathways, modules, reactions, EC numbers, or BRITE.",
-        MapKoIdsInput,
-        MappingToolEnvelope,
+        "search_kegg_entries",
+        "Search KEGG entries",
+        (
+            "Search one allowlisted KEGG database with bounded FIND semantics. Results are "
+            "endpoint candidates without an invented relevance score or selected best match."
+        ),
+        SearchKeggEntriesInput,
+        SearchEntriesToolEnvelope,
         _ADDITIVE_OPEN,
-        map_identifiers,
+        search_entries,
+    ),
+    ToolSpec(
+        "resolve_kegg_entities",
+        "Resolve KEGG entities",
+        (
+            "Resolve bounded gene or organism identifiers through typed FIND, GET, CONV, LINK, "
+            "and optional organism-pathway LIST steps while preserving ambiguity, mismatch, and "
+            "unmapped outcomes."
+        ),
+        ResolveKeggEntitiesInput,
+        ResolveEntitiesToolEnvelope,
+        _ADDITIVE_OPEN,
+        resolve_entities,
+    ),
+    ToolSpec(
+        "trace_kegg_relations",
+        "Trace KEGG relations",
+        (
+            "Trace one or two bounded levels of allowlisted typed KEGG cross-references. "
+            "Returned edges do not establish regulation, causality, activity, or phenotype."
+        ),
+        TraceKeggRelationsInput,
+        TraceRelationsToolEnvelope,
+        _ADDITIVE_OPEN,
+        trace_relations,
+    ),
+    ToolSpec(
+        "map_brite_hierarchy",
+        "Map BRITE hierarchy",
+        (
+            "Map typed KEGG entities into bounded BRITE hierarchy paths. Omitting brite_ids "
+            "uses KO-only BRITE discovery; counts are descriptive unique-input classifications."
+        ),
+        MapBriteHierarchyInput,
+        BriteHierarchyToolEnvelope,
+        _ADDITIVE_OPEN,
+        map_brite,
+    ),
+    ToolSpec(
+        "audit_annotation_mapping",
+        "Audit annotation mapping",
+        (
+            "Audit strict and lenient KO evidence and optional descriptive mapping yields for "
+            "selected KEGG pathway, MODULE, reaction, enzyme, and BRITE relationships."
+        ),
+        AuditAnnotationMappingInput,
+        AnnotationAuditToolEnvelope,
+        _ADDITIVE_OPEN,
+        audit_mapping,
     ),
     ToolSpec(
         "analyze_modules",
@@ -212,7 +276,11 @@ _CLIENT_TOOL_NAMES = frozenset(
     {
         "analyze_ko_annotations",
         "get_kegg_entries",
-        "map_ko_ids",
+        "search_kegg_entries",
+        "resolve_kegg_entities",
+        "trace_kegg_relations",
+        "map_brite_hierarchy",
+        "audit_annotation_mapping",
         "analyze_modules",
         "analyze_pathways",
         "compare_ko_sets",
@@ -259,7 +327,12 @@ async def dispatch_tool(
     try:
         request = validate_tool_input(spec.input_model, arguments)
     except ValidationError as exception:
-        return error_result(validation_error(exception))
+        return error_result(
+            validation_error(
+                exception,
+                input_model=spec.input_model,
+            )
+        )
     try:
         if name in _INLINE_TOOL_NAMES:
             outcome = spec.handler(ToolContext(runtime, TOOL_NAMES), request)
@@ -297,10 +370,15 @@ async def dispatch_tool(
 
 def _tool(spec: ToolSpec) -> types.Tool:
     input_schema = spec.input_model.model_json_schema(mode="validation")
+    if spec.input_model.__pydantic_root_model__:
+        input_schema["type"] = "object"
     output_schema = spec.output_model.model_json_schema(mode="serialization")
     constrain_mcp_input_schema(input_schema)
     constrain_mcp_output_schema(output_schema)
     _inline_local_schema_references(input_schema)
+    discriminator = input_schema.get("discriminator")
+    if isinstance(discriminator, dict):
+        cast(dict[str, object], discriminator).pop("mapping", None)
     _remove_nested_schema_identities(input_schema)
     _remove_nested_schema_identities(output_schema)
     return types.Tool(
