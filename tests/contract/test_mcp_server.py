@@ -380,6 +380,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert "$defs" not in tool.inputSchema
             assert '"$ref"' not in json.dumps(tool.inputSchema, separators=(",", ":"))
             assert tool.outputSchema is not None
+            assert tool.outputSchema.get("additionalProperties") is False
             assert tool.annotations is not None
         status = _tool_by_name(tools, "get_server_status")
         assert status.annotations is not None

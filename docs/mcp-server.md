@@ -201,9 +201,9 @@ Minimal one-level typed relation trace:
 }
 ```
 
-Resolver and trace direct JSON are independently limited to 64 KiB. A projection that violates
-that bound fails closed and compensates the newly created retained result; callers use the returned
-scoped resource to read complete bounded detail when the projection succeeds.
+All five P0 query and audit direct results are independently limited to 64 KiB. A projection that
+violates that bound fails closed and compensates the newly created retained result; callers use the
+returned scoped resource to read complete bounded detail when the projection succeeds.
 
 Minimal single-relationship mapping audit:
 

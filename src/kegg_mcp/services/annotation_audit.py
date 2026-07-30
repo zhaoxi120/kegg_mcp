@@ -44,7 +44,7 @@ from kegg_mcp.services.result_store import (
     ResultArtifactMetadata,
     ResultMetadata,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 MAX_AUDIT_DEGREE_BUCKETS = 512
@@ -685,7 +685,8 @@ def audit_annotation_mapping(
                 SafeDetail(name="limit_bytes", value=str(MAX_AUDIT_ARTIFACT_BYTES)),
             ),
         )
-    stored = result_store.create(
+    with create_retained_result(
+        result_store,
         scope_id,
         (
             ResultArtifactInput(
@@ -694,8 +695,7 @@ def audit_annotation_mapping(
                 content=payload,
             ),
         ),
-    )
-    try:
+    ) as stored:
         result = AnnotationMappingAuditResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
@@ -723,14 +723,6 @@ def audit_annotation_mapping(
         )
         require_bounded_query_direct_result(result)
         return result
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            stored.result_id,
-            stored.created_at,
-        )
-        raise
 
 
 def _mapping_summary(

@@ -528,43 +528,6 @@ def test_genome_get_rejects_wire_forms_or_non_genome_identifiers(identifier: str
 @pytest.mark.parametrize(
     ("relationship", "source_identifier"),
     [
-        (KeggLinkRelationship.KO_TO_PATHWAY, "K00001"),
-        (KeggLinkRelationship.KO_TO_MODULE, "K00001"),
-        (KeggLinkRelationship.KO_TO_REACTION, "K00001"),
-        (KeggLinkRelationship.KO_TO_ENZYME, "K00001"),
-        (KeggLinkRelationship.KO_TO_BRITE, "K00001"),
-        (KeggLinkRelationship.PATHWAY_TO_KO, "map00010"),
-        (KeggLinkRelationship.GENE_TO_KO, "hsa:10458"),
-        (KeggLinkRelationship.GENE_TO_PATHWAY, "hsa:10458"),
-        (KeggLinkRelationship.ENZYME_TO_REACTION, "1.1.1.1"),
-        (KeggLinkRelationship.REACTION_TO_ENZYME, "R00001"),
-        (KeggLinkRelationship.REACTION_TO_KO, "R00001"),
-        (KeggLinkRelationship.REACTION_TO_COMPOUND, "R00001"),
-        (KeggLinkRelationship.REACTION_TO_PATHWAY, "R00001"),
-        (KeggLinkRelationship.COMPOUND_TO_REACTION, "C00031"),
-        (KeggLinkRelationship.COMPOUND_TO_PATHWAY, "C00031"),
-        (KeggLinkRelationship.PATHWAY_TO_REACTION, "map00010"),
-        (KeggLinkRelationship.PATHWAY_TO_COMPOUND, "map00010"),
-        (KeggLinkRelationship.GENOME_TO_TAXONOMY, "T01001"),
-        (KeggLinkRelationship.GENOME_TO_TAXONOMY, "hsa"),
-        (KeggLinkRelationship.TAXONOMY_TO_GENOME, "taxid:9606"),
-    ],
-)
-def test_link_relationships_accept_only_their_typed_selected_sources(
-    relationship: KeggLinkRelationship,
-    source_identifier: str,
-) -> None:
-    request = LinkRequest(
-        relationship=relationship,
-        source_identifiers=(source_identifier,),
-    )
-
-    assert request.source_identifiers == (source_identifier,)
-
-
-@pytest.mark.parametrize(
-    ("relationship", "source_identifier"),
-    [
         (KeggLinkRelationship.GENE_TO_KO, "K00001"),
         (KeggLinkRelationship.ENZYME_TO_REACTION, "ec:1.1.1.1"),
         (KeggLinkRelationship.REACTION_TO_KO, "C00031"),

@@ -18,6 +18,7 @@ from kegg_mcp.kegg import (
     KeggRequestOptions,
 )
 from kegg_mcp.kegg.contracts import (
+    MAX_GET_ENTRIES_PER_BATCH,
     KeggBatchProvenance,
     KeggFlatFileDocument,
     KeggPairRow,
@@ -36,6 +37,8 @@ from kegg_mcp.services.query_models import (
     ResolveKeggEntitiesResult,
 )
 from kegg_mcp.services.query_support import (
+    QueryBudget,
+    bounded_query_relation,
     deduplicate_entities,
     entity_key,
     fail_unexpected_relation_row,
@@ -45,16 +48,12 @@ from kegg_mcp.services.query_support import (
 )
 from kegg_mcp.services.reference_budget import KeggQueryClient
 from kegg_mcp.services.resolution_support import (
-    ResolverBudget,
-    bounded_resolver_link,
+    new_resolver_budget,
     relation_step,
-    require_resolver_request_capacity,
     resolution_limit,
     retain_resolution,
 )
 from kegg_mcp.services.result_store import SQLiteResultStore
-
-_MAX_GENE_GET_ENTRIES_PER_CALL = 10
 
 _GENE_CONV_DATABASES = {
     GeneIdentifierNamespace.NCBI_GENEID: KeggConvDatabase.NCBI_GENEID,
@@ -89,7 +88,7 @@ def resolve_gene_request(
     operations_by_input: list[list[ResolutionOperation]] = [[] for _ in request.identifiers]
     provenance: list[KeggBatchProvenance] = []
     steps: list[dict[str, Any]] = []
-    budget = ResolverBudget()
+    budget = new_resolver_budget()
     allowed_organism_prefixes: frozenset[str] | None = None
 
     if request.organism is not None:
@@ -97,7 +96,7 @@ def resolve_gene_request(
             (request.organism,),
             client=client,
             options=options,
-            before_batch=lambda: require_resolver_request_capacity(budget),
+            before_batch=budget.require_request_capacity,
             record_batch=lambda count, batches: budget.record(
                 row_count=count,
                 batches=batches,
@@ -137,7 +136,7 @@ def resolve_gene_request(
         if request.organism is None:
             raise AssertionError("gene_symbol request validation requires organism")
         for index, identifier in enumerate(request.identifiers):
-            require_resolver_request_capacity(budget)
+            budget.require_request_capacity()
             found = client.find(
                 FindRequest(
                     database=KeggFindDatabase.GENES,
@@ -215,7 +214,7 @@ def resolve_gene_request(
         dict[tuple[str, str], list[KeggEntityRef]],
     ] = {}
     if all_genes and GeneResolutionTarget.PATHWAY in request.targets:
-        linked_pathways = bounded_resolver_link(
+        linked_pathways = bounded_query_relation(
             tuple(gene.identifier for gene in all_genes),
             relationship=link_relationship(KeggRelationType.GENE_TO_PATHWAY),
             client=client,
@@ -257,7 +256,7 @@ def resolve_gene_request(
         for target in request.targets
     )
     if all_genes and requires_ko:
-        linked_kos = bounded_resolver_link(
+        linked_kos = bounded_query_relation(
             tuple(gene.identifier for gene in all_genes),
             relationship=link_relationship(KeggRelationType.GENE_TO_KO),
             client=client,
@@ -295,7 +294,7 @@ def resolve_gene_request(
             relationship = _GENE_TARGET_RELATIONS.get(target)
             if relationship is None or not unique_kos:
                 continue
-            linked_targets = bounded_resolver_link(
+            linked_targets = bounded_query_relation(
                 tuple(ko.identifier for ko in unique_kos),
                 relationship=link_relationship(relationship),
                 client=client,
@@ -374,7 +373,7 @@ def _load_existing_genes(
     *,
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    budget: ResolverBudget,
+    budget: QueryBudget,
 ) -> tuple[
     tuple[KeggEntityRef, ...],
     tuple[KeggBatchProvenance, ...],
@@ -393,7 +392,7 @@ def _load_existing_genes(
             },
         )
     batch_size = min(
-        _MAX_GENE_GET_ENTRIES_PER_CALL,
+        MAX_GET_ENTRIES_PER_BATCH,
         client.config.limits.max_identifiers,
     )
     existing: list[KeggEntityRef] = []
@@ -401,7 +400,7 @@ def _load_existing_genes(
     retained_results: list[dict[str, Any]] = []
     for start in range(0, len(unique_genes), batch_size):
         chunk = unique_genes[start : start + batch_size]
-        require_resolver_request_capacity(budget)
+        budget.require_request_capacity()
         fetched = client.get(
             GetRequest(
                 entries=tuple(
@@ -440,7 +439,7 @@ def _bounded_resolver_conv(
     source_identifiers: tuple[str, ...],
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    budget: ResolverBudget,
+    budget: QueryBudget,
 ) -> tuple[BoundedRelationResult, tuple[dict[str, Any], ...]]:
     rows: list[KeggPairRow] = []
     batches: list[KeggBatchProvenance] = []
@@ -450,7 +449,7 @@ def _bounded_resolver_conv(
         client.config.limits.max_identifiers,
     )
     for start in range(0, len(source_identifiers), batch_size):
-        require_resolver_request_capacity(budget)
+        budget.require_request_capacity()
         result = client.conv(
             ConvRequest(
                 target_database=KeggConvDatabase.GENES,

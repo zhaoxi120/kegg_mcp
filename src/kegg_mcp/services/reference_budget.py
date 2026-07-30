@@ -58,7 +58,7 @@ class KeggRelationClient(Protocol):
     ) -> LinkResult: ...
 
 
-class KeggQueryClient(KeggRelationClient, Protocol):
+class KeggQueryClient(KeggPrimitiveClient, Protocol):
     """Narrow FIND/GET/CONV/LINK port for bounded query services."""
 
     def find(
@@ -74,13 +74,6 @@ class KeggQueryClient(KeggRelationClient, Protocol):
         *,
         options: KeggRequestOptions | None = None,
     ) -> ConvResult: ...
-
-    def get(
-        self,
-        request: GetRequest,
-        *,
-        options: KeggRequestOptions | None = None,
-    ) -> GetResult: ...
 
     def list_organism_pathways(
         self,

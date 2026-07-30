@@ -56,17 +56,7 @@ requests immediate cleanup.
 Query and audit tools do not turn their retained details into durable cross-process handoffs. Use
 their bounded direct previews in conversation. For complete search, resolution, relation, BRITE, or
 audit detail, follow the resource URI returned by the tool instead of pasting every candidate,
-crosswalk, path, distribution, row, edge, or provenance batch or constructing a URI. The server
-declares these fixed resources and templates:
-
-```text
-ko-analysis://status
-ko-analysis://cache/info
-ko-analysis://results/{result_id}
-ko-analysis://results/{result_id}/{section}
-ko-analysis://results/{result_id}/{section}/{offset}/{limit}
-kegg-cache://entries/{database}/{identifier}
-```
+crosswalk, path, distribution, row, edge, or provenance batch or constructing a URI.
 
 Use a section or validated page resource rather than pasting large annotation or missing-KO lists.
 Never expose cache paths, credentials, environment values, or raw payloads from status data.

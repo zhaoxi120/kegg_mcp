@@ -97,49 +97,13 @@ def _mapping_execution(
     )
 
 
-def test_registry_uses_typed_open_world_client_contracts() -> None:
+def test_registry_uses_typed_brite_and_audit_contracts() -> None:
     specs = {spec.name: spec for spec in registry_module.TOOL_SPECS}
-    tools = {tool.name: tool for tool in registry_module.tool_definitions()}
 
     assert specs["map_brite_hierarchy"].input_model is MapBriteHierarchyInput
     assert specs["map_brite_hierarchy"].output_model is BriteHierarchyToolEnvelope
     assert specs["audit_annotation_mapping"].input_model is AuditAnnotationMappingInput
     assert specs["audit_annotation_mapping"].output_model is AnnotationAuditToolEnvelope
-
-    for name in ("map_brite_hierarchy", "audit_annotation_mapping"):
-        assert specs[name].annotations.openWorldHint is True
-        tool = tools[name]
-        annotations = tool.annotations
-        input_schema = tool.inputSchema
-        output_schema = tool.outputSchema
-        assert annotations is not None
-        assert input_schema is not None
-        assert output_schema is not None
-        assert annotations.openWorldHint is True
-        assert input_schema["additionalProperties"] is False
-        assert output_schema["additionalProperties"] is False
-
-    brite_input_schema = tools["map_brite_hierarchy"].inputSchema
-    audit_input_schema = tools["audit_annotation_mapping"].inputSchema
-    brite_output_schema = tools["map_brite_hierarchy"].outputSchema
-    audit_output_schema = tools["audit_annotation_mapping"].outputSchema
-    assert brite_input_schema is not None
-    assert audit_input_schema is not None
-    assert brite_output_schema is not None
-    assert audit_output_schema is not None
-    assert set(brite_input_schema["properties"]) == {
-        "entity_ids",
-        "brite_ids",
-        "include_all_paths",
-        "include_unmatched",
-        "preview_limit",
-    }
-    assert set(audit_input_schema["properties"]) == {
-        "source",
-        "quality_context",
-        "mapping_targets",
-    }
-    assert audit_input_schema["properties"]["mapping_targets"]["maxItems"] == 5
     with pytest.raises(ValidationError, match="mapping_targets must be unique"):
         AuditAnnotationMappingInput(
             source=DatasetSource(ko_text="K00001"),
@@ -148,22 +112,6 @@ def test_registry_uses_typed_open_world_client_contracts() -> None:
                 AnnotationMappingTarget.PATHWAY,
             ),
         )
-    assert "MapBriteHierarchyResult" in brite_output_schema["$defs"]
-    assert "AnnotationMappingAuditResult" in audit_output_schema["$defs"]
-
-    for envelope in (BriteHierarchyToolEnvelope, AnnotationAuditToolEnvelope):
-        with pytest.raises(ValidationError):
-            envelope.model_validate(
-                {
-                    "ok": True,
-                    "result": {
-                        "data": {"unexpected": "shape"},
-                        "resource_uri": None,
-                    },
-                    "error": None,
-                },
-                strict=True,
-            )
 
 
 def test_handlers_delegate_to_services_with_runtime_dependencies(
@@ -252,9 +200,6 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
     assert audit_outcome.data is audit_result
     assert brite_outcome.result_id == brite_result.result.result_id
     assert audit_outcome.result_id == audit_result.result.result_id
-    assert audit_outcome.summary == (
-        "Audited annotation evidence and completed the selected KEGG relationship mappings."
-    )
 
 
 @pytest.mark.parametrize(

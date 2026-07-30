@@ -33,15 +33,6 @@ CORE_TOOLS = {
     "delete_analysis_result",
 }
 
-CORE_RESOURCES = {
-    "ko-analysis://status",
-    "ko-analysis://cache/info",
-    "ko-analysis://results/{result_id}",
-    "ko-analysis://results/{result_id}/{section}",
-    "ko-analysis://results/{result_id}/{section}/{offset}/{limit}",
-    "kegg-cache://entries/{database}/{identifier}",
-}
-
 
 def _files() -> set[str]:
     return {
@@ -120,7 +111,6 @@ def test_ko_analysis_metadata_declares_only_core_stdio_dependency() -> None:
 def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
     corpus = _corpus()
     assert all(tool in corpus for tool in CORE_TOOLS)
-    assert all(resource in corpus for resource in CORE_RESOURCES)
     for forbidden in (
         "run_deepkoala_job",
         "prepare_deepkoala_job",
@@ -152,46 +142,6 @@ def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
     assert "no explicit selection are supplied" in corpus
     assert "`pathway_selection`" in corpus
     assert "Top-5 MODULEs and Top-5 canonical KO" in corpus
-
-
-def test_ko_analysis_routes_all_bounded_query_starting_points() -> None:
-    workflow = (SKILL_ROOT / "references" / "workflow-selection.md").read_text(encoding="utf-8")
-    for heading in (
-        "## Search terms and compound candidates",
-        "## Gene and organism identifiers",
-        "## Typed relation questions",
-        "## BRITE hierarchy questions",
-        "## Annotation mapping audit",
-    ):
-        assert heading in workflow
-    for fragment in (
-        "`search_kegg_entries`",
-        "`resolve_kegg_entities`",
-        "`trace_kegg_relations`",
-        "`map_brite_hierarchy`",
-        "`audit_annotation_mapping`",
-        "include_pathway_directory",
-        "`mapping_targets`",
-        "`skipped_request_limit`",
-        "returned resource URI",
-        "do not manually batch and merge",
-    ):
-        assert fragment in workflow
-
-
-def test_ko_analysis_query_reporting_preserves_conservative_semantics() -> None:
-    reporting = (SKILL_ROOT / "references" / "reporting-policy.md").read_text(encoding="utf-8")
-    normalized = " ".join(reporting.split())
-    for fragment in (
-        "candidate, not a compound identification",
-        "not biological absence",
-        "available KEGG references only",
-        "database cross-references",
-        "not enrichment or dominant function",
-        "does not invalidate the complete evidence audit",
-        "bounded direct previews",
-    ):
-        assert fragment in normalized
 
 
 def test_ko_analysis_routes_explicit_ko01100_outside_regular_pipeline() -> None:

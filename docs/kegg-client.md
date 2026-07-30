@@ -534,10 +534,7 @@ behavior.
 
 ## Test policy
 
-Local pytest skips the live compatibility campaign by default. Pull-request CI explicitly runs
-20 real requests for each of `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`,
-for 120 total, using one request per second, zero retries, a temporary cache, and no uploaded KEGG
-payloads. Each operation rotates its documented stable typed cases within that unchanged budget;
-the FIND matrix covers keyword, formula, exact-mass, and molecular-weight modes. Authorized manual
-runs may configure 1 through 20 requests per operation. Other unit and integration network behavior
-uses injected transports or local mock servers.
+Local pytest skips the governed live compatibility campaign by default. Its authoritative request
+matrix, limits, CI behavior, and opt-in local command are defined in
+[the live-test guide](../tests/live/README.md). Other unit and integration network behavior uses
+injected transports or local mock servers.

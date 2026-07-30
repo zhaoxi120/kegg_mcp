@@ -35,29 +35,13 @@ upstream or rendering MCP.
   reference pathways by unique selected-KO overlap.
 - For Top-N detected pathways, supply `pathway_selection={"top_n":N}`. Let the server map,
   canonicalize `ko`/`map` views, rank, batch, and summarize.
-- Use `search_kegg_entries` for bounded endpoint candidates. Never describe a candidate as the
-  selected best match, invent a relevance score, or call an exact-mass hit a compound
-  identification.
-- Use `resolve_kegg_entities` for gene or organism crosswalks. Preserve every reported ambiguous
-  candidate, require organism context for gene symbols, and treat unmapped results as mapping
-  outcomes rather than biological absence. Request `include_pathway_directory=true` only when the
-  user explicitly asks which organism-specific pathway references KEGG provides. Treat that
-  directory as reference availability, never as pathway presence, completeness, activity, flux, or
-  phenotype.
-- Use `trace_kegg_relations` for one- or two-level allowlisted cross-references. Do not interpret
-  returned edges as regulation, causality, mechanism, activity, or phenotype.
+- Route `search_kegg_entries`, `resolve_kegg_entities`, `trace_kegg_relations`,
+  `map_brite_hierarchy`, and `audit_annotation_mapping` exactly as specified in
+  [workflow-selection.md](references/workflow-selection.md).
 - All P0 query and audit direct responses are bounded previews. Read the returned resource URI only
   when complete search matches, crosswalks, graph data, BRITE paths, audit distributions, rows, or
   provenance are needed; do not reconstruct an authoritative result by manually batching and
   merging calls.
-- Use `map_brite_hierarchy` for complete BRITE paths and descriptive unique-input counts; never
-  call those counts enrichment or dominant function.
-- Use `audit_annotation_mapping` to summarize evidence status, strict/lenient mapping yield,
-  ambiguity, provenance, and optional assembly-quality warnings without correcting scores or
-  filling missing K numbers. Set `mapping_targets` to the relationship classes required by the
-  question; an empty list requests an evidence-only audit. If relationship mapping is skipped by a
-  request limit, retain and report the complete evidence audit instead of treating the skipped
-  mapping as missing biology.
 - Use `normalize_ko_annotations`, `get_kegg_entries`, `analyze_modules`, `analyze_pathways`, or
   `compare_ko_sets` only for the corresponding narrower request.
 - Call `get_server_status` when deployment state matters. If live access is enabled and

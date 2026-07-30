@@ -30,6 +30,7 @@ from kegg_mcp.services.query_models import (
 )
 from kegg_mcp.services.query_support import (
     GenomeRecord,
+    bounded_query_relation,
     deduplicate_entities,
     entity_key,
     fail_unexpected_relation_row,
@@ -40,10 +41,8 @@ from kegg_mcp.services.query_support import (
 )
 from kegg_mcp.services.reference_budget import KeggQueryClient
 from kegg_mcp.services.resolution_support import (
-    ResolverBudget,
-    bounded_resolver_link,
+    new_resolver_budget,
     relation_step,
-    require_resolver_request_capacity,
     resolution_limit,
     retain_resolution,
 )
@@ -64,7 +63,7 @@ def resolve_organism_request(
     operations_by_input: list[list[ResolutionOperation]] = [[] for _ in request.identifiers]
     provenance: list[KeggBatchProvenance] = []
     steps: list[dict[str, Any]] = []
-    budget = ResolverBudget()
+    budget = new_resolver_budget()
 
     if request.source_namespace is OrganismIdentifierNamespace.CODE:
         for index, identifier in enumerate(request.identifiers):
@@ -85,7 +84,7 @@ def resolve_organism_request(
             candidate_identities[index][entity_key(genome)] = [genome]
     elif request.source_namespace is OrganismIdentifierNamespace.TAXONOMY:
         taxonomies = tuple(_taxonomy_entity(identifier) for identifier in request.identifiers)
-        linked = bounded_resolver_link(
+        linked = bounded_query_relation(
             tuple(taxonomy.identifier for taxonomy in taxonomies),
             relationship=link_relationship(KeggRelationType.TAXONOMY_TO_GENOME),
             client=client,
@@ -115,7 +114,7 @@ def resolve_organism_request(
             candidate_identities[index][entity_key(lookup)] = [taxonomy, lookup]
     else:
         for index, identifier in enumerate(request.identifiers):
-            require_resolver_request_capacity(budget)
+            budget.require_request_capacity()
             found = client.find(
                 FindRequest(
                     database=KeggFindDatabase.ORGANISM,
@@ -163,7 +162,7 @@ def resolve_organism_request(
             tuple(entity.identifier for entity in lookup_entities),
             client=client,
             options=options,
-            before_batch=lambda: require_resolver_request_capacity(budget),
+            before_batch=budget.require_request_capacity,
             record_batch=lambda count, batches: budget.record(
                 row_count=count,
                 batches=batches,
@@ -223,7 +222,7 @@ def resolve_organism_request(
     pathway_summaries: dict[str, OrganismPathwaySummary] = {}
     if request.include_pathway_directory:
         for organism in all_organism_codes:
-            require_resolver_request_capacity(budget)
+            budget.require_request_capacity()
             listed = client.list_organism_pathways(
                 OrganismPathwayListRequest(organism=organism.identifier),
                 options=options,
@@ -258,7 +257,7 @@ def resolve_organism_request(
                 operations_by_input[index].append(ResolutionOperation.LIST)
 
     if all_organism_codes:
-        linked_taxonomies = bounded_resolver_link(
+        linked_taxonomies = bounded_query_relation(
             tuple(organism.identifier for organism in all_organism_codes),
             relationship=link_relationship(KeggRelationType.GENOME_TO_TAXONOMY),
             client=client,

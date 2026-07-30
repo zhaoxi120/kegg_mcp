@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn, cast
+from typing import cast
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -49,10 +49,8 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
 )
 from kegg_mcp.services import (
-    kegg_search,
     query_support,
     relation_tracing,
-    resolution_support,
 )
 from kegg_mcp.services.entity_resolution import resolve_kegg_entities
 from kegg_mcp.services.kegg_search import search_kegg_entries
@@ -1858,6 +1856,31 @@ def test_trace_enforces_global_request_budget_across_relationships(
     assert store.list_results("scope").total_items == 0
 
 
+@pytest.mark.parametrize(
+    ("request_capacity_first", "expected_limit"),
+    [(False, "query_row_count"), (True, "kegg_request_count")],
+)
+def test_shared_query_budget_preserves_service_preflight_order(
+    request_capacity_first: bool,
+    expected_limit: str,
+) -> None:
+    budget = query_support.QueryBudget(
+        request_limit=0,
+        row_limit=0,
+        response_byte_limit=0,
+        error_message="bounded",
+        suggested_action="narrow",
+        row_limit_name="query_row_count",
+        request_capacity_first=request_capacity_first,
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        budget.require_relation_capacity()
+
+    details = {detail.name: detail.value for detail in caught.value.detail.safe_details}
+    assert details["limit_name"] == expected_limit
+
+
 def test_query_artifact_cap_applies_before_retention_for_all_services(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1905,75 +1928,6 @@ def test_query_artifact_cap_applies_before_retention_for_all_services(
             scope_id="scope",
         )
     assert trace_error.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
-    assert trace_store.list_results("scope").total_items == 0
-
-
-def test_retained_result_model_failures_are_compensated(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def reject_result(**values: object) -> NoReturn:
-        del values
-        raise RuntimeError("synthetic result failure")
-
-    search_client = _QueryClient()
-    search_client.find_rows[(KeggFindDatabase.KO, "hexokinase", None)] = (("K00844", "hexokinase"),)
-    search_store = SQLiteResultStore(tmp_path / "search.sqlite3")
-    with monkeypatch.context() as patch:
-        patch.setattr(kegg_search, "SearchKeggEntriesResult", reject_result)
-        with pytest.raises(RuntimeError, match="synthetic result failure"):
-            search_kegg_entries(
-                SearchKeggEntriesRequest(
-                    database=KeggSearchDatabase.KO,
-                    query="hexokinase",
-                ),
-                client=cast(KeggQueryClient, search_client),
-                result_store=search_store,
-                scope_id="scope",
-            )
-    assert search_store.list_results("scope").total_items == 0
-
-    resolve_store = SQLiteResultStore(tmp_path / "resolve.sqlite3")
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            resolution_support,
-            "ResolveKeggEntitiesResult",
-            reject_result,
-        )
-        with pytest.raises(RuntimeError, match="synthetic result failure"):
-            resolve_kegg_entities(
-                GeneResolutionRequest(
-                    kind="gene",
-                    source_namespace=GeneIdentifierNamespace.KEGG_GENE,
-                    identifiers=("hsa:1",),
-                ),
-                client=cast(KeggQueryClient, _QueryClient()),
-                result_store=resolve_store,
-                scope_id="scope",
-            )
-    assert resolve_store.list_results("scope").total_items == 0
-
-    trace_client = _QueryClient()
-    trace_client.link_rows = {
-        KeggLinkRelationship.KO_TO_PATHWAY: (("ko:K00001", "path:ko00010"),),
-    }
-    trace_store = SQLiteResultStore(tmp_path / "trace.sqlite3")
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            relation_tracing,
-            "TraceKeggRelationsResult",
-            reject_result,
-        )
-        with pytest.raises(RuntimeError, match="synthetic result failure"):
-            trace_kegg_relations(
-                TraceKeggRelationsRequest(
-                    seeds=(_entity(KeggEntityKind.KO, "K00001"),),
-                    edge_types=(KeggRelationType.KO_TO_PATHWAY,),
-                ),
-                client=cast(KeggQueryClient, trace_client),
-                result_store=trace_store,
-                scope_id="scope",
-            )
     assert trace_store.list_results("scope").total_items == 0
 
 

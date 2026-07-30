@@ -63,9 +63,8 @@ remain bounded across the complete operation.
 
 `search_kegg_entries` composes one typed FIND request and returns a bounded projection of ordered
 database-validated candidates. The complete response remains in a scoped retained artifact.
-The direct result reports observed and bounded candidate counts, at most ten candidate previews,
-at most 128 characters of endpoint text per preview with an explicit clipping flag, and compact
-retrieval accounting without full provenance.
+The direct result reports observed and bounded candidate counts, clipped candidate previews with
+explicit flags, and compact retrieval accounting without full provenance.
 Keyword, formula, exact-mass, and molecular-weight matches are candidates only: the service does
 not calculate relevance, choose a best match, or claim compound identification.
 
@@ -78,16 +77,16 @@ code/T-number identity before direct or converted gene prefixes are filtered; a 
 difference alone is not treated as a cross-organism mismatch. Organism pathway-directory retrieval
 is a separate opt-in projection: `include_pathway_directory=false` performs no LIST request, while
 `true` retains the complete typed LIST response for every source-backed canonical candidate. The
-direct result contains counts plus at most five input previews, two candidates per input, five
-projected entities per candidate, three taxonomy labels, and two pathway entries. Text clipping has
-explicit field-level flags. The direct retrieval summary contains only counts, response bytes, and
-an explicitly truncated preview of distinct release labels; complete provenance remains retained.
+direct result contains counts plus bounded input, candidate, projected-entity, taxonomy, and
+pathway previews. Text clipping has explicit field-level flags. The direct retrieval summary
+contains only counts, response bytes, and a bounded release-label preview; complete provenance
+remains retained.
 The directory describes available KEGG references, not pathway presence, completeness, activity,
 flux, or phenotype. Mapping failure is not evidence that an entity does not exist.
 
 `trace_kegg_relations` traverses an allowlist of typed KEGG LINK directions for one or two hops.
 Seeds, edge types, nodes, edges, raw relationship rows, response bytes, and provenance are bounded.
-The direct result contains retrieval counts plus at most 25 nodes and 25 edges, without embedding
+The direct result contains retrieval counts plus bounded node and edge previews without embedding
 complete provenance batches. The retained graph is complete within the service bounds, and every
 retained edge contains sorted indexes into its complete provenance sequence for the LINK and any
 required genome-alias GET batches that support it. The service preserves endpoint-returned nodes
@@ -105,10 +104,10 @@ cache entry and preserve an explicit refresh request unchanged.
 `map_brite_hierarchy` maps bounded typed entities into selected or safely discovered BRITE
 hierarchies. It preserves source-backed hierarchy paths, supports multiple memberships, reports
 unmatched entities, and retains complete bounded JSON and formula-safe TSV artifacts behind a
-compact preview. The direct result includes at most three lightweight path and classification
-previews, ten unmatched-entity previews, clipped node names with explicit flags, and compact
-retrieval accounting. Classification counts are unique supplied-entity counts without abundance
-weighting or statistical enrichment.
+compact preview. The direct result includes bounded lightweight path, classification, and
+unmatched-entity previews, clipped node names with explicit flags, and compact retrieval
+accounting. Classification counts are unique supplied-entity counts without abundance weighting or
+statistical enrichment.
 
 `audit_annotation_mapping` reuses the imported immutable annotation dataset and selected fixed KO
 relationship mappings. The caller may select any subset of pathway, MODULE, reaction, enzyme, and
@@ -121,7 +120,7 @@ strict and lenient yields, one-to-many and unmapped K numbers, source-provenance
 cache, release, and retrieval summaries. The audit does not alter source decisions, fill missing K
 numbers, compare incompatible scores, or infer biological absence. The direct result contains the
 evidence summary, mapping execution state, compact per-target counts and yields, compact retrieval
-accounting, and at most five clipped warning previews. Complete degree distributions, KO previews,
+accounting, and bounded clipped warning previews. Complete degree distributions, KO previews,
 warnings, relationship rows, and provenance remain retained.
 
 These services are query and evidence-routing paths, not extensions of the annotator or renderer.

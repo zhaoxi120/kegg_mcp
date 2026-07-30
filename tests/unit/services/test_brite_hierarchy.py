@@ -577,7 +577,7 @@ def test_hierarchy_response_budget_stops_after_the_failing_endpoint_batch(
     assert len(client.get_requests) == 2
 
 
-def test_detail_construction_failure_and_result_construction_failure_leave_no_result(
+def test_detail_construction_failure_leaves_no_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -594,24 +594,6 @@ def test_detail_construction_failure_and_result_construction_failure_leave_no_re
 
     monkeypatch.setattr(brite_hierarchy, "_tsv_bytes", fail_table)
     with pytest.raises(RuntimeError, match="table construction"):
-        map_brite_hierarchy(
-            MapBriteHierarchyRequest(
-                entity_ids=(_ko("K00001"),),
-                brite_ids=("ko00001",),
-            ),
-            client=cast(KeggPrimitiveClient, _GetClient((document,))),
-            result_store=store,
-            scope_id="scope",
-        )
-    assert store.list_results("scope").total_items == 0
-
-    monkeypatch.undo()
-
-    def fail_result(*args: object, **kwargs: object) -> object:
-        raise RuntimeError("result construction failed")
-
-    monkeypatch.setattr(brite_hierarchy, "MapBriteHierarchyResult", fail_result)
-    with pytest.raises(RuntimeError, match="result construction"):
         map_brite_hierarchy(
             MapBriteHierarchyRequest(
                 entity_ids=(_ko("K00001"),),

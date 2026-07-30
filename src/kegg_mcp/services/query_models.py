@@ -9,6 +9,7 @@ from pydantic import Field, field_validator, model_validator
 
 from kegg_mcp.domain.annotations import FrozenModel, normalize_identifier_label, validate_utf8_text
 from kegg_mcp.kegg.contracts import (
+    MAX_FIND_MATCH_TEXT_CHARACTERS,
     FindRequest,
     KeggFindDatabase,
     KeggFindMode,
@@ -40,7 +41,6 @@ MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW = 2
 MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS = 128
 MAX_TRACE_NODE_PREVIEW = 25
 MAX_TRACE_EDGE_PREVIEW = 25
-MAX_MATCH_TEXT_CHARACTERS = 10_000
 MAX_ORGANISM_NAME_CHARACTERS = 2_000
 MAX_TAXONOMY_LINEAGE_DEPTH = 64
 MAX_TAXONOMY_LINEAGE_LABEL_CHARACTERS = 512
@@ -287,12 +287,6 @@ class TaxonomyResolutionRank(StrEnum):
     SPECIES = "species"
 
 
-class AmbiguityPolicy(StrEnum):
-    """The only supported policy preserves every endpoint-returned candidate."""
-
-    REPORT_ALL = "report_all"
-
-
 class GeneResolutionTarget(StrEnum):
     """Allowlisted projections from each canonical KEGG gene candidate."""
 
@@ -318,7 +312,7 @@ class GeneResolutionRequest(FrozenModel):
         tuple[GeneResolutionTarget, ...],
         Field(min_length=1, max_length=len(GeneResolutionTarget)),
     ] = (GeneResolutionTarget.GENE,)
-    ambiguity_policy: Literal[AmbiguityPolicy.REPORT_ALL] = AmbiguityPolicy.REPORT_ALL
+    ambiguity_policy: Literal["report_all"] = "report_all"
 
     @field_validator("identifiers")
     @classmethod
@@ -385,7 +379,7 @@ class OrganismResolutionRequest(FrozenModel):
     ]
     taxonomy_rank: TaxonomyResolutionRank = TaxonomyResolutionRank.EXACT
     include_pathway_directory: bool = False
-    ambiguity_policy: Literal[AmbiguityPolicy.REPORT_ALL] = AmbiguityPolicy.REPORT_ALL
+    ambiguity_policy: Literal["report_all"] = "report_all"
 
     @field_validator("identifiers")
     @classmethod
@@ -458,7 +452,7 @@ class OrganismPathwayPreviewEntry(FrozenModel):
     """One bounded organism-specific pathway directory preview entry."""
 
     pathway: KeggEntityRef
-    name: str = Field(min_length=1, max_length=MAX_MATCH_TEXT_CHARACTERS)
+    name: str = Field(min_length=1, max_length=MAX_FIND_MATCH_TEXT_CHARACTERS)
 
     @model_validator(mode="after")
     def require_pathway_entity(self) -> Self:
@@ -966,7 +960,6 @@ __all__ = [
     "MAX_TRACE_NODES",
     "MAX_TRACE_NODE_PREVIEW",
     "MAX_TRACE_SEEDS",
-    "AmbiguityPolicy",
     "EntityResolution",
     "EntityResolutionPreview",
     "GeneIdentifierNamespace",

@@ -15,12 +15,18 @@ from kegg_mcp.kegg import (
     KeggGetDatabase,
     KeggLinkRelationship,
     KeggRequestOptions,
+    KeggTaxonomyRank,
     ResponseOrigin,
 )
 from kegg_mcp.kegg.contracts import (
+    MAX_GET_ENTRIES_PER_BATCH,
     KeggBatchProvenance,
     KeggFlatFileDocument,
     KeggFlatFileField,
+)
+from kegg_mcp.services.kegg_relations import (
+    BoundedRelationResult,
+    bounded_relation_batches,
 )
 from kegg_mcp.services.query_models import (
     MAX_QUERY_PROVENANCE_BATCHES,
@@ -36,7 +42,6 @@ from kegg_mcp.services.result_builders import _json_bytes
 
 MAX_QUERY_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_QUERY_DIRECT_BYTES = 64 * 1024
-MAX_GENOME_GET_ENTRIES_PER_CALL = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +62,117 @@ class GenomeRecordLoad:
     batches: tuple[KeggBatchProvenance, ...]
     batch_index_by_alias: dict[str, int]
     step: dict[str, Any]
+
+
+@dataclass(slots=True)
+class QueryBudget:
+    """One shared aggregate request, row, and response-byte budget."""
+
+    request_limit: int
+    row_limit: int
+    response_byte_limit: int
+    error_message: str
+    suggested_action: str
+    row_limit_name: str
+    request_capacity_first: bool = True
+    requests: int = 0
+    rows: int = 0
+    response_bytes: int = 0
+
+    @property
+    def remaining_requests(self) -> int:
+        return self.request_limit - self.requests
+
+    @property
+    def remaining_rows(self) -> int:
+        return self.row_limit - self.rows
+
+    @property
+    def remaining_response_bytes(self) -> int:
+        return self.response_byte_limit - self.response_bytes
+
+    def require_request_capacity(self) -> None:
+        if self.remaining_requests <= 0:
+            self._limit("kegg_request_count", self.requests + 1, self.request_limit)
+
+    def require_relation_capacity(self) -> None:
+        if self.request_capacity_first:
+            self.require_request_capacity()
+        if self.remaining_rows <= 0:
+            self._limit(self.row_limit_name, self.rows + 1, self.row_limit)
+        if self.remaining_response_bytes <= 0:
+            self._limit(
+                "kegg_response_bytes",
+                self.response_bytes + 1,
+                self.response_byte_limit,
+            )
+        if not self.request_capacity_first:
+            self.require_request_capacity()
+
+    def record(
+        self,
+        *,
+        row_count: int,
+        batches: Iterable[KeggBatchProvenance],
+    ) -> None:
+        batch_tuple = tuple(batches)
+        next_requests = self.requests + len(batch_tuple)
+        next_rows = self.rows + row_count
+        next_response_bytes = self.response_bytes + sum(
+            batch.response_bytes for batch in batch_tuple
+        )
+        if next_requests > self.request_limit:
+            self._limit("kegg_request_count", next_requests, self.request_limit)
+        if next_rows > self.row_limit:
+            self._limit(self.row_limit_name, next_rows, self.row_limit)
+        if next_response_bytes > self.response_byte_limit:
+            self._limit(
+                "kegg_response_bytes",
+                next_response_bytes,
+                self.response_byte_limit,
+            )
+        self.requests = next_requests
+        self.rows = next_rows
+        self.response_bytes = next_response_bytes
+
+    def _limit(self, name: str, observed: int, limit: int) -> NoReturn:
+        fail(
+            ErrorCode.INPUT_LIMIT_EXCEEDED,
+            self.error_message,
+            suggested_action=self.suggested_action,
+            safe_details=(
+                SafeDetail(name="limit_name", value=name),
+                SafeDetail(name="observed", value=str(observed)),
+                SafeDetail(name="limit", value=str(limit)),
+            ),
+        )
+
+
+def bounded_query_relation(
+    source_identifiers: tuple[str, ...],
+    *,
+    relationship: KeggLinkRelationship,
+    client: KeggQueryClient,
+    options: KeggRequestOptions | None,
+    budget: QueryBudget,
+    taxonomy_rank: KeggTaxonomyRank = KeggTaxonomyRank.EXACT,
+) -> BoundedRelationResult:
+    """Run one LINK relation against the remaining aggregate query budget."""
+    budget.require_relation_capacity()
+    return bounded_relation_batches(
+        source_identifiers,
+        relationship=relationship,
+        client=client,
+        options=options,
+        taxonomy_rank=taxonomy_rank,
+        max_total_requests=budget.remaining_requests,
+        max_total_rows=budget.remaining_rows,
+        max_total_response_bytes=budget.remaining_response_bytes,
+        record_batch=lambda count, batches: budget.record(
+            row_count=count,
+            batches=batches,
+        ),
+    )
 
 
 def load_genome_records(
@@ -87,7 +203,7 @@ def load_genome_records(
     batch_index_by_alias: dict[str, int] = {}
     retained_results: list[dict[str, Any]] = []
     batch_size = min(
-        MAX_GENOME_GET_ENTRIES_PER_CALL,
+        MAX_GET_ENTRIES_PER_BATCH,
         client.config.limits.max_identifiers,
     )
     for start in range(0, len(unique_identifiers), batch_size):
@@ -343,7 +459,9 @@ __all__ = [
     "MAX_QUERY_DIRECT_BYTES",
     "GenomeRecord",
     "GenomeRecordLoad",
+    "QueryBudget",
     "bounded_query_payload",
+    "bounded_query_relation",
     "deduplicate_entities",
     "entity_key",
     "fail_unexpected_genome_document",

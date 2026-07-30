@@ -85,7 +85,7 @@ from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     ResultArtifactMetadata,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 # Current KEGG Global, Overview, and higher-level Overview KO reference maps.
@@ -375,10 +375,9 @@ def analyze_annotation_targets(
                 )
             )
             artifact_metadata.append(_artifact_metadata(section, "application/json", content))
-    result = result_store.create(scope_id, tuple(stored_inputs))
-    output_bundle = None
-    started = time.perf_counter_ns()
-    try:
+    with create_retained_result(result_store, scope_id, tuple(stored_inputs)) as result:
+        output_bundle = None
+        started = time.perf_counter_ns()
         if output_directory is not None:
             summary_artifact = next(
                 artifact for artifact in rendered.artifacts if artifact.section.value == "summary"
@@ -397,14 +396,6 @@ def analyze_annotation_targets(
                 manifest_path_mode=request.manifest_path_mode,
                 remove_created_directory_on_failure=remove_created_output_on_failure,
             )
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            result.result_id,
-            result.created_at,
-        )
-        raise
     stage_elapsed[ExecutionStage.BUNDLE_WRITE] = _elapsed_ms(started)
     artifacts = tuple(artifact_metadata)
     caveats = ["K-number assignments are annotation evidence, not experimental validation."]

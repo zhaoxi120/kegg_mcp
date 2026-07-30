@@ -26,7 +26,7 @@ from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 
@@ -44,15 +44,15 @@ def retrieve_kegg_entries(
     previews = _entry_previews(fetched)
     provenance = tuple(fetched.batches[:MAX_GET_PROVENANCE_BATCHES])
     artifact = _artifact_metadata(DETAIL_SECTION, "application/json", payload)
-    stored = result_store.create(
+    with create_retained_result(
+        result_store,
         scope_id,
         (
             ResultArtifactInput(
                 section=DETAIL_SECTION, mime_type="application/json", content=payload
             ),
         ),
-    )
-    try:
+    ) as stored:
         return KeggEntriesServiceResult(
             result=stored,
             artifact=artifact,
@@ -64,14 +64,6 @@ def retrieve_kegg_entries(
             provenance=provenance,
             provenance_truncated=len(provenance) < len(fetched.batches),
         )
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            stored.result_id,
-            stored.created_at,
-        )
-        raise
 
 
 def _entry_previews(fetched: GetResult) -> tuple[KeggEntryPreview, ...]:

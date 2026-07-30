@@ -31,6 +31,7 @@ from kegg_mcp.services.kegg_relations import (
     bounded_relation_batches,
 )
 from kegg_mcp.services.query_models import (
+    MAX_QUERY_PROVENANCE_BATCHES,
     KeggEntityKind,
     KeggEntityRef,
     QueryRetrievalSummary,
@@ -46,7 +47,7 @@ from kegg_mcp.services.result_store import (
     ResultArtifactMetadata,
     ResultMetadata,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 MAX_BRITE_ENTITY_IDS = 100
@@ -64,7 +65,6 @@ MAX_BRITE_PATHS = 10_000
 MAX_BRITE_CLASSIFICATIONS = 50_000
 MAX_BRITE_NODE_NAME_CHARACTERS = 2_000
 MAX_BRITE_ARTIFACT_BYTES = 16_000_000
-MAX_BRITE_PROVENANCE_BATCHES = 200
 
 BRITE_DETAIL_SECTION = "brite_hierarchy.json"
 BRITE_TABLE_SECTION = "brite_hierarchy.tsv"
@@ -257,11 +257,11 @@ class BriteHierarchyDetail(FrozenModel):
     ]
     relation_provenance: Annotated[
         tuple[KeggBatchProvenance, ...],
-        Field(max_length=MAX_BRITE_PROVENANCE_BATCHES),
+        Field(max_length=MAX_QUERY_PROVENANCE_BATCHES),
     ] = ()
     hierarchy_provenance: Annotated[
         tuple[KeggBatchProvenance, ...],
-        Field(max_length=MAX_BRITE_PROVENANCE_BATCHES),
+        Field(max_length=MAX_QUERY_PROVENANCE_BATCHES),
     ] = ()
     count_semantics: Literal[
         "Counts classify unique supplied entities under each complete BRITE path prefix. "
@@ -478,8 +478,7 @@ def map_brite_hierarchy(
             content=table_bytes,
         ),
     )
-    stored = result_store.create(scope_id, artifact_inputs)
-    try:
+    with create_retained_result(result_store, scope_id, artifact_inputs) as stored:
         preview_limit = request.preview_limit
         path_preview = tuple(_path_preview(path) for path in paths[:preview_limit])
         classification_preview = tuple(
@@ -522,14 +521,6 @@ def map_brite_hierarchy(
         )
         require_bounded_query_direct_result(result)
         return result
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            stored.result_id,
-            stored.created_at,
-        )
-        raise
 
 
 def _node_preview(node: BriteHierarchyNode) -> BriteHierarchyNodePreview:
@@ -606,11 +597,11 @@ def _validate_response_budget(
     hierarchy_batches: tuple[KeggBatchProvenance, ...],
 ) -> None:
     total_batches = len(relation_batches) + len(hierarchy_batches)
-    if total_batches > MAX_BRITE_PROVENANCE_BATCHES:
+    if total_batches > MAX_QUERY_PROVENANCE_BATCHES:
         _limit_exceeded(
             "provenance_batches",
             total_batches,
-            MAX_BRITE_PROVENANCE_BATCHES,
+            MAX_QUERY_PROVENANCE_BATCHES,
         )
     response_bytes = sum(batch.response_bytes for batch in (*relation_batches, *hierarchy_batches))
     if response_bytes > MAX_BRITE_TOTAL_RESPONSE_BYTES:

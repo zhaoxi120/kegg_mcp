@@ -55,11 +55,9 @@ uv run --frozen pyright
 uv run --frozen pytest
 ```
 
-Pull-request CI keeps one serialized live campaign with 20 requests each for `INFO`,
-organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`, one request per second, zero retries,
-and no uploaded KEGG payloads. Each operation rotates its documented stable-case matrix within the
-same 120-request total budget. The workflow has no `push` trigger. If a live campaign is not
-authorized, record it as not run; never substitute unauthorized access.
+Run the governed pull-request compatibility campaign exactly as defined in
+[the live-test guide](../tests/live/README.md). If a live campaign is not authorized, record it as
+not run; never substitute unauthorized access.
 
 Validate the companions independently:
 

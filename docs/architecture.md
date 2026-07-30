@@ -185,13 +185,9 @@ Cache behavior is deployment-owned:
 - status reads do not create or open SQLite merely to collect statistics and report
   `inspection_status=not_probed` for uninspected counts.
 
-The default local test profile performs no live KEGG requests. Pull-request CI runs one serialized
-campaign of 20 `INFO`, 20 organism-pathway `LIST`, 20 `FIND`, 20 `GET`, 20 `LINK`, and 20 `CONV`
-requests at one request per second with zero retries and no uploaded KEGG payloads. Each
-operation's fixed 20-request budget rotates several stable typed cases, including all four public
-Core FIND modes and multiple P0 relation directions; it does not repeat one request twenty times.
-The workflow has no merge-push repetition. This campaign is an access and compatibility check, not
-permission to redistribute responses.
+The default local test profile performs no live KEGG requests. The governed pull-request
+compatibility campaign is defined only in [the live-test guide](../tests/live/README.md). It is an
+access and compatibility check, not permission to redistribute responses.
 
 ## Bounded query and evidence routing
 

@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.kegg import KeggRequestOptions
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggPairRow
-from kegg_mcp.services.kegg_relations import (
-    DEFAULT_MAX_RELATION_RESPONSE_BYTES,
-    BoundedRelationResult,
-    bounded_relation_batches,
-)
+from kegg_mcp.services.kegg_relations import DEFAULT_MAX_RELATION_RESPONSE_BYTES
 from kegg_mcp.services.models import DETAIL_SECTION
 from kegg_mcp.services.query_models import (
     MAX_TRACE_EDGE_PREVIEW,
@@ -28,7 +23,9 @@ from kegg_mcp.services.query_models import (
     relation_entity_kinds,
 )
 from kegg_mcp.services.query_support import (
+    QueryBudget,
     bounded_query_payload,
+    bounded_query_relation,
     entity_key,
     fail_unexpected_relation_row,
     genome_lookup_from_pair,
@@ -44,7 +41,7 @@ from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 MAX_TRACE_KEGG_REQUESTS = 128
@@ -56,58 +53,6 @@ class _TracedPair:
     source: KeggEntityRef
     target: KeggEntityRef
     provenance_batch_indexes: tuple[int, ...]
-
-
-@dataclass(slots=True)
-class _TraceBudget:
-    row_limit: int
-    request_limit: int = MAX_TRACE_KEGG_REQUESTS
-    response_byte_limit: int = DEFAULT_MAX_RELATION_RESPONSE_BYTES
-    requests: int = 0
-    rows: int = 0
-    response_bytes: int = 0
-
-    @property
-    def remaining_requests(self) -> int:
-        return self.request_limit - self.requests
-
-    @property
-    def remaining_rows(self) -> int:
-        return self.row_limit - self.rows
-
-    @property
-    def remaining_response_bytes(self) -> int:
-        return self.response_byte_limit - self.response_bytes
-
-    def record(
-        self,
-        *,
-        row_count: int,
-        batches: Iterable[KeggBatchProvenance],
-    ) -> None:
-        batch_tuple = tuple(batches)
-        next_requests = self.requests + len(batch_tuple)
-        next_rows = self.rows + row_count
-        next_response_bytes = self.response_bytes + sum(
-            batch.response_bytes for batch in batch_tuple
-        )
-        if next_requests > self.request_limit:
-            _trace_limit(
-                "kegg_request_count",
-                next_requests,
-                self.request_limit,
-            )
-        if next_rows > self.row_limit:
-            _trace_limit("raw_relation_row_count", next_rows, self.row_limit)
-        if next_response_bytes > self.response_byte_limit:
-            _trace_limit(
-                "kegg_response_bytes",
-                next_response_bytes,
-                self.response_byte_limit,
-            )
-        self.requests = next_requests
-        self.rows = next_rows
-        self.response_bytes = next_response_bytes
 
 
 def trace_kegg_relations(
@@ -131,11 +76,16 @@ def trace_kegg_relations(
     provenance: list[KeggBatchProvenance] = []
     steps: list[dict[str, Any]] = []
     frontier = list(request.seeds)
-    budget = _TraceBudget(
+    budget = QueryBudget(
+        request_limit=MAX_TRACE_KEGG_REQUESTS,
         row_limit=min(
             request.max_edges * _MAX_TRACE_RAW_ROW_FACTOR,
             10_000,
-        )
+        ),
+        response_byte_limit=DEFAULT_MAX_RELATION_RESPONSE_BYTES,
+        error_message="Relation tracing exceeded a caller-selected traversal bound.",
+        suggested_action="Use fewer seeds, edge types, or a smaller traversal depth.",
+        row_limit_name="raw_relation_row_count",
     )
 
     for depth in range(1, request.max_depth + 1):
@@ -238,7 +188,8 @@ def trace_kegg_relations(
             },
         }
     )
-    stored = result_store.create(
+    with create_retained_result(
+        result_store,
         scope_id,
         (
             ResultArtifactInput(
@@ -247,8 +198,7 @@ def trace_kegg_relations(
                 content=payload,
             ),
         ),
-    )
-    try:
+    ) as stored:
         result = TraceKeggRelationsResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
@@ -263,14 +213,6 @@ def trace_kegg_relations(
         )
         require_bounded_query_direct_result(result)
         return result
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            stored.result_id,
-            stored.created_at,
-        )
-        raise
 
 
 def _trace_relation(
@@ -279,7 +221,7 @@ def _trace_relation(
     *,
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    budget: _TraceBudget,
+    budget: QueryBudget,
     depth: int,
 ) -> tuple[
     tuple[_TracedPair, ...],
@@ -304,9 +246,9 @@ def _trace_relation(
         )
 
     source_kind, target_kind = relation_entity_kinds(relationship)
-    linked = _bounded_trace_link(
+    linked = bounded_query_relation(
         tuple(source.identifier for source in sources),
-        relationship=relationship,
+        relationship=link_relationship(relationship),
         client=client,
         options=options,
         budget=budget,
@@ -344,7 +286,7 @@ def _trace_genome_to_taxonomy(
     *,
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    budget: _TraceBudget,
+    budget: QueryBudget,
     depth: int,
 ) -> tuple[
     tuple[_TracedPair, ...],
@@ -355,7 +297,7 @@ def _trace_genome_to_taxonomy(
         tuple(source.identifier for source in sources),
         client=client,
         options=options,
-        before_batch=lambda: _require_trace_request_capacity(budget),
+        before_batch=budget.require_request_capacity,
         record_batch=lambda _count, batches: budget.record(
             row_count=0,
             batches=batches,
@@ -372,9 +314,9 @@ def _trace_genome_to_taxonomy(
     }
     if not records_by_code:
         return (), get_batches, (get_step,)
-    linked = _bounded_trace_link(
+    linked = bounded_query_relation(
         tuple(records_by_code),
-        relationship=KeggRelationType.GENOME_TO_TAXONOMY,
+        relationship=link_relationship(KeggRelationType.GENOME_TO_TAXONOMY),
         client=client,
         options=options,
         budget=budget,
@@ -416,16 +358,16 @@ def _trace_taxonomy_to_genome(
     *,
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    budget: _TraceBudget,
+    budget: QueryBudget,
     depth: int,
 ) -> tuple[
     tuple[_TracedPair, ...],
     tuple[KeggBatchProvenance, ...],
     tuple[dict[str, Any], ...],
 ]:
-    linked = _bounded_trace_link(
+    linked = bounded_query_relation(
         tuple(source.identifier for source in sources),
-        relationship=KeggRelationType.TAXONOMY_TO_GENOME,
+        relationship=link_relationship(KeggRelationType.TAXONOMY_TO_GENOME),
         client=client,
         options=options,
         budget=budget,
@@ -451,7 +393,7 @@ def _trace_taxonomy_to_genome(
         unique_codes,
         client=client,
         options=options,
-        before_batch=lambda: _require_trace_request_capacity(budget),
+        before_batch=budget.require_request_capacity,
         record_batch=lambda _count, batches: budget.record(
             row_count=0,
             batches=batches,
@@ -489,47 +431,6 @@ def _trace_taxonomy_to_genome(
     return pairs, (*linked.batches, *get_batches), steps
 
 
-def _bounded_trace_link(
-    source_identifiers: tuple[str, ...],
-    *,
-    relationship: KeggRelationType,
-    client: KeggQueryClient,
-    options: KeggRequestOptions | None,
-    budget: _TraceBudget,
-) -> BoundedRelationResult:
-    if budget.remaining_requests <= 0:
-        _trace_limit(
-            "kegg_request_count",
-            budget.requests + 1,
-            budget.request_limit,
-        )
-    if budget.remaining_rows <= 0:
-        _trace_limit(
-            "raw_relation_row_count",
-            budget.rows + 1,
-            budget.row_limit,
-        )
-    if budget.remaining_response_bytes <= 0:
-        _trace_limit(
-            "kegg_response_bytes",
-            budget.response_bytes + 1,
-            budget.response_byte_limit,
-        )
-    return bounded_relation_batches(
-        source_identifiers,
-        relationship=link_relationship(relationship),
-        client=client,
-        options=options,
-        max_total_requests=budget.remaining_requests,
-        max_total_rows=budget.remaining_rows,
-        max_total_response_bytes=budget.remaining_response_bytes,
-        record_batch=lambda count, batches: budget.record(
-            row_count=count,
-            batches=batches,
-        ),
-    )
-
-
 def _trace_link_step(
     relationship: KeggRelationType,
     depth: int,
@@ -545,15 +446,6 @@ def _trace_link_step(
         "rows": [row.model_dump(mode="json") for row in rows],
         "provenance": [batch.model_dump(mode="json") for batch in batches],
     }
-
-
-def _require_trace_request_capacity(budget: _TraceBudget) -> None:
-    if budget.remaining_requests <= 0:
-        _trace_limit(
-            "kegg_request_count",
-            budget.requests + 1,
-            budget.request_limit,
-        )
 
 
 def _trace_limit(

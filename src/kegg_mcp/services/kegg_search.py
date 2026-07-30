@@ -26,7 +26,7 @@ from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
     SQLiteResultStore,
-    compensate_created_result,
+    create_retained_result,
 )
 
 _SEARCH_ENTITY_KINDS = {
@@ -65,7 +65,8 @@ def search_kegg_entries(
             "find_result": fetched.model_dump(mode="json"),
         }
     )
-    stored = result_store.create(
+    with create_retained_result(
+        result_store,
         scope_id,
         (
             ResultArtifactInput(
@@ -74,8 +75,7 @@ def search_kegg_entries(
                 content=payload,
             ),
         ),
-    )
-    try:
+    ) as stored:
         result = SearchKeggEntriesResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
@@ -91,14 +91,6 @@ def search_kegg_entries(
         )
         require_bounded_query_direct_result(result)
         return result
-    except BaseException:
-        compensate_created_result(
-            result_store,
-            scope_id,
-            stored.result_id,
-            stored.created_at,
-        )
-        raise
 
 
 def _candidate_preview(
