@@ -21,11 +21,20 @@ from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_handlers import ToolContext
 from kegg_mcp.services.annotation_audit import (
     AnnotationMappingAuditResult,
+    AnnotationMappingExecution,
+    AnnotationMappingExecutionStatus,
     AnnotationMappingTarget,
 )
 from kegg_mcp.services.brite_hierarchy import MapBriteHierarchyResult
 from kegg_mcp.services.models import DatasetSource
-from kegg_mcp.services.query_models import KeggEntityKind, KeggEntityRef
+from kegg_mcp.services.query_models import (
+    KeggEntityKind,
+    KeggEntityRef,
+    KeggSearchDatabase,
+    KeggSearchMode,
+    SearchKeggEntriesRequest,
+    SearchKeggEntriesResult,
+)
 from kegg_mcp.services.reference_budget import KeggPrimitiveClient, KeggRelationClient
 from kegg_mcp.services.result_store import ResultMetadata, SQLiteResultStore
 
@@ -54,6 +63,38 @@ def _context(
         ),
     )
     return ToolContext(runtime=runtime, supported_tools=registry_module.TOOL_NAMES)
+
+
+def _mapping_execution(
+    status: AnnotationMappingExecutionStatus,
+) -> AnnotationMappingExecution:
+    if status is AnnotationMappingExecutionStatus.NOT_REQUESTED:
+        requested = ()
+        completed = ()
+        skipped = ()
+        planned = 0
+        limit = 100
+    elif status is AnnotationMappingExecutionStatus.COMPLETED:
+        requested = (AnnotationMappingTarget.PATHWAY,)
+        completed = requested
+        skipped = ()
+        planned = 1
+        limit = 100
+    else:
+        requested = (AnnotationMappingTarget.PATHWAY,)
+        completed = ()
+        skipped = requested
+        planned = 2
+        limit = 1
+    return AnnotationMappingExecution(
+        status=status,
+        requested_targets=requested,
+        completed_targets=completed,
+        skipped_targets=skipped,
+        selected_unique_ko_count=0,
+        planned_request_count=planned,
+        request_limit=limit,
+    )
 
 
 def test_registry_uses_typed_open_world_client_contracts() -> None:
@@ -146,6 +187,7 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
     )
     audit_result = AnnotationMappingAuditResult.model_construct(
         result=_result_metadata(artifact_count=1),
+        mapping_execution=_mapping_execution(AnnotationMappingExecutionStatus.COMPLETED),
     )
     captured: dict[str, object] = {}
 
@@ -210,3 +252,83 @@ def test_handlers_delegate_to_services_with_runtime_dependencies(
     assert audit_outcome.data is audit_result
     assert brite_outcome.result_id == brite_result.result.result_id
     assert audit_outcome.result_id == audit_result.result.result_id
+    assert audit_outcome.summary == (
+        "Audited annotation evidence and completed the selected KEGG relationship mappings."
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (
+            AnnotationMappingExecutionStatus.COMPLETED,
+            "Audited annotation evidence and completed the selected KEGG relationship mappings.",
+        ),
+        (
+            AnnotationMappingExecutionStatus.NOT_REQUESTED,
+            "Completed the annotation evidence audit; no KEGG relationship mapping was requested.",
+        ),
+        (
+            AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT,
+            (
+                "Completed the annotation evidence audit; KEGG relationship mapping was skipped "
+                "before network access because the planned request count exceeded the limit."
+            ),
+        ),
+    ],
+)
+def test_audit_handler_summary_reflects_mapping_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    status: AnnotationMappingExecutionStatus,
+    expected: str,
+) -> None:
+    execution = _mapping_execution(status)
+    result = AnnotationMappingAuditResult.model_construct(
+        result=_result_metadata(artifact_count=1),
+        mapping_execution=execution,
+    )
+
+    def fake_audit(*args: object, **kwargs: object) -> AnnotationMappingAuditResult:
+        return result
+
+    monkeypatch.setattr(handler_module, "audit_annotation_mapping", fake_audit)
+    outcome = handler_module.audit_mapping(
+        _context(
+            cast(KeggPrimitiveClient, object()),
+            cast(SQLiteResultStore, object()),
+        ),
+        AuditAnnotationMappingInput(
+            source=DatasetSource(ko_text="K00001"),
+            mapping_targets=execution.requested_targets,
+        ),
+    )
+
+    assert outcome.summary == expected
+
+
+def test_exact_mass_search_handler_summary_marks_candidates_as_not_identifications(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = SearchKeggEntriesResult.model_construct(
+        result=_result_metadata(artifact_count=1),
+        mode=KeggSearchMode.EXACT_MASS,
+        candidate_count=2,
+    )
+
+    def fake_search(*args: object, **kwargs: object) -> SearchKeggEntriesResult:
+        return result
+
+    monkeypatch.setattr(handler_module, "search_kegg_entries", fake_search)
+    outcome = handler_module.search_entries(
+        _context(
+            cast(KeggPrimitiveClient, object()),
+            cast(SQLiteResultStore, object()),
+        ),
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.COMPOUND,
+            query="180.063",
+            mode=KeggSearchMode.EXACT_MASS,
+        ),
+    )
+
+    assert "compound candidates, not compound identifications" in outcome.summary

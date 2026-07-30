@@ -1672,8 +1672,10 @@ def test_search_service_prefers_fresh_cache_by_default(
     )
 
     assert transport.urls == ["https://rest.kegg.jp/find/ko/hexokinase"]
-    assert first.provenance[0].origin is ResponseOrigin.NETWORK
-    assert second.provenance[0].origin is ResponseOrigin.CACHE
+    assert first.retrieval.network_request_count == 1
+    assert first.retrieval.cache_hit_count == 0
+    assert second.retrieval.network_request_count == 0
+    assert second.retrieval.cache_hit_count == 1
 
 
 def test_gene_resolver_reuses_positive_and_negative_split_entry_cache(

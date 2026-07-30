@@ -19,8 +19,8 @@ The `tests/skill/` suite verifies that:
 - candidate, ambiguity, cross-reference, BRITE-count, audit, and biological interpretations remain
   conservative;
 - organism pathway directories require explicit caller opt-in;
-- resolver and relation-trace direct previews route complete detail through returned scoped
-  resources rather than LLM-side batching and merging;
+- all P0 query and audit direct previews route complete detail through returned scoped resources
+  rather than LLM-side batching and merging;
 - audit mapping targets remain caller-selected and a skipped mapping phase preserves the complete
   evidence audit;
 - no Skill implements inference, normalization, MODULE evaluation, KGML parsing, or rendering;
@@ -48,7 +48,7 @@ candidate:
 | BRITE hierarchy classification | Use `map_brite_hierarchy`, preserve requested paths and multi-parent memberships, and describe counts as unique supplied-entity classifications rather than enrichment or dominant function. |
 | Annotation evidence or mapping-quality audit | Use `audit_annotation_mapping` with only the required `mapping_targets`; use an empty target list for evidence-only audit. Preserve the complete evidence audit if relationship mapping reports `skipped_request_limit`. |
 | Large plain-KO set mapped to one relationship class | Use `audit_annotation_mapping` with that single `mapping_targets` value. Let Core batch, de-duplicate, and retain complete rows; do not split the work across graph traces or merge shards in the LLM. |
-| Resolver or relation trace with truncated direct previews | Report the counts and preview, then read the returned same-session resource only when complete retained detail is needed. Do not reconstruct an authoritative result through LLM-side batching and merging. |
+| P0 query or audit with truncated direct previews | Report the counts and preview, then read the returned same-session resource only when complete retained detail is needed. Do not reconstruct an authoritative result through LLM-side batching and merging. |
 | Protein FASTA without KO assignments | Use the user's explicitly selected annotator; otherwise prefer `deepkoala-annotation`. Do not send FASTA to the core server or use the GenomeNet form as an automation fallback. |
 | First DeepKOALA call in a Codex task | Tell the user that CPU is the default and that GPU requires an explicit request to the LLM. Continue the already authorized CPU job without waiting for confirmation. |
 | Fragmented or metagenomic protein calls | Select `frag` before the first annotation call and briefly report why; an explicit user model choice wins. |

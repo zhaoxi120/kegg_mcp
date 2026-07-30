@@ -106,7 +106,9 @@ The server exposes fifteen tools:
 - `search_kegg_entries`: search one allowlisted database by keyword, or search compounds by
   formula, exact mass, or molecular weight. It returns bounded endpoint candidates without an
   invented relevance score, canonical-name claim, or automatic best-match selection. The endpoint
-  match text remains explicit. Exact-mass results are candidates, not compound identifications.
+  match text remains explicit. The direct result returns at most ten candidate previews with
+  128-character text previews and compact retrieval counts; full rows and provenance remain in the
+  scoped `detail` artifact. Exact-mass results are candidates, not compound identifications.
 - `resolve_kegg_entities`: resolve a discriminated gene or organism request through typed FIND,
   GET, CONV, and LINK steps. Gene symbols require organism context; organism mismatches and all
   ambiguous candidates remain explicit. Organism-specific pathway LIST retrieval is disabled by
@@ -123,16 +125,21 @@ The server exposes fifteen tools:
   retained. Typed edges are database cross-references, not evidence of regulation, causality,
   activity, flux, phenotype, or mechanism.
 - `map_brite_hierarchy`: preserve all matched BRITE paths, multi-parent memberships, unmatched
-  entities, and descriptive unique-input classification counts. It does not calculate enrichment
-  or dominant function.
+  entities, and descriptive unique-input classification counts. The direct result returns at most
+  three lightweight path and classification previews, ten unmatched-entity previews, clipped node
+  names, and compact retrieval counts. Complete paths, classifications, and provenance remain
+  retained; the TSV protects formula-like spreadsheet cells. It does not calculate enrichment or
+  dominant function.
 - `audit_annotation_mapping`: summarize source evidence, strict and lenient KO views, mapping
   yields, mapping-degree distributions, retrieval provenance, and optional assembly-quality
   warnings. `mapping_targets` selects any subset of pathway, MODULE, reaction, enzyme, and BRITE;
   it defaults to all five and an empty list requests an evidence-only audit. The server preflights
   exact LINK batches. If the selected mapping would exceed the 100-request audit budget, it reports
   `skipped_request_limit` while preserving the complete local evidence audit instead of failing the
-  whole call. It never corrects scores, fills missing K numbers, or interprets an unmapped KO as
-  biological absence.
+  whole call. The direct result contains evidence counts, execution state, compact per-target
+  yields, compact retrieval counts, and at most five warning previews. Complete degree
+  distributions, KO previews, warnings, rows, and provenance remain retained. It never corrects
+  scores, fills missing K numbers, or interprets an unmapped KO as biological absence.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the

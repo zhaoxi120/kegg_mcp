@@ -10,7 +10,6 @@ from pydantic import Field, field_validator, model_validator
 from kegg_mcp.domain.annotations import FrozenModel, normalize_identifier_label, validate_utf8_text
 from kegg_mcp.kegg.contracts import (
     FindRequest,
-    KeggBatchProvenance,
     KeggFindDatabase,
     KeggFindMode,
     KeggLinkRelationship,
@@ -31,6 +30,8 @@ MAX_TRACE_NODES = 200
 MAX_TRACE_EDGES = 500
 MAX_QUERY_PROVENANCE_BATCHES = 200
 MAX_QUERY_RELEASE_PREVIEW = 25
+MAX_SEARCH_PREVIEW_RESULTS = 10
+MAX_SEARCH_PREVIEW_MATCH_CHARACTERS = 128
 MAX_RESOLUTION_INPUT_PREVIEW = 5
 MAX_RESOLUTION_CANDIDATE_PREVIEW = 2
 MAX_RESOLUTION_ENTITY_PREVIEW = 5
@@ -126,6 +127,36 @@ class KeggSearchMode(StrEnum):
     MOLECULAR_WEIGHT = "molecular_weight"
 
 
+class QueryRetrievalSummary(FrozenModel):
+    """Compact retrieval accounting; complete batch provenance remains retained."""
+
+    batch_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
+    network_request_count: int = Field(strict=True, ge=0)
+    cache_hit_count: int = Field(strict=True, ge=0)
+    stale_batch_count: int = Field(strict=True, ge=0)
+    response_bytes: int = Field(strict=True, ge=0)
+    database_release_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
+    database_releases: Annotated[
+        tuple[str, ...],
+        Field(max_length=MAX_QUERY_RELEASE_PREVIEW),
+    ]
+    database_releases_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> Self:
+        if self.cache_hit_count > self.batch_count or self.stale_batch_count > self.batch_count:
+            raise ValueError("retrieval batch subsets cannot exceed the batch count")
+        if self.database_release_count > self.batch_count:
+            raise ValueError("distinct database releases cannot exceed the batch count")
+        if self.database_release_count < len(self.database_releases):
+            raise ValueError("database release count cannot be smaller than its preview")
+        if self.database_releases_truncated != (
+            self.database_release_count > len(self.database_releases)
+        ):
+            raise ValueError("database_releases_truncated must match its preview")
+        return self
+
+
 class SearchKeggEntriesRequest(FrozenModel):
     """One bounded KEGG FIND request and direct-result projection."""
 
@@ -168,32 +199,44 @@ class SearchKeggEntriesRequest(FrozenModel):
         )
 
 
-class KeggSearchCandidate(FrozenModel):
-    """One endpoint-returned candidate without an invented relevance score."""
+class KeggSearchCandidatePreview(FrozenModel):
+    """One compact endpoint-candidate preview without an invented relevance score."""
 
     entity: KeggEntityRef
-    raw_match: str = Field(min_length=1, max_length=MAX_MATCH_TEXT_CHARACTERS)
+    raw_match: str = Field(
+        min_length=1,
+        max_length=MAX_SEARCH_PREVIEW_MATCH_CHARACTERS,
+    )
+    raw_match_truncated: bool
 
     @field_validator("raw_match")
     @classmethod
     def validate_match_text(cls, value: str) -> str:
         return validate_utf8_text(value, field_name="search match")
 
+    @model_validator(mode="after")
+    def validate_truncation(self) -> Self:
+        if self.raw_match_truncated and len(self.raw_match) != MAX_SEARCH_PREVIEW_MATCH_CHARACTERS:
+            raise ValueError("truncated search match previews must fill their fixed text bound")
+        return self
+
 
 class SearchKeggEntriesResult(FrozenModel):
-    """Retained complete FIND result plus a bounded candidate projection."""
+    """Compact direct FIND projection with the complete endpoint result retained."""
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
     database: KeggSearchDatabase
     mode: KeggSearchMode
     observed_count: int = Field(strict=True, ge=0)
-    returned_count: int = Field(strict=True, ge=0, le=MAX_SEARCH_RESULTS)
-    candidates: Annotated[tuple[KeggSearchCandidate, ...], Field(max_length=MAX_SEARCH_RESULTS)]
-    truncated: bool
-    provenance: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_QUERY_PROVENANCE_BATCHES)
+    candidate_count: int = Field(strict=True, ge=0, le=MAX_SEARCH_RESULTS)
+    candidate_preview: Annotated[
+        tuple[KeggSearchCandidatePreview, ...],
+        Field(max_length=MAX_SEARCH_PREVIEW_RESULTS),
     ]
+    candidates_truncated: bool
+    endpoint_candidates_truncated: bool
+    retrieval: QueryRetrievalSummary
     interpretation_caveats: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=256)], ...],
         Field(min_length=1, max_length=2),
@@ -201,12 +244,14 @@ class SearchKeggEntriesResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_projection_counts(self) -> Self:
-        if self.returned_count != len(self.candidates):
-            raise ValueError("returned_count must match candidates")
-        if self.observed_count < self.returned_count:
-            raise ValueError("observed_count cannot be smaller than returned_count")
-        if self.truncated != (self.observed_count > self.returned_count):
-            raise ValueError("truncated must match the candidate projection")
+        if self.candidate_count < len(self.candidate_preview):
+            raise ValueError("candidate_count cannot be smaller than candidate_preview")
+        if self.observed_count < self.candidate_count:
+            raise ValueError("observed_count cannot be smaller than candidate_count")
+        if self.candidates_truncated != (self.candidate_count > len(self.candidate_preview)):
+            raise ValueError("candidates_truncated must match the candidate preview")
+        if self.endpoint_candidates_truncated != (self.observed_count > self.candidate_count):
+            raise ValueError("endpoint_candidates_truncated must match max_results")
         expected_caveat_count = 2 if self.mode is KeggSearchMode.EXACT_MASS else 1
         if len(self.interpretation_caveats) != expected_caveat_count:
             raise ValueError("search caveats must match the selected query mode")
@@ -659,36 +704,6 @@ class EntityResolutionPreview(FrozenModel):
         return self
 
 
-class QueryRetrievalSummary(FrozenModel):
-    """Compact retrieval accounting; complete batch provenance remains retained."""
-
-    batch_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
-    network_request_count: int = Field(strict=True, ge=0)
-    cache_hit_count: int = Field(strict=True, ge=0)
-    stale_batch_count: int = Field(strict=True, ge=0)
-    response_bytes: int = Field(strict=True, ge=0)
-    database_release_count: int = Field(strict=True, ge=0, le=MAX_QUERY_PROVENANCE_BATCHES)
-    database_releases: Annotated[
-        tuple[str, ...],
-        Field(max_length=MAX_QUERY_RELEASE_PREVIEW),
-    ]
-    database_releases_truncated: bool
-
-    @model_validator(mode="after")
-    def validate_summary(self) -> Self:
-        if self.cache_hit_count > self.batch_count or self.stale_batch_count > self.batch_count:
-            raise ValueError("retrieval batch subsets cannot exceed the batch count")
-        if self.database_release_count > self.batch_count:
-            raise ValueError("distinct database releases cannot exceed the batch count")
-        if self.database_release_count < len(self.database_releases):
-            raise ValueError("database release count cannot be smaller than its preview")
-        if self.database_releases_truncated != (
-            self.database_release_count > len(self.database_releases)
-        ):
-            raise ValueError("database_releases_truncated must match its preview")
-        return self
-
-
 class ResolveKeggEntitiesResult(FrozenModel):
     """Compact direct resolution preview with a complete retained crosswalk."""
 
@@ -943,6 +958,8 @@ __all__ = [
     "MAX_RESOLUTION_INPUT_PREVIEW",
     "MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW",
     "MAX_RESOLUTION_TAXONOMY_PREVIEW",
+    "MAX_SEARCH_PREVIEW_MATCH_CHARACTERS",
+    "MAX_SEARCH_PREVIEW_RESULTS",
     "MAX_SEARCH_RESULTS",
     "MAX_TRACE_EDGES",
     "MAX_TRACE_EDGE_PREVIEW",
@@ -959,7 +976,7 @@ __all__ = [
     "KeggEntityRef",
     "KeggRelationEdge",
     "KeggRelationType",
-    "KeggSearchCandidate",
+    "KeggSearchCandidatePreview",
     "KeggSearchDatabase",
     "KeggSearchMode",
     "MappingStatus",

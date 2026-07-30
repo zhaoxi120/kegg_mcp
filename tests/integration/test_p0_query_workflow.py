@@ -269,12 +269,13 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
                 },
             )
         )
-        assert searched["returned_count"] == 2
-        assert [item["entity"]["identifier"] for item in searched["candidates"]] == [
+        assert searched["candidate_count"] == 2
+        assert [item["entity"]["identifier"] for item in searched["candidate_preview"]] == [
             "C00031",
             "C00267",
         ]
-        assert all("score" not in item for item in searched["candidates"])
+        assert all("score" not in item for item in searched["candidate_preview"])
+        assert searched["retrieval"]["batch_count"] == 1
         assert any(
             "not relevance-ranked" in caveat for caveat in searched["interpretation_caveats"]
         )
@@ -415,7 +416,8 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         assert brite["path_count"] == 1
         assert brite["path_preview"][0]["nodes"][-1]["node_id"] == "K00844"
         assert brite["classification_count"] == 3
-        assert brite["unmatched_entities"] == [{"kind": "ko", "identifier": "K99999"}]
+        assert brite["unmatched_preview"] == [{"kind": "ko", "identifier": "K99999"}]
+        assert brite["retrieval"]["batch_count"] == 2
         assert "without statistical testing" in brite["count_semantics"]
         assert "enrichment" not in brite["count_semantics"].lower()
         brite_artifacts = await _read_all_artifacts(session, brite)
@@ -439,20 +441,22 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
                 },
             )
         )
-        detail = audited["detail"]
-        assert detail["evidence"]["strict_unique_ko_count"] == 1
-        assert detail["evidence"]["lenient_unique_ko_count"] == 2
-        assert detail["mapping_execution"]["status"] == "completed"
-        assert detail["lenient_only_ko_preview"] == ["K01810"]
-        assert detail["mappings"][0]["strict"]["mapped_unique_ko_count"] == 1
-        assert detail["mappings"][0]["lenient"]["mapped_unique_ko_count"] == 2
-        warning_codes = {warning["code"] for warning in detail["warnings"]}
-        assert "incomplete_assembly_context" in warning_codes
-        assert "contamination_context" in warning_codes
+        assert audited["evidence"]["strict_unique_ko_count"] == 1
+        assert audited["evidence"]["lenient_unique_ko_count"] == 2
+        assert audited["mapping_execution"]["status"] == "completed"
+        assert audited["lenient_only_ko_count"] == 1
+        assert audited["mappings"][0]["strict"]["mapped_unique_ko_count"] == 1
+        assert audited["mappings"][0]["lenient"]["mapped_unique_ko_count"] == 2
+        assert audited["retrieval"]["batch_count"] == 5
+        assert audited["warning_count"] >= len(audited["warning_preview"])
         audit_artifacts = await _read_all_artifacts(session, audited)
         audit_detail = json.loads(audit_artifacts["detail"])
         assert audit_detail["strict_ko_ids"] == ["K00844"]
         assert audit_detail["lenient_only_ko_ids"] == ["K01810"]
+        assert audit_detail["detail"]["lenient_only_ko_preview"] == ["K01810"]
+        warning_codes = {warning["code"] for warning in audit_detail["detail"]["warnings"]}
+        assert "incomplete_assembly_context" in warning_codes
+        assert "contamination_context" in warning_codes
 
     assert "https://rest.kegg.jp/link/genome/taxid:562/species" in transport.urls
     assert "https://rest.kegg.jp/list/pathway/eco" in transport.urls

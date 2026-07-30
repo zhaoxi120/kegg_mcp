@@ -29,8 +29,9 @@ from kegg_mcp.kegg.contracts import (
     ResponseOrigin,
     RetrievalEndpointClass,
 )
-from kegg_mcp.services import annotation_audit
+from kegg_mcp.services import annotation_audit, query_support
 from kegg_mcp.services.annotation_audit import (
+    AnnotationAuditWarning,
     AnnotationAuditWarningCode,
     AnnotationMappingExecution,
     AnnotationMappingExecutionStatus,
@@ -233,39 +234,27 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
         ),
     )
 
-    assert result.detail.evidence.strict_unique_ko_count == 3
-    assert result.detail.evidence.lenient_unique_ko_count == 4
-    assert result.detail.evidence.rejected_unique_ko_count == 1
-    assert result.detail.evidence.duplicate_assignment_count == 1
-    assert result.detail.evidence.conflicting_assignment_count == 1
-    assert tuple(item.target for item in result.detail.mappings) == tuple(AnnotationMappingTarget)
-    pathway = result.detail.mappings[0]
+    assert result.evidence.strict_unique_ko_count == 3
+    assert result.evidence.lenient_unique_ko_count == 4
+    assert result.evidence.rejected_unique_ko_count == 1
+    assert result.evidence.duplicate_assignment_count == 1
+    assert result.evidence.conflicting_assignment_count == 1
+    assert tuple(item.target for item in result.mappings) == tuple(AnnotationMappingTarget)
+    pathway = result.mappings[0]
     assert pathway.strict.mapped_unique_ko_count == 2
     assert pathway.strict.one_to_many_ko_count == 1
-    assert tuple(
-        (item.target_count, item.ko_count) for item in pathway.strict.target_degree_distribution
-    ) == ((1, 1), (2, 1))
     assert pathway.lenient.unmapped_ko_count == 2
-    assert result.detail.lenient_only_ko_count == 1
-    assert result.detail.lenient_only_ko_preview == ("K00002",)
-    assert result.detail.strict_without_any_audited_relationship_preview == ("K00006",)
-    assert result.detail.lenient_without_any_audited_relationship_preview == (
-        "K00002",
-        "K00006",
-    )
+    assert result.lenient_only_ko_count == 1
+    assert result.strict_without_any_audited_relationship_count == 1
+    assert result.lenient_without_any_audited_relationship_count == 2
+    assert result.retrieval.batch_count == 10
+    assert len(result.model_dump_json().encode("utf-8")) <= query_support.MAX_QUERY_DIRECT_BYTES
     assert len(client.requests) == 10
     assert {request.relationship for request in client.requests} == set(_TARGET_IDS)
     assert all(
         set(request.source_identifiers) <= {"K00001", "K00002", "K00005", "K00006"}
         for request in client.requests
     )
-    warning_codes = {warning.code for warning in result.detail.warnings}
-    assert AnnotationAuditWarningCode.MISSING_SOURCE_VERSION in warning_codes
-    assert AnnotationAuditWarningCode.KEGG_RELEASE_UNAVAILABLE in warning_codes
-    assert AnnotationAuditWarningCode.INCOMPLETE_ASSEMBLY_CONTEXT in warning_codes
-    assert AnnotationAuditWarningCode.CONTAMINATION_CONTEXT in warning_codes
-    assert result.detail.quality_context is not None
-    assert result.detail.quality_context.genome_type is GenomeType.MAG
     artifact = store.read_artifact(
         scope_id,
         result.result.result_id,
@@ -273,10 +262,28 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
         offset=0,
         limit=store.limits.max_range_bytes,
     )
-    assert b'"complete_relationship_rows"' in artifact.content
-    assert b'"strict_ko_ids":["K00001","K00005","K00006"]' in artifact.content
-    assert b'"lenient_only_ko_ids":["K00002"]' in artifact.content
-    assert b'"provenance"' in artifact.content
+    retained = json.loads(artifact.content)
+    detail = retained["detail"]
+    assert detail["lenient_only_ko_preview"] == ["K00002"]
+    assert detail["strict_without_any_audited_relationship_preview"] == ["K00006"]
+    assert detail["lenient_without_any_audited_relationship_preview"] == [
+        "K00002",
+        "K00006",
+    ]
+    assert [
+        (item["target_count"], item["ko_count"])
+        for item in detail["mappings"][0]["strict"]["target_degree_distribution"]
+    ] == [(1, 1), (2, 1)]
+    warning_codes = {warning["code"] for warning in detail["warnings"]}
+    assert AnnotationAuditWarningCode.MISSING_SOURCE_VERSION in warning_codes
+    assert AnnotationAuditWarningCode.KEGG_RELEASE_UNAVAILABLE in warning_codes
+    assert AnnotationAuditWarningCode.INCOMPLETE_ASSEMBLY_CONTEXT in warning_codes
+    assert AnnotationAuditWarningCode.CONTAMINATION_CONTEXT in warning_codes
+    assert detail["quality_context"]["genome_type"] == GenomeType.MAG
+    assert retained["strict_ko_ids"] == ["K00001", "K00005", "K00006"]
+    assert retained["lenient_only_ko_ids"] == ["K00002"]
+    assert len(retained["provenance"]) == 10
+    assert retained["provenance"][0]["request_key"] == "synthetic:1"
 
 
 def test_audit_warns_for_each_mapping_batch_without_a_database_release(
@@ -292,16 +299,62 @@ def test_audit_warns_for_each_mapping_batch_without_a_database_release(
         scope_id="mixed-release-audit-scope",
     )
 
+    retained = json.loads(
+        store.read_artifact(
+            "mixed-release-audit-scope",
+            result.result.result_id,
+            "detail",
+            limit=store.limits.max_range_bytes,
+        ).content
+    )
     warning = next(
         item
-        for item in result.detail.warnings
-        if item.code is AnnotationAuditWarningCode.KEGG_RELEASE_UNAVAILABLE
+        for item in retained["detail"]["warnings"]
+        if item["code"] == AnnotationAuditWarningCode.KEGG_RELEASE_UNAVAILABLE
     )
-    warning_codes = {item.code for item in result.detail.warnings}
+    warning_codes = {item["code"] for item in retained["detail"]["warnings"]}
     assert len(client.requests) == 5
-    assert warning.affected_count == 4
+    assert warning["affected_count"] == 4
     assert AnnotationAuditWarningCode.MISSING_MODEL_NAME not in warning_codes
     assert AnnotationAuditWarningCode.MISSING_MODEL_VERSION not in warning_codes
+
+
+def test_audit_warning_preview_clips_text_without_altering_retained_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_message = "x" * 1_000
+
+    def long_warning(*args: object, **kwargs: object) -> tuple[AnnotationAuditWarning, ...]:
+        return (
+            AnnotationAuditWarning(
+                code=AnnotationAuditWarningCode.MISSING_SOURCE_VERSION,
+                message=long_message,
+                affected_count=1,
+            ),
+        )
+
+    monkeypatch.setattr(annotation_audit, "_audit_warnings", long_warning)
+    store = SQLiteResultStore(tmp_path / "warning-preview.sqlite3")
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text="K00001"),
+        client=_AuditClient(),
+        result_store=store,
+        scope_id="scope",
+        mapping_targets=(),
+    )
+
+    assert len(result.warning_preview[0].message) == 256
+    assert result.warning_preview[0].message_truncated is True
+    retained = json.loads(
+        store.read_artifact(
+            "scope",
+            result.result.result_id,
+            "detail",
+            limit=store.limits.max_range_bytes,
+        ).content
+    )
+    assert retained["detail"]["warnings"][0]["message"] == long_message
 
 
 def test_audit_preserves_evidence_when_planned_mapping_exceeds_request_bound(
@@ -318,13 +371,10 @@ def test_audit_preserves_evidence_when_planned_mapping_exceeds_request_bound(
         scope_id="audit-limit-scope",
     )
 
-    assert result.detail.evidence.lenient_unique_ko_count == 501
-    assert (
-        result.detail.mapping_execution.status
-        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
-    )
-    assert result.detail.mappings == ()
-    assert result.detail.strict_without_any_audited_relationship_count is None
+    assert result.evidence.lenient_unique_ko_count == 501
+    assert result.mapping_execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
+    assert result.mappings == ()
+    assert result.strict_without_any_audited_relationship_count is None
     assert client.requests == []
 
 
@@ -343,11 +393,9 @@ def test_audit_maps_more_than_500_kos_for_one_selected_target(
         mapping_targets=(AnnotationMappingTarget.PATHWAY,),
     )
 
-    assert result.detail.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
-    assert result.detail.mapping_execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
-    assert tuple(item.target for item in result.detail.mappings) == (
-        AnnotationMappingTarget.PATHWAY,
-    )
+    assert result.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
+    assert result.mapping_execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
+    assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
     assert len(client.requests) == 6
     assert {request.relationship for request in client.requests} == {
         KeggLinkRelationship.KO_TO_PATHWAY
@@ -378,10 +426,10 @@ def test_audit_can_run_evidence_only_without_kegg_mapping(
         mapping_targets=(),
     )
 
-    assert result.detail.mapping_execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED
-    assert result.detail.evidence.strict_unique_ko_count == 2
-    assert result.detail.mappings == ()
-    assert result.detail.strict_without_any_audited_relationship_count is None
+    assert result.mapping_execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED
+    assert result.evidence.strict_unique_ko_count == 2
+    assert result.mappings == ()
+    assert result.strict_without_any_audited_relationship_count is None
     assert client.requests == []
 
 
@@ -424,8 +472,25 @@ def test_audit_request_budget_skip_is_reported_before_network_access(
         scope_id=scope_id,
     )
 
-    assert (
-        result.detail.mapping_execution.status
-        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
-    )
+    assert result.mapping_execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
     assert client.requests == []
+
+
+def test_audit_direct_result_cap_compensates_the_retained_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "direct-cap.sqlite3")
+    monkeypatch.setattr(query_support, "MAX_QUERY_DIRECT_BYTES", 1)
+
+    with pytest.raises(KeggMcpError) as caught:
+        audit_annotation_mapping(
+            DatasetSource(ko_text="K00001"),
+            client=_AuditClient(),
+            result_store=store,
+            scope_id="scope",
+            mapping_targets=(),
+        )
+
+    assert caught.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+    assert store.list_results("scope").total_items == 0

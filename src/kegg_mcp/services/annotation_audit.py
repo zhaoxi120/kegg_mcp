@@ -21,13 +21,18 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
-from kegg_mcp.kegg import KeggLinkRelationship, KeggRequestOptions, ResponseOrigin
+from kegg_mcp.kegg import KeggLinkRelationship, KeggRequestOptions
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
 from kegg_mcp.services.kegg_relations import (
     bounded_relation_batches,
     planned_relation_request_count,
 )
 from kegg_mcp.services.models import DETAIL_SECTION, DatasetSource
+from kegg_mcp.services.query_models import QueryRetrievalSummary
+from kegg_mcp.services.query_support import (
+    require_bounded_query_direct_result,
+    summarize_query_retrieval,
+)
 from kegg_mcp.services.reference_budget import KeggRelationClient, effective_query_options
 from kegg_mcp.services.result_builders import (
     _artifact_metadata,
@@ -44,12 +49,13 @@ from kegg_mcp.services.result_store import (
 
 MAX_AUDIT_DEGREE_BUCKETS = 512
 MAX_AUDIT_UNMAPPED_PREVIEW = 50
-MAX_AUDIT_PROVENANCE_PREVIEW = 25
 MAX_AUDIT_RELATIONSHIP_ROWS = 50_000
 MAX_AUDIT_RESPONSE_BYTES = 25_000_000
 MAX_AUDIT_KEGG_REQUESTS = 100
 MAX_AUDIT_ARTIFACT_BYTES = 32_000_000
 MAX_AUDIT_WARNINGS = 25
+MAX_AUDIT_WARNING_PREVIEW = 5
+MAX_AUDIT_WARNING_PREVIEW_MESSAGE_CHARACTERS = 256
 
 
 class AnnotationMappingTarget(StrEnum):
@@ -291,29 +297,65 @@ class AnnotationTargetMappingAudit(FrozenModel):
     lenient: EvidenceModeMappingAudit
 
 
-class KeggAuditRetrievalSummary(FrozenModel):
-    """Bounded retrieval provenance summary for the complete mapping audit."""
+class EvidenceModeMappingAuditSummary(FrozenModel):
+    """Compact direct mapping counts without degree distributions or KO previews."""
 
-    batch_count: int = Field(strict=True, ge=0)
-    network_request_count: int = Field(strict=True, ge=0)
-    cache_hit_count: int = Field(strict=True, ge=0)
-    stale_batch_count: int = Field(strict=True, ge=0)
-    response_bytes: int = Field(strict=True, ge=0)
-    database_releases: Annotated[tuple[str, ...], Field(max_length=25)]
-    provenance_preview: Annotated[
-        tuple[KeggBatchProvenance, ...], Field(max_length=MAX_AUDIT_PROVENANCE_PREVIEW)
-    ]
-    provenance_truncated: bool
+    evidence_mode: EvidenceMode
+    selected_unique_ko_count: int = Field(strict=True, ge=0)
+    mapped_unique_ko_count: int = Field(strict=True, ge=0)
+    mapping_yield: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
+    raw_relationship_row_count: int = Field(strict=True, ge=0)
+    unique_relationship_count: int = Field(strict=True, ge=0)
+    one_to_many_ko_count: int = Field(strict=True, ge=0)
+    unmapped_ko_count: int = Field(strict=True, ge=0)
 
     @model_validator(mode="after")
-    def validate_provenance_preview(self) -> KeggAuditRetrievalSummary:
-        if self.provenance_truncated != (self.batch_count > len(self.provenance_preview)):
-            raise ValueError("provenance truncation must match the batch count")
+    def validate_counts(self) -> EvidenceModeMappingAuditSummary:
+        if self.mapped_unique_ko_count + self.unmapped_ko_count != self.selected_unique_ko_count:
+            raise ValueError("mapped and unmapped KO counts must partition the selected set")
+        expected_yield = (
+            None
+            if self.selected_unique_ko_count == 0
+            else self.mapped_unique_ko_count / self.selected_unique_ko_count
+        )
+        if self.mapping_yield != expected_yield:
+            raise ValueError("mapping_yield must use the selected unique KO denominator")
+        if self.one_to_many_ko_count > self.mapped_unique_ko_count:
+            raise ValueError("one-to-many count cannot exceed mapped unique K numbers")
+        return self
+
+
+class AnnotationTargetMappingAuditSummary(FrozenModel):
+    """Compact strict and lenient mapping summary for one selected relationship."""
+
+    target: AnnotationMappingTarget
+    strict: EvidenceModeMappingAuditSummary
+    lenient: EvidenceModeMappingAuditSummary
+
+
+class AnnotationAuditWarningPreview(FrozenModel):
+    """One compact direct warning preview; the complete warning remains retained."""
+
+    code: AnnotationAuditWarningCode
+    message: str = Field(
+        min_length=1,
+        max_length=MAX_AUDIT_WARNING_PREVIEW_MESSAGE_CHARACTERS,
+    )
+    message_truncated: bool
+    affected_count: int = Field(default=0, strict=True, ge=0)
+
+    @model_validator(mode="after")
+    def validate_truncation(self) -> AnnotationAuditWarningPreview:
+        if (
+            self.message_truncated
+            and len(self.message) != MAX_AUDIT_WARNING_PREVIEW_MESSAGE_CHARACTERS
+        ):
+            raise ValueError("truncated audit warning previews must fill their fixed text bound")
         return self
 
 
 class AnnotationAuditDetail(FrozenModel):
-    """Direct bounded audit summary; complete relationship rows remain retained."""
+    """Complete retained audit detail; relationship rows and provenance are stored alongside it."""
 
     evidence: AnnotationEvidenceAudit
     mappings: Annotated[
@@ -341,7 +383,7 @@ class AnnotationAuditDetail(FrozenModel):
     lenient_without_any_audited_relationship_preview: Annotated[
         tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
     ]
-    retrieval: KeggAuditRetrievalSummary
+    retrieval: QueryRetrievalSummary
     quality_context: AnnotationQualityContext | None = None
     warning_count: int = Field(strict=True, ge=0, le=MAX_AUDIT_WARNINGS)
     warnings: Annotated[tuple[AnnotationAuditWarning, ...], Field(max_length=MAX_AUDIT_WARNINGS)]
@@ -379,11 +421,60 @@ class AnnotationAuditDetail(FrozenModel):
 
 
 class AnnotationMappingAuditResult(FrozenModel):
-    """Retained annotation mapping audit returned by the MCP service."""
+    """Compact direct annotation audit with complete detail retained."""
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
-    detail: AnnotationAuditDetail
+    evidence: AnnotationEvidenceAudit
+    mapping_execution: AnnotationMappingExecution
+    mappings: Annotated[
+        tuple[AnnotationTargetMappingAuditSummary, ...],
+        Field(max_length=len(AnnotationMappingTarget)),
+    ]
+    lenient_only_ko_count: int = Field(strict=True, ge=0)
+    strict_without_any_audited_relationship_count: int | None = Field(
+        default=None,
+        strict=True,
+        ge=0,
+    )
+    lenient_without_any_audited_relationship_count: int | None = Field(
+        default=None,
+        strict=True,
+        ge=0,
+    )
+    retrieval: QueryRetrievalSummary
+    warning_count: int = Field(strict=True, ge=0, le=MAX_AUDIT_WARNINGS)
+    warning_preview: Annotated[
+        tuple[AnnotationAuditWarningPreview, ...],
+        Field(max_length=MAX_AUDIT_WARNING_PREVIEW),
+    ]
+    warnings_truncated: bool
+    interpretation_caveats: Annotated[tuple[str, ...], Field(min_length=2, max_length=4)]
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> AnnotationMappingAuditResult:
+        if tuple(item.target for item in self.mappings) != self.mapping_execution.completed_targets:
+            raise ValueError("mapping summaries must match completed targets in stable order")
+        if self.lenient_only_ko_count != (
+            self.evidence.lenient_unique_ko_count - self.evidence.strict_unique_ko_count
+        ):
+            raise ValueError("lenient-only count must match strict and lenient evidence counts")
+        if self.mapping_execution.selected_unique_ko_count != self.evidence.lenient_unique_ko_count:
+            raise ValueError("mapping execution must use the lenient unique-KO denominator")
+        mapping_completed = (
+            self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
+        )
+        without_counts = (
+            self.strict_without_any_audited_relationship_count,
+            self.lenient_without_any_audited_relationship_count,
+        )
+        if mapping_completed != all(value is not None for value in without_counts):
+            raise ValueError("no-relationship counts are available only after completed mapping")
+        if self.warning_count < len(self.warning_preview):
+            raise ValueError("warning_count cannot be smaller than warning_preview")
+        if self.warnings_truncated != (self.warning_count > len(self.warning_preview)):
+            raise ValueError("warnings_truncated must match warning_preview")
+        return self
 
 
 _RELATIONSHIPS = {
@@ -544,20 +635,7 @@ def audit_annotation_mapping(
         status_counts=evidence_view.status_counts,
     )
     batches = tuple(all_batches)
-    retrieval = KeggAuditRetrievalSummary(
-        batch_count=len(batches),
-        network_request_count=sum(
-            batch.attempt_count for batch in batches if batch.origin is ResponseOrigin.NETWORK
-        ),
-        cache_hit_count=sum(batch.origin is ResponseOrigin.CACHE for batch in batches),
-        stale_batch_count=sum(batch.is_stale for batch in batches),
-        response_bytes=sum(batch.response_bytes for batch in batches),
-        database_releases=tuple(
-            sorted({batch.database_release for batch in batches if batch.database_release})
-        ),
-        provenance_preview=batches[:MAX_AUDIT_PROVENANCE_PREVIEW],
-        provenance_truncated=len(batches) > MAX_AUDIT_PROVENANCE_PREVIEW,
-    )
+    retrieval = summarize_query_retrieval(batches)
     detail = AnnotationAuditDetail(
         evidence=evidence,
         mappings=tuple(mappings),
@@ -618,11 +696,33 @@ def audit_annotation_mapping(
         ),
     )
     try:
-        return AnnotationMappingAuditResult(
+        result = AnnotationMappingAuditResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
-            detail=detail,
+            evidence=evidence,
+            mapping_execution=mapping_execution,
+            mappings=tuple(_mapping_summary(mapping) for mapping in mappings),
+            lenient_only_ko_count=len(lenient_only),
+            strict_without_any_audited_relationship_count=(
+                len(strict_without_any)
+                if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+                else None
+            ),
+            lenient_without_any_audited_relationship_count=(
+                len(lenient_without_any)
+                if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
+                else None
+            ),
+            retrieval=retrieval,
+            warning_count=len(warnings),
+            warning_preview=tuple(
+                _warning_preview(warning) for warning in warnings[:MAX_AUDIT_WARNING_PREVIEW]
+            ),
+            warnings_truncated=len(warnings) > MAX_AUDIT_WARNING_PREVIEW,
+            interpretation_caveats=detail.interpretation_caveats,
         )
+        require_bounded_query_direct_result(result)
+        return result
     except BaseException:
         compensate_created_result(
             result_store,
@@ -631,6 +731,43 @@ def audit_annotation_mapping(
             stored.created_at,
         )
         raise
+
+
+def _mapping_summary(
+    mapping: AnnotationTargetMappingAudit,
+) -> AnnotationTargetMappingAuditSummary:
+    return AnnotationTargetMappingAuditSummary(
+        target=mapping.target,
+        strict=_mode_mapping_summary(mapping.strict),
+        lenient=_mode_mapping_summary(mapping.lenient),
+    )
+
+
+def _mode_mapping_summary(
+    mapping: EvidenceModeMappingAudit,
+) -> EvidenceModeMappingAuditSummary:
+    return EvidenceModeMappingAuditSummary(
+        evidence_mode=mapping.evidence_mode,
+        selected_unique_ko_count=mapping.selected_unique_ko_count,
+        mapped_unique_ko_count=mapping.mapped_unique_ko_count,
+        mapping_yield=mapping.mapping_yield,
+        raw_relationship_row_count=mapping.raw_relationship_row_count,
+        unique_relationship_count=mapping.unique_relationship_count,
+        one_to_many_ko_count=mapping.one_to_many_ko_count,
+        unmapped_ko_count=mapping.unmapped_ko_count,
+    )
+
+
+def _warning_preview(
+    warning: AnnotationAuditWarning,
+) -> AnnotationAuditWarningPreview:
+    message = warning.message[:MAX_AUDIT_WARNING_PREVIEW_MESSAGE_CHARACTERS]
+    return AnnotationAuditWarningPreview(
+        code=warning.code,
+        message=message,
+        message_truncated=len(warning.message) > len(message),
+        affected_count=warning.affected_count,
+    )
 
 
 def _mode_mapping_audit(
@@ -819,6 +956,7 @@ __all__ = [
     "AnnotationAuditDetail",
     "AnnotationAuditWarning",
     "AnnotationAuditWarningCode",
+    "AnnotationAuditWarningPreview",
     "AnnotationEvidenceAudit",
     "AnnotationMappingAuditResult",
     "AnnotationMappingExecution",
@@ -826,9 +964,10 @@ __all__ = [
     "AnnotationMappingTarget",
     "AnnotationQualityContext",
     "AnnotationTargetMappingAudit",
+    "AnnotationTargetMappingAuditSummary",
     "EvidenceModeMappingAudit",
+    "EvidenceModeMappingAuditSummary",
     "GenomeType",
-    "KeggAuditRetrievalSummary",
     "MappingDegreeCount",
     "audit_annotation_mapping",
 ]

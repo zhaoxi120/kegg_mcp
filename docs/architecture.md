@@ -226,8 +226,9 @@ but it does not become a second annotation model. BRITE paths and mapping-audit 
 query results; they are not passed into `deepkoala-mcp`, added to the renderer handoff, or
 recomputed by `kegg-render-mcp`.
 
-Resolver and relation-trace direct results are fixed compact projections with explicit counts and
-truncation flags. Their complete bounded crosswalks, steps, nodes, edges, and provenance remain in
+All five P0 query and audit direct results are fixed compact projections with explicit counts and
+truncation flags under a shared 64 KiB serialized bound. Complete search matches, crosswalks,
+steps, graph data, BRITE paths, audit distributions, relationship rows, and provenance remain in
 the scoped retained resource. The LLM selects projections and interprets summaries; it does not
 perform server batching, merge relationship shards, or reconstruct discarded detail.
 

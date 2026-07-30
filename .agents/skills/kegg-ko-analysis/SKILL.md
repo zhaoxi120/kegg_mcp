@@ -46,9 +46,10 @@ upstream or rendering MCP.
   phenotype.
 - Use `trace_kegg_relations` for one- or two-level allowlisted cross-references. Do not interpret
   returned edges as regulation, causality, mechanism, activity, or phenotype.
-- Resolver and relation-trace direct responses are bounded previews. Read the returned resource URI
-  only when the complete retained crosswalk, nodes, edges, or provenance are needed; do not
-  reconstruct an authoritative result by manually batching and merging calls.
+- All P0 query and audit direct responses are bounded previews. Read the returned resource URI only
+  when complete search matches, crosswalks, graph data, BRITE paths, audit distributions, rows, or
+  provenance are needed; do not reconstruct an authoritative result by manually batching and
+  merging calls.
 - Use `map_brite_hierarchy` for complete BRITE paths and descriptive unique-input counts; never
   call those counts enrichment or dominant function.
 - Use `audit_annotation_mapping` to summarize evidence status, strict/lenient mapping yield,

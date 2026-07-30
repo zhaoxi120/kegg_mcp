@@ -10,6 +10,7 @@ from enum import Enum
 from itertools import chain
 from typing import Any, Literal, NoReturn
 
+from kegg_mcp._serialization import escape_spreadsheet_formula
 from kegg_mcp.analysis.contracts import ModuleEvaluationResult
 from kegg_mcp.analysis.functional_comparison import (
     ModuleTargetComparison,
@@ -51,7 +52,6 @@ _CSV_HEADER = (
     "evidence_json",
     "source_json",
 )
-_CSV_DANGEROUS_PREFIXES = frozenset({"=", "+", "-", "@", "\t", "\r", "\n", "'"})
 _MARKDOWN_TRUNCATION_NOTICE = (
     "> Markdown summary truncated at the recorded preview or UTF-8 byte limit. "
     "The structured JSON and annotation CSV artifacts remain complete within their hard limits."
@@ -212,13 +212,6 @@ def _flat_csv_cell(value: object) -> str:
     return str(value)
 
 
-def _escape_spreadsheet_formula(value: str) -> str:
-    # Apostrophes are escaped as well, making one-prefix removal reversible for consumers.
-    if value and value[0] in _CSV_DANGEROUS_PREFIXES:
-        return f"'{value}"
-    return value
-
-
 def _record_csv_row(record: AnnotationRecord) -> tuple[str, ...]:
     values: tuple[object, ...] = (
         record.record_id,
@@ -241,7 +234,7 @@ def _record_csv_row(record: AnnotationRecord) -> tuple[str, ...]:
         _canonical_json_cell(record.evidence.model_dump(mode="json")),
         _canonical_json_cell(record.source.model_dump(mode="json")),
     )
-    return tuple(_escape_spreadsheet_formula(_flat_csv_cell(value)) for value in values)
+    return tuple(escape_spreadsheet_formula(_flat_csv_cell(value)) for value in values)
 
 
 def _csv_line(values: Sequence[str]) -> str:

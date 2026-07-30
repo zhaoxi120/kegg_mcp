@@ -5,15 +5,22 @@ from __future__ import annotations
 from kegg_mcp.kegg import KeggRequestOptions
 from kegg_mcp.services.models import DETAIL_SECTION
 from kegg_mcp.services.query_models import (
+    MAX_SEARCH_PREVIEW_MATCH_CHARACTERS,
+    MAX_SEARCH_PREVIEW_RESULTS,
     KeggEntityKind,
     KeggEntityRef,
-    KeggSearchCandidate,
+    KeggSearchCandidatePreview,
     KeggSearchDatabase,
     KeggSearchMode,
     SearchKeggEntriesRequest,
     SearchKeggEntriesResult,
 )
-from kegg_mcp.services.query_support import bounded_query_payload, pair_entity
+from kegg_mcp.services.query_support import (
+    bounded_query_payload,
+    pair_entity,
+    require_bounded_query_direct_result,
+    summarize_query_retrieval,
+)
 from kegg_mcp.services.reference_budget import KeggQueryClient, effective_query_options
 from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
@@ -47,12 +54,10 @@ def search_kegg_entries(
         request.to_find_request(),
         options=effective_query_options(options),
     )
-    candidates = tuple(
-        KeggSearchCandidate(
-            entity=_find_entity(request.database, row.identifier),
-            raw_match=row.matched_text,
-        )
-        for row in fetched.document.rows[: request.max_results]
+    candidates = fetched.document.rows[: request.max_results]
+    candidate_preview = tuple(
+        _candidate_preview(request.database, row.identifier, row.matched_text)
+        for row in candidates[:MAX_SEARCH_PREVIEW_RESULTS]
     )
     payload = bounded_query_payload(
         {
@@ -71,18 +76,21 @@ def search_kegg_entries(
         ),
     )
     try:
-        return SearchKeggEntriesResult(
+        result = SearchKeggEntriesResult(
             result=stored,
             artifact=_artifact_metadata(DETAIL_SECTION, "application/json", payload),
             database=request.database,
             mode=request.mode,
             observed_count=len(fetched.document.rows),
-            returned_count=len(candidates),
-            candidates=candidates,
-            truncated=len(candidates) < len(fetched.document.rows),
-            provenance=(fetched.batch,),
+            candidate_count=len(candidates),
+            candidate_preview=candidate_preview,
+            candidates_truncated=len(candidates) > len(candidate_preview),
+            endpoint_candidates_truncated=len(candidates) < len(fetched.document.rows),
+            retrieval=summarize_query_retrieval((fetched.batch,)),
             interpretation_caveats=_search_caveats(request.mode),
         )
+        require_bounded_query_direct_result(result)
+        return result
     except BaseException:
         compensate_created_result(
             result_store,
@@ -91,6 +99,19 @@ def search_kegg_entries(
             stored.created_at,
         )
         raise
+
+
+def _candidate_preview(
+    database: KeggSearchDatabase,
+    identifier: str,
+    raw_match: str,
+) -> KeggSearchCandidatePreview:
+    match_preview = raw_match[:MAX_SEARCH_PREVIEW_MATCH_CHARACTERS]
+    return KeggSearchCandidatePreview(
+        entity=_find_entity(database, identifier),
+        raw_match=match_preview,
+        raw_match_truncated=len(raw_match) > len(match_preview),
+    )
 
 
 def _find_entity(

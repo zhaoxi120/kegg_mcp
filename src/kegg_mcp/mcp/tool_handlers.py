@@ -30,7 +30,10 @@ from kegg_mcp.mcp.contracts import (
 from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
-from kegg_mcp.services.annotation_audit import audit_annotation_mapping
+from kegg_mcp.services.annotation_audit import (
+    AnnotationMappingExecutionStatus,
+    audit_annotation_mapping,
+)
 from kegg_mcp.services.brite_hierarchy import map_brite_hierarchy
 from kegg_mcp.services.comparison import compare_annotation_sets
 from kegg_mcp.services.entity_resolution import resolve_kegg_entities
@@ -46,6 +49,7 @@ from kegg_mcp.services.operational import (
     probe_kegg_connectivity_service,
 )
 from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
+from kegg_mcp.services.query_models import KeggSearchMode
 from kegg_mcp.services.relation_tracing import trace_kegg_relations
 
 
@@ -156,11 +160,16 @@ def search_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
     )
+    identification_caveat = (
+        " Exact-mass matches are compound candidates, not compound identifications."
+        if result.mode is KeggSearchMode.EXACT_MASS
+        else ""
+    )
     return ToolOutcome(
         result,
         (
-            f"Returned {result.returned_count} bounded endpoint candidates; "
-            "no best match or relevance score was inferred."
+            f"Returned {result.candidate_count} bounded endpoint candidates; "
+            f"no best match or relevance score was inferred.{identification_caveat}"
         ),
         result.result.result_id,
     )
@@ -235,9 +244,22 @@ def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
         quality_context=request.quality_context,
         mapping_targets=request.mapping_targets,
     )
+    if result.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED:
+        summary = (
+            "Audited annotation evidence and completed the selected KEGG relationship mappings."
+        )
+    elif result.mapping_execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED:
+        summary = (
+            "Completed the annotation evidence audit; no KEGG relationship mapping was requested."
+        )
+    else:
+        summary = (
+            "Completed the annotation evidence audit; KEGG relationship mapping was skipped "
+            "before network access because the planned request count exceeded the limit."
+        )
     return ToolOutcome(
         result,
-        "Audited strict and lenient annotation evidence and the selected KEGG relationships.",
+        summary,
         result.result.result_id,
     )
 

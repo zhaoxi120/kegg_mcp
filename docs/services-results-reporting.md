@@ -63,6 +63,9 @@ remain bounded across the complete operation.
 
 `search_kegg_entries` composes one typed FIND request and returns a bounded projection of ordered
 database-validated candidates. The complete response remains in a scoped retained artifact.
+The direct result reports observed and bounded candidate counts, at most ten candidate previews,
+at most 128 characters of endpoint text per preview with an explicit clipping flag, and compact
+retrieval accounting without full provenance.
 Keyword, formula, exact-mass, and molecular-weight matches are candidates only: the service does
 not calculate relevance, choose a best match, or claim compound identification.
 
@@ -101,9 +104,11 @@ cache entry and preserve an explicit refresh request unchanged.
 
 `map_brite_hierarchy` maps bounded typed entities into selected or safely discovered BRITE
 hierarchies. It preserves source-backed hierarchy paths, supports multiple memberships, reports
-unmatched entities, and retains complete bounded JSON and TSV artifacts behind a compact preview.
-Classification counts are unique supplied-entity counts without abundance weighting or
-statistical enrichment.
+unmatched entities, and retains complete bounded JSON and formula-safe TSV artifacts behind a
+compact preview. The direct result includes at most three lightweight path and classification
+previews, ten unmatched-entity previews, clipped node names with explicit flags, and compact
+retrieval accounting. Classification counts are unique supplied-entity counts without abundance
+weighting or statistical enrichment.
 
 `audit_annotation_mapping` reuses the imported immutable annotation dataset and selected fixed KO
 relationship mappings. The caller may select any subset of pathway, MODULE, reaction, enzyme, and
@@ -114,7 +119,10 @@ to count exact endpoint batches. If the selection would exceed the 100-request a
 evidence audit and explicit skipped-target metadata are still returned. A completed mapping reports
 strict and lenient yields, one-to-many and unmapped K numbers, source-provenance warnings, and KEGG
 cache, release, and retrieval summaries. The audit does not alter source decisions, fill missing K
-numbers, compare incompatible scores, or infer biological absence.
+numbers, compare incompatible scores, or infer biological absence. The direct result contains the
+evidence summary, mapping execution state, compact per-target counts and yields, compact retrieval
+accounting, and at most five clipped warning previews. Complete degree distributions, KO previews,
+warnings, relationship rows, and provenance remain retained.
 
 These services are query and evidence-routing paths, not extensions of the annotator or renderer.
 Their retained BRITE and audit artifacts do not enter `render_input.json`, and neither companion
@@ -129,11 +137,11 @@ hierarchy paths, audit metrics, rankings, relationships, and evaluations. Public
 and retrieval behavior are specified only in
 [Core MCP server](mcp-server.md#tools).
 
-Resolver and relation-trace services enforce a separate 64 KiB serialized direct-result bound after
+All five P0 query and audit services enforce a separate 64 KiB serialized direct-result bound after
 constructing their fixed previews. A projection-model or byte-bound failure compensates the newly
-created retained result instead of leaving an inaccessible artifact. Full candidate crosswalks,
-resolution steps, graph nodes, graph edges, and provenance remain retained and are never rebuilt by
-the LLM.
+created retained result instead of leaving an inaccessible artifact. Full search matches,
+candidate crosswalks, resolution steps, graph nodes and edges, BRITE paths and classifications,
+audit distributions and rows, and provenance remain retained and are never rebuilt by the LLM.
 
 ## Report artifacts
 

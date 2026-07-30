@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,7 +28,7 @@ from kegg_mcp.kegg.contracts import (
     ResponseOrigin,
     RetrievalEndpointClass,
 )
-from kegg_mcp.services import brite_hierarchy
+from kegg_mcp.services import brite_hierarchy, query_support
 from kegg_mcp.services.brite_hierarchy import (
     BRITE_DETAIL_SECTION,
     BRITE_TABLE_SECTION,
@@ -148,7 +150,8 @@ def test_explicit_hierarchy_preserves_multi_parent_paths_and_source_ids(
     assert result.path_count == 3
     assert result.paths_truncated is True
     assert result.unmatched_count == 1
-    assert result.unmatched_entities == (_ko("K00003"),)
+    assert result.unmatched_preview == (_ko("K00003"),)
+    assert result.unmatched_truncated is False
     assert result.classifications_truncated is True
     assert result.artifacts[0].section == BRITE_DETAIL_SECTION
     assert result.artifacts[1].section == BRITE_TABLE_SECTION
@@ -250,7 +253,8 @@ def test_first_path_and_unmatched_exclusion_are_request_controlled(
     assert result.path_count == 1
     assert result.path_preview[0].nodes[1].name == "First branch"
     assert result.unmatched_count == 1
-    assert result.unmatched_entities == ()
+    assert result.unmatched_preview == ()
+    assert result.unmatched_truncated is True
     assert result.unmatched_included is False
     detail = json.loads(_artifact_bytes(store, result.result.result_id, BRITE_DETAIL_SECTION))
     assert detail["unmatched_entities"] == []
@@ -384,6 +388,70 @@ def test_explicit_hierarchy_accepts_non_ko_entities_and_retains_source_identifie
     )
 
     assert gene_result.path_preview[0].nodes[-1].node_id == "hsa:1234"
+
+
+@pytest.mark.parametrize("formula_text", ["=1+1", "+1", "-1", "@cmd", "'quoted"])
+def test_brite_tsv_escapes_spreadsheet_formulas_without_altering_retained_json(
+    tmp_path: Path,
+    formula_text: str,
+) -> None:
+    document = _document(
+        "ko00001",
+        "A09100 Metabolism",
+        f"B  K00001 {formula_text}",
+    )
+    store = SQLiteResultStore(tmp_path / f"formula-{ord(formula_text[0])}.sqlite3")
+
+    result = map_brite_hierarchy(
+        MapBriteHierarchyRequest(
+            entity_ids=(_ko("K00001"),),
+            brite_ids=("ko00001",),
+        ),
+        client=cast(KeggPrimitiveClient, _GetClient((document,))),
+        result_store=store,
+        scope_id="scope",
+    )
+
+    detail = json.loads(_artifact_bytes(store, result.result.result_id, BRITE_DETAIL_SECTION))
+    assert detail["paths"][0]["nodes"][-1]["name"] == formula_text
+    table = _artifact_bytes(
+        store,
+        result.result.result_id,
+        BRITE_TABLE_SECTION,
+    ).decode("utf-8")
+    rows = list(csv.DictReader(io.StringIO(table), delimiter="\t"))
+    assert rows[-1]["node_name"] == f"'{formula_text}"
+
+
+def test_brite_direct_preview_truncates_node_text_and_stays_bounded(
+    tmp_path: Path,
+) -> None:
+    lines = (
+        *(f"{chr(ord('A') + depth)}  {'x' * 2_000}" for depth in range(25)),
+        f"Z  K00001 {'y' * 1_993}",
+    )
+    store = SQLiteResultStore(tmp_path / "large-direct.sqlite3")
+
+    result = map_brite_hierarchy(
+        MapBriteHierarchyRequest(
+            entity_ids=(_ko("K00001"),),
+            brite_ids=("ko00001",),
+        ),
+        client=cast(
+            KeggPrimitiveClient,
+            _GetClient((_document("ko00001", *lines),)),
+        ),
+        result_store=store,
+        scope_id="scope",
+    )
+
+    assert len(result.path_preview[0].nodes) == 26
+    assert all(len(node.name) <= 128 for node in result.path_preview[0].nodes)
+    assert all(node.name_truncated for node in result.path_preview[0].nodes)
+    assert result.retrieval.batch_count == 1
+    assert len(result.model_dump_json().encode("utf-8")) <= query_support.MAX_QUERY_DIRECT_BYTES
+    detail = json.loads(_artifact_bytes(store, result.result.result_id, BRITE_DETAIL_SECTION))
+    assert len(detail["paths"][0]["nodes"][0]["name"]) == 2_000
 
 
 def test_request_rejects_unsafe_discovery_and_identifier_shapes() -> None:
@@ -553,4 +621,31 @@ def test_detail_construction_failure_and_result_construction_failure_leave_no_re
             result_store=store,
             scope_id="scope",
         )
+    assert store.list_results("scope").total_items == 0
+
+
+def test_brite_direct_result_cap_compensates_the_retained_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _document(
+        "ko00001",
+        "A09100 Metabolism",
+        "B  K00001 first",
+    )
+    store = SQLiteResultStore(tmp_path / "direct-cap.sqlite3")
+    monkeypatch.setattr(query_support, "MAX_QUERY_DIRECT_BYTES", 1)
+
+    with pytest.raises(KeggMcpError) as caught:
+        map_brite_hierarchy(
+            MapBriteHierarchyRequest(
+                entity_ids=(_ko("K00001"),),
+                brite_ids=("ko00001",),
+            ),
+            client=cast(KeggPrimitiveClient, _GetClient((document,))),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
     assert store.list_results("scope").total_items == 0

@@ -601,9 +601,18 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         search_output = _tool_by_name(tools, "search_kegg_entries").outputSchema
         assert search_output is not None
         search_properties = search_output["$defs"]["SearchKeggEntriesResult"]["properties"]
-        assert search_properties["candidates"]["maxItems"] == 100
-        search_candidate_properties = search_output["$defs"]["KeggSearchCandidate"]["properties"]
-        assert set(search_candidate_properties) == {"entity", "raw_match"}
+        assert search_properties["candidate_preview"]["maxItems"] == 10
+        assert "candidates" not in search_properties
+        assert "provenance" not in search_properties
+        search_candidate_properties = search_output["$defs"]["KeggSearchCandidatePreview"][
+            "properties"
+        ]
+        assert set(search_candidate_properties) == {
+            "entity",
+            "raw_match",
+            "raw_match_truncated",
+        }
+        assert search_candidate_properties["raw_match"]["maxLength"] == 128
         resolution_output = _tool_by_name(tools, "resolve_kegg_entities").outputSchema
         assert resolution_output is not None
         resolution_properties = resolution_output["$defs"]["ResolveKeggEntitiesResult"][
@@ -635,10 +644,29 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert retrieval_properties["database_release_count"]["maximum"] == 200
         assert retrieval_properties["database_releases"]["maxItems"] == 25
         assert "database_releases_truncated" in retrieval_properties
+        brite_output = _tool_by_name(tools, "map_brite_hierarchy").outputSchema
+        assert brite_output is not None
+        brite_properties = brite_output["$defs"]["MapBriteHierarchyResult"]["properties"]
+        assert brite_properties["path_preview"]["maxItems"] == 3
+        assert brite_properties["classification_preview"]["maxItems"] == 3
+        assert brite_properties["unmatched_preview"]["maxItems"] == 10
+        brite_node_properties = brite_output["$defs"]["BriteHierarchyNodePreview"]["properties"]
+        assert brite_node_properties["name"]["maxLength"] == 128
+        assert "name_truncated" in brite_node_properties
+        assert "retrieval" in brite_properties
         audit_output = _tool_by_name(tools, "audit_annotation_mapping").outputSchema
         assert audit_output is not None
-        audit_detail_properties = audit_output["$defs"]["AnnotationAuditDetail"]["properties"]
-        assert audit_detail_properties["mappings"]["maxItems"] == 5
+        audit_properties = audit_output["$defs"]["AnnotationMappingAuditResult"]["properties"]
+        assert "detail" not in audit_properties
+        assert audit_properties["mappings"]["maxItems"] == 5
+        assert audit_properties["warning_preview"]["maxItems"] == 5
+        audit_mode_properties = audit_output["$defs"]["EvidenceModeMappingAuditSummary"][
+            "properties"
+        ]
+        assert "target_degree_distribution" not in audit_mode_properties
+        assert "unmapped_ko_preview" not in audit_mode_properties
+        audit_retrieval_properties = audit_output["$defs"]["QueryRetrievalSummary"]["properties"]
+        assert "provenance_preview" not in audit_retrieval_properties
         execution_properties = audit_output["$defs"]["AnnotationMappingExecution"]["properties"]
         assert execution_properties["request_limit"]["minimum"] == 1
         assert set(audit_output["$defs"]["AnnotationMappingExecutionStatus"]["enum"]) == {

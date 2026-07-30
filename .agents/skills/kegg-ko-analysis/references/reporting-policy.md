@@ -54,9 +54,10 @@ on normal server shutdown. Use `delete_analysis_result` after required reads onl
 requests immediate cleanup.
 
 Query and audit tools do not turn their retained details into durable cross-process handoffs. Use
-their bounded direct previews in conversation. For resolver and relation-trace detail, follow the
-resource URI returned by the tool instead of pasting every crosswalk, node, edge, or provenance
-batch or constructing a URI. The server declares these fixed resources and templates:
+their bounded direct previews in conversation. For complete search, resolution, relation, BRITE, or
+audit detail, follow the resource URI returned by the tool instead of pasting every candidate,
+crosswalk, path, distribution, row, edge, or provenance batch or constructing a URI. The server
+declares these fixed resources and templates:
 
 ```text
 ko-analysis://status

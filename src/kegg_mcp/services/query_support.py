@@ -311,7 +311,10 @@ def require_bounded_query_direct_result(value: BaseModel) -> None:
         fail(
             ErrorCode.OUTPUT_LIMIT_EXCEEDED,
             "The direct query projection exceeded its fixed output-size bound.",
-            suggested_action="Use the retained resource for complete query details.",
+            suggested_action=(
+                "Request a smaller projection and retry; use the retained resource from a "
+                "successful response for complete query details."
+            ),
             safe_details=(
                 SafeDetail(name="observed_bytes", value=str(len(payload))),
                 SafeDetail(name="limit_bytes", value=str(MAX_QUERY_DIRECT_BYTES)),

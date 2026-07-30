@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
+from kegg_mcp._serialization import escape_spreadsheet_formula
 from kegg_mcp.domain.annotations import FrozenModel, validate_utf8_text
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.kegg import (
@@ -29,7 +30,15 @@ from kegg_mcp.services.kegg_relations import (
     BoundedRelationResult,
     bounded_relation_batches,
 )
-from kegg_mcp.services.query_models import KeggEntityKind, KeggEntityRef
+from kegg_mcp.services.query_models import (
+    KeggEntityKind,
+    KeggEntityRef,
+    QueryRetrievalSummary,
+)
+from kegg_mcp.services.query_support import (
+    require_bounded_query_direct_result,
+    summarize_query_retrieval,
+)
 from kegg_mcp.services.reference_budget import KeggPrimitiveClient, effective_query_options
 from kegg_mcp.services.result_builders import _artifact_metadata, _json_bytes
 from kegg_mcp.services.result_store import (
@@ -42,7 +51,9 @@ from kegg_mcp.services.result_store import (
 
 MAX_BRITE_ENTITY_IDS = 100
 MAX_BRITE_IDS = 25
-MAX_BRITE_PREVIEW_PATHS = 50
+MAX_BRITE_PREVIEW_PATHS = 3
+MAX_BRITE_PREVIEW_NODE_NAME_CHARACTERS = 128
+MAX_BRITE_UNMATCHED_PREVIEW = 10
 MAX_BRITE_SOURCE_LINES = 100_000
 MAX_BRITE_SOURCE_CHARACTERS = 8_000_000
 MAX_BRITE_RELATION_ROWS = 5_000
@@ -88,7 +99,7 @@ class MapBriteHierarchyRequest(FrozenModel):
     include_all_paths: bool = Field(default=True, strict=True)
     include_unmatched: bool = Field(default=True, strict=True)
     preview_limit: int = Field(
-        default=20,
+        default=MAX_BRITE_PREVIEW_PATHS,
         strict=True,
         ge=0,
         le=MAX_BRITE_PREVIEW_PATHS,
@@ -167,6 +178,66 @@ class BriteClassificationCount(FrozenModel):
         return self
 
 
+class BriteHierarchyNodePreview(FrozenModel):
+    """One compact BRITE node for a direct-result path preview."""
+
+    depth: int = Field(strict=True, ge=0, lt=MAX_BRITE_PATH_DEPTH)
+    level: str = Field(pattern=r"^[A-Z]$", max_length=1)
+    node_id: str | None = Field(default=None, min_length=1, max_length=256)
+    name: str = Field(max_length=MAX_BRITE_PREVIEW_NODE_NAME_CHARACTERS)
+    name_truncated: bool
+    is_input_entity: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_depth(self) -> Self:
+        if self.depth != ord(self.level) - ord("A"):
+            raise ValueError("BRITE preview node depth must match its hierarchy level")
+        validate_utf8_text(self.name, field_name="BRITE preview node name")
+        if self.name_truncated and len(self.name) != MAX_BRITE_PREVIEW_NODE_NAME_CHARACTERS:
+            raise ValueError("truncated BRITE node previews must fill their fixed text bound")
+        return self
+
+
+class BriteHierarchyPathPreview(FrozenModel):
+    """One compact complete path preview for a supplied entity."""
+
+    input_entity: KeggEntityRef
+    brite_id: str = Field(min_length=1, max_length=100)
+    nodes: Annotated[
+        tuple[BriteHierarchyNodePreview, ...],
+        Field(min_length=1, max_length=MAX_BRITE_PATH_DEPTH),
+    ]
+
+    @model_validator(mode="after")
+    def validate_path(self) -> Self:
+        if not is_kegg_brite_identifier(self.brite_id):
+            raise ValueError("preview path brite_id is invalid")
+        if tuple(node.depth for node in self.nodes) != tuple(range(len(self.nodes))):
+            raise ValueError("BRITE preview path nodes must be contiguous from level A")
+        if not self.nodes[-1].is_input_entity:
+            raise ValueError("BRITE preview path must terminate at the supplied entity")
+        return self
+
+
+class BriteClassificationCountPreview(FrozenModel):
+    """Compact direct classification count for one complete hierarchy path prefix."""
+
+    brite_id: str = Field(min_length=1, max_length=100)
+    path: Annotated[
+        tuple[BriteHierarchyNodePreview, ...],
+        Field(min_length=1, max_length=MAX_BRITE_PATH_DEPTH),
+    ]
+    unique_input_count: int = Field(strict=True, ge=1, le=MAX_BRITE_ENTITY_IDS)
+
+    @model_validator(mode="after")
+    def validate_classification_path(self) -> Self:
+        if not is_kegg_brite_identifier(self.brite_id):
+            raise ValueError("classification preview brite_id is invalid")
+        if tuple(node.depth for node in self.path) != tuple(range(len(self.path))):
+            raise ValueError("classification preview nodes must be contiguous from level A")
+        return self
+
+
 class BriteHierarchyDetail(FrozenModel):
     """Complete retained BRITE mapping detail and retrieval provenance."""
 
@@ -235,22 +306,24 @@ class MapBriteHierarchyResult(FrozenModel):
     missing_brite_ids: Annotated[tuple[str, ...], Field(max_length=MAX_BRITE_IDS)]
     path_count: int = Field(strict=True, ge=0, le=MAX_BRITE_PATHS)
     path_preview: Annotated[
-        tuple[BriteHierarchyPath, ...],
+        tuple[BriteHierarchyPathPreview, ...],
         Field(max_length=MAX_BRITE_PREVIEW_PATHS),
     ]
     paths_truncated: bool
     classification_count: int = Field(strict=True, ge=0, le=MAX_BRITE_CLASSIFICATIONS)
     classification_preview: Annotated[
-        tuple[BriteClassificationCount, ...],
+        tuple[BriteClassificationCountPreview, ...],
         Field(max_length=MAX_BRITE_PREVIEW_PATHS),
     ]
     classifications_truncated: bool
     unmatched_count: int = Field(strict=True, ge=0, le=MAX_BRITE_ENTITY_IDS)
-    unmatched_entities: Annotated[
+    unmatched_preview: Annotated[
         tuple[KeggEntityRef, ...],
-        Field(max_length=MAX_BRITE_ENTITY_IDS),
+        Field(max_length=MAX_BRITE_UNMATCHED_PREVIEW),
     ]
+    unmatched_truncated: bool
     unmatched_included: bool = Field(strict=True)
+    retrieval: QueryRetrievalSummary
     count_semantics: Literal[
         "Counts classify unique supplied entities under each complete BRITE path prefix. "
         "They are descriptive unique-input counts without statistical testing or abundance "
@@ -290,11 +363,12 @@ class MapBriteHierarchyResult(FrozenModel):
             self.classification_count > len(self.classification_preview)
         ):
             raise ValueError("classifications_truncated must match classification_preview")
-        if self.unmatched_included:
-            if self.unmatched_count != len(self.unmatched_entities):
-                raise ValueError("included unmatched entities must match unmatched_count")
-        elif self.unmatched_entities:
+        if not self.unmatched_included and self.unmatched_preview:
             raise ValueError("excluded unmatched entities must not be returned directly")
+        if self.unmatched_count < len(self.unmatched_preview):
+            raise ValueError("unmatched_count cannot be smaller than unmatched_preview")
+        if self.unmatched_truncated != (self.unmatched_count > len(self.unmatched_preview)):
+            raise ValueError("unmatched_truncated must match the direct preview")
         return self
 
 
@@ -407,9 +481,14 @@ def map_brite_hierarchy(
     stored = result_store.create(scope_id, artifact_inputs)
     try:
         preview_limit = request.preview_limit
-        path_preview = paths[:preview_limit]
-        classification_preview = classifications[:preview_limit]
-        return MapBriteHierarchyResult(
+        path_preview = tuple(_path_preview(path) for path in paths[:preview_limit])
+        classification_preview = tuple(
+            _classification_preview(item) for item in classifications[:preview_limit]
+        )
+        unmatched_preview = (
+            retained_unmatched[:MAX_BRITE_UNMATCHED_PREVIEW] if request.include_unmatched else ()
+        )
+        result = MapBriteHierarchyResult(
             result=stored,
             artifacts=(
                 _artifact_metadata(
@@ -436,9 +515,13 @@ def map_brite_hierarchy(
             classification_preview=classification_preview,
             classifications_truncated=(len(classification_preview) < len(classifications)),
             unmatched_count=len(unmatched),
-            unmatched_entities=retained_unmatched,
+            unmatched_preview=unmatched_preview,
+            unmatched_truncated=len(unmatched) > len(unmatched_preview),
             unmatched_included=request.include_unmatched,
+            retrieval=summarize_query_retrieval((*relation.batches, *hierarchy_provenance)),
         )
+        require_bounded_query_direct_result(result)
+        return result
     except BaseException:
         compensate_created_result(
             result_store,
@@ -447,6 +530,36 @@ def map_brite_hierarchy(
             stored.created_at,
         )
         raise
+
+
+def _node_preview(node: BriteHierarchyNode) -> BriteHierarchyNodePreview:
+    name = node.name[:MAX_BRITE_PREVIEW_NODE_NAME_CHARACTERS]
+    return BriteHierarchyNodePreview(
+        depth=node.depth,
+        level=node.level,
+        node_id=node.node_id,
+        name=name,
+        name_truncated=len(node.name) > len(name),
+        is_input_entity=node.is_input_entity,
+    )
+
+
+def _path_preview(path: BriteHierarchyPath) -> BriteHierarchyPathPreview:
+    return BriteHierarchyPathPreview(
+        input_entity=path.input_entity,
+        brite_id=path.brite_id,
+        nodes=tuple(_node_preview(node) for node in path.nodes),
+    )
+
+
+def _classification_preview(
+    classification: BriteClassificationCount,
+) -> BriteClassificationCountPreview:
+    return BriteClassificationCountPreview(
+        brite_id=classification.brite_id,
+        path=tuple(_node_preview(node) for node in classification.path),
+        unique_input_count=classification.unique_input_count,
+    )
 
 
 def _discovered_brite_scope(
@@ -738,17 +851,19 @@ def _tsv_bytes(
     output = io.StringIO(newline="")
     writer = csv.writer(output, delimiter="\t", lineterminator="\n")
     writer.writerow(
-        (
-            "record_type",
-            "input_kind",
-            "input_identifier",
-            "brite_id",
-            "path_index",
-            "depth",
-            "level",
-            "node_id",
-            "node_name",
-            "unique_input_count",
+        _safe_tsv_row(
+            (
+                "record_type",
+                "input_kind",
+                "input_identifier",
+                "brite_id",
+                "path_index",
+                "depth",
+                "level",
+                "node_id",
+                "node_name",
+                "unique_input_count",
+            )
         )
     )
     for path_index, path in enumerate(paths, start=1):
@@ -759,35 +874,45 @@ def _tsv_bytes(
                 tuple(_node_key(item) for item in prefix),
             )
             writer.writerow(
-                (
-                    "path_node",
-                    path.input_entity.kind.value,
-                    path.input_entity.identifier,
-                    path.brite_id,
-                    path_index,
-                    node.depth,
-                    node.level,
-                    node.node_id or "",
-                    node.name,
-                    classification_lookup[key],
+                _safe_tsv_row(
+                    (
+                        "path_node",
+                        path.input_entity.kind.value,
+                        path.input_entity.identifier,
+                        path.brite_id,
+                        path_index,
+                        node.depth,
+                        node.level,
+                        node.node_id or "",
+                        node.name,
+                        classification_lookup[key],
+                    )
                 )
             )
     for entity in unmatched_entities:
         writer.writerow(
-            (
-                "unmatched",
-                entity.kind.value,
-                entity.identifier,
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
+            _safe_tsv_row(
+                (
+                    "unmatched",
+                    entity.kind.value,
+                    entity.identifier,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
             )
         )
     return output.getvalue().encode("utf-8")
+
+
+def _safe_tsv_row(values: Iterable[object]) -> tuple[str, ...]:
+    return tuple(
+        escape_spreadsheet_formula("" if value is None else str(value)) for value in values
+    )
 
 
 def _validate_artifact_bytes(detail: bytes, table: bytes) -> None:
@@ -836,11 +961,16 @@ __all__ = [
     "MAX_BRITE_ENTITY_IDS",
     "MAX_BRITE_IDS",
     "MAX_BRITE_PATHS",
+    "MAX_BRITE_PREVIEW_NODE_NAME_CHARACTERS",
     "MAX_BRITE_PREVIEW_PATHS",
+    "MAX_BRITE_UNMATCHED_PREVIEW",
     "BriteClassificationCount",
+    "BriteClassificationCountPreview",
     "BriteHierarchyDetail",
     "BriteHierarchyNode",
+    "BriteHierarchyNodePreview",
     "BriteHierarchyPath",
+    "BriteHierarchyPathPreview",
     "MapBriteHierarchyRequest",
     "MapBriteHierarchyResult",
     "map_brite_hierarchy",

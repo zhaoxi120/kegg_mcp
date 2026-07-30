@@ -64,6 +64,7 @@ from kegg_mcp.services.query_models import (
     KeggEntityRef,
     KeggRelationEdge,
     KeggRelationType,
+    KeggSearchCandidatePreview,
     KeggSearchDatabase,
     KeggSearchMode,
     MappingStatus,
@@ -470,17 +471,71 @@ def test_search_preserves_raw_candidates_without_scores_and_retains_all_rows(
     )
 
     assert result.observed_count == 3
-    assert result.returned_count == 2
-    assert result.truncated is True
-    assert result.candidates[0].raw_match == "hexokinase [EC:2.7.1.1]"
-    assert set(result.candidates[0].model_dump()) == {"entity", "raw_match"}
-    assert "score" not in result.candidates[0].model_dump()
+    assert result.candidate_count == 2
+    assert result.candidates_truncated is False
+    assert result.endpoint_candidates_truncated is True
+    assert result.candidate_preview[0].raw_match == "hexokinase [EC:2.7.1.1]"
+    assert result.candidate_preview[0].raw_match_truncated is False
+    assert set(result.candidate_preview[0].model_dump()) == {
+        "entity",
+        "raw_match",
+        "raw_match_truncated",
+    }
+    assert "score" not in result.candidate_preview[0].model_dump()
+    assert result.retrieval.batch_count == 1
     assert "not relevance-ranked" in result.interpretation_caveats[0]
     assert len(result.interpretation_caveats) == 1
     retained = _artifact(store, result.result.result_id)
     find_result = cast(dict[str, object], retained["find_result"])
     document = cast(dict[str, object], find_result["document"])
     assert len(cast(list[object], document["rows"])) == 3
+    batch = cast(dict[str, object], find_result["batch"])
+    assert batch["operation"] == "find"
+    assert isinstance(batch["request_key"], str)
+
+
+def test_search_direct_preview_truncates_large_candidate_text_and_retains_full_rows(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    long_match = "x" * 10_000
+    client.find_rows[(KeggFindDatabase.KO, "large", None)] = tuple(
+        (f"K{index:05d}", long_match) for index in range(1, 101)
+    )
+    store = SQLiteResultStore(tmp_path / "large-search.sqlite3")
+
+    result = search_kegg_entries(
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.KO,
+            query="large",
+            max_results=100,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=store,
+        scope_id="scope",
+    )
+
+    assert result.candidate_count == 100
+    assert len(result.candidate_preview) == 10
+    assert result.candidates_truncated is True
+    assert all(len(item.raw_match) == 128 for item in result.candidate_preview)
+    assert all(item.raw_match_truncated for item in result.candidate_preview)
+    assert len(result.model_dump_json().encode("utf-8")) <= query_support.MAX_QUERY_DIRECT_BYTES
+    retained = _artifact(store, result.result.result_id)
+    find_result = cast(dict[str, object], retained["find_result"])
+    document = cast(dict[str, object], find_result["document"])
+    rows = cast(list[dict[str, object]], document["rows"])
+    assert len(rows) == 100
+    assert rows[0]["matched_text"] == long_match
+
+
+def test_search_candidate_preview_rejects_inconsistent_truncation_flag() -> None:
+    with pytest.raises(ValidationError, match="fill their fixed text bound"):
+        KeggSearchCandidatePreview(
+            entity=_entity(KeggEntityKind.KO, "K00001"),
+            raw_match="short",
+            raw_match_truncated=True,
+        )
 
 
 def test_exact_mass_caveat_is_emitted_only_for_exact_mass_search(
@@ -1927,8 +1982,22 @@ def test_direct_query_cap_compensates_the_retained_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(query_support, "MAX_QUERY_DIRECT_BYTES", 1)
-    store = SQLiteResultStore(tmp_path / "direct-cap.sqlite3")
+    search_store = SQLiteResultStore(tmp_path / "search-direct-cap.sqlite3")
+    with pytest.raises(KeggMcpError) as search_error:
+        search_kegg_entries(
+            SearchKeggEntriesRequest(
+                database=KeggSearchDatabase.KO,
+                query="bounded",
+            ),
+            client=cast(KeggQueryClient, _QueryClient()),
+            result_store=search_store,
+            scope_id="scope",
+        )
 
+    assert search_error.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+    assert search_store.list_results("scope").total_items == 0
+
+    store = SQLiteResultStore(tmp_path / "direct-cap.sqlite3")
     with pytest.raises(KeggMcpError) as captured:
         resolve_kegg_entities(
             GeneResolutionRequest(
