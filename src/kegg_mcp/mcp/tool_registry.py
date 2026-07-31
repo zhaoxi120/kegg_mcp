@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, cast
 
-from anyio import lowlevel, to_thread
+from anyio import CancelScope, lowlevel, to_thread
 from mcp import types
 from pydantic import BaseModel, ValidationError
 
@@ -52,6 +53,7 @@ from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_handlers import (
     ToolContext,
     ToolHandler,
+    ToolOutcome,
     analyze_annotations,
     analyze_modules,
     analyze_pathways,
@@ -316,12 +318,29 @@ _LOCAL_TOOL_NAMES = frozenset(
     }
 )
 _INLINE_TOOL_NAMES = frozenset({"get_server_status"})
+_RESULT_WRITING_TOOL_NAMES = frozenset(
+    {
+        "analyze_ko_annotations",
+        "normalize_ko_annotations",
+        "get_kegg_entries",
+        "search_kegg_entries",
+        "resolve_kegg_entities",
+        "trace_kegg_relations",
+        "map_brite_hierarchy",
+        "audit_annotation_mapping",
+        "compare_kegg_reference_snapshots",
+        "analyze_modules",
+        "analyze_pathways",
+        "compare_ko_sets",
+    }
+)
 _CLASSIFIED_TOOL_NAMES = _CLIENT_TOOL_NAMES | _LOCAL_TOOL_NAMES | _INLINE_TOOL_NAMES
 if (  # pragma: no cover - import-time contract guard
     frozenset(TOOL_NAMES) != _CLASSIFIED_TOOL_NAMES
     or _CLIENT_TOOL_NAMES & _LOCAL_TOOL_NAMES
     or _CLIENT_TOOL_NAMES & _INLINE_TOOL_NAMES
     or _LOCAL_TOOL_NAMES & _INLINE_TOOL_NAMES
+    or not _RESULT_WRITING_TOOL_NAMES < _CLASSIFIED_TOOL_NAMES
 ):
     raise RuntimeError("every registered tool must have exactly one execution class")
 
@@ -358,21 +377,41 @@ async def dispatch_tool(
         if name in _INLINE_TOOL_NAMES:
             outcome = spec.handler(ToolContext(runtime, TOOL_NAMES), request)
         else:
+
+            def run_handler() -> ToolOutcome:
+                if name in _RESULT_WRITING_TOOL_NAMES:
+                    runtime.result_store.preflight_write()
+                return spec.handler(ToolContext(runtime, TOOL_NAMES), request)
+
             limiter = (
                 runtime.client_handler_limiter
                 if name in _CLIENT_TOOL_NAMES
                 else runtime.local_handler_limiter
             )
+            threaded_outcome: ToolOutcome | None = None
             try:
-                outcome = await to_thread.run_sync(
-                    spec.handler,
-                    ToolContext(runtime, TOOL_NAMES),
-                    request,
+                threaded_outcome = await to_thread.run_sync(
+                    run_handler,
                     abandon_on_cancel=False,
                     limiter=limiter,
                 )
             finally:
-                await lowlevel.checkpoint_if_cancelled()
+                try:
+                    await lowlevel.checkpoint_if_cancelled()
+                except BaseException:
+                    if threaded_outcome is not None and threaded_outcome.result_id is not None:
+                        with CancelScope(shield=True):
+                            with suppress(KeggMcpError, ResultStoreError):
+                                await to_thread.run_sync(
+                                    runtime.result_store.delete,
+                                    runtime.scope_id,
+                                    threaded_outcome.result_id,
+                                    abandon_on_cancel=False,
+                                )
+                    raise
+            if threaded_outcome is None:  # pragma: no cover - successful worker always returns
+                raise RuntimeError("tool worker returned no outcome")
+            outcome = threaded_outcome
     except KeggMcpError as exception:
         return error_result(exception.detail)
     except ResultStoreError:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from itertools import pairwise
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
@@ -15,6 +17,7 @@ from kegg_mcp.kegg import (
     KeggClient,
     KeggClientConfig,
     KeggClientLimits,
+    RateLimitPolicy,
     RetryPolicy,
 )
 from kegg_mcp.kegg.transport import HttpsTransport, TransportError, TransportResponse
@@ -24,6 +27,19 @@ _DEFAULT_REQUESTS_PER_OPERATION = 20
 _MAX_REQUESTS_PER_OPERATION = 20
 _OPERATION_COUNT = 6
 _MIN_START_GAP_SECONDS = 0.95
+
+
+@dataclass(frozen=True, slots=True)
+class LiveCampaign:
+    """One private live-test deployment sharing a single bounded transport."""
+
+    client: KeggClient
+    transport: _BoundedLiveTransport
+    root: Path
+    cache_path: Path
+    result_store_path: Path
+    rate_limit_root: Path
+    max_requests: int
 
 
 class _BoundedLiveTransport:
@@ -38,6 +54,10 @@ class _BoundedLiveTransport:
     @property
     def starts(self) -> tuple[float, ...]:
         return tuple(self._starts)
+
+    @property
+    def request_count(self) -> int:
+        return len(self._starts)
 
     def request(
         self,
@@ -82,8 +102,8 @@ def live_requests_per_operation() -> int:
 
 
 @pytest.fixture(scope="session")
-def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
-    """Provide one one-request-per-second client backed by a temporary cache."""
+def live_campaign(live_requests_per_operation: int) -> Iterator[LiveCampaign]:
+    """Provide one private one-request-per-second deployment for the complete campaign."""
     if os.environ.get("PYTEST_XDIST_WORKER") is not None:
         raise pytest.UsageError("live KEGG tests must run in one non-xdist process")
     runtime = load_runtime_config(os.environ)
@@ -91,15 +111,20 @@ def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
     max_requests = live_requests_per_operation * _OPERATION_COUNT
     transport = _BoundedLiveTransport(max_requests=max_requests)
     with TemporaryDirectory(prefix="kegg-mcp-live-") as directory:
-        yield KeggClient(
+        root = Path(directory)
+        cache_path = root / "kegg.sqlite3"
+        result_store_path = root / "results.sqlite3"
+        rate_limit_root = root / "rate-limit"
+        rate_limit_root.mkdir(mode=0o700)
+        client = KeggClient(
             KeggClientConfig(
                 access=runtime.kegg.access,
                 limits=KeggClientLimits(
                     requests_per_second=1.0,
                     timeout_seconds=30.0,
-                    max_identifiers=1,
-                    relation_batch_size=1,
-                    link_batch_size=1,
+                    max_identifiers=100,
+                    relation_batch_size=10,
+                    link_batch_size=100,
                 ),
                 retry=RetryPolicy(
                     max_retries=0,
@@ -108,11 +133,21 @@ def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
                     jitter_seconds=0.0,
                 ),
                 cache=CachePolicy(
-                    path=os.path.join(directory, "kegg.sqlite3"),
-                    ttl_seconds=60,
+                    path=str(cache_path),
+                    ttl_seconds=600,
                 ),
+                rate_limit=RateLimitPolicy(state_root=str(rate_limit_root)),
             ),
             transport=transport,
+        )
+        yield LiveCampaign(
+            client=client,
+            transport=transport,
+            root=root,
+            cache_path=cache_path,
+            result_store_path=result_store_path,
+            rate_limit_root=rate_limit_root,
+            max_requests=max_requests,
         )
 
     starts = transport.starts
@@ -120,3 +155,9 @@ def live_kegg_client(live_requests_per_operation: int) -> Iterator[KeggClient]:
     assert all(
         current - previous >= _MIN_START_GAP_SECONDS for previous, current in pairwise(starts)
     )
+
+
+@pytest.fixture(scope="session")
+def live_kegg_client(live_campaign: LiveCampaign) -> KeggClient:
+    """Expose the shared client to the low-level compatibility matrix."""
+    return live_campaign.client

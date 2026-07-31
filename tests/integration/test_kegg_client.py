@@ -140,6 +140,20 @@ class RecordingLimiter:
         self.acquire_count += 1
 
 
+class _FailingMandatoryLimiter:
+    def __init__(
+        self,
+        scope: str,
+        requests_per_second: float,
+        *,
+        state_root: str,
+    ) -> None:
+        del scope, requests_per_second, state_root
+
+    def acquire(self) -> NoReturn:
+        raise OSError("/private/rate-limit-state includes API_SECRET=do-not-leak")
+
+
 class WriteFailingCache(SQLiteKeggCache):
     def write(
         self,
@@ -684,6 +698,45 @@ def test_partial_entry_cache_service_bounds_preview_without_losing_mixed_provena
     ]
 
 
+def test_entry_service_defaults_to_fresh_cache_first(tmp_path: Path) -> None:
+    cache_path = tmp_path / "entry-service-fresh-cache.sqlite3"
+    entries = (
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00002"),
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=b"".join(_flat_entry(entry.identifier) for entry in entries),
+            )
+        ]
+    )
+    client = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        clock=_clock(_NOW),
+    )
+    store = SQLiteResultStore(tmp_path / "entry-service-fresh-results.sqlite3")
+
+    first = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=client,
+        result_store=store,
+        scope_id="entry-service-fresh-cache",
+    )
+    second = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=client,
+        result_store=store,
+        scope_id="entry-service-fresh-cache",
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/K00001+K00002"]
+    assert all(batch.origin is ResponseOrigin.NETWORK for batch in first.provenance)
+    assert all(batch.origin is ResponseOrigin.CACHE for batch in second.provenance)
+
+
 def test_entry_result_model_failure_compensates_the_created_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1070,6 +1123,31 @@ def test_transient_responses_retry_with_backoff_and_rate_limit_each_attempt(
     assert result.batch.attempt_count == 2
     assert limiter.acquire_count == 2
     assert sleeps == [0.5]
+
+
+def test_rate_limit_state_oserror_is_classified_before_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client_module, "DeploymentRateLimiter", _FailingMandatoryLimiter)
+    transport = QueueTransport([])
+    client = KeggClient(
+        _public_config(tmp_path / "rate-limit-state.sqlite3"),
+        transport=transport,
+        clock=_clock(_NOW),
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        client.info(InfoRequest(database=KeggInfoDatabase.KO))
+
+    assert caught.value.detail.code is ErrorCode.LOCAL_STATE_FAILED
+    assert {detail.name: detail.value for detail in caught.value.detail.safe_details} == {
+        "operation": "info",
+        "stage": "rate_limit_state",
+    }
+    assert "/private" not in caught.value.detail.model_dump_json()
+    assert "API_SECRET" not in caught.value.detail.model_dump_json()
+    assert transport.urls == []
 
 
 def test_transient_transport_error_is_retried(tmp_path: Path) -> None:

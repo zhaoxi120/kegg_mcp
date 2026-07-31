@@ -73,6 +73,8 @@ Use query-calibrated language:
 - call search rows candidates, not best matches, and never invent a relevance score;
 - call an exact-mass hit a chemical candidate, not a compound or drug identification;
 - describe a typed entry card as a deterministic projection of KEGG fields, not an LLM summary;
+- preserve a reaction-card equation as a KEGG field without inferring physiological direction or
+  irreversibility;
 - preserve all reported resolver candidates and describe mismatch or unmapped as mapping outcomes,
   not biological absence;
 - identify PubChem substance inputs as SIDs and never reinterpret a CID;
@@ -82,8 +84,9 @@ Use query-calibrated language:
 - describe BRITE counts as unique supplied-entity classifications, not enrichment or dominant
   function;
 - state whether audit `mapping_targets` completed, were not requested, or were skipped by the
-  request limit, row limit, or response-byte limit. An incomplete mapping phase does not invalidate
-  the complete local evidence audit, and mapping yield is available only for completed targets; and
+  request limit. For a row or response-byte limit, distinguish the incomplete target, previously
+  completed targets, and later skipped targets. An incomplete mapping phase does not invalidate the
+  complete local evidence audit, and mapping yield is available only for completed targets; and
 - describe reference-snapshot changes as local structural differences with parser, endpoint,
   retrieval/cache, and release context, not biological gain/loss, correction, or validation.
 

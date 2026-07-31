@@ -396,6 +396,15 @@ class SQLiteResultStore:
         """Return immutable configured limits for service compatibility checks."""
         return self._limits
 
+    def preflight_write(self) -> None:
+        """Verify writable store readiness before an external request is started."""
+        try:
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.rollback()
+        except (OSError, sqlite3.Error, _ResultStoreIntegrityError):
+            raise ResultStoreError("preflight_write") from None
+
     def create(
         self,
         scope_id: str,

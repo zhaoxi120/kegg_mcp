@@ -44,7 +44,7 @@ jobs:
       - name: Type-check
         run: uv run --frozen pyright
 
-      - name: Test, including 120 live KEGG requests
+      - name: Test, including at most 120 live KEGG requests
         run: uv run --frozen pytest
 
       - name: Build core distributions

@@ -14,6 +14,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 - Return the endpoint-ordered candidates without inventing a relevance score or selecting a best
   match. For a compound search, an exact-mass result is a compound candidate, not a compound
   identification; for a drug search it is likewise only a drug candidate, not an identification.
+- The public RCLASS FIND endpoint returned a well-formed empty result for a known identifier and
+  definition fragments on 2026-07-31. Report zero candidates as an upstream result; when a
+  canonical RCLASS identifier is already known, prefer `get_kegg_entries` with the preview
+  projection instead of promising positive keyword discovery.
 - Ask for disambiguating context only when the next requested step requires one canonical entity.
   Do not silently carry one search candidate into resolution, relation tracing, or analysis.
 
@@ -42,9 +46,16 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   from biological familiarity.
 - For substance resolution, use `pubchem_sid` only for a PubChem SID. Never reinterpret a CID as a
   SID, and never call a crosswalk or mass candidate a chemical identification.
+- For a known KEGG compound, glycan, or drug, use `trace_kegg_relations` for a relationship-only
+  question. Use substance resolution when identity validation or an external-ID crosswalk is also
+  required; include the matching `kegg_compound`, `kegg_glycan`, or `kegg_drug` identity target
+  before requesting its supported one-hop projections.
 - Taxonomy resolution supports exact, species, genus, family, order, class, and phylum. Leave
   `candidate_materialization="auto"` unless the user explicitly needs full GENOME records: auto
   uses full materialization for exact/species and identity-only candidates for broader ranks.
+  Rank expansion requires an NCBI Taxonomy ID for the requested rank; for example, a species-rank
+  lookup uses the species Taxonomy ID rather than a strain Taxonomy ID. A genus or family name is
+  only a name search and must not be reinterpreted as a taxonomy-rank request.
 - Leave `include_pathway_directory` false unless the user explicitly asks which organism-specific
   pathway references KEGG provides. It requires full candidate materialization. A returned
   directory describes reference availability, not pathway presence, completeness, activity, flux,
@@ -59,8 +70,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   allowlisted relationship. Keep the default one-level trace unless the question requires the
   supported second level.
 - For KO-to-gene or organism-specific pathway-to-gene, require one canonical `organism_scope`.
-  Never request or emulate a global KO-to-all-genes expansion. MODULE, glycan, and drug relations
-  remain limited to the advertised edge allowlist.
+  Use the direct scoped edge instead of emulating KO-to-gene through a generic pathway. Never
+  request or emulate a global KO-to-all-genes expansion. MODULE, glycan, and drug relations remain
+  limited to the advertised edge allowlist. MODULE-source edges accept reference `M` identifiers,
+  not organism- or genome-prefixed module identifiers.
 - Do not invent selected-entry reaction-class edges or RMODULE routes. The bounded client omits
   both after the 2026-07-30 live compatibility review found no safe selected-entry contract.
 - Treat every edge as a KEGG database cross-reference. Do not infer regulation, causality,

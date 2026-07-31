@@ -599,6 +599,42 @@ class _FailingResultStore(SQLiteResultStore):
         )
 
 
+def test_preflight_write_initializes_store_without_creating_a_result(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "private" / "store.sqlite3")
+
+    store.preflight_write()
+
+    assert store.list_results("scope", now=_NOW).total_items == 0
+
+
+def test_preflight_write_sanitizes_unwritable_store_failures(tmp_path: Path) -> None:
+    store = _FailingResultStore(tmp_path / "private" / "store.sqlite3")
+
+    with pytest.raises(ResultStoreError) as error:
+        store.preflight_write()
+
+    assert error.value.stage == "preflight_write"
+    assert str(tmp_path) not in str(error.value)
+    assert "API_SECRET" not in str(error.value)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX symlink checks are unavailable")
+def test_preflight_write_rejects_parent_symlink_escape_without_writing_outside(
+    tmp_path: Path,
+) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir(mode=0o700)
+    outside.mkdir(mode=0o700)
+    (allowed / "jump").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ResultStoreError) as error:
+        SQLiteResultStore(allowed / "jump" / "escaped.sqlite3").preflight_write()
+
+    assert error.value.stage == "preflight_write"
+    assert not (outside / "escaped.sqlite3").exists()
+
+
 def test_storage_failures_never_leak_paths_secrets_or_payloads(tmp_path: Path) -> None:
     store = _FailingResultStore(tmp_path / "private" / "store.sqlite3")
 

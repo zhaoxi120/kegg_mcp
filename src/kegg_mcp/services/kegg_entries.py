@@ -33,7 +33,7 @@ from kegg_mcp.services.query_support import (
     bounded_query_payload,
     require_bounded_query_direct_result,
 )
-from kegg_mcp.services.reference_budget import KeggPrimitiveClient
+from kegg_mcp.services.reference_budget import KeggPrimitiveClient, effective_query_options
 from kegg_mcp.services.result_builders import _artifact_metadata
 from kegg_mcp.services.result_store import (
     ResultArtifactInput,
@@ -63,7 +63,7 @@ def retrieve_kegg_entries(
                 "compound, glycan, gene, or genome cards."
             ),
         )
-    fetched = client.get(request, options=options)
+    fetched = client.get(request, options=effective_query_options(options))
     payload = fetched.model_dump_json().encode("utf-8")
     all_previews = _entry_previews(fetched)
     direct_previews = (

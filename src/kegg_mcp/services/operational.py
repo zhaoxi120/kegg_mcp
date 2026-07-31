@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from kegg_mcp.domain.errors import KeggMcpError
+from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg import (
     AccessMode,
     InfoRequest,
@@ -114,6 +114,11 @@ def probe_kegg_connectivity_service(
             state = ConnectivityState.DNS_FAILURE
         elif transport_kind == "connection":
             state = ConnectivityState.CONNECTION_FAILURE
+        elif error.detail.code in {
+            ErrorCode.CACHE_FAILED,
+            ErrorCode.LOCAL_STATE_FAILED,
+        }:
+            state = ConnectivityState.LOCAL_STORAGE_FAILURE
         else:
             state = ConnectivityState.AUTHORIZATION_CONFIGURATION_FAILURE
         return ConnectivityProbeResult(

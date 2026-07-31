@@ -31,7 +31,7 @@ inherit that default and requires the operator to select an access mode explicit
 and configuration failures are written to stderr; stdout is reserved for MCP protocol messages.
 
 Local pytest skips live requests by default. Pull-request CI explicitly runs the bounded
-120-request public-academic compatibility campaign once.
+at-most-120-request public-academic compatibility campaign once.
 
 Use the side-effect-free operator diagnostic before client startup:
 
@@ -179,7 +179,7 @@ The server exposes sixteen tools:
 - `compare_ko_sets`: calculate deterministic set differences for two to ten datasets, with optional
   shared-reference MODULE or pathway comparisons.
 - `probe_kegg_connectivity`: make one explicit low-cost INFO request and classify DNS,
-  connection, or authorization/configuration outcomes.
+  connection, local cache/rate-limit storage, or authorization/configuration outcomes.
 - `list_analysis_results`: list a bounded metadata page of active results in the current stdio
   scope without exposing any other scope.
 - `delete_analysis_result`: immediately delete one retained result in the current stdio scope.

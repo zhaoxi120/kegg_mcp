@@ -64,6 +64,12 @@ remain bounded across the complete operation.
 
 ## Bounded KEGG query services
 
+Before a tool that retains a result starts KEGG access, the MCP dispatch layer verifies that the
+scoped result store can initialize and acquire a write transaction. A local result-store failure
+therefore returns `RESULT_STORE_FAILED` without first consuming a KEGG request. Connectivity
+probing separately reports local cache or rate-limit state failures as `local_storage_failure`
+rather than misclassifying them as endpoint authorization failures.
+
 `get_kegg_entries` retains the complete parsed typed GET response. Its default preview projection
 returns bounded flat-file or BRITE text previews. The optional card projection accepts only KO,
 MODULE, pathway, reaction, enzyme, compound, glycan, gene, and genome flat files. It
@@ -86,7 +92,9 @@ accepts typed external or KEGG namespaces and an explicit organism where require
 resolution accepts code, genome, taxonomy, or name inputs. Taxonomy lookup supports exact, species,
 genus, family, order, class, and phylum ranks. Its automatic materialization policy fully validates
 exact and species candidates but retains identity-only candidate rows for broader ranks unless the
-caller explicitly selects full materialization. Substance resolution accepts KEGG compound,
+caller explicitly selects full materialization. Rank expansion accepts a Taxonomy ID for the
+requested rank rather than a taxon name or a descendant's Taxonomy ID. Substance resolution
+accepts KEGG compound,
 glycan, or drug identifiers and selected ChEBI or PubChem SID crosswalks. PubChem CID is not an
 alias for SID. The service retains all candidates and reports mapping yield, ambiguity, many-to-one
 mappings, organism mismatches, and the typed operations used.
@@ -106,7 +114,8 @@ flux, or phenotype. Mapping failure is not evidence that an entity does not exis
 Seeds, edge types, nodes, edges, raw relationship rows, response bytes, and provenance are bounded.
 The allowlist includes selected MODULE, glycan, and drug relations. KO-to-gene and
 organism-specific pathway-to-gene are dynamically bound to one required canonical organism code;
-the service does not expose unscoped KO-to-all-genes expansion. Selected-entry reaction-class
+the service does not expose unscoped KO-to-all-genes expansion or emulate it through generic
+pathways. MODULE-source relations accept reference M identifiers only. Selected-entry reaction-class
 relations and RMODULE are not exposed because the public endpoint behavior checked on 2026-07-30
 did not provide a safe selected-entry contract for them.
 The direct result contains retrieval counts plus bounded node and edge previews without embedding

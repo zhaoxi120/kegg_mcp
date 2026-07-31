@@ -524,6 +524,7 @@ class ConnectivityState(StrEnum):
     NETWORK_DISABLED = "network_disabled"
     DNS_FAILURE = "dns_failure"
     CONNECTION_FAILURE = "connection_failure"
+    LOCAL_STORAGE_FAILURE = "local_storage_failure"
     AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
 
 

@@ -199,6 +199,12 @@ FIND has no low-level
 5,000,000-byte default, the parser retains its complete ordered rows, and the calling service
 applies its own smaller result-preview bound.
 
+On 2026-07-31, the public FIND endpoint returned a well-formed empty response for the known
+`RC00002` identifier and its definition fragments. RCLASS therefore remains an allowlisted typed
+FIND database, but callers must treat zero candidates as a valid upstream result and must not
+promise positive RCLASS keyword discovery. Use selected RCLASS GET when an identifier is already
+known.
+
 The internal gene resolver may use the additional typed `genes` FIND database with an explicit
 canonical three- or four-letter organism code. That scope becomes the wire database, for example
 `/find/hsa/...`, and every returned canonical KEGG gene identifier must have the same organism
@@ -314,7 +320,8 @@ public endpoint probes on 2026-07-30 did not establish a non-empty, selected-ent
 even though database-wide forms could return rows, and database-wide expansion is outside this
 client. RMODULE was also omitted because its INFO/GET/LIST/LINK behavior did not establish one
 consistent typed selected-entry contract in the same review. RCLASS remains available through
-typed INFO, FIND, and GET; RMODULE is not a public client database.
+typed INFO, FIND, and GET, subject to the documented public FIND empty-result observation; RMODULE
+is not a public client database.
 
 Every LINK call remains selected-entry and bounded; database-to-database expansion is not exposed.
 Preparation canonicalizes identifier order and greedily packs the largest next batch that satisfies
@@ -505,6 +512,7 @@ safe details, and a suggested action:
 | `KEGG_REQUEST_FAILED` | A deterministic request error or exhausted transport retry could not produce a response. |
 | `KEGG_PARSE_FAILED` | Successful response bytes do not conform to the selected strict parser. |
 | `CACHE_FAILED` | Cache I/O, schema, metadata, or parser-version validation failed. |
+| `LOCAL_STATE_FAILED` | The private deployment-wide rate-limit state could not be read or written safely. |
 
 HTTP 400 and 404 responses are not retried. A GET 404 becomes an empty typed batch with provenance,
 and a multi-entry GET may return only some requested entries; both cases are represented by
