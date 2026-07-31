@@ -21,13 +21,17 @@ repeating requests:
 The remaining default budget exercises scientist-shaped workflows through an MCP client session
 and the real high-level services:
 
-- mixed typed entry cards, retained snapshots, cache reuse, and local snapshot comparison;
+- mixed typed entry cards, retained snapshots, cache reuse, cached PubMed-reference projection,
+  local snapshot comparison, and a durable selected-reference bundle;
 - glycan and drug search plus the currently empty public reaction-class FIND response;
 - ChEBI, PubChem SID-to-compound/glycan/drug, and direct compound/glycan/drug resolution;
 - exact through phylum taxonomy resolution plus an organism pathway directory;
 - every v0.7 organism-scoped, MODULE, glycan, and drug relationship, including one depth-two trace;
 - automatic BRITE mapping and complete JSON/TSV resource reads;
-- completed, evidence-only, and request-limit-skipped annotation audits; and
+- completed, evidence-only, and request-limit-skipped annotation audits;
+- all seven local-only KEGG Mapper/Syntax handoffs (Reconstruct, Search, Color, Join, MWsearch,
+  KO composition, and caller-ordered KO sequence) plus one explicit-universe, statistics-free
+  pathway gene-set handoff, all verified not to add a wire request; and
 - direct and paginated retained-resource reconstruction.
 
 Assertions cover response structure and request namespaces without freezing names, release labels,
@@ -39,10 +43,12 @@ The client is limited to one request per second without burst and zero retries. 
 enforces the configured wire budget and opens its circuit after any transport or non-200 response.
 Low-level compatibility calls explicitly bypass cache; high-level workflows use normal fresh-cache
 semantics and verify cache reuse. The workflow stops after the first transport or non-200 failure.
-The cache, result store, and deployment-wide rate-limit state share one owner-only temporary root.
-The tests verify private file modes, reconstruct every retained artifact in-session, clear the
-result scope, and delete the complete temporary deployment after the session. Do not use
-pytest-xdist or upload KEGG responses, cache files, or generated artifacts.
+The cache, result store, deployment-wide rate-limit state, and v0.8 output bundles share one
+owner-only temporary allowed root. The tests verify private file modes, reconstruct every retained
+artifact in-session, verify reference and handoff manifests, clear the result scope, confirm that
+explicit durable output bundles survive scope cleanup, and delete the complete temporary
+deployment after the session. Do not use pytest-xdist or upload KEGG responses, cache files, or
+generated artifacts.
 
 Run the local non-live suite:
 
@@ -63,11 +69,13 @@ KEGG_MCP_RUN_LIVE_STDIO_E2E=true \
   uv run --frozen pytest tests/live/test_stdio_scientist_live.py
 ```
 
-That manual check performs two additional logical live operations through a real stdio subprocess
-and verifies
-environment configuration, private state files, retained resource reads, and normal-exit scope
-cleanup. It is intentionally excluded from pull-request CI and from the shared at-most-120-request
-campaign budget.
+That manual check performs two additional logical live operations through a real stdio subprocess,
+then reuses the GET cache for a PubMed-reference projection and writes a durable reference bundle
+plus all seven local-only Mapper/Syntax handoffs beneath an explicitly configured allowed root.
+It verifies environment configuration, private state and output files, retained resource reads,
+unchanged complete cache state across all local writes, normal-exit scope cleanup, and
+durable-output survival without adding another logical live operation. It is intentionally
+excluded from pull-request CI and from the shared at-most-120-request campaign budget.
 
 The enabled default reserves a maximum of 20 requests per low-level operation class and runs the
 complete high-level scientist workflow within the shared at-most-120-request ceiling. Set
