@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from kegg_mcp.domain.annotations import FrozenModel, KNumber, normalize_identifier_label
+from kegg_mcp.domain.annotations import FrozenModel, KNumber, validate_utf8_text
 from kegg_mcp.kegg.contracts import (
     is_ec_number,
     is_kegg_gene_identifier,
@@ -28,33 +28,8 @@ _COMPOUND_ID = re.compile(r"^C[0-9]{5}$")
 _FORMULA = re.compile(r"^(?:[A-Z][a-z]?(?:[1-9][0-9]*)?)+$")
 _EXACT_MASS = re.compile(r"^(?:0|[1-9][0-9]{0,19})(?:\.[0-9]{1,12})?$")
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-_BASIC_NAMED_COLORS = frozenset(
-    {
-        "aqua",
-        "black",
-        "blue",
-        "brown",
-        "cyan",
-        "fuchsia",
-        "gold",
-        "gray",
-        "green",
-        "grey",
-        "lime",
-        "magenta",
-        "maroon",
-        "navy",
-        "olive",
-        "orange",
-        "pink",
-        "purple",
-        "red",
-        "silver",
-        "teal",
-        "white",
-        "yellow",
-    }
-)
+_NAMED_COLOR = re.compile(r"^[A-Za-z]{3,20}$")
+_FORMAT_BREAKING_UNICODE = frozenset({"\u0085", "\u2028", "\u2029"})
 
 HandoffItems = Annotated[
     tuple[Annotated[str, Field(min_length=1, max_length=128)], ...],
@@ -97,15 +72,23 @@ class MapperMwsearchMode(StrEnum):
     C_NUMBER = "c_number"
 
 
-def _normalize_token(value: str, *, field_name: str) -> str:
-    normalized = normalize_identifier_label(value, field_name=field_name)
-    if any(character.isspace() for character in normalized):
+def _validate_cell(value: str, *, field_name: str) -> str:
+    validate_utf8_text(value, field_name=field_name)
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+    if any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 or character in _FORMAT_BREAKING_UNICODE
+        for character in value
+    ):
+        raise ValueError(f"{field_name} must not contain control or line-separator characters")
+    return value
+
+
+def _validate_token(value: str, *, field_name: str) -> str:
+    validated = _validate_cell(value, field_name=field_name)
+    if any(character.isspace() for character in validated):
         raise ValueError(f"{field_name} must not contain whitespace")
-    return normalized
-
-
-def _normalize_cell(value: str, *, field_name: str) -> str:
-    return normalize_identifier_label(value, field_name=field_name)
+    return validated
 
 
 def _is_ec_identifier(value: str) -> bool:
@@ -168,19 +151,20 @@ class MapperReconstructRow(FrozenModel):
     @field_validator("user_id")
     @classmethod
     def validate_user_id(cls, value: str | None) -> str | None:
-        normalized = (
+        validated = (
             None
             if value is None
-            else _normalize_token(value, field_name="Mapper Reconstruct user ID")
+            else _validate_token(value, field_name="Mapper Reconstruct user ID")
         )
-        if normalized is not None and normalized.startswith("#"):
+        if validated is not None and validated.startswith("#"):
             raise ValueError("Mapper Reconstruct user IDs must not use the reserved comment prefix")
-        return normalized
+        return validated
 
 
 class MapperReconstructRequest(FrozenModel):
     """Prepare KEGG Mapper Reconstruct rows in caller order."""
 
+    # One rows collection is the complete unannotated data block; FrozenModel rejects extras.
     target: Literal[ExternalHandoffTarget.MAPPER_RECONSTRUCT]
     rows: Annotated[
         tuple[MapperReconstructRow, ...],
@@ -205,9 +189,9 @@ class MapperSearchRequest(FrozenModel):
 
     @field_validator("identifiers")
     @classmethod
-    def normalize_identifiers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def validate_identifiers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(
-            _normalize_token(value, field_name="Mapper Search identifier") for value in values
+            _validate_token(value, field_name="Mapper Search identifier") for value in values
         )
 
     @model_validator(mode="after")
@@ -232,18 +216,17 @@ class MapperColorRow(FrozenModel):
 
     @field_validator("identifier")
     @classmethod
-    def normalize_identifier(cls, value: str) -> str:
-        return _normalize_token(value, field_name="Mapper Color identifier")
+    def validate_identifier(cls, value: str) -> str:
+        return _validate_token(value, field_name="Mapper Color identifier")
 
     @field_validator("background_color", "foreground_color")
     @classmethod
     def validate_color(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.lower() if not value.startswith("#") else value
-        if _HEX_COLOR.fullmatch(normalized) is None and normalized not in _BASIC_NAMED_COLORS:
-            raise ValueError("colors must be #RRGGBB values or supported basic CSS color names")
-        return normalized
+        if _HEX_COLOR.fullmatch(value) is None and _NAMED_COLOR.fullmatch(value) is None:
+            raise ValueError("colors must be #RRGGBB values or 3-20 letter ASCII names")
+        return value
 
     @model_validator(mode="after")
     def require_at_least_one_color(self) -> Self:
@@ -287,13 +270,13 @@ class MapperJoinRow(FrozenModel):
 
     @field_validator("identifier")
     @classmethod
-    def normalize_identifier(cls, value: str) -> str:
-        return _normalize_token(value, field_name="Mapper Join identifier")
+    def validate_identifier(cls, value: str) -> str:
+        return _validate_token(value, field_name="Mapper Join identifier")
 
     @field_validator("attribute")
     @classmethod
-    def normalize_attribute(cls, value: str) -> str:
-        return _normalize_cell(value, field_name="Mapper Join attribute")
+    def validate_attribute(cls, value: str) -> str:
+        return _validate_cell(value, field_name="Mapper Join attribute")
 
 
 class MapperJoinRequest(FrozenModel):
@@ -333,10 +316,8 @@ class MapperMwsearchRequest(FrozenModel):
 
     @field_validator("values")
     @classmethod
-    def normalize_values(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(
-            _normalize_token(value, field_name="Mapper MWsearch value") for value in values
-        )
+    def validate_values(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_validate_token(value, field_name="Mapper MWsearch value") for value in values)
 
     @model_validator(mode="after")
     def validate_mode_and_values(self) -> Self:
@@ -386,8 +367,8 @@ class SyntaxKoSequenceRow(FrozenModel):
 
     @field_validator("gene_id")
     @classmethod
-    def normalize_gene_id(cls, value: str) -> str:
-        return _normalize_token(value, field_name="Syntax KO sequence gene ID")
+    def validate_gene_id(cls, value: str) -> str:
+        return _validate_token(value, field_name="Syntax KO sequence gene ID")
 
 
 class SyntaxKoSequenceRequest(FrozenModel):

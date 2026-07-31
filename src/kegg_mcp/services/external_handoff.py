@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from hashlib import sha256
 from pathlib import Path
 
 from kegg_mcp import __version__
-from kegg_mcp._serialization import escape_spreadsheet_formula
 from kegg_mcp.services._atomic_bundle import write_text_bundle
+from kegg_mcp.services._text_artifact import TextArtifactSpec
 from kegg_mcp.services.external_handoff_models import (
     EXTERNAL_HANDOFF_SCHEMA_VERSION,
     MAX_EXTERNAL_HANDOFF_DATA_BYTES,
@@ -51,20 +50,23 @@ def prepare_external_handoff(
 ) -> ExternalHandoffBundle:
     """Write one local input file and manifest without invoking an external service."""
     data_name = _DATA_FILE_NAMES[request.target]
-    data_content = serialize_external_handoff(request)
-    data_bytes = len(data_content.encode("utf-8"))
-    item_count = _item_count(request)
-    manifest_content = _serialize_manifest(
-        request,
-        data_name=data_name,
-        data_byte_size=data_bytes,
-        data_sha256=sha256(data_content.encode("utf-8")).hexdigest(),
-        item_count=item_count,
+    data_artifact = TextArtifactSpec(
+        name=data_name,
+        mime_type=_mime_type(data_name),
+        content=serialize_external_handoff(request),
     )
-    files = {
-        data_name: data_content,
-        _MANIFEST_NAME: manifest_content,
-    }
+    item_count = _item_count(request)
+    manifest_artifact = TextArtifactSpec(
+        name=_MANIFEST_NAME,
+        mime_type=_mime_type(_MANIFEST_NAME),
+        content=_serialize_manifest(
+            request,
+            data_artifact=data_artifact,
+            item_count=item_count,
+        ),
+    )
+    artifacts = (data_artifact, manifest_artifact)
+    files = {artifact.name: artifact.content for artifact in artifacts}
     write_text_bundle(
         output_directory,
         files,
@@ -76,18 +78,18 @@ def prepare_external_handoff(
     return ExternalHandoffBundle(
         target=request.target,
         output_directory=str(output_directory),
-        data_file=str(output_directory / data_name),
-        manifest=str(output_directory / _MANIFEST_NAME),
+        data_file=str(output_directory / data_artifact.name),
+        manifest=str(output_directory / manifest_artifact.name),
         item_count=item_count,
-        data_byte_size=data_bytes,
+        data_byte_size=data_artifact.byte_size,
         artifacts=tuple(
             OutputBundleArtifact(
-                name=name,
-                mime_type=_mime_type(name),
-                byte_size=len(content.encode("utf-8")),
-                path=str(output_directory / name),
+                name=artifact.name,
+                mime_type=artifact.mime_type,
+                byte_size=artifact.byte_size,
+                path=str(output_directory / artifact.name),
             )
-            for name, content in files.items()
+            for artifact in artifacts
         ),
     )
 
@@ -96,7 +98,7 @@ def serialize_external_handoff(request: ExternalHandoffRequest) -> str:
     """Serialize one already validated request in the official upload-file shape."""
     if isinstance(request, MapperReconstructRequest):
         return _tabular(
-            ((row.ko_id,) if row.user_id is None else (_safe_cell(row.user_id), row.ko_id))
+            ((row.ko_id,) if row.user_id is None else (row.user_id, row.ko_id))
             for row in request.rows
         )
     if isinstance(request, MapperSearchRequest):
@@ -114,24 +116,20 @@ def serialize_external_handoff(request: ExternalHandoffRequest) -> str:
             for row in request.rows
         )
     if isinstance(request, MapperJoinRequest):
-        return _tabular((row.identifier, _safe_cell(row.attribute)) for row in request.rows)
+        return _tabular((row.identifier, row.attribute) for row in request.rows)
     if isinstance(request, MapperMwsearchRequest):
         return _line_items(request.values)
     if isinstance(request, SyntaxKoCompositionRequest):
         return _line_items(request.ko_ids)
-    return _tabular((_safe_cell(row.gene_id), row.ko_id) for row in request.rows)
+    return _tabular((row.gene_id, row.ko_id) for row in request.rows)
 
 
 def _line_items(values: tuple[str, ...]) -> str:
-    return "".join(f"{_safe_cell(value)}\n" for value in values)
+    return "".join(f"{value}\n" for value in values)
 
 
 def _tabular(rows: Iterable[tuple[str, ...]]) -> str:
     return "".join("\t".join(row) + "\n" for row in rows)
-
-
-def _safe_cell(value: str) -> str:
-    return escape_spreadsheet_formula(value)
 
 
 def _item_count(request: ExternalHandoffRequest) -> int:
@@ -155,9 +153,7 @@ def _item_count(request: ExternalHandoffRequest) -> int:
 def _serialize_manifest(
     request: ExternalHandoffRequest,
     *,
-    data_name: str,
-    data_byte_size: int,
-    data_sha256: str,
+    data_artifact: TextArtifactSpec,
     item_count: int,
 ) -> str:
     source_url = (
@@ -181,21 +177,15 @@ def _serialize_manifest(
             "duplicate_semantics": _duplicate_semantics(request),
         },
         "format": {
-            "data_file": data_name,
-            "mime_type": _mime_type(data_name),
+            "data_file": data_artifact.name,
+            "mime_type": data_artifact.mime_type,
             "header": False,
-            "delimiter": "\t" if data_name.endswith(".tsv") else "newline",
-            "spreadsheet_formula_cells_escaped": _contains_user_text_cells(request),
+            "delimiter": "\t" if data_artifact.name.endswith(".tsv") else "newline",
             "official_source": source_url,
             "source_retrieved_on": _FORMAT_SOURCE_RETRIEVED_ON,
         },
         "files": [
-            {
-                "name": data_name,
-                "mime_type": _mime_type(data_name),
-                "byte_size": data_byte_size,
-                "sha256": data_sha256,
-            },
+            data_artifact.integrity_record(),
             {
                 "name": _MANIFEST_NAME,
                 "mime_type": _mime_type(_MANIFEST_NAME),
@@ -233,17 +223,6 @@ def _duplicate_semantics(request: ExternalHandoffRequest) -> str:
     if isinstance(request, SyntaxKoSequenceRequest):
         return "gene_ids_unique_repeated_ko_ids_preserved"
     return "duplicates_rejected"
-
-
-def _contains_user_text_cells(request: ExternalHandoffRequest) -> bool:
-    return isinstance(
-        request,
-        (
-            MapperReconstructRequest,
-            MapperJoinRequest,
-            SyntaxKoSequenceRequest,
-        ),
-    )
 
 
 def _mime_type(name: str) -> str:

@@ -35,6 +35,8 @@ from kegg_mcp.services.external_handoff_models import (
     SyntaxKoSequenceRow,
 )
 
+_FIXTURE_ROOT = Path(__file__).parents[2] / "fixtures" / "external_handoff"
+
 
 def test_discriminated_request_contract_selects_one_target() -> None:
     adapter: TypeAdapter[ExternalHandoffRequest] = TypeAdapter(ExternalHandoffRequest)
@@ -47,7 +49,7 @@ def test_discriminated_request_contract_selects_one_target() -> None:
     assert request.target is ExternalHandoffTarget.MAPPER_SEARCH
 
 
-def test_mapper_reconstruct_preserves_rows_and_escapes_caller_labels() -> None:
+def test_mapper_reconstruct_preserves_rows_and_caller_labels_verbatim() -> None:
     request = MapperReconstructRequest(
         target=ExternalHandoffTarget.MAPPER_RECONSTRUCT,
         rows=(
@@ -58,7 +60,7 @@ def test_mapper_reconstruct_preserves_rows_and_escapes_caller_labels() -> None:
 
     content = serialize_external_handoff(request)
 
-    assert content == "'@gene-1\tK00001\nK00002\n"
+    assert content == "@gene-1\tK00001\nK00002\n"
 
 
 def test_mapper_reconstruct_rejects_exact_duplicate_rows() -> None:
@@ -72,6 +74,20 @@ def test_mapper_reconstruct_rejects_exact_duplicate_rows() -> None:
 
     with pytest.raises(ValidationError, match="reserved comment prefix"):
         MapperReconstructRow(user_id="#sample", ko_id="K00001")
+
+
+@pytest.mark.parametrize("unsupported_field", ["blocks", "annotations"])
+def test_mapper_reconstruct_accepts_only_one_unannotated_data_block(
+    unsupported_field: str,
+) -> None:
+    payload = {
+        "target": ExternalHandoffTarget.MAPPER_RECONSTRUCT,
+        "rows": (MapperReconstructRow(user_id="gene-1", ko_id="K00001"),),
+        unsupported_field: (),
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        MapperReconstructRequest.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -139,15 +155,33 @@ def test_mapper_color_preserves_meaningful_repeated_identifier_colors() -> None:
             MapperColorRow(identifier="K00001", background_color="RED"),
             MapperColorRow(
                 identifier="K00001",
-                background_color="#00ff00",
+                background_color="#00fF00",
                 foreground_color="black",
             ),
-            MapperColorRow(identifier="K00002", foreground_color="blue"),
+            MapperColorRow(identifier="K00002", foreground_color="skyblue"),
         ),
     )
 
     assert serialize_external_handoff(request) == (
-        "K00001\tred\nK00001\t#00ff00,black\nK00002\t,blue\n"
+        "K00001\tRED\nK00001\t#00fF00,black\nK00002\t,skyblue\n"
+    )
+
+
+def test_mapper_color_matches_synthetic_official_shape_golden() -> None:
+    request = MapperColorRequest(
+        target=ExternalHandoffTarget.MAPPER_COLOR,
+        rows=(
+            MapperColorRow(
+                identifier="K00001",
+                background_color="skyblue",
+                foreground_color="blue",
+            ),
+            MapperColorRow(identifier="K00002", background_color="#ff0000"),
+        ),
+    )
+
+    assert serialize_external_handoff(request) == (_FIXTURE_ROOT / "mapper_color.tsv").read_text(
+        encoding="utf-8"
     )
 
 
@@ -182,8 +216,9 @@ def test_mapper_color_rejects_exact_duplicate_rows_invalid_colors_and_scope_mism
             (
                 MapperJoinRow(identifier="K00001", attribute="disease association"),
                 MapperJoinRow(identifier="K00001", attribute="=formula-like"),
+                MapperJoinRow(identifier="K00001", attribute="  caller text  "),
             ),
-            "K00001\tdisease association\nK00001\t'=formula-like\n",
+            "K00001\tdisease association\nK00001\t=formula-like\nK00001\t  caller text  \n",
         ),
         (
             MapperJoinMode.BR,
@@ -235,6 +270,34 @@ def test_mapper_join_rejects_mode_mismatch_exact_duplicates_and_empty_attributes
 
     with pytest.raises(ValidationError):
         MapperJoinRow(identifier="K00001", attribute="   ")
+
+
+@pytest.mark.parametrize("value", ["=caller", "+caller", "-caller", "@caller", "'caller"])
+def test_mapper_join_preserves_formula_like_attributes_verbatim(value: str) -> None:
+    request = MapperJoinRequest(
+        target=ExternalHandoffTarget.MAPPER_JOIN,
+        mode=MapperJoinMode.KO,
+        rows=(MapperJoinRow(identifier="K00001", attribute=value),),
+    )
+
+    assert serialize_external_handoff(request) == f"K00001\t{value}\n"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "left\tright",
+        "left\nright",
+        "left\rright",
+        "left\x00right",
+        "left\u0085right",
+        "left\u2028right",
+        "left\u2029right",
+    ],
+)
+def test_mapper_join_rejects_format_breaking_attribute_characters(value: str) -> None:
+    with pytest.raises(ValidationError, match="control or line-separator characters"):
+        MapperJoinRow(identifier="K00001", attribute=value)
 
 
 @pytest.mark.parametrize(
@@ -321,8 +384,23 @@ def test_syntax_ko_sequence_requires_explicit_caller_order_and_preserves_it() ->
     )
 
     assert serialize_external_handoff(request) == (
-        "gene-3\tK00002\n'@gene-1\tK00001\ngene-2\tK00002\n"
+        "gene-3\tK00002\n@gene-1\tK00001\ngene-2\tK00002\n"
     )
+
+
+def test_syntax_ko_sequence_matches_synthetic_official_shape_golden() -> None:
+    request = SyntaxKoSequenceRequest(
+        target=ExternalHandoffTarget.SYNTAX_KO_SEQUENCE,
+        order_semantics="caller_supplied_genomic_order",
+        rows=(
+            SyntaxKoSequenceRow(gene_id="gene-alpha", ko_id="K00001"),
+            SyntaxKoSequenceRow(gene_id="@gene-beta", ko_id="K00002"),
+        ),
+    )
+
+    assert serialize_external_handoff(request) == (
+        _FIXTURE_ROOT / "syntax_ko_sequence.tsv"
+    ).read_text(encoding="utf-8")
 
 
 def test_syntax_ko_sequence_rejects_missing_order_confirmation_and_duplicate_genes() -> None:
@@ -385,6 +463,7 @@ def test_prepare_external_handoff_writes_committed_bundle_and_manifest(tmp_path:
         "uploaded": False,
     }
     assert manifest["format"]["official_source"] == "https://www.kegg.jp/kegg/mapper/"
+    assert "spreadsheet_formula_cells_escaped" not in manifest["format"]
     assert manifest["files"][0]["sha256"] == sha256(b"eco:b0002\nK00844\n").hexdigest()
     assert "eco:b0002" not in json.dumps(manifest)
     assert result.item_count == 2
