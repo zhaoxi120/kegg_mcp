@@ -177,7 +177,6 @@ advice.
 - [ ] Status, logs, and errors redact credentials, endpoints, environment values, and local paths.
 - [ ] Offline Core and Renderer paths perform no HTTP request or cache write.
 - [ ] Renderer XML, images, SVG, and resources remain static and free of active external content.
-- [ ] The vulnerability-reporting route in `SECURITY.md` matches repository visibility.
 - [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
 - [ ] Core advertises exactly eighteen tools with self-contained schemas, including deterministic
       card/citation projection, local current-scope reference comparison, selected-reference

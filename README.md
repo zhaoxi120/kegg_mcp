@@ -117,6 +117,17 @@ written last so a completed bundle is distinguishable from an interrupted one.
 Once the suite is installed and the paths are inside configured roots, prompts can stay focused on
 the research task.
 
+<p align="center">
+  <img
+    src="docs/assets/fasta-to-pathway-example.webp"
+    alt="Illustrative conversation showing a protein FASTA request followed by a summarized KO annotation and pathway-map response"
+    width="760"
+  >
+</p>
+
+<p align="center"><em>Illustrative interaction. Actual filenames, protein counts, model versions,
+and rendered targets depend on the input and local configuration.</em></p>
+
 ### Protein FASTA to report and graphics
 
 > Annotate `/absolute/project/inputs/proteins.faa` as an isolate proteome. Analyze the resulting KO
@@ -357,7 +368,6 @@ their stdio commands manually:
 - [Installation and operation](docs/installation.md)
 - [Synthetic examples](examples/README.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Security policy](SECURITY.md)
 
 ### Understand the analysis
 
@@ -406,10 +416,6 @@ uv run pytest
 Pull-request CI additionally runs the governed, serialized live KEGG compatibility campaign. It is
 an access and compatibility check, not permission to redistribute responses. See the
 [live-test guide](tests/live/README.md).
-
-Contributions should stay focused on one layer or public contract and preserve provenance,
-ambiguity, bounded behavior, and the three process boundaries. Read
-[Contributing](CONTRIBUTING.md) before opening a change.
 
 ## License
 
