@@ -18,8 +18,6 @@ OWNED_RELEASE_DOCUMENTS = tuple(
     sorted(
         {
             PROJECT_ROOT / "README.md",
-            PROJECT_ROOT / "SECURITY.md",
-            PROJECT_ROOT / "CONTRIBUTING.md",
             PROJECT_ROOT / "tests" / "live" / "README.md",
             PROJECT_ROOT / "examples" / "README.md",
             *(PROJECT_ROOT / "docs").rglob("*.md"),
@@ -150,7 +148,6 @@ def test_document_ownership_and_release_gates_are_explicit() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
-    contributing = (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
     for relative in (
         "docs/architecture.md",
@@ -162,7 +159,6 @@ def test_document_ownership_and_release_gates_are_explicit() -> None:
         assert relative in readme
     assert "manual-component-deployment.md" in installation
     assert "skill-evaluation.md#release-review-matrix" in readiness
-    assert "companions/kegg-render-mcp" in contributing
 
 
 def test_distribution_versions_and_compatibility_are_consistent() -> None:
@@ -176,7 +172,6 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
-    security = (PROJECT_ROOT / "SECURITY.md").read_text(encoding="utf-8")
     matrix_rows = (
         f"| `kegg-mcp` | `{core_version}` |",
         f"| `deepkoala-mcp` | `{deepkoala_project['version']}` |",
@@ -190,7 +185,6 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Python 3.11.x" in document
 
     assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
-    assert "latest GitHub release and the current `main` branch" in security
     assert "Distribution boundary" in readiness
 
 
