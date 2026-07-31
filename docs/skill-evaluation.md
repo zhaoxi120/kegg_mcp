@@ -15,8 +15,8 @@ The `tests/skill/` suite verifies that:
 
 - each Skill declares exactly one matching MCP dependency;
 - bounded KEGG search terms, typed card or citation requests, gene/organism/substance identifiers,
-  typed relation seeds, snapshot comparisons, selected-reference export, enrichment/Mapper/Syntax
-  input preparation, BRITE questions, annotation audits, protein FASTA, existing KO evidence, and
+  typed relation seeds, snapshot comparisons, selected-reference export, Mapper/Syntax input
+  preparation, BRITE questions, annotation audits, protein FASTA, existing KO evidence, and
   renderer handoffs route to the appropriate Skill;
 - card, citation, candidate, ambiguity, cross-reference, snapshot-difference, selected-reference,
   external-input, BRITE-count, audit, and biological interpretations remain conservative;
@@ -31,8 +31,7 @@ The `tests/skill/` suite verifies that:
 - no Skill implements inference, normalization, MODULE evaluation, KGML parsing, or rendering;
 - cross-stage continuation uses stable files rather than private process identifiers, while a
   card result ID is used only in-session to create an explicit durable selected-reference bundle;
-- enrichment handoff requires an explicit universe and never claims a statistical test, while
-  Mapper/Syntax handoff never claims upload or execution;
+- Mapper/Syntax handoff never claims upload or execution;
 - absent explicit output paths, each server allocates a fresh directory beneath its configured
   project output root, while explicit user paths win;
 - the first annotation call discloses the CPU default without adding a confirmation gate, while
@@ -66,7 +65,6 @@ candidate:
 | Large plain-KO set mapped to one relationship class | Use `audit_annotation_mapping` with that single `mapping_targets` value. Let Core batch, de-duplicate, and retain complete rows; do not split the work across graph traces or merge shards in the LLM. |
 | Same-request entry cards from two retrievals | Use `compare_kegg_reference_snapshots` only with two current-session card result IDs. Report parser/endpoint/retrieval/release context and structural changes without biological gain/loss claims; do not present it as a general release history. |
 | Card snapshot needed after the current session | Use `write_kegg_reference_bundle` while the card result ID remains valid. Preserve an explicit subset and optional BRITE source, require a user-selected output directory, and report the manifest. Do not reconstruct data in the LLM or call the selected bundle a cache export, KEGG mirror, or release archive. |
-| Foreground and explicit universe prepared for enrichment | Use `prepare_kegg_handoff(target="enrichment")`; require the same supported namespace and foreground subset, organism context for gene namespaces, and explicit BRITE IDs when requested. Report mapping and denominator audit only; do not claim that enrichment ran or report p-values, FDR, GSEA, significance, pathway activity, presence, or absence. |
 | KEGG Mapper or Syntax input request | Use the matching `prepare_kegg_handoff` target and require a user-selected output directory. Report the local input and manifest paths plus the no-upload/no-execution boundary; do not open a browser or parse a downstream result. |
 | KEGG Syntax KO Sequence without confirmed order | Stop before writing. Continue only when the caller confirms genomic row order, then set `order_semantics="caller_supplied_genomic_order"`; never infer order or coordinates. |
 | Query, card, audit, or comparison with truncated direct previews | Report the counts and preview, then read the returned same-session resource only when complete retained detail is needed. Do not reconstruct an authoritative result through LLM-side batching and merging. |

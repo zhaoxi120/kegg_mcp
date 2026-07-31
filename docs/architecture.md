@@ -17,8 +17,8 @@ relationships, conservative MODULE evaluation, descriptive pathway coverage, det
 comparisons, and bounded static visualizations. Its query surface returns candidates, typed
 cards and current-scope reference differences, KEGG-supplied PubMed identifiers, crosswalks,
 relation traces, BRITE classifications, and annotation mapping audits. It can persist selected
-references and prepare bounded files for external analysis, but it does not infer experimental
-validation, expression, activity, flux, phenotype, or statistical significance.
+references and prepare bounded KEGG Mapper or KEGG Syntax input files, but it does not infer
+experimental validation, expression, activity, flux, phenotype, or statistical significance.
 
 The supported input routes are:
 
@@ -28,8 +28,8 @@ The supported input routes are:
 - a protein FASTA processed by the separately installed `deepkoala-mcp` companion;
 - bounded search terms, external gene, organism, or substance identifiers, known KEGG entries, and
   typed KEGG entity seeds supplied directly to the core query services;
-- an explicit foreground and universe, selected current-session card or BRITE results, or
-  caller-supplied KEGG identifiers prepared as local handoff files; and
+- selected current-session card or BRITE results, or caller-supplied KEGG identifiers prepared as
+  local handoff files; and
 - an existing compatible `render_input.json` passed directly to `kegg-render-mcp`.
 
 The common FASTA-to-image workflow is:
@@ -62,17 +62,16 @@ The current product does not provide:
 - arbitrary graph traversal, centrality, shortest-path, community, or causal-network analysis;
 - remote HTTP transport, public hosting, user accounts, or multi-user result storage;
 - a web UI, interactive HTML, browser automation, or active SVG content;
-- upload, browser launch, execution, or result parsing for KEGG Mapper, KEGG Syntax, or an
-  enrichment package;
+- upload, browser launch, execution, or result parsing for KEGG Mapper or KEGG Syntax;
 - public plugin marketplace distribution or automatic update services;
 - KEGG dataset mirroring or redistribution; or
 - automatic installation of later DeepKOALA weights, multi-domain resources, or KOfam profiles.
 
 Bounded organism-scoped gene-symbol lookup is candidate discovery and preserves every match; it is
-not genome annotation or automatic identity selection. Statistics-free preparation does not turn
-Core into an enrichment, KEGG Mapper, or KEGG Syntax execution engine. Abundance-aware methods,
-statistical enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG
-backends, and wider platform support require separately assigned work.
+not genome annotation or automatic identity selection. Local input preparation does not turn Core
+into a KEGG Mapper or KEGG Syntax execution engine. Abundance-aware methods, statistical
+enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, and
+wider platform support require separately assigned work.
 
 ## Process, package, and Skill architecture
 
@@ -106,7 +105,7 @@ Domain, importer, KEGG client, analysis, reporting, service, and storage code re
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
 limits, rate limiting, caching, strict parsing, and retrieval provenance. Query services compose
 only those typed primitives into bounded search, resolution, relation tracing, BRITE mapping,
-annotation audit, selected-reference export, and statistics-free handoff results. MCP handlers
+annotation audit, selected-reference export, and external-input handoff results. MCP handlers
 validate transport models and call public service functions; they do not duplicate client, query,
 or domain logic.
 
@@ -250,36 +249,20 @@ relationship shards, reconstruct discarded detail, or treat KEGG-returned text a
 
 ## Durable reference and external-input handoffs
 
-`write_kegg_reference_bundle` turns one successful current-scope card snapshot into a durable,
-bounded local bundle. The caller may select a subset of snapshot entries and may attach one
-optional current-scope BRITE mapping. The stable files are `entities.json`,
-`relationships.tsv`, `brite_paths.tsv`, `retrieval_provenance.json`,
-`request_contract.json`, and the commit-marker `reference_manifest.json`. The manifest records
-schema and parser versions, selection counts, retrieval/cache/release context, MIME types, sizes,
-and hashes without exposing result identifiers, endpoint values, cache keys, or local paths. This
-is selected-reference preservation, not cache export, a full KEGG mirror, or release history.
+`write_kegg_reference_bundle` turns one successful canonical entry snapshot from card or references
+projection into a durable, bounded local bundle. The caller may select a subset of snapshot entries
+and may attach one optional current-scope BRITE mapping. This is selected-reference preservation,
+not cache export, a full KEGG mirror, or release history.
 
-`prepare_kegg_handoff` has one discriminated target contract:
-
-- `enrichment` requires an explicit non-empty universe and a foreground that is its subset. It
-  accepts KO, KEGG gene, NCBI GeneID, NCBI Protein ID, or UniProt namespaces; gene namespaces
-  require one organism. It deterministically retains mapping ambiguity, mismatch, unmapped
-  outcomes, gene-set denominators, and KEGG retrieval provenance. The stable files are
-  `mapped_foreground.tsv`, `mapped_universe.tsv`, `unmapped_identifiers.tsv`,
-  `gene_sets.gmt`, `mapping_audit.json`, and the commit-marker `handoff_manifest.json`. Pathway,
-  MODULE, and explicitly selected BRITE hierarchy-node gene sets are reference memberships only.
-  Ambiguous mappings expand all retained candidates in the GMT and audit. BRITE K numbers without
-  a path in the selected hierarchy are reported as unmatched, never as biological absence.
-  Core calculates no p-value, FDR, GSEA score, significance, activity, presence, or absence.
-- KEGG Mapper Reconstruct, Search, Color, Join, and MWsearch targets and KEGG Syntax KO
-  Composition or caller-supplied KO Sequence targets validate caller input and write exactly one
-  upload-shaped data file plus `handoff_manifest.json`. Syntax sequence order must be explicitly
-  declared as caller-supplied genomic order; Core never infers gene order or coordinates.
+`prepare_kegg_handoff` accepts seven discriminated local formats. KEGG Mapper Reconstruct, Search,
+Color, Join, and MWsearch targets and KEGG Syntax KO Composition or caller-supplied KO Sequence
+targets validate caller input without KEGG retrieval, upload, browser launch, external execution,
+or downstream-result parsing. Core never infers genomic order or coordinates.
 
 Both tools require an explicit allowed-root output directory, publish files without replacement,
-protect spreadsheet-formula-like cells, bound artifact and total bytes, and install the manifest
-last. The external-tool branches perform no network request. No branch uploads data, starts a
-browser, runs an external service or statistical package, or parses downstream results.
+bound artifact and total bytes, and install the manifest last. The exact public file and validation
+contracts are in [Core MCP server](mcp-server.md); serializer and publication internals are in
+[Services, result storage, and reporting](services-results-reporting.md).
 
 ## MODULE, pathway, and comparison semantics
 

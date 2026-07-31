@@ -152,15 +152,6 @@ NORMALIZED_CORPUS = " ".join(CORPUS.split())
             ),
         ),
         (
-            "Prepare pathway and MODULE enrichment inputs for this foreground and universe.",
-            (
-                "Use `prepare_kegg_handoff`",
-                "require a non-empty explicit universe",
-                "do not say enrichment was run",
-                "do not report p-values, FDR, GSEA",
-            ),
-        ),
-        (
             "Prepare KEGG Mapper input but do not upload or run it.",
             (
                 "KEGG Mapper Reconstruct, Search, Color, Join, or MWsearch",

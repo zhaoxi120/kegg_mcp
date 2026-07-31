@@ -206,7 +206,7 @@ def test_v08_reference_and_handoff_boundaries_are_release_gated() -> None:
         'projection="references"',
         "write_kegg_reference_bundle",
         "prepare_kegg_handoff",
-        "explicit universe",
+        "reference_snapshot.json",
         "reference_manifest.json",
         "handoff_manifest.json",
         "does not retrieve or summarize papers",

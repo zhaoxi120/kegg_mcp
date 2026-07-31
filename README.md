@@ -33,8 +33,8 @@ CSV evidence. It:
   KEGG relationship mapping yields;
 - writes a selected card snapshot and optional BRITE mapping as a bounded, integrity-recorded
   local reference bundle;
-- prepares statistics-free enrichment inputs with an explicit universe, or validated local input
-  files for supported KEGG Mapper and KEGG Syntax routes, without uploading or executing them;
+- prepares validated local input files for supported KEGG Mapper and KEGG Syntax routes without
+  uploading or executing them;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit namespace and denominator;
 - compares KO sets deterministically; and
@@ -111,8 +111,8 @@ Requests that already contain KO evidence start at `kegg-mcp`. Requests that pro
 `render_input.json` may start at `kegg-render-mcp`. Bounded KEGG search, entity-card retrieval,
 gene, organism, or substance resolution, relation tracing, BRITE classification, and local
 reference-snapshot comparison also start directly at `kegg-mcp`. Reference-bundle export and
-statistics-free enrichment or KEGG web-tool input preparation likewise start at Core when their
-typed inputs already exist; none requires an annotation run.
+KEGG web-tool input preparation likewise start at Core when their typed inputs already exist; neither
+requires an annotation run.
 
 ## Components and contracts
 

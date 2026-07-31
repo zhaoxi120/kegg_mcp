@@ -30,8 +30,7 @@ and the real high-level services:
 - automatic BRITE mapping and complete JSON/TSV resource reads;
 - completed, evidence-only, and request-limit-skipped annotation audits;
 - all seven local-only KEGG Mapper/Syntax handoffs (Reconstruct, Search, Color, Join, MWsearch,
-  KO composition, and caller-ordered KO sequence) plus one explicit-universe, statistics-free
-  pathway gene-set handoff, all verified not to add a wire request; and
+  KO composition, and caller-ordered KO sequence), all verified not to add a wire request; and
 - direct and paginated retained-resource reconstruction.
 
 Assertions cover response structure and request namespaces without freezing names, release labels,

@@ -454,20 +454,18 @@ response.
 
 Core can also write two other durable bundle families beneath the same allowed roots:
 
-- a selected KEGG reference bundle with `entities.json`, deterministic relationship and optional
-  BRITE tables, sanitized retrieval provenance, request contract, and
-  `reference_manifest.json`; and
-- a statistics-free enrichment-input bundle or validated KEGG Mapper/Syntax input file with
-  `handoff_manifest.json`.
+- a selected KEGG reference bundle with `reference_snapshot.json`, deterministic
+  `relationships.tsv`, optional `brite_paths.tsv`, and `reference_manifest.json`; and
+- a validated KEGG Mapper/Syntax input file with `handoff_manifest.json`.
 
-These tools require an explicit output directory. They do not export the KEGG cache, run
-enrichment statistics, upload data, open a browser, execute KEGG Mapper or Syntax, or parse an
-external result.
+These tools require an explicit output directory. They do not export the KEGG cache, upload data,
+open a browser, execute KEGG Mapper or Syntax, or parse an external result.
 
 Opaque job and result identifiers belong to the stdio process that created them. Use the returned
-resource URI for bounded in-session retrieval. Export a card snapshot through
-`write_kegg_reference_bundle` before its result ID expires when durable selected references are
-needed. Use output-directory artifacts for durable cross-process handoff. Result storage,
+resource URI for bounded in-session retrieval. Export a canonical entry snapshot from card or
+references projection through `write_kegg_reference_bundle` before its result ID expires when
+durable selected references are needed. Use output-directory artifacts for durable cross-process
+handoff. Result storage,
 retention, deletion, and resource templates are documented in
 [Services, result storage, and reporting](services-results-reporting.md).
 

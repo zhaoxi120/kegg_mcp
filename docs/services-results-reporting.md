@@ -4,7 +4,7 @@ This document describes the current transport-independent orchestration, reporti
 and retained-result contracts. MCP tools call these public services; they do not reimplement
 normalization, KEGG retrieval, entity resolution, relation tracing, BRITE classification,
 typed card/reference projection, annotation mapping audit, local reference comparison, selected
-reference export, statistics-free handoff preparation, MODULE evaluation, pathway coverage, or
+reference export, external-input handoff preparation, MODULE evaluation, pathway coverage, or
 result retention.
 
 This document owns service composition, serializer behavior, transactional bundle writing, and
@@ -21,9 +21,8 @@ fields, resource URIs, pagination, protocol errors, and deployment environment v
   `kegg_mcp.services.kegg_search`, `kegg_mcp.services.entity_resolution`,
   `kegg_mcp.services.relation_tracing`, `kegg_mcp.services.brite_hierarchy`,
   `kegg_mcp.services.annotation_audit`, `kegg_mcp.services.reference_snapshots`,
-  `kegg_mcp.services.reference_bundles`, `kegg_mcp.services.enrichment_handoff`, and
-  `kegg_mcp.services.external_handoff` own bounded retrieval, query, evidence-routing, local
-  reference-comparison, and handoff semantics.
+  `kegg_mcp.services.reference_bundles`, and `kegg_mcp.services.external_handoff` own bounded
+  retrieval, query, evidence-routing, local reference-comparison, and handoff semantics.
 - `kegg_mcp.reporting` serializes already-computed evidence and analysis without network or file I/O.
 - `SQLiteResultStore` retains immutable artifacts under an explicit local scope.
 - `kegg_mcp.mcp` owns transport schemas, resources, protocol errors, and stdio lifecycle.
@@ -80,11 +79,11 @@ deterministically extracts typed common and entity-specific fields, preserves un
 names, and retains a versioned `entry_snapshot` with the original database-qualified request and
 exact GET provenance. Card construction performs no additional KEGG request and is not an LLM
 summary. Snapshot data is scoped to the current result store and is not a durable database archive.
-The references projection accepts KEGG flat-file entries other than BRITE and deterministically
-extracts only PubMed identifiers listed in their `REFERENCE` fields. It retains the complete
-versioned `literature_references` projection beside the common GET detail and returns bounded PMID
-counts and previews. It makes no paper request, reads no full text, and performs no citation
-summary or mechanistic interpretation.
+The references projection accepts the same nine card-supported entry types and deterministically
+extracts only PubMed identifiers listed in their `REFERENCE` fields. It reuses the complete
+versioned `entry_snapshot` beside the common GET detail and returns bounded PMID counts and
+previews. It makes no paper request, reads no full text, and performs no citation summary or
+mechanistic interpretation.
 
 `search_kegg_entries` composes one typed FIND request and returns a bounded projection of ordered
 database-validated candidates. The complete response remains in a scoped retained artifact.
@@ -182,23 +181,12 @@ gain, loss, or validation.
 `write_kegg_reference_bundle` reads one current-scope `entry_snapshot`, validates an optional
 entry subset, and may attach one current-scope BRITE `detail` artifact. It creates no KEGG request
 and exports neither raw cache payloads nor unbounded database content. The committed bundle has
-stable `entities.json`, `relationships.tsv`, `brite_paths.tsv`,
-`retrieval_provenance.json`, `request_contract.json`, and `reference_manifest.json` files. Its
-sanitized manifest records selection, schema/parser, retrieval/cache/release, MIME, size, and
-SHA-256 metadata without process-scoped result identifiers, request keys, endpoint values, or local
-paths.
-
-`prepare_enrichment_handoff` accepts one namespace for an explicit universe and foreground subset.
-Direct K numbers require no organism; KEGG gene, NCBI GeneID, NCBI Protein ID, and UniProt input
-require one canonical organism. The service preserves one-to-many mappings, organism mismatch,
-unmapped inputs, exact expanded crosswalk rows, denominators, and KEGG provenance while
-constructing pathway, MODULE, or explicitly requested BRITE hierarchy-node memberships over
-universe input identifiers. It writes `mapped_foreground.tsv`, `mapped_universe.tsv`,
-`unmapped_identifiers.tsv`, `gene_sets.gmt`, `mapping_audit.json`, and
-`handoff_manifest.json`. Its explicit `expand_all_candidates` ambiguity policy retains every
-mapped candidate; BRITE audit detail separately lists K numbers unmatched in the selected
-hierarchies without interpreting absence. It does not calculate or report a statistical test,
-p-value, FDR, GSEA score, pathway activity, presence, or absence.
+stable `reference_snapshot.json`, `relationships.tsv`, optional `brite_paths.tsv`, and
+`reference_manifest.json` files. The snapshot records the selected cards, request, parser/schema,
+complete sanitized retrieval batches, and optional BRITE request and provenance. The manifest
+records the producer, selection and optional BRITE summary, sanitized retrieval summary, and
+payload MIME types, sizes, and SHA-256 hashes without process-scoped result identifiers, request
+keys, endpoint values, or local paths.
 
 `prepare_external_handoff` validates one allowlisted KEGG Mapper Reconstruct, Search, Color, Join,
 or MWsearch request, or one KEGG Syntax KO Composition or KO Sequence request. It writes the
@@ -249,9 +237,11 @@ constructing the manifest rather than by MCP transport.
 
 Reference and input-handoff writers reuse the same fail-closed publication boundary. They
 preflight per-artifact and aggregate UTF-8 bytes, create owner-only regular files without following
-links, reject an existing output entry, protect formula-like spreadsheet cells, synchronize file
-content, and install the manifest last. A failed transaction removes only files and a fresh
-directory proven to belong to that transaction.
+links, reject an existing output entry, synchronize file content, and install the manifest last.
+Reference report TSV cells protect formula-like content. Mapper/Syntax upload fields instead
+preserve caller text verbatim after validation rejects tabs, line breaks, NUL, and other
+format-breaking controls. A failed transaction removes only files and a fresh directory proven to
+belong to that transaction.
 
 The renderer handoff is a separate typed service model. It contains only accepted and
 policy-defined uncertain evidence plus complete-within-limit authoritative analysis state;

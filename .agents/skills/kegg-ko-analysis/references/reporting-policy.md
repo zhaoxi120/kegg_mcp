@@ -68,14 +68,6 @@ entry and relationship counts, optional BRITE status, output directory, manifest
 retrieval/release summary. Do not expose the source result ID as a durable identifier, call the
 bundle a KEGG mirror, or imply it contains unselected database content.
 
-For `prepare_kegg_handoff(target="enrichment")`, report the foreground and explicit-universe
-mapping yields, ambiguity, organism mismatch, unmapped count, requested gene-set counts,
-retrieval/cache/release context, bundle paths, and the absence of statistics. Say that
-ambiguous mappings expand all retained candidates and that a selected-hierarchy BRITE miss means
-only unmatched reference membership. Say that `gene_sets.gmt` and `mapping_audit.json` are
-prepared inputs; do not report enrichment,
-significance, p-values, FDR, GSEA, pathway activity, presence, or absence.
-
 For a Mapper or Syntax target, report the exact target, item count, data-file path, manifest path,
 and that Core did not upload, execute, open a browser, or parse a result. For Syntax KO Sequence,
 state that order was caller supplied rather than inferred.

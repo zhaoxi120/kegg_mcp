@@ -1,6 +1,6 @@
 ---
 name: kegg-ko-analysis
-description: Search bounded KEGG entries, retrieve typed cards or KEGG-listed PubMed identifiers, resolve gene or organism identifiers and substance crosswalks, trace typed KEGG relations, compare or durably export selected references, prepare statistics-free enrichment or KEGG web-tool inputs, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment execution, flux inference, or non-KEGG ontology analysis.
+description: Search bounded KEGG entries, retrieve typed cards or KEGG-listed PubMed identifiers, resolve gene or organism identifiers and substance crosswalks, trace typed KEGG relations, compare or durably export selected references, prepare KEGG web-tool inputs, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment execution, flux inference, or non-KEGG ontology analysis.
 ---
 
 # KEGG query and KO analysis
@@ -54,10 +54,10 @@ upstream or rendering MCP.
 - Follow discovered schemas and field-level errors. Do not fabricate identifiers, parameters,
   successful retrievals, resource URIs, or unsupported results.
 - Prefer output-bundle files for durable KO-analysis handoff. Query and audit resources are
-  same-session retained detail, not durable cross-process files. Export a successful card snapshot
-  with `write_kegg_reference_bundle` before its result ID expires when the user needs a durable
-  selected reference. Prepared enrichment/Mapper/Syntax bundles are likewise durable local files,
-  not retained resources. A result identifier is opaque and valid only in the current stdio
+  same-session retained detail, not durable cross-process files. Export a successful canonical
+  entry snapshot with `write_kegg_reference_bundle` before its result ID expires when the user
+  needs a durable selected reference. Prepared Mapper/Syntax bundles are likewise durable local
+  files, not retained resources. A result identifier is opaque and valid only in the current stdio
   process. Use `list_analysis_results` for bounded discovery within the current scope, then use a
   result identifier only for same-session retrieval, selected-reference export, or requested
   cleanup.

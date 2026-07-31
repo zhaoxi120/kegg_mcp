@@ -1,7 +1,7 @@
 interface:
   display_name: "KEGG Query and KO Analysis"
   short_description: "Query KEGG, export selected references, prepare inputs, and analyze KOs"
-  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query, selected-reference export, statistics-free input handoff, or KO-analysis route."
+  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query, selected-reference export, KEGG web-tool input handoff, or KO-analysis route."
 
 dependencies:
   tools:

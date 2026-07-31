@@ -80,7 +80,7 @@ def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None
         "resolve gene or organism identifiers",
         "trace typed KEGG relations",
         "durably export selected references",
-        "statistics-free enrichment or KEGG web-tool inputs",
+        "prepare KEGG web-tool inputs",
         "map BRITE hierarchies",
         "audit KO mappings",
         "existing K numbers",

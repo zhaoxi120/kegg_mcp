@@ -181,27 +181,27 @@ advice.
 - [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
 - [ ] Core advertises exactly eighteen tools with self-contained schemas, including deterministic
       card/citation projection, local current-scope reference comparison, selected-reference
-      export, and statistics-free handoff preparation.
+      export, and local KEGG Mapper/Syntax handoff preparation.
 - [ ] Entry cards retain the complete parsed GET detail, preserve unrecognized fields, and create
       no additional KEGG request; reference comparison accepts only current-schema snapshots for
       the same requested entries and makes no network request.
-- [ ] Citation projection returns only PubMed identifiers explicitly present in KEGG flat-file
-      `REFERENCE` fields, retains bounded provenance, rejects BRITE, and neither retrieves nor
-      summarizes papers or upgrades a citation into mechanism or validation evidence.
-- [ ] Selected-reference bundles contain only the requested bounded card snapshot and optional
-      BRITE result. They do not export cache payloads or mirror KEGG; their manifest excludes result
-      IDs, request keys, endpoint values, credentials, and local paths while recording hashes,
-      parser/schema, selection, retrieval/cache/release, MIME, and size metadata.
-- [ ] Enrichment handoff requires a non-empty explicit universe and foreground subset, preserves
-      namespace, ambiguity, organism mismatch, unmapped outcomes, denominators, and provenance, and
-      contains no statistical test, p-value, FDR, GSEA score, significance, activity, presence, or
-      absence result.
+- [ ] Citation projection supports the same nine entry types as card projection, returns only
+      PubMed identifiers explicitly present in KEGG flat-file `REFERENCE` fields, retains bounded
+      provenance, and neither retrieves nor summarizes papers nor upgrades a citation into
+      mechanism or validation evidence.
+- [ ] Selected-reference bundles contain only the requested bounded canonical entry snapshot and
+      optional BRITE result. They do not export cache payloads or mirror KEGG. The bundle records
+      parser/schema and sanitized retrieval batches in `reference_snapshot.json`; the manifest
+      contains only producer, payload hashes/MIME/sizes, selection and optional BRITE summary, and
+      a sanitized retrieval summary, without result IDs, request keys, endpoint values,
+      credentials, or local paths.
 - [ ] KEGG Mapper and Syntax handoffs only validate and serialize local inputs. They do not issue a
       KEGG request, upload, start a browser, execute an external tool, or parse a downstream result;
       Syntax KO Sequence order is explicitly caller supplied.
 - [ ] All selected-reference and input-handoff files are bounded, owner-only, non-overwriting,
       transactionally rolled back on failure, and committed by a manifest installed last beneath
-      an allowed root; tabular cells protect formula-like caller or endpoint text.
+      an allowed root. Reference and report TSV cells are spreadsheet-safe; Mapper/Syntax caller
+      fields remain verbatim after format-breaking control characters are rejected.
 - [ ] Substance resolution distinguishes PubChem SID from CID and preserves all ChEBI/PubChem
       crosswalk candidates without chemical-identification claims.
 - [ ] KO/pathway-to-gene LINK requires one matching organism scope; unbounded KO-to-all-genes,
