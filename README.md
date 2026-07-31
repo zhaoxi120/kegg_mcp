@@ -117,6 +117,17 @@ written last so a completed bundle is distinguishable from an interrupted one.
 Once the suite is installed and the paths are inside configured roots, prompts can stay focused on
 the research task.
 
+<p align="center">
+  <img
+    src="docs/assets/fasta-to-pathway-example.webp"
+    alt="Illustrative conversation showing a protein FASTA request followed by a summarized KO annotation and pathway-map response"
+    width="760"
+  >
+</p>
+
+<p align="center"><em>Illustrative interaction. Actual filenames, protein counts, model versions,
+and rendered targets depend on the input and local configuration.</em></p>
+
 ### Protein FASTA to report and graphics
 
 > Annotate `/absolute/project/inputs/proteins.faa` as an isolate proteome. Analyze the resulting KO
