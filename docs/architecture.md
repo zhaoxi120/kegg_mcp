@@ -8,16 +8,17 @@ The repository contains three independently packaged local stdio MCP servers and
 repository Skills. All three distributions support Linux with CPython 3.11.x only. Wider Python or
 operating-system support requires separate compatibility work.
 
-Last architecture and document-ownership review: 2026-07-30.
+Last architecture and document-ownership review: 2026-07-31.
 
 ## Product boundary
 
 KEGG MCP converts supplied KO annotation evidence and bounded entity queries into traceable KEGG
 relationships, conservative MODULE evaluation, descriptive pathway coverage, deterministic KO-set
 comparisons, and bounded static visualizations. Its query surface returns candidates, typed
-cards and current-scope reference differences, crosswalks, relation traces, BRITE classifications,
-and annotation mapping audits. It does not infer experimental validation, expression, activity,
-flux, phenotype, or statistical significance.
+cards and current-scope reference differences, KEGG-supplied PubMed identifiers, crosswalks,
+relation traces, BRITE classifications, and annotation mapping audits. It can persist selected
+references and prepare bounded KEGG Mapper or KEGG Syntax input files, but it does not infer
+experimental validation, expression, activity, flux, phenotype, or statistical significance.
 
 The supported input routes are:
 
@@ -26,7 +27,9 @@ The supported input routes are:
 - previously generated DeepKOALA detailed output;
 - a protein FASTA processed by the separately installed `deepkoala-mcp` companion;
 - bounded search terms, external gene, organism, or substance identifiers, known KEGG entries, and
-  typed KEGG entity seeds supplied directly to the core query services; and
+  typed KEGG entity seeds supplied directly to the core query services;
+- selected current-session card or BRITE results, or caller-supplied KEGG identifiers prepared as
+  local handoff files; and
 - an existing compatible `render_input.json` passed directly to `kegg-render-mcp`.
 
 The common FASTA-to-image workflow is:
@@ -53,21 +56,22 @@ The current product does not provide:
 - annotator execution, model loading, KGML parsing, or image generation inside the core server;
 - nucleotide gene prediction, translation, sequence alignment, or unrestricted genome-wide or
   cross-organism gene discovery;
-- abundance analysis, enrichment, differential abundance, confidence intervals, or replicate-aware
-  statistics;
+- abundance analysis, enrichment statistics, differential abundance, confidence intervals, or
+  replicate-aware statistics;
 - metabolic modeling, flux inference, or phenotype prediction;
 - arbitrary graph traversal, centrality, shortest-path, community, or causal-network analysis;
 - remote HTTP transport, public hosting, user accounts, or multi-user result storage;
 - a web UI, interactive HTML, browser automation, or active SVG content;
+- upload, browser launch, execution, or result parsing for KEGG Mapper or KEGG Syntax;
 - public plugin marketplace distribution or automatic update services;
 - KEGG dataset mirroring or redistribution; or
 - automatic installation of later DeepKOALA weights, multi-domain resources, or KOfam profiles.
 
 Bounded organism-scoped gene-symbol lookup is candidate discovery and preserves every match; it is
-not genome annotation or automatic identity selection. Abundance-aware methods, statistical
-enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, and wider
-platform support require separately assigned work. They must not leak into current interfaces as
-speculative options.
+not genome annotation or automatic identity selection. Local input preparation does not turn Core
+into a KEGG Mapper or KEGG Syntax execution engine. Abundance-aware methods, statistical
+enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, and
+wider platform support require separately assigned work.
 
 ## Process, package, and Skill architecture
 
@@ -75,7 +79,7 @@ The repository keeps three process boundaries:
 
 | Process | Responsibility | Explicit exclusions |
 | --- | --- | --- |
-| `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and produce renderer handoffs | Running an annotator, parsing KGML, rendering images, or performing enrichment or arbitrary graph analysis |
+| `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
 | `kegg-render-mcp` | Validate a version 3 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
@@ -88,7 +92,7 @@ The three repository Skills have one MCP dependency each:
 | Skill | MCP dependency | Responsibility |
 | --- | --- | --- |
 | `deepkoala-annotation` | `deepkoala-mcp` | Protein FASTA annotation and stable detailed-CSV delivery |
-| `kegg-ko-analysis` | `kegg-mcp` | Bounded KEGG query and evidence routing, existing-KO analysis, and KO-set comparison |
+| `kegg-ko-analysis` | `kegg-mcp` | Bounded KEGG query and evidence routing, existing-KO analysis, selected-reference export, and controlled input handoffs |
 | `kegg-pathway-rendering` | `kegg-render-mcp` | Static rendering from an existing compatible handoff |
 
 Skills contain instructions, not deterministic implementation code. They do not launch
@@ -100,9 +104,10 @@ optimizations, not cross-process authorization or durable handoff tokens.
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
 limits, rate limiting, caching, strict parsing, and retrieval provenance. Query services compose
-only those typed primitives into bounded search, resolution, relation tracing, BRITE mapping, and
-annotation audit results. MCP handlers validate transport models and call public service functions;
-they do not duplicate client, query, or domain logic.
+only those typed primitives into bounded search, resolution, relation tracing, BRITE mapping,
+annotation audit, selected-reference export, and external-input handoff results. MCP handlers
+validate transport models and call public service functions; they do not duplicate client, query,
+or domain logic.
 
 ### Document ownership
 
@@ -195,8 +200,10 @@ access and compatibility check, not permission to redistribute responses.
 The Core query layer exposes seven focused capabilities:
 
 - `get_kegg_entries` performs bounded typed retrieval and can deterministically project supported
-  flat files into typed cards plus a current-scope, versioned comparison snapshot. Cards do not
-  replace the retained parsed source or become an LLM-generated summary.
+  flat files into typed cards plus a current-scope, versioned comparison snapshot. Its references
+  projection reports only PubMed identifiers explicitly present in KEGG flat-file `REFERENCE`
+  fields and does not retrieve or summarize papers. Neither projection replaces the retained
+  parsed source or becomes an LLM-generated summary.
 - `search_kegg_entries` performs bounded keyword and approved chemical-candidate searches. Results
   preserve KEGG match text and never invent a relevance score or confirmed identity.
 - `resolve_kegg_entities` resolves gene, organism, or chemical-substance identifiers through typed
@@ -239,6 +246,23 @@ Complete search matches, cards, crosswalks, steps, graph data, BRITE paths, audi
 relationship rows, snapshot differences, and provenance remain in scoped retained resources. The
 LLM selects projections and interprets summaries; it does not perform server batching, merge
 relationship shards, reconstruct discarded detail, or treat KEGG-returned text as instructions.
+
+## Durable reference and external-input handoffs
+
+`write_kegg_reference_bundle` turns one successful canonical entry snapshot from card or references
+projection into a durable, bounded local bundle. The caller may select a subset of snapshot entries
+and may attach one optional current-scope BRITE mapping. This is selected-reference preservation,
+not cache export, a full KEGG mirror, or release history.
+
+`prepare_kegg_handoff` accepts seven discriminated local formats. KEGG Mapper Reconstruct, Search,
+Color, Join, and MWsearch targets and KEGG Syntax KO Composition or caller-supplied KO Sequence
+targets validate caller input without KEGG retrieval, upload, browser launch, external execution,
+or downstream-result parsing. Core never infers genomic order or coordinates.
+
+Both tools require an explicit allowed-root output directory, publish files without replacement,
+bound artifact and total bytes, and install the manifest last. The exact public file and validation
+contracts are in [Core MCP server](mcp-server.md); serializer and publication internals are in
+[Services, result storage, and reporting](services-results-reporting.md).
 
 ## MODULE, pathway, and comparison semantics
 
@@ -302,10 +326,11 @@ bounded optional Top-N selection, loads only required references, evaluates requ
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
 reuse the same service and domain functions.
 
-The bounded retrieval/card, search, resolver, relation-trace, BRITE, mapping-audit, and local
-snapshot-comparison tools are separate transport-independent service workflows. They reuse the same
-typed client, access policy, retrieval provenance, and scoped result storage without being folded
-into `analyze_ko_annotations`.
+The bounded retrieval/card, search, resolver, relation-trace, BRITE, mapping-audit, local
+snapshot-comparison, selected-reference export, and input-handoff tools are separate
+transport-independent service workflows. They reuse the same typed client, access policy,
+retrieval provenance, result storage, and safe publication primitives without being folded into
+`analyze_ko_annotations`.
 
 Ordinary tool inputs expose only analysis choices. Eligibility, endpoints, cache policy, allowed
 roots, storage, rate limits, and hard service limits remain deployment configuration. Connectivity
@@ -421,7 +446,8 @@ External facts are time-sensitive. Recheck a source when a change affects a pars
 access rule, or acceptance test, and record the new retrieval date in the same tracked change.
 
 KEGG service, FIND, relationship, data-format, MODULE, pathway, and rights sources were reviewed on
-2026-07-30, with the visualization-specific API and legal boundary reviewed again on 2026-07-30:
+2026-07-30, with selected flat-file references and KEGG Mapper/Syntax input formats reviewed again
+on 2026-07-31:
 
 - [KEGG REST overview](https://www.kegg.jp/kegg/rest/),
   [API manual](https://www.kegg.jp/kegg/rest/keggapi.html), and
@@ -431,6 +457,8 @@ KEGG service, FIND, relationship, data-format, MODULE, pathway, and rights sourc
 - [KEGG PATHWAY database](https://www.kegg.jp/kegg/pathway.html),
   [database entry format](https://www.kegg.jp/kegg/docs/dbentry.html), and
   [Pathway Map Viewer help](https://www.kegg.jp/kegg/document/help_pathway.html)
+- [KEGG Mapper](https://www.kegg.jp/kegg/mapper/) and
+  [KEGG Syntax KO sequence](https://www.kegg.jp/kegg/syntax/synteny.html)
 
 DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14. The explicit CPU/CUDA
 device choices, optional multi-domain CLI, HMMER invocation boundary, and short-sequence output were

@@ -39,6 +39,14 @@ NORMALIZED_CORPUS = " ".join(CORPUS.split())
             ),
         ),
         (
+            "Which PubMed identifiers does KEGG list for this known reaction?",
+            (
+                'Use `get_kegg_entries` with `projection="references"`',
+                "KEGG-listed PMID identifiers",
+                "do not retrieve papers, summarize their conclusions",
+            ),
+        ),
+        (
             "Resolve a ChEBI identifier or PubChem SID.",
             (
                 "use `pubchem_sid` only for a PubChem SID",
@@ -101,6 +109,14 @@ NORMALIZED_CORPUS = " ".join(CORPUS.split())
             ),
         ),
         (
+            "Make this card snapshot durable across MCP sessions.",
+            (
+                "Use `write_kegg_reference_bundle`",
+                "before its result ID expires",
+                "do not call the bundle a KEGG cache export",
+            ),
+        ),
+        (
             "Classify these K numbers in BRITE.",
             (
                 "Use `map_brite_hierarchy`",
@@ -133,6 +149,22 @@ NORMALIZED_CORPUS = " ".join(CORPUS.split())
                 "let the audit service batch, de-duplicate",
                 "Do not split the set through graph traces",
                 "merge shards in the LLM",
+            ),
+        ),
+        (
+            "Prepare KEGG Mapper input but do not upload or run it.",
+            (
+                "KEGG Mapper Reconstruct, Search, Color, Join, or MWsearch",
+                "never guesses a destination",
+                "uploads data, opens a browser, executes",
+            ),
+        ),
+        (
+            "Prepare a KEGG Syntax KO sequence file from these rows.",
+            (
+                "caller confirms that the rows are already in genomic order",
+                '`order_semantics="caller_supplied_genomic_order"`',
+                "Do not infer order",
             ),
         ),
         (

@@ -138,6 +138,41 @@ class BriteHierarchyNode(FrozenModel):
         return self
 
 
+class LoadedBriteHtextDocuments(FrozenModel):
+    """Bounded explicit BRITE htext documents and their retrieval provenance."""
+
+    selected_brite_ids: Annotated[
+        tuple[str, ...],
+        Field(min_length=1, max_length=MAX_BRITE_IDS),
+    ]
+    resolved_brite_ids: Annotated[tuple[str, ...], Field(max_length=MAX_BRITE_IDS)]
+    missing_brite_ids: Annotated[tuple[str, ...], Field(max_length=MAX_BRITE_IDS)]
+    documents: Annotated[
+        tuple[KeggBriteHtextDocument, ...],
+        Field(max_length=MAX_BRITE_IDS),
+    ]
+    hierarchy_provenance: Annotated[
+        tuple[KeggBatchProvenance, ...],
+        Field(max_length=MAX_QUERY_PROVENANCE_BATCHES),
+    ]
+
+    @model_validator(mode="after")
+    def validate_loaded_documents(self) -> Self:
+        if len(self.selected_brite_ids) != len(set(self.selected_brite_ids)):
+            raise ValueError("selected BRITE identifiers must be unique")
+        if len(self.resolved_brite_ids) != len(set(self.resolved_brite_ids)):
+            raise ValueError("resolved BRITE identifiers must be unique")
+        if len(self.missing_brite_ids) != len(set(self.missing_brite_ids)):
+            raise ValueError("missing BRITE identifiers must be unique")
+        if set(self.resolved_brite_ids) & set(self.missing_brite_ids) or set(
+            self.resolved_brite_ids
+        ) | set(self.missing_brite_ids) != set(self.selected_brite_ids):
+            raise ValueError("resolved and missing BRITE identifiers must partition the selection")
+        if tuple(document.identifier for document in self.documents) != self.resolved_brite_ids:
+            raise ValueError("loaded BRITE documents must follow resolved identifier order")
+        return self
+
+
 class BriteHierarchyPath(FrozenModel):
     """One complete source-ordered hierarchy path for one supplied entity."""
 
@@ -381,83 +416,26 @@ def map_brite_hierarchy(
     options: KeggRequestOptions | None = None,
 ) -> MapBriteHierarchyResult:
     """Map supplied entities through bounded BRITE LINK discovery and htext GET parsing."""
-    options = effective_query_options(options)
-    relation = BoundedRelationResult(rows=(), batches=())
-    if request.brite_ids:
-        selected_brite_ids = request.brite_ids
-        entities_by_brite = {brite_id: request.entity_ids for brite_id in selected_brite_ids}
-    else:
-        relation = bounded_relation_batches(
-            tuple(entity.identifier for entity in request.entity_ids),
-            relationship=KeggLinkRelationship.KO_TO_BRITE,
-            client=client,
-            options=options,
-            max_total_rows=MAX_BRITE_RELATION_ROWS,
-            max_total_response_bytes=MAX_BRITE_RELATION_RESPONSE_BYTES,
-        )
-        selected_brite_ids, entities_by_brite = _discovered_brite_scope(
-            request.entity_ids,
-            relation,
-        )
-
-    documents: dict[str, KeggBriteHtextDocument] = {}
-    missing_brite_ids: tuple[str, ...] = ()
-    hierarchy_provenance: tuple[KeggBatchProvenance, ...] = ()
-    if selected_brite_ids:
-        fetched_documents: list[object] = []
-        fetched_batches: list[KeggBatchProvenance] = []
-        for brite_id in selected_brite_ids:
-            fetched = client.get(
-                GetRequest(
-                    entries=(
-                        KeggEntryRef(
-                            database=KeggGetDatabase.BRITE,
-                            identifier=brite_id,
-                            brite_kind=KeggBriteEntryKind.HIERARCHY,
-                        ),
-                    )
-                ),
-                options=options,
-            )
-            fetched_batches.extend(fetched.batches)
-            _validate_response_budget(relation.batches, tuple(fetched_batches))
-            fetched_documents.extend(fetched.documents)
-        hierarchy_provenance = tuple(fetched_batches)
-        documents = _brite_documents(fetched_documents)
-        if not set(documents).issubset(selected_brite_ids):
-            fail(
-                ErrorCode.KEGG_PARSE_FAILED,
-                "The BRITE hierarchy response included an unrequested document.",
-                suggested_action="Refresh the exact typed BRITE hierarchy entries and retry.",
-            )
-        missing_brite_ids = tuple(
-            brite_id for brite_id in selected_brite_ids if brite_id not in documents
-        )
-    resolved_brite_ids = tuple(brite_id for brite_id in selected_brite_ids if brite_id in documents)
-    _validate_response_budget(relation.batches, hierarchy_provenance)
-
-    paths = _extract_paths(
-        resolved_brite_ids,
-        documents,
-        entities_by_brite,
-        include_all_paths=request.include_all_paths,
+    detail = load_brite_hierarchy_detail(
+        request,
+        client=client,
+        options=options,
     )
-    classifications, classification_lookup = _classification_counts(paths)
-    matched_keys = {_entity_key(path.input_entity) for path in paths}
-    unmatched = tuple(
-        entity for entity in request.entity_ids if _entity_key(entity) not in matched_keys
-    )
-    retained_unmatched = unmatched if request.include_unmatched else ()
-    detail = BriteHierarchyDetail(
-        request=request,
-        selected_brite_ids=selected_brite_ids,
-        resolved_brite_ids=resolved_brite_ids,
-        missing_brite_ids=missing_brite_ids,
-        paths=paths,
-        classifications=classifications,
-        unmatched_entities=retained_unmatched,
-        relation_provenance=relation.batches,
-        hierarchy_provenance=hierarchy_provenance,
+    paths = detail.paths
+    classifications = detail.classifications
+    retained_unmatched = detail.unmatched_entities
+    relation_provenance = detail.relation_provenance
+    hierarchy_provenance = detail.hierarchy_provenance
+    classification_lookup = {
+        (item.brite_id, tuple(_node_key(node) for node in item.path)): item.unique_input_count
+        for item in classifications
+    }
+    unmatched_count = len(
+        tuple(
+            entity
+            for entity in request.entity_ids
+            if _entity_key(entity) not in {_entity_key(path.input_entity) for path in paths}
+        )
     )
     detail_bytes = _json_bytes(detail.model_dump(mode="json"))
     table_bytes = _tsv_bytes(
@@ -502,25 +480,146 @@ def map_brite_hierarchy(
                 ),
             ),
             entity_count=len(request.entity_ids),
-            selected_brite_count=len(selected_brite_ids),
-            resolved_brite_count=len(resolved_brite_ids),
-            selected_brite_ids=selected_brite_ids,
-            resolved_brite_ids=resolved_brite_ids,
-            missing_brite_ids=missing_brite_ids,
+            selected_brite_count=len(detail.selected_brite_ids),
+            resolved_brite_count=len(detail.resolved_brite_ids),
+            selected_brite_ids=detail.selected_brite_ids,
+            resolved_brite_ids=detail.resolved_brite_ids,
+            missing_brite_ids=detail.missing_brite_ids,
             path_count=len(paths),
             path_preview=path_preview,
             paths_truncated=len(path_preview) < len(paths),
             classification_count=len(classifications),
             classification_preview=classification_preview,
             classifications_truncated=(len(classification_preview) < len(classifications)),
-            unmatched_count=len(unmatched),
+            unmatched_count=unmatched_count,
             unmatched_preview=unmatched_preview,
-            unmatched_truncated=len(unmatched) > len(unmatched_preview),
+            unmatched_truncated=unmatched_count > len(unmatched_preview),
             unmatched_included=request.include_unmatched,
-            retrieval=summarize_query_retrieval((*relation.batches, *hierarchy_provenance)),
+            retrieval=summarize_query_retrieval((*relation_provenance, *hierarchy_provenance)),
         )
         require_bounded_query_direct_result(result)
         return result
+
+
+def load_brite_hierarchy_detail(
+    request: MapBriteHierarchyRequest,
+    *,
+    client: KeggPrimitiveClient,
+    options: KeggRequestOptions | None = None,
+) -> BriteHierarchyDetail:
+    """Return one bounded parsed BRITE mapping without retaining transport artifacts."""
+    options = effective_query_options(options)
+    relation = BoundedRelationResult(rows=(), batches=())
+    if request.brite_ids:
+        selected_brite_ids = request.brite_ids
+        entities_by_brite = {brite_id: request.entity_ids for brite_id in selected_brite_ids}
+    else:
+        relation = bounded_relation_batches(
+            tuple(entity.identifier for entity in request.entity_ids),
+            relationship=KeggLinkRelationship.KO_TO_BRITE,
+            client=client,
+            options=options,
+            max_total_rows=MAX_BRITE_RELATION_ROWS,
+            max_total_response_bytes=MAX_BRITE_RELATION_RESPONSE_BYTES,
+        )
+        selected_brite_ids, entities_by_brite = _discovered_brite_scope(
+            request.entity_ids,
+            relation,
+        )
+
+    documents: dict[str, KeggBriteHtextDocument] = {}
+    missing_brite_ids: tuple[str, ...] = ()
+    hierarchy_provenance: tuple[KeggBatchProvenance, ...] = ()
+    if selected_brite_ids:
+        loaded = load_brite_htext_documents(
+            selected_brite_ids,
+            client=client,
+            options=options,
+        )
+        hierarchy_provenance = loaded.hierarchy_provenance
+        documents = {document.identifier: document for document in loaded.documents}
+        missing_brite_ids = loaded.missing_brite_ids
+    resolved_brite_ids = tuple(brite_id for brite_id in selected_brite_ids if brite_id in documents)
+    _validate_response_budget(relation.batches, hierarchy_provenance)
+
+    paths = _extract_paths(
+        resolved_brite_ids,
+        documents,
+        entities_by_brite,
+        include_all_paths=request.include_all_paths,
+    )
+    classifications, _classification_lookup = _classification_counts(paths)
+    matched_keys = {_entity_key(path.input_entity) for path in paths}
+    unmatched = tuple(
+        entity for entity in request.entity_ids if _entity_key(entity) not in matched_keys
+    )
+    retained_unmatched = unmatched if request.include_unmatched else ()
+    detail = BriteHierarchyDetail(
+        request=request,
+        selected_brite_ids=selected_brite_ids,
+        resolved_brite_ids=resolved_brite_ids,
+        missing_brite_ids=missing_brite_ids,
+        paths=paths,
+        classifications=classifications,
+        unmatched_entities=retained_unmatched,
+        relation_provenance=relation.batches,
+        hierarchy_provenance=hierarchy_provenance,
+    )
+    return detail
+
+
+def load_brite_htext_documents(
+    brite_ids: tuple[str, ...],
+    *,
+    client: KeggPrimitiveClient,
+    options: KeggRequestOptions | None = None,
+) -> LoadedBriteHtextDocuments:
+    """Retrieve explicit BRITE hierarchy documents once for bounded local interpretation."""
+    if not 1 <= len(brite_ids) <= MAX_BRITE_IDS:
+        _limit_exceeded("brite_identifiers", len(brite_ids), MAX_BRITE_IDS)
+    if len(brite_ids) != len(set(brite_ids)) or any(
+        not is_kegg_brite_identifier(identifier) for identifier in brite_ids
+    ):
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "Explicit BRITE hierarchy identifiers must be unique and canonical.",
+            suggested_action="Provide unique supported BRITE hierarchy identifiers.",
+        )
+    effective_options = effective_query_options(options)
+    fetched_documents: list[object] = []
+    fetched_batches: list[KeggBatchProvenance] = []
+    for brite_id in brite_ids:
+        fetched = client.get(
+            GetRequest(
+                entries=(
+                    KeggEntryRef(
+                        database=KeggGetDatabase.BRITE,
+                        identifier=brite_id,
+                        brite_kind=KeggBriteEntryKind.HIERARCHY,
+                    ),
+                )
+            ),
+            options=effective_options,
+        )
+        fetched_batches.extend(fetched.batches)
+        _validate_response_budget((), tuple(fetched_batches))
+        fetched_documents.extend(fetched.documents)
+    documents_by_id = _brite_documents(fetched_documents)
+    if not set(documents_by_id).issubset(brite_ids):
+        fail(
+            ErrorCode.KEGG_PARSE_FAILED,
+            "The BRITE hierarchy response included an unrequested document.",
+            suggested_action="Refresh the exact typed BRITE hierarchy entries and retry.",
+        )
+    resolved = tuple(brite_id for brite_id in brite_ids if brite_id in documents_by_id)
+    missing = tuple(brite_id for brite_id in brite_ids if brite_id not in documents_by_id)
+    return LoadedBriteHtextDocuments(
+        selected_brite_ids=brite_ids,
+        resolved_brite_ids=resolved,
+        missing_brite_ids=missing,
+        documents=tuple(documents_by_id[brite_id] for brite_id in resolved),
+        hierarchy_provenance=tuple(fetched_batches),
+    )
 
 
 def _node_preview(node: BriteHierarchyNode) -> BriteHierarchyNodePreview:
@@ -669,7 +768,7 @@ def _extract_paths(
         entities = entities_by_brite.get(brite_id, ())
         if not entities:
             continue
-        for nodes, candidate in _stacked_htext_nodes(document):
+        for nodes, candidate in iter_brite_htext_nodes(document):
             matched = tuple(
                 entity for entity in entities if candidate in _entity_match_tokens(entity)
             )
@@ -719,7 +818,7 @@ def _extract_paths(
     return tuple(paths)
 
 
-def _stacked_htext_nodes(
+def iter_brite_htext_nodes(
     document: KeggBriteHtextDocument,
 ) -> Iterable[tuple[tuple[BriteHierarchyNode, ...], str]]:
     stack: list[BriteHierarchyNode] = []
@@ -962,7 +1061,11 @@ __all__ = [
     "BriteHierarchyNodePreview",
     "BriteHierarchyPath",
     "BriteHierarchyPathPreview",
+    "LoadedBriteHtextDocuments",
     "MapBriteHierarchyRequest",
     "MapBriteHierarchyResult",
+    "iter_brite_htext_nodes",
+    "load_brite_hierarchy_detail",
+    "load_brite_htext_documents",
     "map_brite_hierarchy",
 ]

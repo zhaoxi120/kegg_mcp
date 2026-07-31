@@ -20,20 +20,73 @@ def validate_tool_input(model: type[_M], arguments: dict[str, Any]) -> _M:
 
 def _prepare_model(model: type[BaseModel], value: object) -> object:
     if model.__pydantic_root_model__:
-        return _prepare_value(model.model_fields["root"].annotation, value)
+        root = model.model_fields["root"]
+        if isinstance(root.discriminator, str):
+            return _prepare_discriminated_value(root.annotation, value, root.discriminator)
+        return _prepare_value(root.annotation, value)
     if not isinstance(value, dict):
         return value
     prepared: dict[str, object] = dict(cast(dict[str, object], value))
     for name, field in model.model_fields.items():
         if name in prepared:
-            prepared[name] = _prepare_value(field.annotation, prepared[name])
+            prepared[name] = (
+                _prepare_discriminated_value(
+                    field.annotation,
+                    prepared[name],
+                    field.discriminator,
+                )
+                if isinstance(field.discriminator, str)
+                else _prepare_value(field.annotation, prepared[name])
+            )
     return prepared
+
+
+def _prepare_discriminated_value(
+    annotation: object,
+    value: object,
+    discriminator: str,
+) -> object:
+    if not isinstance(value, dict):
+        return value
+    mapping = cast(dict[object, object], value)
+    selected = mapping.get(discriminator)
+    for candidate in _model_options(annotation):
+        field = candidate.model_fields.get(discriminator)
+        if field is None or get_origin(field.annotation) is not Literal:
+            continue
+        if selected in get_args(field.annotation):
+            return _prepare_model(candidate, cast(object, mapping))
+    return cast(object, mapping)
+
+
+def _model_options(annotation: object) -> tuple[type[BaseModel], ...]:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        arguments = get_args(annotation)
+        return _model_options(arguments[0]) if arguments else ()
+    if origin in {Union, types.UnionType}:
+        return tuple(
+            candidate for option in get_args(annotation) for candidate in _model_options(option)
+        )
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return (annotation,)
+    return ()
 
 
 def _prepare_value(annotation: object, value: object) -> object:
     origin = get_origin(annotation)
     arguments = get_args(annotation)
     if origin is Annotated:
+        discriminator = next(
+            (
+                metadata.discriminator
+                for metadata in arguments[1:]
+                if isinstance(getattr(metadata, "discriminator", None), str)
+            ),
+            None,
+        )
+        if discriminator is not None:
+            return _prepare_discriminated_value(arguments[0], value, discriminator)
         return _prepare_value(arguments[0], value)
     if origin in {Union, types.UnionType}:
         union_value: object = value

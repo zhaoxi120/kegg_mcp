@@ -6,7 +6,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 _LIVE_CONTROLS = _REPOSITORY_ROOT / "tests" / "live" / "conftest.py"
 _LIVE_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_kegg_api_live.py"
-_SCIENTIST_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_v07_scientist_workflows_live.py"
+_SCIENTIST_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_v08_scientist_workflows_live.py"
 _STDIO_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_stdio_scientist_live.py"
 
 
@@ -105,8 +105,26 @@ def test_live_campaign_includes_high_level_mcp_and_manual_stdio_boundaries() -> 
         "map_brite_hierarchy",
         "audit_annotation_mapping",
         "compare_kegg_reference_snapshots",
+        "write_kegg_reference_bundle",
+        "prepare_kegg_handoff",
     ):
         assert f'"{tool_name}"' in scientist_suite
+    assert '"projection": "references"' in scientist_suite
+    for target in (
+        "mapper_reconstruct",
+        "mapper_search",
+        "mapper_color",
+        "mapper_join",
+        "mapper_mwsearch",
+        "syntax_ko_composition",
+        "syntax_ko_sequence",
+    ):
+        assert f'"target": "{target}"' in scientist_suite
+        assert f'"target": "{target}"' in stdio_suite
+    assert "allowed_roots=(str(live_campaign.root.resolve()),)" in scientist_suite
+    for local_step in ("reference_bundle", "external_handoffs"):
+        assert f"requests_before_{local_step}" in scientist_suite
+    assert "_assert_durable_output_bundle" in scientist_suite
     assert "read_resource" in scientist_suite
     assert "artifact_requires_pagination" in scientist_suite
     assert "visited_uris" in scientist_suite
@@ -119,3 +137,9 @@ def test_live_campaign_includes_high_level_mcp_and_manual_stdio_boundaries() -> 
     assert "delete_scope" in scientist_suite
     assert "stdio_client" in stdio_suite
     assert "KEGG_MCP_RUN_LIVE_STDIO_E2E" in stdio_suite
+    assert "KEGG_MCP_ALLOWED_ROOTS" in stdio_suite
+    assert '"projection": "references"' in stdio_suite
+    assert '"write_kegg_reference_bundle"' in stdio_suite
+    assert '"prepare_kegg_handoff"' in stdio_suite
+    assert "_assert_output_bundle" in stdio_suite
+    assert "_cache_snapshot(cache_path) == cache_before_local_writes" in stdio_suite

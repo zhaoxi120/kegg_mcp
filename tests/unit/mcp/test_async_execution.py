@@ -221,6 +221,36 @@ async def test_cancelled_request_waiting_for_client_capacity_never_starts(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_local_handoff_does_not_wait_for_kegg_client_capacity(tmp_path: Path) -> None:
+    client = _CountingClient()
+    runtime = McpRuntime(
+        client=cast(KeggMcpClient, client),
+        result_store=SQLiteResultStore(tmp_path / "results-local-handoff.sqlite3"),
+        scope_id="local-handoff-scope",
+        allowed_roots=(str(tmp_path),),
+    )
+
+    async with runtime.client_handler_limiter:
+        result = await asyncio.wait_for(
+            dispatch_tool(
+                "prepare_kegg_handoff",
+                {
+                    "output_directory": str(tmp_path / "syntax-handoff"),
+                    "handoff": {
+                        "target": "syntax_ko_composition",
+                        "ko_ids": ["K00001"],
+                    },
+                },
+                runtime,
+            ),
+            timeout=1,
+        )
+
+    assert result.isError is False
+    assert client.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_resource_storage_work_runs_outside_event_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

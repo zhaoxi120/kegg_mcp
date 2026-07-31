@@ -35,7 +35,10 @@ from kegg_mcp.mcp.contracts import (
     MapBriteHierarchyInput,
     NormalizeKoAnnotationsInput,
     NormalizeToolEnvelope,
+    PrepareKeggHandoffInput,
+    PrepareKeggHandoffToolEnvelope,
     ProbeKeggConnectivityInput,
+    ReferenceBundleToolEnvelope,
     ReferenceSnapshotComparisonToolEnvelope,
     ResolveEntitiesToolEnvelope,
     ResolveKeggEntitiesInput,
@@ -44,6 +47,7 @@ from kegg_mcp.mcp.contracts import (
     StatusToolEnvelope,
     TraceKeggRelationsInput,
     TraceRelationsToolEnvelope,
+    WriteKeggReferenceBundleInput,
     constrain_mcp_input_schema,
     constrain_mcp_output_schema,
 )
@@ -66,10 +70,12 @@ from kegg_mcp.mcp.tool_handlers import (
     list_results,
     map_brite,
     normalize,
+    prepare_handoff,
     probe_connectivity,
     resolve_entities,
     search_entries,
     trace_relations,
+    write_reference_bundle,
 )
 from kegg_mcp.services.result_store import ResultStoreError
 
@@ -134,7 +140,9 @@ TOOL_SPECS = (
         (
             "Retrieve allowlisted KEGG entries with bounded batching. The card projection "
             "returns deterministic typed field previews and retains a versioned local snapshot; "
-            "this is not a URL proxy or an LLM-generated summary."
+            "the references projection returns only PubMed identifiers explicitly listed by "
+            "KEGG and does not retrieve or interpret papers. This is not a URL proxy or an "
+            "LLM-generated summary."
         ),
         GetKeggEntriesInput,
         EntriesToolEnvelope,
@@ -214,6 +222,32 @@ TOOL_SPECS = (
         ReferenceSnapshotComparisonToolEnvelope,
         _ADDITIVE_CLOSED,
         compare_reference_snapshots,
+    ),
+    ToolSpec(
+        "write_kegg_reference_bundle",
+        "Write KEGG reference bundle",
+        (
+            "Persist one selected current-session entry-card snapshot and an optional retained "
+            "BRITE mapping as a bounded, versioned local bundle. The tool performs no KEGG "
+            "requests and never exports the private cache or an unbounded database mirror."
+        ),
+        WriteKeggReferenceBundleInput,
+        ReferenceBundleToolEnvelope,
+        _ADDITIVE_CLOSED,
+        write_reference_bundle,
+    ),
+    ToolSpec(
+        "prepare_kegg_handoff",
+        "Prepare KEGG handoff",
+        (
+            "Prepare one bounded local KEGG Mapper or KEGG Syntax input bundle. The tool never "
+            "uploads files, starts a browser, executes an external tool, or parses external "
+            "results."
+        ),
+        PrepareKeggHandoffInput,
+        PrepareKeggHandoffToolEnvelope,
+        _ADDITIVE_CLOSED,
+        prepare_handoff,
     ),
     ToolSpec(
         "analyze_modules",
@@ -313,6 +347,8 @@ _LOCAL_TOOL_NAMES = frozenset(
     {
         "normalize_ko_annotations",
         "compare_kegg_reference_snapshots",
+        "write_kegg_reference_bundle",
+        "prepare_kegg_handoff",
         "list_analysis_results",
         "delete_analysis_result",
     }
@@ -347,6 +383,10 @@ if (  # pragma: no cover - import-time contract guard
 
 def tool_definitions() -> list[types.Tool]:
     return [_tool(spec) for spec in TOOL_SPECS]
+
+
+def _requires_client_limiter(name: str) -> bool:
+    return name in _CLIENT_TOOL_NAMES
 
 
 async def dispatch_tool(
@@ -385,7 +425,7 @@ async def dispatch_tool(
 
             limiter = (
                 runtime.client_handler_limiter
-                if name in _CLIENT_TOOL_NAMES
+                if _requires_client_limiter(name)
                 else runtime.local_handler_limiter
             )
             threaded_outcome: ToolOutcome | None = None
@@ -519,6 +559,9 @@ def _remove_nested_schema_identities(value: object) -> None:
         mapping = cast(dict[str, object], value)
         mapping.pop("$id", None)
         mapping.pop("$schema", None)
+        discriminator = mapping.get("discriminator")
+        if isinstance(discriminator, dict):
+            cast(dict[str, object], discriminator).pop("mapping", None)
         for nested in mapping.values():
             _remove_nested_schema_identities(nested)
     elif isinstance(value, list):

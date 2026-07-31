@@ -29,6 +29,10 @@ def test_server_instructions_fail_closed_for_fasta_only_workflows() -> None:
     assert "remain stopped until a user-selected route supplies" in SERVER_INSTRUCTIONS
     assert "kegg-pathway-rendering Skill" in SERVER_INSTRUCTIONS
     assert "kegg-render-mcp renderer" in SERVER_INSTRUCTIONS
+    assert "PubMed identifiers explicitly listed in KEGG" in SERVER_INSTRUCTIONS
+    assert "KEGG Mapper or KEGG Syntax input bundles" in SERVER_INSTRUCTIONS
+    assert "enrichment" not in SERVER_INSTRUCTIONS
+    assert "upload files" in SERVER_INSTRUCTIONS
 
 
 @pytest.mark.asyncio
@@ -52,7 +56,7 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
         assert initialized.instructions == SERVER_INSTRUCTIONS
         tools = await session.list_tools()
         tool_names = {tool.name for tool in tools.tools}
-        assert len(tool_names) == 16
+        assert len(tool_names) == 18
         assert {
             "search_kegg_entries",
             "resolve_kegg_entities",
@@ -60,6 +64,8 @@ async def test_stdio_process_initializes_and_lists_tools_without_noise(tmp_path:
             "map_brite_hierarchy",
             "audit_annotation_mapping",
             "compare_kegg_reference_snapshots",
+            "write_kegg_reference_bundle",
+            "prepare_kegg_handoff",
         } <= tool_names
         normalized = await session.call_tool("normalize_ko_annotations", {"text": "K00844"})
         assert normalized.isError is False

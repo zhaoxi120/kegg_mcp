@@ -88,7 +88,7 @@ can display nested object fields and enum values without resolving `$defs`.
 
 ## Tools
 
-The server exposes sixteen tools:
+The server exposes eighteen tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
@@ -101,17 +101,21 @@ The server exposes sixteen tools:
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries with `projection="preview"`
-  (default) or `"card"`. Preview returns at most ten compact flat-file or BRITE text previews. Card
-  projection
-  accepts KO, MODULE, pathway, reaction, enzyme, compound, glycan, gene, and genome entries,
+  (default), `projection="card"`, or `projection="references"`. Preview returns at most ten
+  compact flat-file or BRITE text previews. Card projection accepts KO, MODULE, pathway, reaction,
+  enzyme, compound, glycan, gene, and genome entries,
   deterministically parses their supported fields into typed cards, returns at most ten card
   previews, and retains a versioned `entry_snapshot` beside the complete parsed GET `detail`.
   Unknown flat-file field names remain recorded on the cards, while their complete content remains
   in the parsed detail; a card is a field projection, not an LLM summary. The snapshot is
   current-scope retained data for local comparison and preserves the original database-qualified
   GET request independently from returned canonical identifiers. It is not a durable KEGG archive
-  or a new retrieval endpoint. Both projections report total provenance-batch count and at most
-  five provenance records; complete provenance remains in `detail`.
+  or a new retrieval endpoint. References projection accepts the same nine card-supported entry
+  types and deterministically extracts only PubMed identifiers explicitly listed in KEGG
+  `REFERENCE` fields. It returns at most ten entry previews with at most ten PMID previews each and
+  retains the complete card `entry_snapshot`; it does not retrieve, read, or summarize papers.
+  All projections report total provenance-batch count and at most five provenance records;
+  complete provenance remains in `detail`.
 - `search_kegg_entries`: perform keyword FIND over KO, pathway, MODULE, reaction, enzyme, compound,
   glycan, drug, reaction class, genome, or organism. Formula, exact-mass, and molecular-weight
   modes are limited to compound or drug. It returns bounded endpoint candidates without an
@@ -162,14 +166,38 @@ The server exposes sixteen tools:
   previews. Complete degree distributions, KO previews, warnings, completed relationship rows, and
   provenance remain retained. It never corrects scores, fills missing K numbers, or interprets an
   unmapped KO as biological absence.
-- `compare_kegg_reference_snapshots`: compare two `entry_snapshot` artifacts produced by card
-  projection in the current stdio scope. Both snapshots must use the current card schema and cover
-  the same database-qualified requested entries. The caller selects any of entry fields,
+- `compare_kegg_reference_snapshots`: compare two canonical `entry_snapshot` artifacts produced by
+  typed card or references projection in the current stdio scope. Both snapshots must use the
+  current card schema and cover the same database-qualified requested entries. The caller selects
+  any of entry fields,
   relationships, MODULE definitions, and pathway KO denominators; membership changes from returned
   to missing or vice versa remain explicit. The operation is local and makes no KEGG request. Its
   direct result reports parser, endpoint, retrieval, and release compatibility plus at most 25
   value-free change locations; the complete deterministic diff is retained. A structural
   difference is not biological gain, loss, validation, or a general KEGG release history.
+- `write_kegg_reference_bundle`: persist one successful canonical `entry_snapshot` from card or
+  references projection, an optional selected entry subset, and an optional current-scope BRITE
+  mapping in one explicit allowed-root output directory. It writes `reference_snapshot.json`,
+  `relationships.tsv`, optional
+  `brite_paths.tsv`, and the commit-marker `reference_manifest.json`. The snapshot records the
+  selected cards, request, parser/schema, sanitized retrieval batches, and optional BRITE detail.
+  The manifest records the producer, selection and optional BRITE summary, sanitized retrieval
+  summary, and payload size, MIME, and hash metadata without result IDs, request keys, endpoint
+  values, or local paths. This local tool makes no KEGG request and exports neither the raw cache
+  nor an unbounded KEGG mirror.
+- `prepare_kegg_handoff`: prepare one discriminated local handoff under an explicit allowed-root
+  output directory. Its seven targets prepare validated input files for KEGG Mapper Reconstruct,
+  Search, Color, Join, or MWsearch, or KEGG Syntax KO Composition or caller-ordered KO Sequence.
+  Each bundle contains the target-specific data file and commit-marker `handoff_manifest.json`.
+  Every target is local and makes no KEGG request; the tool does not upload data, launch a browser,
+  execute an external tool, or parse its result. Mapper Reconstruct accepts one unannotated data
+  block only; the official `#` multi-organism and comment-block forms are unsupported. Caller text
+  fields are serialized verbatim, while tab, CR, LF, NUL, other C0 controls, and DEL are rejected
+  before writing. Mapper Color accepts `#RRGGBB` or an ASCII letter name matching
+  `[A-Za-z]{3,20}` and preserves caller casing. These formats were checked on 2026-07-31 against
+  the official [KEGG Mapper Reconstruct](https://www.kegg.jp/kegg/mapper/reconstruct.html),
+  [KEGG Mapper Color](https://www.kegg.jp/kegg/mapper/color.html), and
+  [KEGG Syntax user-data analysis](https://www.kegg.jp/kegg/syntax/synteny.html) pages.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
@@ -191,15 +219,19 @@ The advertised MCP behavior hints describe local effects as well as remote effec
 | --- | --- | --- | --- | --- |
 | `get_server_status`, `list_analysis_results` | Yes | No | Yes | No |
 | `normalize_ko_annotations`, `compare_kegg_reference_snapshots` | No | No | No | No |
+| `write_kegg_reference_bundle` | No | No | No | No |
+| `prepare_kegg_handoff` | No | No | No | No |
 | KEGG retrieval and analysis tools | No | No | No | Yes |
 | `probe_kegg_connectivity` | No | No | No | Yes |
 | `delete_analysis_result` | No | Yes | Yes | No |
 
-Normalization and analysis create retained results and can create an output bundle. KEGG-facing
-tools can also update the local response cache, so even a connectivity probe is not advertised as
-read-only. Deletion is idempotent in environmental effect although a repeated call returns the
-same safe not-found class. These hints inform clients; they do not replace server-side validation
-or authorization.
+Normalization and analysis create retained results and can create an output bundle. Reference and
+input-handoff tools publish new local files, so they are additive rather than read-only or
+idempotent. The seven handoff targets are closed-world local formatting operations. Other
+KEGG-facing tools can update the local response cache, so even a connectivity probe is not
+advertised as read-only. Deletion is idempotent in environmental effect although a repeated call
+returns the same safe not-found class. These hints inform clients; they do not replace server-side
+validation or authorization.
 
 Minimal compound candidate search:
 
@@ -218,6 +250,21 @@ Minimal typed card snapshot:
   "projection": "card"
 }
 ```
+
+Minimal deterministic KEGG-listed PMID projection:
+
+```json
+{
+  "entries": [
+    {"database":"reaction","identifier":"R01786"},
+    {"database":"compound","identifier":"C00031"}
+  ],
+  "projection": "references"
+}
+```
+
+This returns only identifiers present in those KEGG flat-file `REFERENCE` fields. A returned PMID
+is a KEGG-linked citation, not a paper summary, causal claim, or validation.
 
 Minimal ChEBI-to-compound resolution:
 
@@ -282,6 +329,45 @@ requested entries:
   "compare": ["entry_fields", "relationships", "module_definitions", "pathway_denominators"]
 }
 ```
+
+Minimal durable export of one successful card result:
+
+```json
+{
+  "source": {"result_id":"<opaque-card-result-id>"},
+  "entries": [
+    {"database":"reaction","identifier":"R01786"}
+  ],
+  "output_directory": "/absolute/private/results/reaction-reference"
+}
+```
+
+Omit `entries` to select the complete bounded card snapshot. Add
+`"brite_source":{"result_id":"<opaque-brite-result-id>"}` only when a successful
+`map_brite_hierarchy` detail from the same stdio scope should be included.
+
+Minimal caller-ordered KEGG Syntax sequence handoff:
+
+```json
+{
+  "output_directory": "/absolute/private/results/syntax-sequence",
+  "handoff": {
+    "target": "syntax_ko_sequence",
+    "order_semantics": "caller_supplied_genomic_order",
+    "rows": [
+      {"gene_id":"gene_001","ko_id":"K00844"},
+      {"gene_id":"gene_002","ko_id":"K01810"}
+    ]
+  }
+}
+```
+
+Core preserves that row order. The required
+`order_semantics="caller_supplied_genomic_order"` field records its provenance; Core does not
+infer coordinates, upload the file, run KEGG Syntax, or parse a result. The other external target
+values are `mapper_reconstruct`, `mapper_search`,
+`mapper_color`, `mapper_join`, `mapper_mwsearch`, and `syntax_ko_composition`; clients should use
+the discovered branch schema rather than construct unvalidated upload text.
 
 Bounded query, card, audit, and reference-comparison direct results are independently limited to
 64 KiB. A projection that violates that bound fails closed and compensates the newly created
@@ -366,6 +452,9 @@ on the path must retain those ownership and mode constraints. Owner-owned shared
 group-writable before that private boundary; the configured allowed root itself must establish the
 private boundary. An output directory must be new or empty;
 any existing entry causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation.
+`write_kegg_reference_bundle` and `prepare_kegg_handoff` always require an explicit
+`output_directory`; their selected content and external target are deliberate filesystem
+mutations, so they never infer a destination from retained-result or input paths.
 A successful normalization bundle contains
 `normalized_annotations.tsv`, `protein_ko_mapping.tsv`, and `bundle_manifest.json`; analysis adds
 `pathway_coverage.tsv`, `module_completion.tsv`, `analysis_report.md`, and `render_input.json`.
@@ -400,6 +489,14 @@ completion is distinct from
 the project block-coverage metric, and pathway coverage does not establish pathway presence,
 activity, flux, phenotype, or statistical significance.
 
+### Additions in v0.8.0
+
+Version 0.8.0 adds one deterministic KEGG-listed PMID projection and two file-producing tools.
+Existing preview/card, query, analysis, renderer-handoff, and current-scope comparison contracts
+remain unchanged. A process-scoped card or BRITE result can now be selected into a durable
+reference bundle before expiry, while `prepare_kegg_handoff` creates validated external-workflow
+inputs without uploading or executing them.
+
 ### Migration from v0.5.0
 
 Version 0.6.0 was implemented but not released, so v0.7.0 upgrades from the last public v0.5.0
@@ -432,10 +529,19 @@ both the active-result hard TTL and the eligibility threshold for cleaning orpha
 abnormal exit; it is not a cross-process persistence promise. `get_server_status` reports
 `result_scope="stdio_session"`, both TTL meanings, normal-exit cleanup, and
 `durable_output="output_bundle"` explicitly. The result index lists validated section URIs.
+The `output_bundle` capability label is the umbrella for KO-analysis bundles, selected-reference
+bundles, and prepared external-input bundles; it does not imply that every bundle contains a
+renderer handoff.
 High-level analysis normally retains `structured`, `summary`, and `annotations`; automatic target
 selection also retains the applicable MODULE and pathway ranking and relationship artifacts.
-Normalization retains `dataset`; primitive query tools retain `detail`; card projection also
-retains `entry_snapshot`; and local reference comparison retains `reference_diff`.
+Normalization retains `dataset`; primitive query tools retain `detail`; card and references
+projections also retain `entry_snapshot`; and local reference comparison retains `reference_diff`.
+
+Reference and external-input bundles are ordinary owner-controlled files rather than resource
+templates or retained-result artifacts. `write_kegg_reference_bundle` must read its source result
+while that ID is valid in the current stdio scope; after a successful write, the versioned bundle
+remains usable across sessions without that ID. `prepare_kegg_handoff` returns stable file paths
+and does not create a scoped retained result.
 
 `delete_analysis_result` removes one active result only when it belongs to the current scope.
 Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.

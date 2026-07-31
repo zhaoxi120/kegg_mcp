@@ -20,8 +20,13 @@ DeepKOALA detailed output. It:
 - searches endpoint candidates, projects supported GET entries into deterministic typed cards,
   resolves gene, organism, or substance identifiers, and traces allowlisted typed relations
   without hiding ambiguity or inferring causality;
+- extracts KEGG-supplied PubMed identifiers from selected flat-file references without retrieving
+  or summarizing the cited papers;
 - compares two same-session, same-request card snapshots locally without building a KEGG archive;
 - maps BRITE hierarchy paths and audits fixed KO relationship classes descriptively;
+- writes a selected card snapshot and optional BRITE mapping as a bounded local reference bundle;
+- prepares supported KEGG Mapper or KEGG Syntax input files without uploading data, invoking a
+  browser, or executing an external tool;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit reference type and denominator;
 - compares KO sets deterministically; and
@@ -29,7 +34,8 @@ DeepKOALA detailed output. It:
 
 A K-number assignment is annotation evidence, not experimental validation. Search hits are
 candidates and database relationships are cross-references. Pathway KO coverage does not establish
-pathway presence, completeness, expression, activity, flux, or phenotype.
+pathway presence, completeness, expression, activity, flux, or phenotype. BRITE classifications
+and target rankings are descriptive, not enrichment results.
 
 ## Distribution boundary
 

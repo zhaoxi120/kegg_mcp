@@ -25,6 +25,10 @@ from kegg_mcp.services.brite_hierarchy import (
     MapBriteHierarchyResult,
 )
 from kegg_mcp.services.entry_cards import ENTRY_CARD_DATABASES
+from kegg_mcp.services.external_handoff_models import (
+    ExternalHandoffBundle,
+    ExternalHandoffRequest,
+)
 from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
     AnalyzeKoAnnotationsResult,
@@ -50,6 +54,10 @@ from kegg_mcp.services.query_models import (
     SearchKeggEntriesResult,
     TraceKeggRelationsRequest,
     TraceKeggRelationsResult,
+)
+from kegg_mcp.services.reference_bundles import (
+    KeggReferenceBundle,
+    WriteKeggReferenceBundleRequest,
 )
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
@@ -234,12 +242,13 @@ class GetKeggEntriesInput(FrozenModel):
 
     @model_validator(mode="after")
     def validate_projection_databases(self) -> Self:
-        if self.projection is KeggEntryProjection.CARD and any(
-            entry.database not in ENTRY_CARD_DATABASES for entry in self.entries
-        ):
+        if self.projection in {
+            KeggEntryProjection.CARD,
+            KeggEntryProjection.REFERENCES,
+        } and any(entry.database not in ENTRY_CARD_DATABASES for entry in self.entries):
             raise ValueError(
-                "card projection supports only KO, MODULE, pathway, reaction, enzyme, "
-                "compound, glycan, gene, and genome entries"
+                "typed card and references projections support only KO, MODULE, pathway, "
+                "reaction, enzyme, compound, glycan, gene, and genome entries"
             )
         return self
 
@@ -254,6 +263,31 @@ class ResolveKeggEntitiesInput(RootModel[ResolveKeggEntitiesRequest]):
 TraceKeggRelationsInput = TraceKeggRelationsRequest
 MapBriteHierarchyInput = MapBriteHierarchyRequest
 CompareKeggReferenceSnapshotsInput = CompareKeggReferenceSnapshotsRequest
+
+
+class WriteKeggReferenceBundleInput(WriteKeggReferenceBundleRequest):
+    """Persist one current-scope card snapshot as a bounded local reference bundle."""
+
+    output_directory: str = Field(min_length=1, max_length=4_096)
+
+    def to_service_request(self) -> WriteKeggReferenceBundleRequest:
+        return WriteKeggReferenceBundleRequest.model_validate(
+            self.model_dump(exclude={"output_directory"})
+        )
+
+
+class PrepareKeggHandoffInput(FrozenModel):
+    """Prepare one bounded local KEGG Mapper or KEGG Syntax input bundle."""
+
+    output_directory: str = Field(
+        min_length=1,
+        max_length=2_048,
+        description=(
+            "New or empty directory beneath a configured allowed root. The tighter path bound "
+            "keeps every direct handoff result below the MCP response-size budget."
+        ),
+    )
+    handoff: ExternalHandoffRequest
 
 
 class AuditAnnotationMappingInput(FrozenModel):
@@ -405,6 +439,8 @@ TraceRelationsToolEnvelope = ToolEnvelope[TraceKeggRelationsResult]
 BriteHierarchyToolEnvelope = ToolEnvelope[MapBriteHierarchyResult]
 AnnotationAuditToolEnvelope = ToolEnvelope[AnnotationMappingAuditResult]
 ReferenceSnapshotComparisonToolEnvelope = ToolEnvelope[CompareKeggReferenceSnapshotsResult]
+ReferenceBundleToolEnvelope = ToolEnvelope[KeggReferenceBundle]
+PrepareKeggHandoffToolEnvelope = ToolEnvelope[ExternalHandoffBundle]
 AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
 AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
 AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]
@@ -538,7 +574,10 @@ __all__ = [
     "NormalizeKoAnnotationsInput",
     "NormalizeToolEnvelope",
     "OversizedArtifactNotice",
+    "PrepareKeggHandoffInput",
+    "PrepareKeggHandoffToolEnvelope",
     "ProbeKeggConnectivityInput",
+    "ReferenceBundleToolEnvelope",
     "ReferenceSnapshotComparisonToolEnvelope",
     "ResolveEntitiesToolEnvelope",
     "ResolveKeggEntitiesInput",
@@ -550,6 +589,7 @@ __all__ = [
     "ToolPayload",
     "TraceKeggRelationsInput",
     "TraceRelationsToolEnvelope",
+    "WriteKeggReferenceBundleInput",
     "constrain_mcp_input_schema",
     "constrain_mcp_output_schema",
 ]

@@ -117,7 +117,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.7.0"
+    assert project["version"] == "0.8.0"
     assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
@@ -189,9 +189,32 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.5,<0.8" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
     assert "latest GitHub release and the current `main` branch" in security
     assert "Distribution boundary" in readiness
+
+
+def test_v08_reference_and_handoff_boundaries_are_release_gated() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    architecture = (PROJECT_ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+    server = (PROJECT_ROOT / "docs/mcp-server.md").read_text(encoding="utf-8")
+    readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", "\n".join((readme, architecture, server, readiness)))
+
+    for required in (
+        "eighteen Core tools",
+        'projection="references"',
+        "write_kegg_reference_bundle",
+        "prepare_kegg_handoff",
+        "reference_snapshot.json",
+        "reference_manifest.json",
+        "handoff_manifest.json",
+        "does not retrieve or summarize papers",
+        "do not export cache payloads or mirror KEGG",
+        "do not issue a KEGG request, upload, start a browser, execute an external tool",
+        'order_semantics="caller_supplied_genomic_order"',
+    ):
+        assert required in normalized
 
 
 def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> None:
@@ -332,7 +355,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.5,<0.8" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -410,7 +433,7 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert smoke_path.is_file()
     assert ci.count("tests/release/smoke_wheel.py") == 3
     for distribution, version in (
-        ("kegg-mcp", "0.7.0"),
+        ("kegg-mcp", "0.8.0"),
         ("deepkoala-mcp", "0.4.0"),
         ("kegg-render-mcp", "0.3.2"),
     ):

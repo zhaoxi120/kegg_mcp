@@ -25,10 +25,16 @@ CSV evidence. It:
   ambiguous match;
 - projects selected GET flat files into deterministic typed entity cards and compares two
   same-session snapshots locally for the same requested entries;
+- extracts only KEGG-supplied PubMed identifiers from selected flat-file references, without
+  retrieving or summarizing papers;
 - traces allowlisted KEGG relationships for one or two hops, including explicitly
   organism-scoped KO/pathway-to-gene edges;
 - maps supplied entities into bounded BRITE hierarchy paths and audits annotation evidence and
   KEGG relationship mapping yields;
+- writes a selected card snapshot and optional BRITE mapping as a bounded, integrity-recorded
+  local reference bundle;
+- prepares validated local input files for supported KEGG Mapper and KEGG Syntax routes without
+  uploading or executing them;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit namespace and denominator;
 - compares KO sets deterministically; and
@@ -36,9 +42,9 @@ CSV evidence. It:
 
 A K-number assignment is annotation evidence, not experimental validation. Search hits are
 candidates, and KEGG relationships and BRITE classifications are database-backed routing evidence.
-These query functions do not perform enrichment, statistical testing, pathway-activity or flux
-inference, or arbitrary graph analysis. Pathway KO coverage does not establish pathway presence,
-completeness, activity, flux, or phenotype.
+These query functions do not run enrichment or other statistical tests, upload to KEGG web tools,
+infer pathway activity or flux, or perform arbitrary graph analysis. Pathway KO coverage does not
+establish pathway presence, completeness, activity, flux, or phenotype.
 
 ## Quick start for Codex
 
@@ -104,8 +110,9 @@ enrichment, completion, or pathway-presence inference.
 Requests that already contain KO evidence start at `kegg-mcp`. Requests that provide a compatible
 `render_input.json` may start at `kegg-render-mcp`. Bounded KEGG search, entity-card retrieval,
 gene, organism, or substance resolution, relation tracing, BRITE classification, and local
-reference-snapshot comparison also start directly at `kegg-mcp`; they do not require an
-annotation run.
+reference-snapshot comparison also start directly at `kegg-mcp`. Reference-bundle export and
+KEGG web-tool input preparation likewise start at Core when their typed inputs already exist; neither
+requires an annotation run.
 
 ## Components and contracts
 
@@ -119,9 +126,10 @@ The core produces `render_input.json` schema version 3 and preserves
 `AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. Source KEGG PNG and KGML
 assets remain local.
 
-The sixteen Core tools cover normalization, high-level analysis, bounded KEGG search and retrieval,
-gene/organism/substance resolution, typed relation tracing, BRITE hierarchy mapping, annotation
-mapping audit, local reference-snapshot comparison, MODULE and pathway analysis, KO-set comparison,
+The eighteen Core tools cover normalization, high-level analysis, bounded KEGG search and
+retrieval, gene/organism/substance resolution, typed relation tracing, BRITE hierarchy mapping,
+annotation mapping audit, local reference-snapshot comparison, durable selected-reference export,
+statistics-free handoff preparation, MODULE and pathway analysis, KO-set comparison,
 connectivity/status, and scoped result listing/deletion. Full tool and resource schemas are
 documented in
 [MCP server](docs/mcp-server.md).

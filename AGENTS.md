@@ -58,9 +58,9 @@ schema, parser, fixture, or acceptance test.
   including top-k and multi-domain evidence.
 - Treat raw source evidence as immutable. A KO set is a policy-derived view of annotation records.
   Keep analysis parameters and provenance serializable.
-- Do not add external annotation code, weights, KOfam profiles, KEGG datasets, enrichment,
-  differential abundance, abundance weighting, a web UI, remote HTTP transport, multi-user
-  hosting, or non-KEGG backends without separately assigned scope.
+- Do not add external annotation code, weights, KOfam profiles, KEGG datasets, statistical
+  enrichment execution, differential abundance, abundance weighting, a web UI, remote HTTP
+  transport, multi-user hosting, or non-KEGG backends without separately assigned scope.
 
 ## Biological interpretation
 

@@ -34,7 +34,10 @@ from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvena
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
-from kegg_mcp.services.entry_cards import KeggEntryCardPreviewSet
+from kegg_mcp.services.entry_cards import (
+    KeggEntryCardPreviewSet,
+    KeggEntryLiteratureReferencePreviewSet,
+)
 from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle
 from kegg_mcp.services.result_store import (
     RESULT_ID_SCHEMA_PATTERN,
@@ -85,6 +88,7 @@ class KeggEntryProjection(StrEnum):
 
     PREVIEW = "preview"
     CARD = "card"
+    REFERENCES = "references"
 
 
 class GenericDecisionPolicy(StrEnum):
@@ -391,6 +395,7 @@ class KeggEntriesServiceResult(FrozenModel):
     ] = ()
     previews_truncated: bool = False
     card_preview: KeggEntryCardPreviewSet | None = None
+    literature_preview: KeggEntryLiteratureReferencePreviewSet | None = None
     provenance_batch_count: int = Field(strict=True, ge=0, le=MAX_GET_ENTRY_PREVIEWS)
     provenance: Annotated[
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_GET_PROVENANCE_BATCHES)
@@ -403,19 +408,42 @@ class KeggEntriesServiceResult(FrozenModel):
         if self.result.artifact_count != expected_artifact_count:
             raise ValueError("result artifact_count must match GET artifact metadata")
         if self.projection is KeggEntryProjection.PREVIEW:
-            if self.snapshot_artifact is not None or self.card_preview is not None:
-                raise ValueError("preview projection cannot include a card snapshot")
+            if (
+                self.snapshot_artifact is not None
+                or self.card_preview is not None
+                or self.literature_preview is not None
+            ):
+                raise ValueError("preview projection cannot include a retained typed projection")
             if self.returned_count < len(self.previews):
                 raise ValueError("returned_count cannot be smaller than entry previews")
             if self.previews_truncated != (self.returned_count > len(self.previews)):
                 raise ValueError("previews_truncated must match the entry preview")
-        else:
-            if self.snapshot_artifact is None or self.card_preview is None or self.previews:
+        elif self.projection is KeggEntryProjection.CARD:
+            if (
+                self.snapshot_artifact is None
+                or self.card_preview is None
+                or self.literature_preview is not None
+                or self.previews
+            ):
                 raise ValueError("card projection requires only card preview and snapshot metadata")
             if self.previews_truncated:
                 raise ValueError("card projection does not use text-preview truncation")
             if self.card_preview.entry_count != self.returned_count:
                 raise ValueError("returned_count must match card preview entry_count")
+        else:
+            if (
+                self.snapshot_artifact is None
+                or self.card_preview is not None
+                or self.literature_preview is None
+                or self.previews
+            ):
+                raise ValueError(
+                    "references projection requires a card snapshot and literature preview"
+                )
+            if self.previews_truncated:
+                raise ValueError("references projection does not use text-preview truncation")
+            if self.literature_preview.entry_count != self.returned_count:
+                raise ValueError("returned_count must match literature preview entry_count")
         if self.provenance_batch_count < len(self.provenance):
             raise ValueError("provenance_batch_count cannot be smaller than its preview")
         if self.provenance_truncated != (self.provenance_batch_count > len(self.provenance)):
@@ -509,7 +537,7 @@ class ServerStatusResult(FrozenModel):
         tuple[AnnotationInputFormat, ...], Field(max_length=len(AnnotationInputFormat))
     ] = tuple(AnnotationInputFormat)
     supported_tools: Annotated[
-        tuple[Annotated[str, Field(min_length=1, max_length=100)], ...], Field(max_length=16)
+        tuple[Annotated[str, Field(min_length=1, max_length=100)], ...], Field(max_length=18)
     ]
     result_scope: Literal["stdio_session"] = "stdio_session"
     result_active_ttl_seconds: int = Field(strict=True, gt=0)
