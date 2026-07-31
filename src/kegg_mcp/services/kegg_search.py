@@ -36,6 +36,9 @@ _SEARCH_ENTITY_KINDS = {
     KeggSearchDatabase.REACTION: KeggEntityKind.REACTION,
     KeggSearchDatabase.ENZYME: KeggEntityKind.ENZYME,
     KeggSearchDatabase.COMPOUND: KeggEntityKind.COMPOUND,
+    KeggSearchDatabase.GLYCAN: KeggEntityKind.GLYCAN,
+    KeggSearchDatabase.DRUG: KeggEntityKind.DRUG,
+    KeggSearchDatabase.RCLASS: KeggEntityKind.RCLASS,
     KeggSearchDatabase.GENOME: KeggEntityKind.GENOME,
     KeggSearchDatabase.ORGANISM: KeggEntityKind.GENOME,
 }
@@ -87,7 +90,7 @@ def search_kegg_entries(
             candidates_truncated=len(candidates) > len(candidate_preview),
             endpoint_candidates_truncated=len(candidates) < len(fetched.document.rows),
             retrieval=summarize_query_retrieval((fetched.batch,)),
-            interpretation_caveats=_search_caveats(request.mode),
+            interpretation_caveats=_search_caveats(request.database, request.mode),
         )
         require_bounded_query_direct_result(result)
         return result
@@ -113,10 +116,14 @@ def _find_entity(
     return pair_entity(_SEARCH_ENTITY_KINDS[database], identifier)
 
 
-def _search_caveats(mode: KeggSearchMode) -> tuple[str, ...]:
+def _search_caveats(
+    database: KeggSearchDatabase,
+    mode: KeggSearchMode,
+) -> tuple[str, ...]:
     caveats = ["Candidates are endpoint matches, not relevance-ranked or selected best matches."]
     if mode is KeggSearchMode.EXACT_MASS:
-        caveats.append("Exact-mass matches are compound candidates, not compound identifications.")
+        noun = "compound" if database is KeggSearchDatabase.COMPOUND else "drug"
+        caveats.append(f"Exact-mass matches are candidates, not {noun} identifications.")
     return tuple(caveats)
 
 

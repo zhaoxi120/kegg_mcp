@@ -524,7 +524,7 @@ def test_audit_preserves_evidence_and_completed_targets_at_row_limit(
     assert retained["detail"]["mappings"][0]["target"] == "pathway"
 
 
-def test_audit_preserves_accepted_provenance_when_first_target_is_incomplete(
+def test_audit_preserves_observed_provenance_when_first_target_is_incomplete(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -548,7 +548,8 @@ def test_audit_preserves_accepted_provenance_when_first_target_is_incomplete(
     assert result.mapping_execution.incomplete_target is AnnotationMappingTarget.PATHWAY
     assert result.mapping_execution.skipped_targets == (AnnotationMappingTarget.MODULE,)
     assert result.mappings == ()
-    assert result.retrieval.batch_count == 1
+    assert result.retrieval.batch_count == 2
+    assert result.retrieval.network_request_count == 2
     assert len(client.requests) == 2
     retained = json.loads(
         store.read_artifact(
@@ -559,7 +560,10 @@ def test_audit_preserves_accepted_provenance_when_first_target_is_incomplete(
         ).content
     )
     assert retained["complete_relationship_rows"] == {}
-    assert [item["request_key"] for item in retained["provenance"]] == ["synthetic:1"]
+    assert [item["request_key"] for item in retained["provenance"]] == [
+        "synthetic:1",
+        "synthetic:2",
+    ]
 
 
 def test_audit_preserves_evidence_and_completed_targets_at_response_limit(
@@ -590,7 +594,8 @@ def test_audit_preserves_evidence_and_completed_targets_at_response_limit(
     assert execution.limit_observed == 200
     assert execution.limit_value == 150
     assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
-    assert result.retrieval.batch_count == 1
+    assert result.retrieval.batch_count == 2
+    assert result.retrieval.network_request_count == 2
     assert result.strict_without_any_audited_relationship_count is None
 
 

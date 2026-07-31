@@ -1602,19 +1602,20 @@ def test_genome_record_loader_reuses_split_entry_cache_with_exact_batch_indexes(
         clock=_clock(_NOW),
     )
     recorded_batches: list[int] = []
+    planned_batches: list[int] = []
 
     first = load_genome_records(
         ("hsa", "mmu"),
         client=client,
         options=KeggRequestOptions(refresh=False),
-        before_batch=lambda: None,
+        before_batch=planned_batches.append,
         record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
     )
     second = load_genome_records(
         ("hsa", "mmu"),
         client=client,
         options=KeggRequestOptions(refresh=False),
-        before_batch=lambda: None,
+        before_batch=planned_batches.append,
         record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
     )
 
@@ -1633,6 +1634,7 @@ def test_genome_record_loader_reuses_split_entry_cache_with_exact_batch_indexes(
         "T01002": 1,
         "mmu": 1,
     }
+    assert planned_batches == [2, 2]
     assert recorded_batches == [1, 2]
 
 
@@ -1911,6 +1913,11 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
             b"rn:R00001\tcpd:C00031\n",
         ),
         (
+            KeggLinkRelationship.REACTION_TO_GLYCAN,
+            "R05969",
+            b"rn:R05969\tgl:G00001\n",
+        ),
+        (
             KeggLinkRelationship.REACTION_TO_PATHWAY,
             "R00001",
             b"rn:R00001\tpath:map00010\n",
@@ -1924,6 +1931,36 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
             KeggLinkRelationship.COMPOUND_TO_PATHWAY,
             "C00031",
             b"cpd:C00031\tpath:map00010\n",
+        ),
+        (
+            KeggLinkRelationship.GLYCAN_TO_REACTION,
+            "G00001",
+            b"gl:G00001\trn:R05969\n",
+        ),
+        (
+            KeggLinkRelationship.GLYCAN_TO_PATHWAY,
+            "G00001",
+            b"gl:G00001\tpath:map00510\n",
+        ),
+        (
+            KeggLinkRelationship.DRUG_TO_PATHWAY,
+            "D00109",
+            b"dr:D00109\tpath:map07048\n",
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_KO,
+            "M00001",
+            b"md:M00001\tko:K00844\n",
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_REACTION,
+            "M00001",
+            b"md:M00001\trn:R01786\n",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_MODULE,
+            "map00010",
+            b"path:map00010\tmd:M00001\n",
         ),
         (
             KeggLinkRelationship.PATHWAY_TO_REACTION,
@@ -1970,6 +2007,54 @@ def test_extended_selected_link_relationships_use_the_typed_client_surface(
     assert len(result.rows) == 1
     assert result.rows[0].source_id == body.decode().split("\t", maxsplit=1)[0]
     assert result.batches[0].operation is KeggOperation.LINK
+
+
+@pytest.mark.parametrize(
+    ("relationship", "organism", "source_identifier", "body", "expected_url"),
+    [
+        (
+            KeggLinkRelationship.KO_TO_GENE,
+            "eco",
+            "K01810",
+            b"ko:K01810\teco:b4025\n",
+            "https://rest.kegg.jp/link/eco/K01810",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_GENE,
+            "hsa",
+            "hsa00010",
+            b"path:hsa00010\thsa:3098\n",
+            "https://rest.kegg.jp/link/hsa/hsa00010",
+        ),
+    ],
+)
+def test_selected_gene_membership_links_bind_the_target_organism(
+    tmp_path: Path,
+    relationship: KeggLinkRelationship,
+    organism: str,
+    source_identifier: str,
+    body: bytes,
+    expected_url: str,
+) -> None:
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    client = KeggClient(
+        _public_config(tmp_path / f"{relationship.value}.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.link(
+        LinkRequest(
+            relationship=relationship,
+            organism_scope=organism,
+            source_identifiers=(source_identifier,),
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].target_id.startswith(f"{organism}:")
+    assert transport.urls == [expected_url]
 
 
 def test_t_number_genome_link_accepts_an_empty_success_response(tmp_path: Path) -> None:
@@ -2079,6 +2164,55 @@ def test_selected_conversion_uses_the_typed_client_surface(tmp_path: Path) -> No
     assert [(row.source_id, row.target_id) for row in result.rows] == [
         ("up:P12345", "ddi:DDB_G0291764")
     ]
+
+
+@pytest.mark.parametrize(
+    ("target", "source", "identifier", "body"),
+    [
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.CHEBI,
+            "chebi:4167",
+            b"chebi:4167\tcpd:C00031\n",
+        ),
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.PUBCHEM,
+            "pubchem:3333",
+            b"pubchem:3333\tcpd:C00031\n",
+        ),
+        (
+            KeggConvDatabase.PUBCHEM,
+            KeggConvDatabase.DRUG,
+            "D00109",
+            b"dr:D00109\tpubchem:7847177\n",
+        ),
+    ],
+)
+def test_selected_substance_conversion_uses_strict_pair_namespaces(
+    tmp_path: Path,
+    target: KeggConvDatabase,
+    source: KeggConvDatabase,
+    identifier: str,
+    body: bytes,
+) -> None:
+    client = KeggClient(
+        _public_config(tmp_path / f"substance-{target.value}-{source.value}.sqlite3"),
+        transport=QueueTransport([TransportResponse(status_code=200, body=body)]),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.conv(
+        ConvRequest(
+            target_database=target,
+            source_database=source,
+            source_identifiers=(identifier,),
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].target_id == body.decode().strip().split("\t")[1]
 
 
 @pytest.mark.parametrize(

@@ -346,8 +346,11 @@ class KeggInfoDatabase(StrEnum):
     GENES = "genes"
     GENOME = "genome"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
     REACTION = "reaction"
+    RCLASS = "rclass"
     ENZYME = "enzyme"
+    DRUG = "drug"
 
 
 class KeggFindDatabase(StrEnum):
@@ -359,6 +362,9 @@ class KeggFindDatabase(StrEnum):
     REACTION = "reaction"
     ENZYME = "enzyme"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    RCLASS = "rclass"
     GENOME = "genome"
     ORGANISM = "organism"
     GENES = "genes"
@@ -389,6 +395,9 @@ class KeggGetDatabase(StrEnum):
     REACTION = "reaction"
     ENZYME = "enzyme"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    RCLASS = "rclass"
     BRITE = "brite"
     GENE = "gene"
     GENOME = "genome"
@@ -500,6 +509,9 @@ _ENTRY_PATTERNS = {
     KeggGetDatabase.MODULE: re.compile(r"^M[0-9]{5}$"),
     KeggGetDatabase.REACTION: re.compile(r"^R[0-9]{5}$"),
     KeggGetDatabase.COMPOUND: re.compile(r"^C[0-9]{5}$"),
+    KeggGetDatabase.GLYCAN: re.compile(r"^G[0-9]{5}$"),
+    KeggGetDatabase.DRUG: re.compile(r"^D[0-9]{5}$"),
+    KeggGetDatabase.RCLASS: re.compile(r"^RC[0-9]{5}$"),
 }
 
 
@@ -599,8 +611,8 @@ class FindRequest(FrozenModel):
                 raise ValueError("organism must be one canonical KEGG organism code")
         if self.mode is KeggFindMode.KEYWORD:
             return self
-        if self.database is not KeggFindDatabase.COMPOUND:
-            raise ValueError("chemical FIND modes are valid only for the compound database")
+        if self.database not in {KeggFindDatabase.COMPOUND, KeggFindDatabase.DRUG}:
+            raise ValueError("chemical FIND modes are valid only for compound or drug")
         if self.mode is KeggFindMode.FORMULA:
             if _FIND_FORMULA_QUERY.fullmatch(self.query) is None:
                 raise ValueError("formula FIND queries must use bounded molecular-formula syntax")
@@ -640,18 +652,29 @@ class KeggLinkRelationship(StrEnum):
     KO_TO_REACTION = "ko_to_reaction"
     KO_TO_ENZYME = "ko_to_enzyme"
     KO_TO_BRITE = "ko_to_brite"
+    KO_TO_GENE = "ko_to_gene"
     PATHWAY_TO_KO = "pathway_to_ko"
+    PATHWAY_TO_GENE = "pathway_to_gene"
+    PATHWAY_TO_MODULE = "pathway_to_module"
     GENE_TO_KO = "gene_to_ko"
     GENE_TO_PATHWAY = "gene_to_pathway"
     ENZYME_TO_REACTION = "enzyme_to_reaction"
     REACTION_TO_ENZYME = "reaction_to_enzyme"
     REACTION_TO_KO = "reaction_to_ko"
     REACTION_TO_COMPOUND = "reaction_to_compound"
+    REACTION_TO_GLYCAN = "reaction_to_glycan"
     REACTION_TO_PATHWAY = "reaction_to_pathway"
     COMPOUND_TO_REACTION = "compound_to_reaction"
     COMPOUND_TO_PATHWAY = "compound_to_pathway"
+    GLYCAN_TO_REACTION = "glycan_to_reaction"
+    GLYCAN_TO_PATHWAY = "glycan_to_pathway"
+    DRUG_TO_PATHWAY = "drug_to_pathway"
+    MODULE_TO_KO = "module_to_ko"
+    MODULE_TO_PATHWAY = "module_to_pathway"
+    MODULE_TO_REACTION = "module_to_reaction"
     PATHWAY_TO_REACTION = "pathway_to_reaction"
     PATHWAY_TO_COMPOUND = "pathway_to_compound"
+    PATHWAY_TO_GLYCAN = "pathway_to_glycan"
     GENOME_TO_TAXONOMY = "genome_to_taxonomy"
     TAXONOMY_TO_GENOME = "taxonomy_to_genome"
 
@@ -661,13 +684,16 @@ class KeggTaxonomyRank(StrEnum):
 
     EXACT = "exact"
     SPECIES = "species"
+    GENUS = "genus"
+    FAMILY = "family"
+    ORDER = "order"
+    CLASS = "class"
+    PHYLUM = "phylum"
 
     @property
     def wire_suffix(self) -> str:
         """Return the fixed optional KEGG LINK path suffix for this scope."""
-        if self is KeggTaxonomyRank.SPECIES:
-            return "/species"
-        return ""
+        return "" if self is KeggTaxonomyRank.EXACT else f"/{self.value}"
 
 
 class LinkSourceKind(StrEnum):
@@ -675,10 +701,13 @@ class LinkSourceKind(StrEnum):
 
     KO = "ko"
     PATHWAY = "pathway"
+    MODULE = "module"
     GENE = "gene"
     ENZYME = "enzyme"
     REACTION = "reaction"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
     GENOME = "genome"
     TAXONOMY = "taxonomy"
 
@@ -698,6 +727,8 @@ class LinkRelationContract:
             return _ENTRY_PATTERNS[KeggGetDatabase.KO].fullmatch(identifier) is not None
         if self.source_kind is LinkSourceKind.PATHWAY:
             return is_kegg_pathway_identifier(identifier)
+        if self.source_kind is LinkSourceKind.MODULE:
+            return _ENTRY_PATTERNS[KeggGetDatabase.MODULE].fullmatch(identifier) is not None
         if self.source_kind is LinkSourceKind.GENE:
             return is_kegg_gene_identifier(identifier)
         if self.source_kind is LinkSourceKind.ENZYME:
@@ -706,6 +737,10 @@ class LinkRelationContract:
             return _ENTRY_PATTERNS[KeggGetDatabase.REACTION].fullmatch(identifier) is not None
         if self.source_kind is LinkSourceKind.COMPOUND:
             return _ENTRY_PATTERNS[KeggGetDatabase.COMPOUND].fullmatch(identifier) is not None
+        if self.source_kind is LinkSourceKind.GLYCAN:
+            return _ENTRY_PATTERNS[KeggGetDatabase.GLYCAN].fullmatch(identifier) is not None
+        if self.source_kind is LinkSourceKind.DRUG:
+            return _ENTRY_PATTERNS[KeggGetDatabase.DRUG].fullmatch(identifier) is not None
         if self.source_kind is LinkSourceKind.GENOME:
             return is_kegg_genome_identifier(identifier)
         return is_kegg_taxonomy_identifier(identifier)
@@ -737,8 +772,15 @@ _LINK_RELATION_CONTRACTS = {
         LinkSourceKind.KO, "enzyme", None, "ko"
     ),
     KeggLinkRelationship.KO_TO_BRITE: LinkRelationContract(LinkSourceKind.KO, "brite", None, "ko"),
+    KeggLinkRelationship.KO_TO_GENE: LinkRelationContract(LinkSourceKind.KO, "genes", None, "ko"),
     KeggLinkRelationship.PATHWAY_TO_KO: LinkRelationContract(
         LinkSourceKind.PATHWAY, "ko", None, "path"
+    ),
+    KeggLinkRelationship.PATHWAY_TO_GENE: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "genes", None, "path"
+    ),
+    KeggLinkRelationship.PATHWAY_TO_MODULE: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "module", None, "path"
     ),
     KeggLinkRelationship.GENE_TO_KO: LinkRelationContract(LinkSourceKind.GENE, "ko", None, None),
     KeggLinkRelationship.GENE_TO_PATHWAY: LinkRelationContract(
@@ -756,6 +798,9 @@ _LINK_RELATION_CONTRACTS = {
     KeggLinkRelationship.REACTION_TO_COMPOUND: LinkRelationContract(
         LinkSourceKind.REACTION, "compound", None, "rn"
     ),
+    KeggLinkRelationship.REACTION_TO_GLYCAN: LinkRelationContract(
+        LinkSourceKind.REACTION, "glycan", None, "rn"
+    ),
     KeggLinkRelationship.REACTION_TO_PATHWAY: LinkRelationContract(
         LinkSourceKind.REACTION, "pathway", None, "rn"
     ),
@@ -765,11 +810,32 @@ _LINK_RELATION_CONTRACTS = {
     KeggLinkRelationship.COMPOUND_TO_PATHWAY: LinkRelationContract(
         LinkSourceKind.COMPOUND, "pathway", None, "cpd"
     ),
+    KeggLinkRelationship.GLYCAN_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.GLYCAN, "reaction", None, "gl"
+    ),
+    KeggLinkRelationship.GLYCAN_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.GLYCAN, "pathway", None, "gl"
+    ),
+    KeggLinkRelationship.DRUG_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.DRUG, "pathway", None, "dr"
+    ),
+    KeggLinkRelationship.MODULE_TO_KO: LinkRelationContract(
+        LinkSourceKind.MODULE, "ko", None, "md"
+    ),
+    KeggLinkRelationship.MODULE_TO_PATHWAY: LinkRelationContract(
+        LinkSourceKind.MODULE, "pathway", None, "md"
+    ),
+    KeggLinkRelationship.MODULE_TO_REACTION: LinkRelationContract(
+        LinkSourceKind.MODULE, "reaction", None, "md"
+    ),
     KeggLinkRelationship.PATHWAY_TO_REACTION: LinkRelationContract(
         LinkSourceKind.PATHWAY, "reaction", None, "path"
     ),
     KeggLinkRelationship.PATHWAY_TO_COMPOUND: LinkRelationContract(
         LinkSourceKind.PATHWAY, "compound", None, "path"
+    ),
+    KeggLinkRelationship.PATHWAY_TO_GLYCAN: LinkRelationContract(
+        LinkSourceKind.PATHWAY, "glycan", None, "path"
     ),
     KeggLinkRelationship.GENOME_TO_TAXONOMY: LinkRelationContract(
         LinkSourceKind.GENOME, "taxonomy", "gn", "gn"
@@ -790,6 +856,7 @@ class LinkRequest(FrozenModel):
 
     relationship: KeggLinkRelationship
     taxonomy_rank: KeggTaxonomyRank = KeggTaxonomyRank.EXACT
+    organism_scope: str | None = Field(default=None, min_length=3, max_length=4)
     source_identifiers: Annotated[
         tuple[KeggIdentifier, ...],
         Field(min_length=1, max_length=MAX_CONFIGURED_IDENTIFIERS),
@@ -810,16 +877,34 @@ class LinkRequest(FrozenModel):
             and self.relationship is not KeggLinkRelationship.TAXONOMY_TO_GENOME
         ):
             raise ValueError("non-default taxonomy_rank is valid only for taxonomy-to-genome LINK")
+        scoped_gene_relationships = {
+            KeggLinkRelationship.KO_TO_GENE,
+            KeggLinkRelationship.PATHWAY_TO_GENE,
+        }
+        if self.relationship in scoped_gene_relationships:
+            if self.organism_scope is None or not is_kegg_organism_code(self.organism_scope):
+                raise ValueError("organism-scoped gene LINK requires one canonical organism code")
+            if self.relationship is KeggLinkRelationship.PATHWAY_TO_GENE and any(
+                identifier[:-5] != self.organism_scope for identifier in self.source_identifiers
+            ):
+                raise ValueError("organism-specific pathway sources must match organism_scope")
+        elif self.organism_scope is not None:
+            raise ValueError("organism_scope is valid only for organism-scoped gene LINK")
         return self
 
 
 class KeggConvDatabase(StrEnum):
-    """Approved selected-entry gene conversion databases."""
+    """Approved selected-entry gene and chemical conversion databases."""
 
     GENES = "genes"
     NCBI_GENEID = "ncbi-geneid"
     NCBI_PROTEINID = "ncbi-proteinid"
     UNIPROT = "uniprot"
+    COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    CHEBI = "chebi"
+    PUBCHEM = "pubchem"
 
 
 class ConvRequest(FrozenModel):
@@ -834,16 +919,42 @@ class ConvRequest(FrozenModel):
 
     @model_validator(mode="after")
     def validate_conversion_direction(self) -> Self:
-        outside = {
+        gene_outside = {
             KeggConvDatabase.NCBI_GENEID,
             KeggConvDatabase.NCBI_PROTEINID,
             KeggConvDatabase.UNIPROT,
         }
+        substance_inside = {
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.GLYCAN,
+            KeggConvDatabase.DRUG,
+        }
+        substance_outside = {
+            KeggConvDatabase.CHEBI,
+            KeggConvDatabase.PUBCHEM,
+        }
         valid_pair = (
-            self.target_database is KeggConvDatabase.GENES and self.source_database in outside
-        ) or (self.source_database is KeggConvDatabase.GENES and self.target_database in outside)
+            (
+                self.target_database is KeggConvDatabase.GENES
+                and self.source_database in gene_outside
+            )
+            or (
+                self.source_database is KeggConvDatabase.GENES
+                and self.target_database in gene_outside
+            )
+            or (
+                self.target_database in substance_inside
+                and self.source_database in substance_outside
+            )
+            or (
+                self.source_database in substance_inside
+                and self.target_database in substance_outside
+            )
+        )
         if not valid_pair:
-            raise ValueError("CONV supports only selected external-gene identifier conversions")
+            raise ValueError(
+                "CONV supports selected external-gene or external-substance conversions"
+            )
         if self.source_database is KeggConvDatabase.GENES:
             identifiers_are_valid = all(
                 is_kegg_gene_identifier(identifier) for identifier in self.source_identifiers
@@ -853,11 +964,31 @@ class ConvRequest(FrozenModel):
             identifiers_are_valid = all(
                 pattern.fullmatch(identifier) is not None for identifier in self.source_identifiers
             )
-        else:
+        elif self.source_database in gene_outside:
             prefix = re.escape(self.source_database.value)
             pattern = re.compile(rf"^{prefix}:[A-Za-z0-9._-]+$")
             identifiers_are_valid = all(
                 pattern.fullmatch(identifier) is not None for identifier in self.source_identifiers
+            )
+        elif self.source_database in substance_inside:
+            database_pattern = {
+                KeggConvDatabase.COMPOUND: _ENTRY_PATTERNS[KeggGetDatabase.COMPOUND],
+                KeggConvDatabase.GLYCAN: _ENTRY_PATTERNS[KeggGetDatabase.GLYCAN],
+                KeggConvDatabase.DRUG: _ENTRY_PATTERNS[KeggGetDatabase.DRUG],
+            }[self.source_database]
+            identifiers_are_valid = all(
+                database_pattern.fullmatch(identifier) is not None
+                for identifier in self.source_identifiers
+            )
+        elif self.source_database is KeggConvDatabase.CHEBI:
+            identifiers_are_valid = all(
+                re.fullmatch(r"^chebi:[1-9][0-9]*$", identifier) is not None
+                for identifier in self.source_identifiers
+            )
+        else:
+            identifiers_are_valid = all(
+                re.fullmatch(r"^pubchem:[1-9][0-9]*$", identifier) is not None
+                for identifier in self.source_identifiers
             )
         if not identifiers_are_valid:
             raise ValueError("CONV identifier is incompatible with source_database")

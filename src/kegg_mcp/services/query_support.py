@@ -24,6 +24,7 @@ from kegg_mcp.kegg.contracts import (
     KeggFlatFileDocument,
     KeggFlatFileField,
 )
+from kegg_mcp.kegg.operations import prepare_get
 from kegg_mcp.services.kegg_relations import (
     BoundedRelationResult,
     bounded_relation_batches,
@@ -91,9 +92,12 @@ class QueryBudget:
     def remaining_response_bytes(self) -> int:
         return self.response_byte_limit - self.response_bytes
 
-    def require_request_capacity(self) -> None:
-        if self.remaining_requests <= 0:
-            self._limit("kegg_request_count", self.requests + 1, self.request_limit)
+    def require_request_capacity(self, request_count: int = 1) -> None:
+        if request_count < 1:
+            raise ValueError("request_count must be positive")
+        next_requests = self.requests + request_count
+        if next_requests > self.request_limit:
+            self._limit("kegg_request_count", next_requests, self.request_limit)
 
     def require_relation_capacity(self) -> None:
         if self.request_capacity_first:
@@ -156,6 +160,7 @@ def bounded_query_relation(
     options: KeggRequestOptions | None,
     budget: QueryBudget,
     taxonomy_rank: KeggTaxonomyRank = KeggTaxonomyRank.EXACT,
+    organism_scope: str | None = None,
 ) -> BoundedRelationResult:
     """Run one LINK relation against the remaining aggregate query budget."""
     budget.require_relation_capacity()
@@ -165,6 +170,7 @@ def bounded_query_relation(
         client=client,
         options=options,
         taxonomy_rank=taxonomy_rank,
+        organism_scope=organism_scope,
         max_total_requests=budget.remaining_requests,
         max_total_rows=budget.remaining_rows,
         max_total_response_bytes=budget.remaining_response_bytes,
@@ -180,7 +186,7 @@ def load_genome_records(
     *,
     client: KeggQueryClient,
     options: KeggRequestOptions | None,
-    before_batch: Callable[[], None],
+    before_batch: Callable[[int], None],
     record_batch: Callable[[int, tuple[KeggBatchProvenance, ...]], None],
 ) -> GenomeRecordLoad:
     """Load code/T aliases in endpoint-sized GET calls and record every batch immediately."""
@@ -208,19 +214,19 @@ def load_genome_records(
     )
     for start in range(0, len(unique_identifiers), batch_size):
         chunk = unique_identifiers[start : start + batch_size]
-        before_batch()
-        fetched = client.get(
-            GetRequest(
-                entries=tuple(
-                    KeggEntryRef(
-                        database=KeggGetDatabase.GENOME,
-                        identifier=identifier,
-                    )
-                    for identifier in chunk
-                )
-            ),
-            options=options,
+        request = _genome_get_request(chunk)
+        planned_batch_count = _maximum_get_batch_count(
+            request,
+            client=client,
         )
+        before_batch(planned_batch_count)
+        fetched = client.get(request, options=options)
+        if len(fetched.batches) > planned_batch_count:
+            fail(
+                ErrorCode.KEGG_PARSE_FAILED,
+                "A bounded KEGG GENOME call exceeded its preflight batch count.",
+                suggested_action="Retry with the typed KEGG client and unchanged request limits.",
+            )
         if len(fetched.documents) != len(fetched.batches):
             fail(
                 ErrorCode.KEGG_PARSE_FAILED,
@@ -259,6 +265,48 @@ def load_genome_records(
             "results": retained_results,
         },
     )
+
+
+def planned_genome_get_batch_count(
+    identifiers: tuple[str, ...],
+    *,
+    client: KeggQueryClient,
+) -> int:
+    """Return a cache-safe upper bound for GENOME GET provenance batches."""
+    unique_identifiers = tuple(dict.fromkeys(identifiers))
+    batch_size = min(
+        MAX_GET_ENTRIES_PER_BATCH,
+        client.config.limits.max_identifiers,
+    )
+    return sum(
+        _maximum_get_batch_count(
+            _genome_get_request(unique_identifiers[start : start + batch_size]),
+            client=client,
+        )
+        for start in range(0, len(unique_identifiers), batch_size)
+    )
+
+
+def _genome_get_request(identifiers: tuple[str, ...]) -> GetRequest:
+    return GetRequest(
+        entries=tuple(
+            KeggEntryRef(
+                database=KeggGetDatabase.GENOME,
+                identifier=identifier,
+            )
+            for identifier in identifiers
+        )
+    )
+
+
+def _maximum_get_batch_count(
+    request: GetRequest,
+    *,
+    client: KeggQueryClient,
+) -> int:
+    prepared_count = len(prepare_get(request, client.config.limits))
+    # A combined network response may be retained and later served as one cache batch per entry.
+    return max(prepared_count, len(request.entries))
 
 
 def _genome_record(
@@ -313,6 +361,12 @@ def pair_entity(kind: KeggEntityKind, identifier: str) -> KeggEntityRef:
         prefixes = ("ec:", "enzyme:")
     elif kind is KeggEntityKind.COMPOUND:
         prefixes = ("cpd:", "compound:")
+    elif kind is KeggEntityKind.GLYCAN:
+        prefixes = ("gl:", "glycan:")
+    elif kind is KeggEntityKind.DRUG:
+        prefixes = ("dr:", "drug:")
+    elif kind is KeggEntityKind.RCLASS:
+        prefixes = ("rc:", "rclass:")
     elif kind is KeggEntityKind.BRITE:
         prefixes = ("br:", "brite:")
     elif kind is KeggEntityKind.GENOME:
@@ -470,6 +524,7 @@ __all__ = [
     "link_relationship",
     "load_genome_records",
     "pair_entity",
+    "planned_genome_get_batch_count",
     "require_bounded_query_direct_result",
     "require_provenance_bound",
     "summarize_query_retrieval",

@@ -64,6 +64,17 @@ def test_live_suite_is_opt_in_configurable_bounded_and_rate_limited() -> None:
         "GENE_TO_PATHWAY",
         "COMPOUND_TO_REACTION",
         "TAXONOMY_TO_GENOME",
+        "KO_TO_GENE",
+        "PATHWAY_TO_GENE",
+        "MODULE_TO_KO",
+        "MODULE_TO_REACTION",
+        "MODULE_TO_PATHWAY",
+        "PATHWAY_TO_MODULE",
+        "GLYCAN_TO_REACTION",
+        "REACTION_TO_GLYCAN",
+        "GLYCAN_TO_PATHWAY",
+        "PATHWAY_TO_GLYCAN",
+        "DRUG_TO_PATHWAY",
     ):
         assert f"KeggLinkRelationship.{relationship}" in suite
     assert "_REFRESH = KeggRequestOptions(refresh=True)" in suite

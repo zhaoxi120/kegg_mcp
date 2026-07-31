@@ -122,6 +122,43 @@ def test_compound_find_preparation_uses_only_allowlisted_mode_suffixes(
     assert prepared.path == f"/find/compound/{query}/{suffix}"
 
 
+@pytest.mark.parametrize(
+    ("database", "query", "mode", "expected_path"),
+    [
+        (
+            KeggFindDatabase.DRUG,
+            "174.05",
+            KeggFindMode.EXACT_MASS,
+            "/find/drug/174.05/exact_mass",
+        ),
+        (
+            KeggFindDatabase.GLYCAN,
+            "mannose",
+            KeggFindMode.KEYWORD,
+            "/find/glycan/mannose",
+        ),
+        (
+            KeggFindDatabase.RCLASS,
+            "phosphotransfer",
+            KeggFindMode.KEYWORD,
+            "/find/rclass/phosphotransfer",
+        ),
+    ],
+)
+def test_extended_find_scopes_use_fixed_database_routes(
+    database: KeggFindDatabase,
+    query: str,
+    mode: KeggFindMode,
+    expected_path: str,
+) -> None:
+    prepared = prepare_find(
+        FindRequest(database=database, query=query, mode=mode),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == expected_path
+
+
 def test_find_preparation_accounts_for_the_endpoint_in_the_url_bound() -> None:
     request = FindRequest(database=KeggFindDatabase.KO, query="a" * 240)
 
@@ -175,6 +212,23 @@ def test_get_isolates_brite_htext_from_flat_file_batches() -> None:
         ResponseParser.FLAT_FILE,
     ]
     assert batches[1].path == "/get/br:br08901"
+
+
+def test_extended_substance_and_rclass_get_entries_remain_text_only() -> None:
+    prepared = prepare_get(
+        GetRequest(
+            entries=(
+                KeggEntryRef(database=KeggGetDatabase.GLYCAN, identifier="G00001"),
+                KeggEntryRef(database=KeggGetDatabase.DRUG, identifier="D00109"),
+                KeggEntryRef(database=KeggGetDatabase.RCLASS, identifier="RC00002"),
+            )
+        ),
+        KeggClientLimits(),
+    )
+
+    assert len(prepared) == 1
+    assert prepared[0].path == "/get/G00001+D00109+RC00002"
+    assert prepared[0].parser is ResponseParser.FLAT_FILE
 
 
 def test_get_preparation_uses_selected_gene_and_qualified_genome_wire_identifiers() -> None:
@@ -420,6 +474,124 @@ def test_link_preparation_uses_the_authoritative_relation_contract(
     assert prepared.pair_target_database is target_database
 
 
+@pytest.mark.parametrize(
+    ("relationship", "source", "path", "expected_source", "target_database"),
+    [
+        (
+            KeggLinkRelationship.MODULE_TO_KO,
+            "M00001",
+            "/link/ko/M00001",
+            "md:M00001",
+            PairTargetDatabase.KO,
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_PATHWAY,
+            "M00001",
+            "/link/pathway/M00001",
+            "md:M00001",
+            PairTargetDatabase.PATHWAY,
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_REACTION,
+            "M00001",
+            "/link/reaction/M00001",
+            "md:M00001",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_MODULE,
+            "map00010",
+            "/link/module/map00010",
+            "path:map00010",
+            PairTargetDatabase.MODULE,
+        ),
+        (
+            KeggLinkRelationship.GLYCAN_TO_REACTION,
+            "G00001",
+            "/link/reaction/G00001",
+            "gl:G00001",
+            PairTargetDatabase.REACTION,
+        ),
+        (
+            KeggLinkRelationship.REACTION_TO_GLYCAN,
+            "R05969",
+            "/link/glycan/R05969",
+            "rn:R05969",
+            PairTargetDatabase.GLYCAN,
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_GLYCAN,
+            "map00510",
+            "/link/glycan/map00510",
+            "path:map00510",
+            PairTargetDatabase.GLYCAN,
+        ),
+        (
+            KeggLinkRelationship.DRUG_TO_PATHWAY,
+            "D00109",
+            "/link/pathway/D00109",
+            "dr:D00109",
+            PairTargetDatabase.PATHWAY,
+        ),
+    ],
+)
+def test_extended_relation_contracts_remain_selected_entry_only(
+    relationship: KeggLinkRelationship,
+    source: str,
+    path: str,
+    expected_source: str,
+    target_database: PairTargetDatabase,
+) -> None:
+    prepared = prepare_link(
+        LinkRequest(relationship=relationship, source_identifiers=(source,)),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == path
+    assert prepared.expected_pair_source_ids == frozenset({expected_source})
+    assert prepared.pair_target_database is target_database
+
+
+@pytest.mark.parametrize(
+    ("relationship", "source", "organism", "path", "expected_source"),
+    [
+        (
+            KeggLinkRelationship.KO_TO_GENE,
+            "K01810",
+            "eco",
+            "/link/eco/K01810",
+            "ko:K01810",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_GENE,
+            "hsa00010",
+            "hsa",
+            "/link/hsa/hsa00010",
+            "path:hsa00010",
+        ),
+    ],
+)
+def test_organism_scoped_gene_link_uses_a_validated_dynamic_target(
+    relationship: KeggLinkRelationship,
+    source: str,
+    organism: str,
+    path: str,
+    expected_source: str,
+) -> None:
+    prepared = prepare_link(
+        LinkRequest(
+            relationship=relationship,
+            organism_scope=organism,
+            source_identifiers=(source,),
+        ),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == path
+    assert prepared.expected_pair_source_ids == frozenset({expected_source})
+    assert prepared.pair_target_database is PairTargetDatabase.GENES
+
+
 def test_taxonomy_species_link_appends_the_typed_rank_suffix() -> None:
     prepared = prepare_link(
         LinkRequest(
@@ -524,6 +696,57 @@ def test_conv_never_prepares_a_whole_database_conversion() -> None:
     ]
     assert batches[0].expected_pair_source_ids == frozenset({"uniprot:P12345", "up:P12345"})
     assert batches[0].pair_target_database is PairTargetDatabase.GENES
+
+
+@pytest.mark.parametrize(
+    ("target", "source", "identifier", "path", "expected_source", "pair_target"),
+    [
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.CHEBI,
+            "chebi:4167",
+            "/conv/compound/chebi:4167",
+            "chebi:4167",
+            PairTargetDatabase.COMPOUND,
+        ),
+        (
+            KeggConvDatabase.DRUG,
+            KeggConvDatabase.PUBCHEM,
+            "pubchem:7847177",
+            "/conv/drug/pubchem:7847177",
+            "pubchem:7847177",
+            PairTargetDatabase.DRUG,
+        ),
+        (
+            KeggConvDatabase.PUBCHEM,
+            KeggConvDatabase.COMPOUND,
+            "C00031",
+            "/conv/pubchem/C00031",
+            "cpd:C00031",
+            PairTargetDatabase.PUBCHEM,
+        ),
+    ],
+)
+def test_selected_substance_conv_uses_explicit_sid_and_chebi_namespaces(
+    target: KeggConvDatabase,
+    source: KeggConvDatabase,
+    identifier: str,
+    path: str,
+    expected_source: str,
+    pair_target: PairTargetDatabase,
+) -> None:
+    prepared = prepare_conv(
+        ConvRequest(
+            target_database=target,
+            source_database=source,
+            source_identifiers=(identifier,),
+        ),
+        KeggClientLimits(),
+    )[0]
+
+    assert prepared.path == path
+    assert prepared.expected_pair_source_ids == frozenset({expected_source})
+    assert prepared.pair_target_database is pair_target
 
 
 @pytest.mark.parametrize(

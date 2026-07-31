@@ -554,6 +554,10 @@ class KeggRequestExecutor:
             if any(
                 row.source_id not in prepared.expected_pair_source_ids
                 or not pair_target_matches(target_database, row.target_id)
+                or (
+                    prepared.expected_pair_target_prefix is not None
+                    and not row.target_id.startswith(prepared.expected_pair_target_prefix)
+                )
                 for row in document.rows
             ):
                 fail(

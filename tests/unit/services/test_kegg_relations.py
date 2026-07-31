@@ -206,6 +206,8 @@ def test_relation_batches_check_rows_and_bytes_after_each_endpoint_batch(
     max_total_response_bytes: int,
 ) -> None:
     client = _RelationClient(link_batch_size=2, response_bytes=100)
+    observed: list[tuple[int, int]] = []
+    accepted: list[tuple[int, int]] = []
 
     with pytest.raises(KeggMcpError) as captured:
         bounded_relation_batches(
@@ -214,6 +216,8 @@ def test_relation_batches_check_rows_and_bytes_after_each_endpoint_batch(
             client=client,
             max_total_rows=max_total_rows,
             max_total_response_bytes=max_total_response_bytes,
+            observe_batch=lambda count, batches: observed.append((count, len(batches))),
+            record_batch=lambda count, batches: accepted.append((count, len(batches))),
         )
 
     assert captured.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
@@ -221,6 +225,8 @@ def test_relation_batches_check_rows_and_bytes_after_each_endpoint_batch(
         "limit_name"
     ] == limit_name
     assert len(client.requests) == 2
+    assert observed == [(2, 1), (2, 1)]
+    assert accepted == [(2, 1)]
 
 
 def test_relation_batches_invoke_the_budget_hook_before_starting_the_next_batch() -> None:

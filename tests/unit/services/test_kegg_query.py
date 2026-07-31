@@ -19,6 +19,8 @@ from kegg_mcp.kegg import (
     GetRequest,
     GetResult,
     KeggClientConfig,
+    KeggClientLimits,
+    KeggConvDatabase,
     KeggEntryRef,
     KeggFindDatabase,
     KeggGetDatabase,
@@ -66,11 +68,15 @@ from kegg_mcp.services.query_models import (
     KeggSearchDatabase,
     KeggSearchMode,
     MappingStatus,
+    OrganismCandidateMaterialization,
     OrganismIdentifierNamespace,
     OrganismResolutionRequest,
     ResolutionOperation,
     ResolveKeggEntitiesRequest,
     SearchKeggEntriesRequest,
+    SubstanceIdentifierNamespace,
+    SubstanceResolutionRequest,
+    SubstanceResolutionTarget,
     TaxonomyResolutionRank,
     TraceKeggRelationsRequest,
 )
@@ -116,6 +122,10 @@ class _QueryClient:
             tuple[tuple[str, str], ...],
         ] = {}
         self.conv_rows: tuple[tuple[str, str], ...] = ()
+        self.conv_rows_by_database: dict[
+            tuple[KeggConvDatabase, KeggConvDatabase],
+            tuple[tuple[str, str], ...],
+        ] = {}
         self.link_rows: dict[
             KeggLinkRelationship,
             tuple[tuple[str, str], ...],
@@ -127,6 +137,7 @@ class _QueryClient:
         self.link_response_bytes: dict[KeggLinkRelationship, int] = {}
         self.genomes: dict[str, tuple[str, str, str, tuple[str, ...]]] = {}
         self.missing_genes: set[str] = set()
+        self.substances: set[tuple[KeggGetDatabase, str]] = set()
         self.organism_pathways: dict[
             str,
             tuple[tuple[str, str], ...],
@@ -194,13 +205,17 @@ class _QueryClient:
     ) -> ConvResult:
         del options
         self.conv_requests.append(request)
+        configured_rows = self.conv_rows_by_database.get(
+            (request.target_database, request.source_database),
+            self.conv_rows,
+        )
         rows = tuple(
             KeggPairRow(
                 line_number=index,
                 source_id=source,
                 target_id=target,
             )
-            for index, (source, target) in enumerate(self.conv_rows, start=1)
+            for index, (source, target) in enumerate(configured_rows, start=1)
             if _requested_source(source, request.source_identifiers)
         )
         return ConvResult(
@@ -264,7 +279,7 @@ class _QueryClient:
                 else:
                     gene_entries.append(_gene_entry(item.identifier))
             documents = (KeggFlatFileDocument(entries=tuple(gene_entries)),)
-        else:
+        elif request.entries[0].database is KeggGetDatabase.GENOME:
             records: dict[str, tuple[str, str, str, tuple[str, ...]]] = {}
             for item in request.entries:
                 record = self.genomes.get(item.identifier)
@@ -277,6 +292,14 @@ class _QueryClient:
                     entries=tuple(_genome_entry(record) for record in records.values())
                 ),
             )
+        else:
+            substance_entries: list[KeggFlatFileEntry] = []
+            for item in request.entries:
+                if (item.database, item.identifier) not in self.substances:
+                    missing.append(item)
+                else:
+                    substance_entries.append(_simple_entry(item.identifier))
+            documents = (KeggFlatFileDocument(entries=tuple(substance_entries)),)
         return GetResult(
             request=request,
             documents=documents,
@@ -374,6 +397,21 @@ def _gene_entry(identifier: str) -> KeggFlatFileEntry:
     )
 
 
+def _simple_entry(identifier: str) -> KeggFlatFileEntry:
+    field = KeggFlatFileField(
+        name="ENTRY",
+        value_lines=(identifier,),
+        start_line=1,
+        end_line=1,
+    )
+    return KeggFlatFileEntry(
+        identifier=identifier,
+        fields=(field,),
+        start_line=1,
+        end_line=1,
+    )
+
+
 def _add_genome(
     client: _QueryClient,
     *,
@@ -405,6 +443,18 @@ def _artifact(
 
 def _entity(kind: KeggEntityKind, identifier: str) -> KeggEntityRef:
     return KeggEntityRef(kind=kind, identifier=identifier)
+
+
+def _wire_entity(entity: KeggEntityRef) -> str:
+    prefixes = {
+        KeggEntityKind.KO: "ko",
+        KeggEntityKind.PATHWAY: "path",
+        KeggEntityKind.MODULE: "md",
+        KeggEntityKind.REACTION: "rn",
+        KeggEntityKind.GLYCAN: "gl",
+    }
+    prefix = prefixes.get(entity.kind)
+    return entity.identifier if prefix is None else f"{prefix}:{entity.identifier}"
 
 
 def test_search_request_is_bounded_and_public_scope_excludes_brite() -> None:
@@ -556,6 +606,57 @@ def test_exact_mass_caveat_is_emitted_only_for_exact_mass_search(
     assert "not compound identifications" in result.interpretation_caveats[1]
 
 
+def test_drug_exact_mass_and_new_keyword_search_scopes_are_typed(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.find_rows[(KeggFindDatabase.DRUG, "180.063", None)] = (("D00001", "Water; H2O"),)
+    client.find_rows[(KeggFindDatabase.GLYCAN, "mannose", None)] = (("G00001", "N-glycan core"),)
+    client.find_rows[(KeggFindDatabase.RCLASS, "phosphotransfer", None)] = (
+        ("RC00002", "Reaction class candidate"),
+    )
+
+    drug = search_kegg_entries(
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.DRUG,
+            query="180.063",
+            mode=KeggSearchMode.EXACT_MASS,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "drug-search.sqlite3"),
+        scope_id="scope",
+    )
+    glycan = search_kegg_entries(
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.GLYCAN,
+            query="mannose",
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "glycan-search.sqlite3"),
+        scope_id="scope",
+    )
+    rclass = search_kegg_entries(
+        SearchKeggEntriesRequest(
+            database=KeggSearchDatabase.RCLASS,
+            query="phosphotransfer",
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "rclass-search.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert drug.candidate_preview[0].entity == _entity(KeggEntityKind.DRUG, "D00001")
+    assert "not drug identifications" in drug.interpretation_caveats[1]
+    assert glycan.candidate_preview[0].entity == _entity(
+        KeggEntityKind.GLYCAN,
+        "G00001",
+    )
+    assert rclass.candidate_preview[0].entity == _entity(
+        KeggEntityKind.RCLASS,
+        "RC00002",
+    )
+
+
 def test_resolution_discriminator_is_required_in_schema_and_at_runtime() -> None:
     adapter: TypeAdapter[ResolveKeggEntitiesRequest] = TypeAdapter(ResolveKeggEntitiesRequest)
     schema = adapter.json_schema()
@@ -574,6 +675,144 @@ def test_resolution_discriminator_is_required_in_schema_and_at_runtime() -> None
                 "identifiers": ["TP53"],
                 "organism": "hsa",
             }
+        )
+
+
+def test_substance_resolution_preserves_crosswalk_and_one_hop_projections(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.conv_rows_by_database[(KeggConvDatabase.COMPOUND, KeggConvDatabase.CHEBI)] = (
+        ("chebi:4167", "cpd:C00031"),
+    )
+    client.link_rows = {
+        KeggLinkRelationship.COMPOUND_TO_REACTION: (("cpd:C00031", "rn:R01786"),),
+        KeggLinkRelationship.COMPOUND_TO_PATHWAY: (("cpd:C00031", "path:map00010"),),
+    }
+    store = SQLiteResultStore(tmp_path / "substance.sqlite3")
+
+    result = resolve_kegg_entities(
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.CHEBI,
+            identifiers=("CHEBI:4167",),
+            targets=(
+                SubstanceResolutionTarget.KEGG_COMPOUND,
+                SubstanceResolutionTarget.REACTION,
+                SubstanceResolutionTarget.PATHWAY,
+            ),
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=store,
+        scope_id="scope",
+    )
+
+    assert result.kind == "substance"
+    assert result.mapped_input_count == 1
+    candidate = result.resolution_previews[0].candidate_preview[0]
+    assert candidate.canonical_entity == _entity(KeggEntityKind.COMPOUND, "C00031")
+    assert candidate.entity_preview == (
+        _entity(KeggEntityKind.COMPOUND, "C00031"),
+        _entity(KeggEntityKind.REACTION, "R01786"),
+        _entity(KeggEntityKind.PATHWAY, "map00010"),
+    )
+    assert result.resolution_previews[0].operations_used == (
+        ResolutionOperation.CONV,
+        ResolutionOperation.LINK,
+    )
+    assert client.conv_requests[0].source_identifiers == ("chebi:4167",)
+    assert "do not establish substance identification" in result.interpretation_caveats[2]
+    retained = _artifact(store, result.result.result_id)
+    assert cast(dict[str, object], retained["request"])["kind"] == "substance"
+
+
+def test_direct_substance_resolution_verifies_the_kegg_entry(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.substances.add((KeggGetDatabase.GLYCAN, "G00001"))
+
+    result = resolve_kegg_entities(
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.KEGG_GLYCAN,
+            identifiers=("G00001",),
+            targets=(SubstanceResolutionTarget.KEGG_GLYCAN,),
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "direct-substance.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.mapped_input_count == 1
+    assert result.resolution_previews[0].operations_used == (
+        ResolutionOperation.DIRECT,
+        ResolutionOperation.GET,
+    )
+    assert client.get_requests[0].entries[0].database is KeggGetDatabase.GLYCAN
+
+
+def test_substance_request_rejects_unsupported_cross_database_and_drug_reaction() -> None:
+    with pytest.raises(ValidationError, match="only its own"):
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.KEGG_COMPOUND,
+            identifiers=("C00031",),
+            targets=(
+                SubstanceResolutionTarget.KEGG_COMPOUND,
+                SubstanceResolutionTarget.KEGG_GLYCAN,
+            ),
+        )
+    with pytest.raises(ValidationError, match="drug resolution"):
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.PUBCHEM_SID,
+            identifiers=("SID:7847177",),
+            targets=(
+                SubstanceResolutionTarget.KEGG_DRUG,
+                SubstanceResolutionTarget.REACTION,
+            ),
+        )
+    with pytest.raises(ValidationError, match="drug resolution"):
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.PUBCHEM_SID,
+            identifiers=("SID:7847177",),
+            targets=(
+                SubstanceResolutionTarget.KEGG_COMPOUND,
+                SubstanceResolutionTarget.KEGG_DRUG,
+                SubstanceResolutionTarget.REACTION,
+            ),
+        )
+    with pytest.raises(ValidationError, match="after normalization"):
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.PUBCHEM_SID,
+            identifiers=("3333", "SID:3333"),
+            targets=(SubstanceResolutionTarget.KEGG_COMPOUND,),
+        )
+
+
+def test_external_substance_normalization_respects_conv_identifier_bound() -> None:
+    with pytest.raises(ValidationError, match="incompatible"):
+        SubstanceResolutionRequest(
+            kind="substance",
+            source_namespace=SubstanceIdentifierNamespace.PUBCHEM_SID,
+            identifiers=("9" * 256,),
+            targets=(SubstanceResolutionTarget.KEGG_COMPOUND,),
+        )
+
+
+def test_trace_rejects_organism_specific_module_as_reference_relation_source() -> None:
+    with pytest.raises(ValidationError, match="reference M identifiers"):
+        TraceKeggRelationsRequest(
+            seeds=(
+                KeggEntityRef(
+                    kind=KeggEntityKind.MODULE,
+                    identifier="eco_M00001",
+                ),
+            ),
+            edge_types=(KeggRelationType.MODULE_TO_KO,),
         )
 
 
@@ -661,6 +900,99 @@ def test_direct_gene_and_taxonomy_identifiers_fit_downstream_bounds() -> None:
             source_namespace=OrganismIdentifierNamespace.TAXONOMY,
             identifiers=("1" * 251,),
         )
+
+
+@pytest.mark.parametrize(
+    "rank",
+    [
+        TaxonomyResolutionRank.EXACT,
+        TaxonomyResolutionRank.SPECIES,
+        TaxonomyResolutionRank.GENUS,
+        TaxonomyResolutionRank.FAMILY,
+        TaxonomyResolutionRank.ORDER,
+        TaxonomyResolutionRank.CLASS,
+        TaxonomyResolutionRank.PHYLUM,
+    ],
+)
+def test_all_documented_taxonomy_resolution_ranks_are_accepted(
+    rank: TaxonomyResolutionRank,
+) -> None:
+    request = OrganismResolutionRequest(
+        kind="organism",
+        source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+        identifiers=("taxid:543",),
+        taxonomy_rank=rank,
+    )
+
+    assert request.taxonomy_rank is rank
+
+
+def test_broad_taxonomy_resolution_defaults_to_identity_only_without_get(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows_by_rank[(KeggLinkRelationship.TAXONOMY_TO_GENOME, KeggTaxonomyRank.FAMILY)] = (
+        ("taxid:543", "gn:eco"),
+        ("taxid:543", "gn:ecj"),
+        ("taxid:543", "gn:ecd"),
+    )
+
+    result = resolve_kegg_entities(
+        OrganismResolutionRequest(
+            kind="organism",
+            source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+            identifiers=("taxid:543",),
+            taxonomy_rank=TaxonomyResolutionRank.FAMILY,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "family.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.ambiguous_input_count == 1
+    assert result.resolution_previews[0].candidate_count == 3
+    assert all(
+        candidate.organism_materialization is OrganismCandidateMaterialization.IDENTITY_ONLY
+        for candidate in result.resolution_previews[0].candidate_preview
+    )
+    assert any(
+        "without per-candidate GENOME GET metadata" in caveat
+        for caveat in result.interpretation_caveats
+    )
+    assert client.get_requests == []
+    assert client.link_requests[0].taxonomy_rank is KeggTaxonomyRank.FAMILY
+
+
+def test_full_broad_taxonomy_materialization_is_bounded_before_get(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows_by_rank[(KeggLinkRelationship.TAXONOMY_TO_GENOME, KeggTaxonomyRank.FAMILY)] = (
+        tuple(
+            (
+                "taxid:543",
+                f"gn:{chr(97 + index // 26)}{chr(97 + index % 26)}x",
+            )
+            for index in range(201)
+        )
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        resolve_kegg_entities(
+            OrganismResolutionRequest(
+                kind="organism",
+                source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+                identifiers=("taxid:543",),
+                taxonomy_rank=TaxonomyResolutionRank.FAMILY,
+                candidate_materialization=OrganismCandidateMaterialization.FULL,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=SQLiteResultStore(tmp_path / "full-family.sqlite3"),
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    assert client.get_requests == []
 
 
 def test_query_retrieval_summary_bounds_distinct_release_labels() -> None:
@@ -1394,6 +1726,160 @@ def test_organism_pathway_list_counts_toward_resolver_budget(
     assert store.list_results("scope").total_items == 0
 
 
+def test_organism_pathway_directory_preflights_deterministic_request_budget(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.find_rows[(KeggFindDatabase.ORGANISM, "many", None)] = tuple(
+        (f"T{index:05d}", f"Synthetic candidate {index}") for index in range(1, 130)
+    )
+    store = SQLiteResultStore(tmp_path / "pathway-request-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        resolve_kegg_entities(
+            OrganismResolutionRequest(
+                kind="organism",
+                source_namespace=OrganismIdentifierNamespace.NAME,
+                identifiers=("many",),
+                include_pathway_directory=True,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert int(details["planned_additional_requests"]) > int(details["remaining_request_limit"])
+    assert len(client.find_requests) == 1
+    assert client.get_requests == []
+    assert client.organism_pathway_requests == []
+    assert client.link_requests == []
+    assert store.list_results("scope").total_items == 0
+
+
+def test_organism_pathway_preflight_counts_mixed_genome_alias_get_batches(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows_by_rank[(KeggLinkRelationship.TAXONOMY_TO_GENOME, KeggTaxonomyRank.EXACT)] = (
+        tuple(
+            (
+                "taxid:543",
+                (
+                    f"gn:a{chr(ord('a') + index // 26)}{chr(ord('a') + index % 26)}"
+                    if index % 2 == 0
+                    else f"gn:T{index + 1:05d}"
+                ),
+            )
+            for index in range(70)
+        )
+    )
+    store = SQLiteResultStore(tmp_path / "mixed-alias-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        resolve_kegg_entities(
+            OrganismResolutionRequest(
+                kind="organism",
+                source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+                identifiers=("543",),
+                candidate_materialization=OrganismCandidateMaterialization.FULL,
+                include_pathway_directory=True,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert int(details["planned_additional_requests"]) > int(details["remaining_request_limit"])
+    assert len(client.link_requests) == 1
+    assert client.link_requests[0].relationship is KeggLinkRelationship.TAXONOMY_TO_GENOME
+    assert client.get_requests == []
+    assert client.organism_pathway_requests == []
+    assert store.list_results("scope").total_items == 0
+
+
+def test_full_organism_resolution_preflights_all_genome_get_batches(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows_by_rank[
+        (
+            KeggLinkRelationship.TAXONOMY_TO_GENOME,
+            KeggTaxonomyRank.EXACT,
+        )
+    ] = tuple(
+        (
+            "taxid:543",
+            (
+                f"gn:a{chr(ord('a') + index // 26)}{chr(ord('a') + index % 26)}"
+                if index % 2 == 0
+                else f"gn:T{index + 1:05d}"
+            ),
+        )
+        for index in range(130)
+    )
+    store = SQLiteResultStore(tmp_path / "full-materialization-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        resolve_kegg_entities(
+            OrganismResolutionRequest(
+                kind="organism",
+                source_namespace=OrganismIdentifierNamespace.TAXONOMY,
+                identifiers=("543",),
+                candidate_materialization=OrganismCandidateMaterialization.FULL,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details["limit_name"] == "kegg_request_count"
+    assert len(client.link_requests) == 1
+    assert client.get_requests == []
+    assert store.list_results("scope").total_items == 0
+
+
+def test_organism_pathway_preflight_counts_url_limited_taxonomy_batches(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient(
+        KeggClientConfig(
+            limits=KeggClientLimits(max_url_bytes=256),
+        )
+    )
+    client.find_rows[(KeggFindDatabase.ORGANISM, "url-limited", None)] = tuple(
+        (f"T{index:05d}", f"Synthetic candidate {index}") for index in range(1, 114)
+    )
+    store = SQLiteResultStore(tmp_path / "url-limited-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        resolve_kegg_entities(
+            OrganismResolutionRequest(
+                kind="organism",
+                source_namespace=OrganismIdentifierNamespace.NAME,
+                identifiers=("url-limited",),
+                include_pathway_directory=True,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert int(details["planned_additional_requests"]) > int(details["remaining_request_limit"])
+    assert len(client.find_requests) == 1
+    assert client.get_requests == []
+    assert client.organism_pathway_requests == []
+    assert client.link_requests == []
+    assert store.list_results("scope").total_items == 0
+
+
 def test_taxonomy_alias_duplicates_are_rejected_after_normalization() -> None:
     with pytest.raises(ValidationError, match="unique after namespace normalization"):
         OrganismResolutionRequest(
@@ -1620,6 +2106,156 @@ def test_trace_rejects_edge_sets_that_cannot_start_from_any_seed() -> None:
         )
 
 
+def test_trace_organism_scoped_ko_to_gene_validates_target_prefix(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship.KO_TO_GENE: (("ko:K01810", "eco:b4025"),),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(_entity(KeggEntityKind.KO, "K01810"),),
+            edge_types=(KeggRelationType.KO_TO_GENE,),
+            organism_scope="eco",
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "ko-gene.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.edge_preview[0].target == _entity(KeggEntityKind.GENE, "eco:b4025")
+    assert client.link_requests[0].organism_scope == "eco"
+
+    client.link_rows[KeggLinkRelationship.KO_TO_GENE] = (("ko:K01810", "hsa:5230"),)
+    with pytest.raises(KeggMcpError) as caught:
+        trace_kegg_relations(
+            TraceKeggRelationsRequest(
+                seeds=(_entity(KeggEntityKind.KO, "K01810"),),
+                edge_types=(KeggRelationType.KO_TO_GENE,),
+                organism_scope="eco",
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=SQLiteResultStore(tmp_path / "wrong-prefix.sqlite3"),
+            scope_id="scope",
+        )
+    assert caught.value.detail.code is ErrorCode.KEGG_PARSE_FAILED
+
+
+def test_trace_organism_specific_pathway_to_gene_requires_matching_scope(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship.PATHWAY_TO_GENE: (("path:hsa00010", "hsa:3098"),),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(_entity(KeggEntityKind.PATHWAY, "hsa00010"),),
+            edge_types=(KeggRelationType.PATHWAY_TO_GENE,),
+            organism_scope="hsa",
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "pathway-gene.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.edge_preview[0].target == _entity(KeggEntityKind.GENE, "hsa:3098")
+    with pytest.raises(ValidationError, match="must match"):
+        TraceKeggRelationsRequest(
+            seeds=(_entity(KeggEntityKind.PATHWAY, "eco00010"),),
+            edge_types=(KeggRelationType.PATHWAY_TO_GENE,),
+            organism_scope="hsa",
+        )
+
+
+def test_depth_two_generic_pathways_are_not_sent_to_scoped_gene_link(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship.KO_TO_PATHWAY: (("ko:K00844", "path:ko00010"),),
+        KeggLinkRelationship.PATHWAY_TO_GENE: (("path:ko00010", "hsa:3098"),),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(_entity(KeggEntityKind.KO, "K00844"),),
+            edge_types=(
+                KeggRelationType.KO_TO_PATHWAY,
+                KeggRelationType.PATHWAY_TO_GENE,
+            ),
+            organism_scope="hsa",
+            max_depth=2,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "generic-pathway.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.edge_count == 1
+    assert [request.relationship for request in client.link_requests] == [
+        KeggLinkRelationship.KO_TO_PATHWAY
+    ]
+
+
+@pytest.mark.parametrize(
+    ("relationship", "source", "target"),
+    [
+        (
+            KeggRelationType.MODULE_TO_KO,
+            _entity(KeggEntityKind.MODULE, "M00001"),
+            _entity(KeggEntityKind.KO, "K00844"),
+        ),
+        (
+            KeggRelationType.MODULE_TO_REACTION,
+            _entity(KeggEntityKind.MODULE, "M00001"),
+            _entity(KeggEntityKind.REACTION, "R01786"),
+        ),
+        (
+            KeggRelationType.GLYCAN_TO_REACTION,
+            _entity(KeggEntityKind.GLYCAN, "G00001"),
+            _entity(KeggEntityKind.REACTION, "R05969"),
+        ),
+        (
+            KeggRelationType.PATHWAY_TO_GLYCAN,
+            _entity(KeggEntityKind.PATHWAY, "map00510"),
+            _entity(KeggEntityKind.GLYCAN, "G00001"),
+        ),
+    ],
+)
+def test_new_selected_entry_relation_types_are_traced(
+    relationship: KeggRelationType,
+    source: KeggEntityRef,
+    target: KeggEntityRef,
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship(relationship.value): (
+            (
+                _wire_entity(source),
+                _wire_entity(target),
+            ),
+        ),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(source,),
+            edge_types=(relationship,),
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / f"{relationship.value}.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.edge_preview[0].source == source
+    assert result.edge_preview[0].target == target
+
+
 def test_trace_edge_contract_rejects_incompatible_endpoint_kinds() -> None:
     with pytest.raises(ValidationError, match="endpoint kinds"):
         KeggRelationEdge(
@@ -1682,6 +2318,143 @@ def test_trace_genome_taxonomy_bridge_preserves_public_t_number_nodes(
     assert reverse.edge_preview[0].provenance_batch_indexes == (0, 1)
     assert reverse.retrieval.batch_count == 2
     assert client.get_requests[-1].entries[0].identifier == "hsa"
+
+
+def test_trace_taxonomy_to_genome_reuses_an_existing_genome_seed(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    _add_genome(
+        client,
+        t_number="T01001",
+        code="hsa",
+        name="Homo sapiens (human)",
+        lineage=("Eukaryotes", "Animals"),
+    )
+    client.link_rows = {
+        KeggLinkRelationship.TAXONOMY_TO_GENOME: (("taxid:9606", "gn:hsa"),),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(
+                _entity(KeggEntityKind.TAXONOMY, "taxid:9606"),
+                _entity(KeggEntityKind.GENOME, "T01001"),
+            ),
+            edge_types=(KeggRelationType.TAXONOMY_TO_GENOME,),
+            max_nodes=2,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "existing-genome-node.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.node_count == 2
+    assert result.edge_count == 1
+    assert result.edge_preview[0].target == _entity(KeggEntityKind.GENOME, "T01001")
+
+
+def test_trace_taxonomy_to_genome_deduplicates_code_and_t_number_edges(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    _add_genome(
+        client,
+        t_number="T01001",
+        code="hsa",
+        name="Homo sapiens (human)",
+        lineage=("Eukaryotes", "Animals"),
+    )
+    client.link_rows = {
+        KeggLinkRelationship.TAXONOMY_TO_GENOME: (
+            ("taxid:9606", "gn:hsa"),
+            ("taxid:9606", "gn:T01001"),
+        ),
+    }
+
+    result = trace_kegg_relations(
+        TraceKeggRelationsRequest(
+            seeds=(_entity(KeggEntityKind.TAXONOMY, "taxid:9606"),),
+            edge_types=(KeggRelationType.TAXONOMY_TO_GENOME,),
+            max_nodes=2,
+            max_edges=1,
+        ),
+        client=cast(KeggQueryClient, client),
+        result_store=SQLiteResultStore(tmp_path / "genome-alias-edge.sqlite3"),
+        scope_id="scope",
+    )
+
+    assert result.node_count == 2
+    assert result.edge_count == 1
+    assert result.edge_preview[0].target == _entity(KeggEntityKind.GENOME, "T01001")
+
+
+def test_trace_taxonomy_to_genome_checks_known_node_limit_before_get(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship.TAXONOMY_TO_GENOME: tuple(
+            ("taxid:543", f"gn:T{index:05d}") for index in range(1, 4)
+        ),
+    }
+    store = SQLiteResultStore(tmp_path / "taxonomy-node-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        trace_kegg_relations(
+            TraceKeggRelationsRequest(
+                seeds=(_entity(KeggEntityKind.TAXONOMY, "taxid:543"),),
+                edge_types=(KeggRelationType.TAXONOMY_TO_GENOME,),
+                max_nodes=2,
+                max_edges=10,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details == {
+        "limit_name": "node_count",
+        "observed": "4",
+        "limit": "2",
+    }
+    assert len(client.link_requests) == 1
+    assert client.get_requests == []
+    assert store.list_results("scope").total_items == 0
+
+
+def test_trace_taxonomy_to_genome_preflights_genome_get_request_budget(
+    tmp_path: Path,
+) -> None:
+    client = _QueryClient()
+    client.link_rows = {
+        KeggLinkRelationship.TAXONOMY_TO_GENOME: tuple(
+            ("taxid:543", f"gn:T{index:05d}") for index in range(1, 131)
+        ),
+    }
+    store = SQLiteResultStore(tmp_path / "taxonomy-request-preflight.sqlite3")
+
+    with pytest.raises(KeggMcpError) as caught:
+        trace_kegg_relations(
+            TraceKeggRelationsRequest(
+                seeds=(_entity(KeggEntityKind.TAXONOMY, "taxid:543"),),
+                edge_types=(KeggRelationType.TAXONOMY_TO_GENOME,),
+                max_nodes=200,
+                max_edges=200,
+            ),
+            client=cast(KeggQueryClient, client),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details["limit_name"] == "kegg_request_count"
+    assert len(client.link_requests) == 1
+    assert client.get_requests == []
+    assert store.list_results("scope").total_items == 0
 
 
 def test_trace_genome_taxonomy_edges_reference_only_their_own_get_batch(

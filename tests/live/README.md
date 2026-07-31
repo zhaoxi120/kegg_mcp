@@ -6,14 +6,18 @@ Local pytest skips this suite unless the operator explicitly enables it.
 Within each 20-request operation budget, the campaign rotates a fixed small matrix rather than
 repeating one request:
 
-- `INFO`: KO, compound, genome, and BRITE;
+- `INFO`: KO, compound, genome, BRITE, glycan, reaction class, and drug;
 - organism-pathway `LIST`: `hsa` and `eco`;
-- `FIND`: KO and compound keywords plus compound formula, exact-mass, and molecular-weight modes;
-- `GET`: two BRITE hierarchy htext entries;
-- `LINK`: KO-to-pathway, KO-to-BRITE, gene-to-pathway, compound-to-reaction, and
-  species-scoped taxonomy-to-genome; and
-- `CONV`: selected KEGG-gene-to-UniProt, KEGG-gene-to-NCBI-Protein, NCBI-Gene-to-KEGG-gene, and
-  UniProt-to-KEGG-gene directions.
+- `FIND`: KO, compound, glycan, and drug keywords; compound formula, exact-mass, and
+  molecular-weight modes; and drug exact-mass mode;
+- `GET`: one BRITE hierarchy plus representative KO, MODULE, pathway, reaction, enzyme, compound,
+  glycan, gene, genome, drug, and reaction-class flat files; supported flat-file shapes also pass
+  through the deterministic typed-card parser;
+- `LINK`: the established KO, BRITE, gene, compound, and taxonomy cases plus organism-scoped
+  KO/pathway-to-gene; module-to-KO/reaction/pathway; pathway-to-module/glycan;
+  reaction-to-glycan; glycan-to-reaction/pathway; and drug-to-pathway directions; and
+- `CONV`: the established selected gene directions plus ChEBI/PubChem SID-to-compound and
+  drug-to-PubChem SID directions.
 
 Assertions cover response structure and request namespaces without freezing names, release labels,
 row counts, or exact relationship sets. Injected-transport tests cover broader parameter and
@@ -42,9 +46,11 @@ The enabled default is 20 requests per operation. Set
 authorized smaller manual run.
 
 An authorized licensed endpoint may be used with the documented `licensed` access variables.
-The campaign, FIND behavior, and BRITE compact htext shape use the official KEGG API behavior
-reviewed on 2026-07-30. Repeat the campaign against the exact merged release commit. The governing
-primary sources were retrieved on 2026-07-30:
+The campaign, FIND behavior, compact BRITE htext shape, typed-card source shapes, and selected
+relation directions use official KEGG API behavior reviewed on 2026-07-30. Unsupported selected
+reaction-class relations and inconsistent `rmodule` selected endpoints remain outside the
+allowlist. Repeat the campaign against the exact merged release commit. The governing primary
+sources were retrieved on 2026-07-30:
 [KEGG API page](https://www.kegg.jp/kegg/rest/) and
 [KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html).
 

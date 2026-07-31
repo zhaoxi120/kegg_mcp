@@ -591,7 +591,7 @@ def audit_annotation_mapping(
     )
     for target_index, target in enumerate(targets_to_map):
         if lenient_kos:
-            accepted_partial_batches: list[KeggBatchProvenance] = []
+            observed_target_batches: list[KeggBatchProvenance] = []
             consumed_rows = MAX_AUDIT_RELATIONSHIP_ROWS - remaining_rows
             consumed_bytes = MAX_AUDIT_RESPONSE_BYTES - remaining_bytes
             try:
@@ -603,9 +603,9 @@ def audit_annotation_mapping(
                     max_total_requests=remaining_requests,
                     max_total_rows=remaining_rows,
                     max_total_response_bytes=remaining_bytes,
-                    record_batch=partial(
+                    observe_batch=partial(
                         _record_audit_batches,
-                        accepted_partial_batches,
+                        observed_target_batches,
                     ),
                 )
             except KeggMcpError as error:
@@ -624,7 +624,7 @@ def audit_annotation_mapping(
                 ) = aggregate_limit
                 incomplete_target = target
                 skipped_targets = targets_to_map[target_index + 1 :]
-                all_batches.extend(accepted_partial_batches)
+                all_batches.extend(observed_target_batches)
                 break
             remaining_requests -= len(mapped.batches)
             remaining_rows -= len(mapped.rows)

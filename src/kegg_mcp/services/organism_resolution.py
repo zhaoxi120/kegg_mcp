@@ -14,12 +14,15 @@ from kegg_mcp.kegg import (
     OrganismPathwayListRequest,
 )
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
+from kegg_mcp.services.kegg_relations import planned_relation_request_count
 from kegg_mcp.services.query_models import (
     MAX_ORGANISM_PATHWAY_PREVIEW,
+    MAX_ORGANISM_RESOLUTION_CANDIDATES,
     MAX_RESOLUTION_ENTITIES,
     KeggEntityKind,
     KeggEntityRef,
     KeggRelationType,
+    OrganismCandidateMaterialization,
     OrganismIdentifierNamespace,
     OrganismPathwayPreviewEntry,
     OrganismPathwaySummary,
@@ -38,6 +41,7 @@ from kegg_mcp.services.query_support import (
     link_relationship,
     load_genome_records,
     pair_entity,
+    planned_genome_get_batch_count,
 )
 from kegg_mcp.services.reference_budget import KeggQueryClient
 from kegg_mcp.services.resolution_support import (
@@ -148,16 +152,41 @@ def resolve_organism_request(
                 )
                 existing.extend(identities)
 
-    if sum(len(groups) for groups in candidate_identities) > MAX_RESOLUTION_ENTITIES:
+    candidate_count = sum(len(groups) for groups in candidate_identities)
+    if candidate_count > MAX_ORGANISM_RESOLUTION_CANDIDATES:
         resolution_limit("canonical_candidate_count")
+    materialization = request.effective_candidate_materialization
+    if (
+        materialization is OrganismCandidateMaterialization.FULL
+        and candidate_count > MAX_RESOLUTION_ENTITIES
+    ):
+        resolution_limit("full_candidate_materialization_count")
 
-    lookup_entities = deduplicate_entities(
-        next(entity for entity in identities if entity_key(entity) == canonical_key)
-        for groups in candidate_identities
-        for canonical_key, identities in groups.items()
+    lookup_entities = (
+        deduplicate_entities(
+            next(entity for entity in identities if entity_key(entity) == canonical_key)
+            for groups in candidate_identities
+            for canonical_key, identities in groups.items()
+        )
+        if materialization is OrganismCandidateMaterialization.FULL
+        else ()
     )
+    if request.include_pathway_directory:
+        _preflight_full_organism_request_plan(
+            lookup_entities=lookup_entities,
+            client=client,
+            remaining_requests=budget.remaining_requests,
+        )
+    elif materialization is OrganismCandidateMaterialization.FULL and lookup_entities:
+        budget.require_request_capacity(
+            planned_genome_get_batch_count(
+                tuple(entity.identifier for entity in lookup_entities),
+                client=client,
+            )
+        )
+
     genome_records: dict[str, GenomeRecord] = {}
-    if lookup_entities:
+    if materialization is OrganismCandidateMaterialization.FULL:
         loaded_genomes = load_genome_records(
             tuple(entity.identifier for entity in lookup_entities),
             client=client,
@@ -175,42 +204,44 @@ def resolve_organism_request(
             if groups:
                 operations_by_input[index].append(ResolutionOperation.GET)
 
-    normalized_groups: list[dict[tuple[str, str], list[KeggEntityRef]]] = [
-        {} for _ in request.identifiers
-    ]
-    for index, groups in enumerate(candidate_identities):
-        for canonical_key, identities in groups.items():
-            lookup = next(entity for entity in identities if entity_key(entity) == canonical_key)
-            record = genome_records.get(lookup.identifier)
-            if record is None:
-                # Syntax-valid but missing code/T-number probes are not mappings.
-                continue
-            supplied_codes = {
-                identity.identifier
-                for identity in identities
-                if identity.kind is KeggEntityKind.ORGANISM
-            }
-            if supplied_codes and supplied_codes != {record.organism_code}:
-                fail(
-                    ErrorCode.KEGG_PARSE_FAILED,
-                    "The KEGG organism candidate did not match its genome record.",
-                    suggested_action="Refresh the typed FIND and GENOME responses and retry.",
-                    safe_details=(SafeDetail(name="reason", value="organism_code_mismatch"),),
+        normalized_groups: list[dict[tuple[str, str], list[KeggEntityRef]]] = [
+            {} for _ in request.identifiers
+        ]
+        for index, groups in enumerate(candidate_identities):
+            for canonical_key, identities in groups.items():
+                lookup = next(
+                    entity for entity in identities if entity_key(entity) == canonical_key
                 )
-            genome = KeggEntityRef(
-                kind=KeggEntityKind.GENOME,
-                identifier=record.t_number,
-            )
-            organism = KeggEntityRef(
-                kind=KeggEntityKind.ORGANISM,
-                identifier=record.organism_code,
-            )
-            normalized = normalized_groups[index].setdefault(
-                entity_key(organism),
-                [],
-            )
-            normalized.extend((*identities, genome, organism))
-    candidate_identities = normalized_groups
+                record = genome_records.get(lookup.identifier)
+                if record is None:
+                    # Syntax-valid but missing code/T-number probes are not mappings.
+                    continue
+                supplied_codes = {
+                    identity.identifier
+                    for identity in identities
+                    if identity.kind is KeggEntityKind.ORGANISM
+                }
+                if supplied_codes and supplied_codes != {record.organism_code}:
+                    fail(
+                        ErrorCode.KEGG_PARSE_FAILED,
+                        "The KEGG organism candidate did not match its genome record.",
+                        suggested_action="Refresh the typed FIND and GENOME responses and retry.",
+                        safe_details=(SafeDetail(name="reason", value="organism_code_mismatch"),),
+                    )
+                genome = KeggEntityRef(
+                    kind=KeggEntityKind.GENOME,
+                    identifier=record.t_number,
+                )
+                organism = KeggEntityRef(
+                    kind=KeggEntityKind.ORGANISM,
+                    identifier=record.organism_code,
+                )
+                normalized = normalized_groups[index].setdefault(
+                    entity_key(organism),
+                    [],
+                )
+                normalized.extend((*identities, genome, organism))
+        candidate_identities = normalized_groups
 
     all_organism_codes = deduplicate_entities(
         entity
@@ -256,7 +287,7 @@ def resolve_organism_request(
             if groups:
                 operations_by_input[index].append(ResolutionOperation.LIST)
 
-    if all_organism_codes:
+    if all_organism_codes and materialization is OrganismCandidateMaterialization.FULL:
         linked_taxonomies = bounded_query_relation(
             tuple(organism.identifier for organism in all_organism_codes),
             relationship=link_relationship(KeggRelationType.GENOME_TO_TAXONOMY),
@@ -321,6 +352,7 @@ def resolve_organism_request(
                     name=record.name if record is not None else None,
                     taxonomy_lineage=(record.taxonomy_lineage if record is not None else ()),
                     organism_pathways=pathway_summaries.get(canonical.identifier),
+                    organism_materialization=materialization,
                 )
             )
         candidate_groups.append(tuple(resolved_groups))
@@ -364,6 +396,48 @@ def _organism_codes(matched_text: str) -> tuple[str, ...]:
     except ValueError:
         return ()
     return (entity.identifier,)
+
+
+def _preflight_full_organism_request_plan(
+    *,
+    lookup_entities: tuple[KeggEntityRef, ...],
+    client: KeggQueryClient,
+    remaining_requests: int,
+) -> None:
+    candidate_count = len(lookup_entities)
+    if candidate_count == 0:
+        return
+    get_requests = planned_genome_get_batch_count(
+        tuple(entity.identifier for entity in lookup_entities),
+        client=client,
+    )
+    worst_case_organism_codes = tuple(
+        _maximum_width_organism_code(index) for index in range(candidate_count)
+    )
+    taxonomy_requests = planned_relation_request_count(
+        worst_case_organism_codes,
+        relationship=link_relationship(KeggRelationType.GENOME_TO_TAXONOMY),
+        client=client,
+    )
+    planned_requests = get_requests + candidate_count + taxonomy_requests
+    if planned_requests > remaining_requests:
+        fail(
+            ErrorCode.INPUT_LIMIT_EXCEEDED,
+            "The requested organism pathway directories exceed the resolver request budget.",
+            suggested_action=(
+                "Resolve fewer candidates, omit include_pathway_directory, or first select "
+                "specific organism candidates in a separate request."
+            ),
+            safe_details=(
+                SafeDetail(name="planned_additional_requests", value=str(planned_requests)),
+                SafeDetail(name="remaining_request_limit", value=str(remaining_requests)),
+            ),
+        )
+
+
+def _maximum_width_organism_code(index: int) -> str:
+    suffix = "".join(chr(ord("a") + (index // divisor) % 26) for divisor in (26 * 26, 26, 1))
+    return f"z{suffix}"
 
 
 __all__: list[str] = []

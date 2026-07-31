@@ -32,6 +32,7 @@ from kegg_mcp.services.query_support import (
     link_relationship,
     load_genome_records,
     pair_entity,
+    planned_genome_get_batch_count,
     require_bounded_query_direct_result,
     require_provenance_bound,
     summarize_query_retrieval,
@@ -98,6 +99,12 @@ def trace_kegg_relations(
                 for entity in frontier
                 if entity.kind is source_kind and (relationship, entity_key(entity)) not in queried
             ]
+            if relationship is KeggRelationType.PATHWAY_TO_GENE:
+                if request.organism_scope is None:
+                    raise AssertionError("scoped relation validation requires organism_scope")
+                sources = [
+                    source for source in sources if source.identifier[:-5] == request.organism_scope
+                ]
             if not sources:
                 continue
             for source in sources:
@@ -109,6 +116,13 @@ def trace_kegg_relations(
                 options=options,
                 budget=budget,
                 depth=depth,
+                organism_scope=request.organism_scope,
+                current_node_count=len(nodes),
+                current_node_keys=frozenset(node_keys),
+                current_edge_count=len(edges),
+                current_edge_keys=frozenset(edge_indexes),
+                node_limit=request.max_nodes,
+                edge_limit=request.max_edges,
             )
             provenance_offset = len(provenance)
             provenance.extend(relation_provenance)
@@ -223,6 +237,13 @@ def _trace_relation(
     options: KeggRequestOptions | None,
     budget: QueryBudget,
     depth: int,
+    organism_scope: str | None,
+    current_node_count: int,
+    current_node_keys: frozenset[tuple[str, str]],
+    current_edge_count: int,
+    current_edge_keys: frozenset[tuple[KeggRelationType, tuple[str, str], tuple[str, str]]],
+    node_limit: int,
+    edge_limit: int,
 ) -> tuple[
     tuple[_TracedPair, ...],
     tuple[KeggBatchProvenance, ...],
@@ -243,6 +264,12 @@ def _trace_relation(
             options=options,
             budget=budget,
             depth=depth,
+            current_node_count=current_node_count,
+            current_node_keys=current_node_keys,
+            current_edge_count=current_edge_count,
+            current_edge_keys=current_edge_keys,
+            node_limit=node_limit,
+            edge_limit=edge_limit,
         )
 
     source_kind, target_kind = relation_entity_kinds(relationship)
@@ -252,6 +279,11 @@ def _trace_relation(
         client=client,
         options=options,
         budget=budget,
+        organism_scope=(
+            organism_scope
+            if relationship in {KeggRelationType.KO_TO_GENE, KeggRelationType.PATHWAY_TO_GENE}
+            else None
+        ),
     )
     source_by_key = {entity_key(source): source for source in sources}
     pairs: list[_TracedPair] = []
@@ -259,10 +291,17 @@ def _trace_relation(
         source = pair_entity(source_kind, row.source_id)
         if entity_key(source) not in source_by_key:
             fail_unexpected_relation_row()
+        target = pair_entity(target_kind, row.target_id)
+        if (
+            target.kind is KeggEntityKind.GENE
+            and organism_scope is not None
+            and target.identifier.partition(":")[0] != organism_scope
+        ):
+            fail_unexpected_relation_row()
         pairs.append(
             _TracedPair(
                 source=source_by_key[entity_key(source)],
-                target=pair_entity(target_kind, row.target_id),
+                target=target,
                 provenance_batch_indexes=(row.batch_index,),
             )
         )
@@ -293,6 +332,12 @@ def _trace_genome_to_taxonomy(
     tuple[KeggBatchProvenance, ...],
     tuple[dict[str, Any], ...],
 ]:
+    budget.require_request_capacity(
+        planned_genome_get_batch_count(
+            tuple(source.identifier for source in sources),
+            client=client,
+        )
+    )
     loaded_genomes = load_genome_records(
         tuple(source.identifier for source in sources),
         client=client,
@@ -360,6 +405,12 @@ def _trace_taxonomy_to_genome(
     options: KeggRequestOptions | None,
     budget: QueryBudget,
     depth: int,
+    current_node_count: int,
+    current_node_keys: frozenset[tuple[str, str]],
+    current_edge_count: int,
+    current_edge_keys: frozenset[tuple[KeggRelationType, tuple[str, str], tuple[str, str]]],
+    node_limit: int,
+    edge_limit: int,
 ) -> tuple[
     tuple[_TracedPair, ...],
     tuple[KeggBatchProvenance, ...],
@@ -389,6 +440,35 @@ def _trace_taxonomy_to_genome(
         )
         genome_lookups.append(lookup.identifier)
     unique_codes = tuple(dict.fromkeys(genome_lookups))
+    explicit_t_number_edge_keys = {
+        (
+            KeggRelationType.TAXONOMY_TO_GENOME,
+            entity_key(source),
+            (KeggEntityKind.GENOME.value, code),
+        )
+        for source, code, _batch_index in parsed_rows
+        if code.startswith("T")
+    }
+    potential_edge_count = len(explicit_t_number_edge_keys - current_edge_keys)
+    if current_edge_count + potential_edge_count > edge_limit:
+        _trace_limit(
+            "edge_count",
+            current_edge_count + potential_edge_count,
+            edge_limit,
+        )
+    t_number_lookups = {
+        code
+        for code in unique_codes
+        if code.startswith("T") and (KeggEntityKind.GENOME.value, code) not in current_node_keys
+    }
+    if current_node_count + len(t_number_lookups) > node_limit:
+        _trace_limit(
+            "node_count",
+            current_node_count + len(t_number_lookups),
+            node_limit,
+        )
+    if unique_codes:
+        budget.require_request_capacity(planned_genome_get_batch_count(unique_codes, client=client))
     loaded_genomes = load_genome_records(
         unique_codes,
         client=client,
@@ -402,6 +482,34 @@ def _trace_taxonomy_to_genome(
     records = loaded_genomes.records
     get_batches = loaded_genomes.batches
     get_step = loaded_genomes.step
+    potential_target_keys = {
+        (KeggEntityKind.GENOME.value, record.t_number)
+        for code in unique_codes
+        if (record := records.get(code)) is not None
+    }
+    potential_new_node_count = len(potential_target_keys - current_node_keys)
+    if current_node_count + potential_new_node_count > node_limit:
+        _trace_limit(
+            "node_count",
+            current_node_count + potential_new_node_count,
+            node_limit,
+        )
+    canonical_edge_keys = {
+        (
+            KeggRelationType.TAXONOMY_TO_GENOME,
+            entity_key(source),
+            (KeggEntityKind.GENOME.value, record.t_number),
+        )
+        for source, code, _batch_index in parsed_rows
+        if (record := records.get(code)) is not None
+    }
+    potential_edge_count = len(canonical_edge_keys - current_edge_keys)
+    if current_edge_count + potential_edge_count > edge_limit:
+        _trace_limit(
+            "edge_count",
+            current_edge_count + potential_edge_count,
+            edge_limit,
+        )
     pairs = tuple(
         _TracedPair(
             source=source,

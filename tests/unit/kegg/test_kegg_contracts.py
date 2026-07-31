@@ -567,6 +567,49 @@ def test_taxonomy_to_genome_link_accepts_the_typed_species_rank() -> None:
     assert request.taxonomy_rank is KeggTaxonomyRank.SPECIES
 
 
+@pytest.mark.parametrize(
+    "rank",
+    [
+        KeggTaxonomyRank.GENUS,
+        KeggTaxonomyRank.FAMILY,
+        KeggTaxonomyRank.ORDER,
+        KeggTaxonomyRank.CLASS,
+        KeggTaxonomyRank.PHYLUM,
+    ],
+)
+def test_taxonomy_to_genome_link_accepts_documented_broad_ranks(
+    rank: KeggTaxonomyRank,
+) -> None:
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.TAXONOMY_TO_GENOME,
+        taxonomy_rank=rank,
+        source_identifiers=("taxid:543",),
+    )
+
+    assert request.taxonomy_rank is rank
+
+
+def test_organism_scoped_gene_links_cannot_fall_back_to_global_genes() -> None:
+    with pytest.raises(ValidationError, match="organism-scoped"):
+        LinkRequest(
+            relationship=KeggLinkRelationship.KO_TO_GENE,
+            source_identifiers=("K01810",),
+        )
+    with pytest.raises(ValidationError, match="must match"):
+        LinkRequest(
+            relationship=KeggLinkRelationship.PATHWAY_TO_GENE,
+            organism_scope="hsa",
+            source_identifiers=("eco00010",),
+        )
+
+    request = LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_GENE,
+        organism_scope="eco",
+        source_identifiers=("K01810",),
+    )
+    assert request.organism_scope == "eco"
+
+
 def test_non_taxonomy_link_rejects_a_non_default_taxonomy_rank() -> None:
     with pytest.raises(ValidationError, match="taxonomy_rank"):
         LinkRequest(
@@ -600,6 +643,55 @@ def test_conversion_requires_database_qualified_source_identifiers() -> None:
             target_database=KeggConvDatabase.GENES,
             source_database=KeggConvDatabase.UNIPROT,
             source_identifiers=("P12345",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "source", "identifier"),
+    [
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.CHEBI,
+            "chebi:4167",
+        ),
+        (
+            KeggConvDatabase.GLYCAN,
+            KeggConvDatabase.PUBCHEM,
+            "pubchem:12345",
+        ),
+        (
+            KeggConvDatabase.PUBCHEM,
+            KeggConvDatabase.DRUG,
+            "D00109",
+        ),
+    ],
+)
+def test_conversion_accepts_selected_substance_crosswalks(
+    target: KeggConvDatabase,
+    source: KeggConvDatabase,
+    identifier: str,
+) -> None:
+    request = ConvRequest(
+        target_database=target,
+        source_database=source,
+        source_identifiers=(identifier,),
+    )
+
+    assert request.source_identifiers == (identifier,)
+
+
+def test_conversion_rejects_ambiguous_or_internal_substance_directions() -> None:
+    with pytest.raises(ValidationError):
+        ConvRequest(
+            target_database=KeggConvDatabase.COMPOUND,
+            source_database=KeggConvDatabase.DRUG,
+            source_identifiers=("D00109",),
+        )
+    with pytest.raises(ValidationError):
+        ConvRequest(
+            target_database=KeggConvDatabase.DRUG,
+            source_database=KeggConvDatabase.PUBCHEM,
+            source_identifiers=("pubchem:0",),
         )
 
 

@@ -11,16 +11,17 @@ from kegg_mcp.services.models import DETAIL_SECTION
 from kegg_mcp.services.query_models import (
     MAX_RESOLUTION_CANDIDATE_PREVIEW,
     MAX_RESOLUTION_DIRECT_TEXT_CHARACTERS,
-    MAX_RESOLUTION_ENTITIES,
     MAX_RESOLUTION_ENTITY_PREVIEW,
     MAX_RESOLUTION_INPUT_PREVIEW,
     MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW,
     MAX_RESOLUTION_TAXONOMY_PREVIEW,
+    MAX_RESOLUTION_UNIQUE_ENTITIES,
     EntityResolution,
     EntityResolutionPreview,
     GeneResolutionRequest,
     KeggRelationType,
     MappingStatus,
+    OrganismCandidateMaterialization,
     OrganismPathwayDirectPreviewEntry,
     OrganismPathwayPreviewEntry,
     OrganismResolutionRequest,
@@ -28,6 +29,7 @@ from kegg_mcp.services.query_models import (
     ResolvedEntityCandidate,
     ResolvedEntityCandidatePreview,
     ResolveKeggEntitiesResult,
+    SubstanceResolutionRequest,
 )
 from kegg_mcp.services.query_support import (
     QueryBudget,
@@ -64,8 +66,8 @@ def new_resolver_budget() -> QueryBudget:
 
 def retain_resolution(
     *,
-    request: GeneResolutionRequest | OrganismResolutionRequest,
-    kind: Literal["gene", "organism"],
+    request: GeneResolutionRequest | OrganismResolutionRequest | SubstanceResolutionRequest,
+    kind: Literal["gene", "organism", "substance"],
     candidate_groups: tuple[tuple[ResolvedEntityCandidate, ...], ...],
     mismatch_counts: tuple[int, ...],
     operations_by_input: tuple[tuple[ResolutionOperation, ...], ...],
@@ -83,7 +85,7 @@ def retain_resolution(
         for candidate in groups
         for entity in candidate.entities
     }
-    if len(unique_entities) > MAX_RESOLUTION_ENTITIES:
+    if len(unique_entities) > MAX_RESOLUTION_UNIQUE_ENTITIES:
         resolution_limit("unique_mapped_entity_count")
 
     canonical_candidate_counts = Counter(
@@ -236,6 +238,7 @@ def _candidate_preview(
         organism_pathways_truncated=(
             None if pathways is None else pathways.total_count > len(pathway_preview)
         ),
+        organism_materialization=candidate.organism_materialization,
     )
 
 
@@ -258,7 +261,7 @@ def _direct_text(value: str) -> tuple[str, bool]:
 
 
 def _resolution_caveats(
-    request: GeneResolutionRequest | OrganismResolutionRequest,
+    request: GeneResolutionRequest | OrganismResolutionRequest | SubstanceResolutionRequest,
 ) -> tuple[str, ...]:
     caveats = [
         "Unmapped identifiers are not evidence that the biological entity does not exist.",
@@ -268,6 +271,20 @@ def _resolution_caveats(
         caveats.append(
             "Organism-specific pathway directory entries are KEGG references and do not "
             "establish pathway presence, completeness, activity, flux, or phenotype."
+        )
+    elif (
+        isinstance(request, OrganismResolutionRequest)
+        and request.effective_candidate_materialization
+        is OrganismCandidateMaterialization.IDENTITY_ONLY
+    ):
+        caveats.append(
+            "Identity-only taxonomy candidates preserve LINK-reported genome identities without "
+            "per-candidate GENOME GET metadata."
+        )
+    elif isinstance(request, SubstanceResolutionRequest):
+        caveats.append(
+            "Chemical crosswalks and projected references do not establish substance "
+            "identification, biological activity, or clinical suitability."
         )
     return tuple(caveats)
 
