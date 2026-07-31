@@ -19,7 +19,6 @@ from kegg_mcp.kegg.contracts import (
     GetRequest,
     GetResult,
     KeggBatchProvenance,
-    KeggBriteEntryKind,
     KeggEntryRef,
     KeggGetDatabase,
     KeggOperation,
@@ -27,12 +26,12 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
 )
 from kegg_mcp.kegg.parsers import parse_flat_file_response
-from kegg_mcp.services.entry_references import (
-    ENTRY_REFERENCE_PARSER_VERSION,
-    ENTRY_REFERENCE_SCHEMA_VERSION,
-    ENTRY_REFERENCE_SNAPSHOT_SECTION,
-    build_entry_literature_references,
-    entry_literature_reference_previews,
+from kegg_mcp.services.entry_cards import (
+    ENTRY_CARD_PARSER_VERSION,
+    ENTRY_CARD_SCHEMA_VERSION,
+    ENTRY_CARD_SNAPSHOT_SECTION,
+    build_entry_cards,
+    entry_card_reference_previews,
 )
 from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
 from kegg_mcp.services.models import KeggEntryProjection
@@ -105,16 +104,14 @@ class _UnexpectedGetClient:
         raise AssertionError("unsupported reference projection must fail before KEGG access")
 
 
-def _drug_result() -> GetResult:
-    request = GetRequest(
-        entries=(KeggEntryRef(database=KeggGetDatabase.DRUG, identifier="D00001"),)
-    )
+def _ko_result() -> GetResult:
+    request = GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),))
     return GetResult(
         request=request,
         documents=(
             parse_flat_file_response(
-                b"ENTRY       D00001                      Drug\n"
-                b"NAME        Synthetic drug\n"
+                b"ENTRY       K00001                      KO\n"
+                b"NAME        Synthetic ortholog\n"
                 b"REFERENCE   PMID:123456\n"
                 b"            PMID:234567 PMID:123456\n"
                 b"///\n"
@@ -126,14 +123,14 @@ def _drug_result() -> GetResult:
 
 
 def test_reference_projection_extracts_only_ordered_unique_kegg_pmids() -> None:
-    snapshot = build_entry_literature_references(_drug_result())
+    snapshot = build_entry_cards(_ko_result())
 
-    assert snapshot.schema_version == ENTRY_REFERENCE_SCHEMA_VERSION
-    assert snapshot.parser_version == ENTRY_REFERENCE_PARSER_VERSION
+    assert snapshot.schema_version == ENTRY_CARD_SCHEMA_VERSION
+    assert snapshot.parser_version == ENTRY_CARD_PARSER_VERSION
     assert snapshot.response_parser_version == PARSER_VERSION
-    assert snapshot.entries[0].entity.database is KeggGetDatabase.DRUG
+    assert snapshot.entries[0].entity.database.value == KeggGetDatabase.KO.value
     assert snapshot.entries[0].pubmed_ids == ("123456", "234567")
-    preview = entry_literature_reference_previews(snapshot)
+    preview = entry_card_reference_previews(snapshot)
     assert preview.entry_count == 1
     assert preview.referenced_entry_count == 1
     assert preview.pubmed_id_count == 2
@@ -141,20 +138,20 @@ def test_reference_projection_extracts_only_ordered_unique_kegg_pmids() -> None:
 
 
 def test_reference_projection_accepts_returned_entry_without_pubmed_ids() -> None:
-    fetched = _drug_result().model_copy(
+    fetched = _ko_result().model_copy(
         update={
             "documents": (
                 parse_flat_file_response(
-                    b"ENTRY       D00001                      Drug\n"
-                    b"NAME        Synthetic drug without references\n"
+                    b"ENTRY       K00001                      KO\n"
+                    b"NAME        Synthetic ortholog without references\n"
                     b"///\n"
                 ),
             ),
         }
     )
 
-    snapshot = build_entry_literature_references(fetched)
-    preview = entry_literature_reference_previews(snapshot)
+    snapshot = build_entry_cards(fetched)
+    preview = entry_card_reference_previews(snapshot)
 
     assert snapshot.entries[0].pubmed_ids == ()
     assert preview.entry_count == 1
@@ -162,10 +159,10 @@ def test_reference_projection_accepts_returned_entry_without_pubmed_ids() -> Non
     assert preview.pubmed_id_count == 0
 
 
-def test_reference_service_retains_complete_projection_for_unsupported_card_type(
+def test_reference_service_reuses_complete_card_snapshot(
     tmp_path: Path,
 ) -> None:
-    fetched = _drug_result()
+    fetched = _ko_result()
     client = _StaticGetClient(fetched)
     store = SQLiteResultStore(tmp_path / "literature.sqlite3")
 
@@ -179,22 +176,23 @@ def test_reference_service_retains_complete_projection_for_unsupported_card_type
 
     assert client.calls == 1
     assert result.projection is KeggEntryProjection.REFERENCES
-    assert result.snapshot_artifact is None
+    assert result.snapshot_artifact is not None
     assert result.card_preview is None
-    assert result.literature_artifact is not None
     assert result.literature_preview is not None
     assert result.literature_preview.pubmed_id_count == 2
     retained = store.read_artifact(
         "literature-scope",
         result.result.result_id,
-        ENTRY_REFERENCE_SNAPSHOT_SECTION,
+        ENTRY_CARD_SNAPSHOT_SECTION,
         now=_NOW,
     )
     payload = json.loads(retained.content)
     assert payload["entries"][0]["pubmed_ids"] == ["123456", "234567"]
 
 
-def test_reference_projection_rejects_brite_before_kegg_access(tmp_path: Path) -> None:
+def test_reference_projection_rejects_unsupported_card_type_before_kegg_access(
+    tmp_path: Path,
+) -> None:
     client = _UnexpectedGetClient()
     store = SQLiteResultStore(tmp_path / "brite-references.sqlite3")
 
@@ -203,9 +201,8 @@ def test_reference_projection_rejects_brite_before_kegg_access(tmp_path: Path) -
             GetRequest(
                 entries=(
                     KeggEntryRef(
-                        database=KeggGetDatabase.BRITE,
-                        identifier="br08901",
-                        brite_kind=KeggBriteEntryKind.HIERARCHY,
+                        database=KeggGetDatabase.DRUG,
+                        identifier="D00001",
                     ),
                 )
             ),

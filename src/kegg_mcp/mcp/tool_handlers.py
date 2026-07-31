@@ -40,8 +40,6 @@ from kegg_mcp.services.annotation_audit import (
 )
 from kegg_mcp.services.brite_hierarchy import map_brite_hierarchy
 from kegg_mcp.services.comparison import compare_annotation_sets
-from kegg_mcp.services.enrichment_handoff import prepare_enrichment_handoff
-from kegg_mcp.services.enrichment_handoff_models import EnrichmentHandoffRequest
 from kegg_mcp.services.entity_resolution import resolve_kegg_entities
 from kegg_mcp.services.external_handoff import prepare_external_handoff
 from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
@@ -359,27 +357,15 @@ def prepare_handoff(context: ToolContext, model: BaseModel) -> ToolOutcome:
     if output_directory is None:  # pragma: no cover - input requires a value
         raise AssertionError("validated handoff request omitted output_directory")
     preflight_text_bundle_output(output_directory)
-    if isinstance(request.handoff, EnrichmentHandoffRequest):
-        result = prepare_enrichment_handoff(
-            request.handoff,
-            client=runtime.client,
-            output_directory=output_directory,
-            remove_created_directory_on_failure=True,
-        )
-        summary = (
-            "Prepared a deterministic enrichment-input bundle with an explicit universe; "
-            "no enrichment statistic, p-value, FDR, GSEA score, or pathway activity was computed."
-        )
-    else:
-        result = prepare_external_handoff(
-            request.handoff,
-            output_directory=output_directory,
-            remove_created_directory_on_failure=True,
-        )
-        summary = (
-            f"Prepared a local {result.target.value} input bundle; no external tool was "
-            "executed, uploaded to, or opened."
-        )
+    result = prepare_external_handoff(
+        request.handoff,
+        output_directory=output_directory,
+        remove_created_directory_on_failure=True,
+    )
+    summary = (
+        f"Prepared a local {result.target.value} input bundle; no external tool was "
+        "executed, uploaded to, or opened."
+    )
     return ToolOutcome(result, summary)
 
 

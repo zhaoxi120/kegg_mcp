@@ -110,7 +110,6 @@ def test_live_campaign_includes_high_level_mcp_and_manual_stdio_boundaries() -> 
     ):
         assert f'"{tool_name}"' in scientist_suite
     assert '"projection": "references"' in scientist_suite
-    assert '"target": "enrichment"' in scientist_suite
     for target in (
         "mapper_reconstruct",
         "mapper_search",
@@ -123,7 +122,7 @@ def test_live_campaign_includes_high_level_mcp_and_manual_stdio_boundaries() -> 
         assert f'"target": "{target}"' in scientist_suite
         assert f'"target": "{target}"' in stdio_suite
     assert "allowed_roots=(str(live_campaign.root.resolve()),)" in scientist_suite
-    for local_step in ("reference_bundle", "external_handoffs", "enrichment"):
+    for local_step in ("reference_bundle", "external_handoffs"):
         assert f"requests_before_{local_step}" in scientist_suite
     assert "_assert_durable_output_bundle" in scientist_suite
     assert "read_resource" in scientist_suite

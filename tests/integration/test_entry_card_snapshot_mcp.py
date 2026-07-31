@@ -32,7 +32,6 @@ from kegg_mcp.kegg.parsers import parse_flat_file_response
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import dispatch_tool, tool_definitions
 from kegg_mcp.services.entry_cards import ENTRY_CARD_SNAPSHOT_SECTION
-from kegg_mcp.services.entry_references import ENTRY_REFERENCE_SNAPSHOT_SECTION
 from kegg_mcp.services.query_support import MAX_QUERY_DIRECT_BYTES
 from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.reference_snapshots import REFERENCE_DIFF_SECTION
@@ -175,7 +174,7 @@ def test_registry_declares_card_and_local_snapshot_comparison_contracts() -> Non
 
 
 @pytest.mark.asyncio
-async def test_literature_references_round_trip_without_card_snapshot(tmp_path: Path) -> None:
+async def test_literature_references_round_trip_through_card_snapshot(tmp_path: Path) -> None:
     tools = _tool_map()
     store = SQLiteResultStore(tmp_path / "literature-results.sqlite3")
     client = _CountingEntryClient()
@@ -189,9 +188,8 @@ async def test_literature_references_round_trip_without_card_snapshot(tmp_path: 
     _validate_output(tools["get_kegg_entries"], result)
     data = _data(result)
     assert data["projection"] == "references"
-    assert data["snapshot_artifact"] is None
+    assert data["snapshot_artifact"]["section"] == ENTRY_CARD_SNAPSHOT_SECTION
     assert data["card_preview"] is None
-    assert data["literature_artifact"]["section"] == ENTRY_REFERENCE_SNAPSHOT_SECTION
     assert data["literature_preview"]["entry_count"] == _ENTRY_COUNT
     assert data["literature_preview"]["referenced_entry_count"] == _ENTRY_COUNT
     assert data["literature_preview"]["pubmed_id_count"] == 2
@@ -205,7 +203,7 @@ async def test_literature_references_round_trip_without_card_snapshot(tmp_path: 
     artifacts = store.list_artifacts(runtime.scope_id, result_id)
     assert tuple(item.section for item in artifacts.items) == (
         "detail",
-        ENTRY_REFERENCE_SNAPSHOT_SECTION,
+        ENTRY_CARD_SNAPSHOT_SECTION,
     )
 
 

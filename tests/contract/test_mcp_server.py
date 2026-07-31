@@ -404,7 +404,6 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "analyze_modules",
             "analyze_pathways",
             "compare_ko_sets",
-            "prepare_kegg_handoff",
             "probe_kegg_connectivity",
         ):
             annotations = _tool_by_name(tools, name).annotations
@@ -438,6 +437,12 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert reference_bundle_annotations.destructiveHint is False
         assert reference_bundle_annotations.idempotentHint is False
         assert reference_bundle_annotations.openWorldHint is False
+        handoff_annotations = _tool_by_name(tools, "prepare_kegg_handoff").annotations
+        assert handoff_annotations is not None
+        assert handoff_annotations.readOnlyHint is False
+        assert handoff_annotations.destructiveHint is False
+        assert handoff_annotations.idempotentHint is False
+        assert handoff_annotations.openWorldHint is False
         delete_annotations = _tool_by_name(tools, "delete_analysis_result").annotations
         assert delete_annotations is not None
         assert delete_annotations.readOnlyHint is False
@@ -481,9 +486,18 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert set(handoff_schema["properties"]) == {"output_directory", "handoff"}
         handoff_union = handoff_schema["properties"]["handoff"]
         assert handoff_union["discriminator"] == {"propertyName": "target"}
-        assert len(handoff_union["oneOf"]) == 8
+        assert len(handoff_union["oneOf"]) == 7
         assert all(branch["additionalProperties"] is False for branch in handoff_union["oneOf"])
         assert all("target" in branch["required"] for branch in handoff_union["oneOf"])
+        assert {branch["properties"]["target"]["const"] for branch in handoff_union["oneOf"]} == {
+            "mapper_reconstruct",
+            "mapper_search",
+            "mapper_color",
+            "mapper_join",
+            "mapper_mwsearch",
+            "syntax_ko_composition",
+            "syntax_ko_sequence",
+        }
         resolution_schema = _tool_by_name(tools, "resolve_kegg_entities").inputSchema
         assert resolution_schema["discriminator"] == {"propertyName": "kind"}
         assert {branch["properties"]["kind"]["const"] for branch in resolution_schema["oneOf"]} == {

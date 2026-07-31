@@ -42,11 +42,9 @@ from kegg_mcp.services.entry_cards import (
 from kegg_mcp.services.query_models import KeggEntityKind, KeggEntityRef
 from kegg_mcp.services.reference_bundles import (
     REFERENCE_BRITE_PATHS_NAME,
-    REFERENCE_ENTITIES_NAME,
     REFERENCE_MANIFEST_NAME,
-    REFERENCE_PROVENANCE_NAME,
     REFERENCE_RELATIONSHIPS_NAME,
-    REFERENCE_REQUEST_NAME,
+    REFERENCE_SNAPSHOT_NAME,
     ReferenceBundleSource,
     WriteKeggReferenceBundleRequest,
     write_kegg_reference_bundle,
@@ -235,11 +233,8 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
     )
 
     expected_names = (
-        REFERENCE_ENTITIES_NAME,
+        REFERENCE_SNAPSHOT_NAME,
         REFERENCE_RELATIONSHIPS_NAME,
-        REFERENCE_BRITE_PATHS_NAME,
-        REFERENCE_PROVENANCE_NAME,
-        REFERENCE_REQUEST_NAME,
         REFERENCE_MANIFEST_NAME,
     )
     assert tuple(item.name for item in result.artifacts) == expected_names
@@ -281,36 +276,48 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
             "text/tab-separated-values; charset=utf-8",
         }
 
-    request_contract = json.loads((output / REFERENCE_REQUEST_NAME).read_text(encoding="utf-8"))
-    assert request_contract["operation"] == "get"
-    assert request_contract["projection"] == "card"
-    assert request_contract["entries"] == [
-        {"database": "ko", "identifier": "K00001"},
-        {"database": "pathway", "identifier": "ko99999"},
+    reference_snapshot = json.loads((output / REFERENCE_SNAPSHOT_NAME).read_text(encoding="utf-8"))
+    assert set(reference_snapshot) == {
+        "schema_version",
+        "source_schema",
+        "request",
+        "entries",
+        "missing_entries",
+        "brite",
+        "retrieval",
+    }
+    assert reference_snapshot["schema_version"] == "1"
+    assert reference_snapshot["source_schema"] == {
+        "card_parser_name": "kegg_flat_file_entry_card",
+        "card_parser_version": "1",
+        "card_schema_version": "1",
+        "response_parser_version": PARSER_VERSION,
+    }
+    assert reference_snapshot["request"] == {
+        "operation": "get",
+        "projection": "card",
+        "entries": [
+            {"database": "ko", "identifier": "K00001"},
+            {"database": "pathway", "identifier": "ko99999"},
+        ],
+    }
+    assert reference_snapshot["entries"][0]["entity"]["identifier"] == "K00001"
+    assert reference_snapshot["missing_entries"] == [
+        {"database": "pathway", "identifier": "ko99999"}
     ]
-    entities = json.loads((output / REFERENCE_ENTITIES_NAME).read_text(encoding="utf-8"))
-    assert entities["entries"][0]["entity"]["identifier"] == "K00001"
-    assert entities["missing_entries"] == [{"database": "pathway", "identifier": "ko99999"}]
+    assert reference_snapshot["brite"] is None
     relationships = (output / REFERENCE_RELATIONSHIPS_NAME).read_text(encoding="utf-8")
     assert "module\tM00001\t'=untrusted spreadsheet formula" in relationships
-    assert (output / REFERENCE_BRITE_PATHS_NAME).read_text(encoding="utf-8").splitlines() == [
-        "record_type\tinput_kind\tinput_identifier\tbrite_id\tpath_index\tdepth\tlevel"
-        "\tnode_id\tnode_name\tunique_input_count"
-    ]
 
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in output.iterdir())
-    assert _SECRET_REQUEST not in combined
-    assert _SECRET_ENDPOINT_LABEL not in combined
-    assert result_id not in combined
-    assert str(output) not in combined
-    provenance = json.loads((output / REFERENCE_PROVENANCE_NAME).read_text(encoding="utf-8"))
-    assert set(provenance) == {
-        "schema_version",
-        "batches",
+    retrieval = reference_snapshot["retrieval"]
+    assert set(retrieval) == {
+        "entry_batches",
         "brite_relation_batches",
         "brite_hierarchy_batches",
     }
-    assert set(provenance["batches"][0]) == {
+    assert retrieval["brite_relation_batches"] == []
+    assert retrieval["brite_hierarchy_batches"] == []
+    assert set(retrieval["entry_batches"][0]) == {
         "access_mode",
         "attempt_count",
         "batch_index",
@@ -327,6 +334,12 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
         "retrieved_at",
         "served_at",
     }
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in output.iterdir())
+    assert _SECRET_REQUEST not in combined
+    assert _SECRET_ENDPOINT_LABEL not in combined
+    assert result_id not in combined
+    assert str(output) not in combined
 
 
 def test_exports_complete_validated_brite_paths_without_network_access(
@@ -347,7 +360,12 @@ def test_exports_complete_validated_brite_paths_without_network_access(
         scope_id="reference-scope",
     )
 
-    assert len(result.artifacts) == 6
+    assert tuple(item.name for item in result.artifacts) == (
+        REFERENCE_SNAPSHOT_NAME,
+        REFERENCE_RELATIONSHIPS_NAME,
+        REFERENCE_BRITE_PATHS_NAME,
+        REFERENCE_MANIFEST_NAME,
+    )
     brite_table = (output / REFERENCE_BRITE_PATHS_NAME).read_text(encoding="utf-8")
     assert "\npath_node\tko\tK00001\tko00001\t1\t0\tA\t09100\tMetabolism\t1\n" in brite_table
     assert (
@@ -363,12 +381,11 @@ def test_exports_complete_validated_brite_paths_without_network_access(
         "status": "completed",
         "unmatched_entity_count": 0,
     }
-    request_contract = json.loads((output / REFERENCE_REQUEST_NAME).read_text(encoding="utf-8"))
-    assert request_contract["brite"]["schema_version"] == "1"
-    assert request_contract["brite"]["request"]["brite_ids"] == ["ko00001"]
-    provenance = json.loads((output / REFERENCE_PROVENANCE_NAME).read_text(encoding="utf-8"))
-    assert provenance["brite_relation_batches"] == []
-    assert len(provenance["brite_hierarchy_batches"]) == 1
+    reference_snapshot = json.loads((output / REFERENCE_SNAPSHOT_NAME).read_text(encoding="utf-8"))
+    assert reference_snapshot["brite"]["schema_version"] == "1"
+    assert reference_snapshot["brite"]["request"]["brite_ids"] == ["ko00001"]
+    assert reference_snapshot["retrieval"]["brite_relation_batches"] == []
+    assert len(reference_snapshot["retrieval"]["brite_hierarchy_batches"]) == 1
     combined = "\n".join(path.read_text(encoding="utf-8") for path in output.iterdir())
     assert _SECRET_REQUEST not in combined
     assert _SECRET_ENDPOINT_LABEL not in combined
@@ -393,10 +410,11 @@ def test_explicit_selection_exports_only_selected_reference(tmp_path: Path) -> N
     assert result.requested_entry_count == 1
     assert result.returned_entry_count == 1
     assert result.missing_entry_count == 0
-    request_contract = json.loads((output / REFERENCE_REQUEST_NAME).read_text(encoding="utf-8"))
-    assert request_contract["entries"] == [{"database": "ko", "identifier": "K00001"}]
-    entities = json.loads((output / REFERENCE_ENTITIES_NAME).read_text(encoding="utf-8"))
-    assert entities["missing_entries"] == []
+    reference_snapshot = json.loads((output / REFERENCE_SNAPSHOT_NAME).read_text(encoding="utf-8"))
+    assert reference_snapshot["request"]["entries"] == [
+        {"database": "ko", "identifier": "K00001"},
+    ]
+    assert reference_snapshot["missing_entries"] == []
 
 
 def test_selection_outside_snapshot_fails_before_filesystem_write(tmp_path: Path) -> None:
@@ -606,7 +624,7 @@ def test_install_failure_rolls_back_files_and_created_directory(
     real_link = os.link
     destinations: list[str] = []
 
-    def fail_third_link(
+    def fail_second_link(
         source: str,
         destination: str,
         *,
@@ -615,7 +633,7 @@ def test_install_failure_rolls_back_files_and_created_directory(
         follow_symlinks: bool = True,
     ) -> None:
         destinations.append(destination)
-        if len(destinations) == 3:
+        if len(destinations) == 2:
             raise OSError("synthetic transaction failure")
         real_link(
             source,
@@ -625,7 +643,7 @@ def test_install_failure_rolls_back_files_and_created_directory(
             follow_symlinks=follow_symlinks,
         )
 
-    monkeypatch.setattr(os, "link", fail_third_link)
+    monkeypatch.setattr(os, "link", fail_second_link)
     with pytest.raises(KeggMcpError) as caught:
         write_kegg_reference_bundle(
             _request(result_id),
@@ -676,11 +694,8 @@ def test_manifest_is_published_after_every_payload(
 
     assert destinations[-1] == REFERENCE_MANIFEST_NAME
     assert set(destinations[:-1]) == {
-        REFERENCE_ENTITIES_NAME,
+        REFERENCE_SNAPSHOT_NAME,
         REFERENCE_RELATIONSHIPS_NAME,
-        REFERENCE_BRITE_PATHS_NAME,
-        REFERENCE_PROVENANCE_NAME,
-        REFERENCE_REQUEST_NAME,
     }
 
 

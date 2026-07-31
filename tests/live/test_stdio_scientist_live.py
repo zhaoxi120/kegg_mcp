@@ -43,11 +43,14 @@ def _successful_payload(result: types.CallToolResult) -> tuple[dict[str, object]
     return cast(dict[str, object], data), resource_uri
 
 
-async def _read_all_text_sections(session: ClientSession, resource_uri: str) -> None:
+async def _read_all_text_sections(session: ClientSession, resource_uri: str) -> set[str]:
     root = await session.read_resource(AnyUrl(resource_uri))
     root_content = root.contents[0]
     assert isinstance(root_content, types.TextResourceContents)
     index = cast(dict[str, object], json.loads(root_content.text))
+    artifacts = cast(list[dict[str, object]], index["artifacts"])
+    artifact_sections = {cast(str, artifact["section"]) for artifact in artifacts}
+    assert len(artifact_sections) == len(artifacts)
     section_uris = index["section_uris"]
     assert isinstance(section_uris, list)
     assert section_uris
@@ -57,6 +60,7 @@ async def _read_all_text_sections(session: ClientSession, resource_uri: str) -> 
         content = section.contents[0]
         assert isinstance(content, types.TextResourceContents)
         assert content.text
+    return artifact_sections
 
 
 def _assert_owner_only(path: Path) -> None:
@@ -238,7 +242,8 @@ async def test_live_stdio_card_query_uses_private_local_state_and_cleans_scope(
             for item in cast(list[dict[str, object]], references["provenance"])
         )
         assert isinstance(references_uri, str)
-        await _read_all_text_sections(session, references_uri)
+        reference_sections = await _read_all_text_sections(session, references_uri)
+        assert reference_sections == {"detail", "entry_snapshot"}
 
         cache_before_local_writes = _cache_snapshot(cache_path)
         card_result = cast(dict[str, object], cards["result"])
@@ -257,14 +262,29 @@ async def test_live_stdio_card_query_uses_private_local_state_and_cleans_scope(
         _assert_output_bundle(
             reference_output,
             {
-                "entities.json",
+                "reference_snapshot.json",
                 "relationships.tsv",
-                "brite_paths.tsv",
-                "retrieval_provenance.json",
-                "request_contract.json",
                 "reference_manifest.json",
             },
         )
+        reference_snapshot = cast(
+            dict[str, object],
+            json.loads((reference_output / "reference_snapshot.json").read_text(encoding="utf-8")),
+        )
+        assert len(cast(list[object], reference_snapshot["entries"])) == 2
+        assert reference_snapshot["request"] == {
+            "operation": "get",
+            "projection": "card",
+            "entries": [
+                {"database": "ko", "identifier": "K00844"},
+                {"database": "reaction", "identifier": "R01786"},
+            ],
+        }
+        assert reference_snapshot["brite"] is None
+        retrieval = cast(dict[str, object], reference_snapshot["retrieval"])
+        assert retrieval["entry_batches"]
+        assert retrieval["brite_relation_batches"] == []
+        assert retrieval["brite_hierarchy_batches"] == []
 
         for target, handoff, data_name in _local_handoff_cases():
             output_directory = local_handoff_outputs[target]
@@ -317,11 +337,8 @@ async def test_live_stdio_card_query_uses_private_local_state_and_cleans_scope(
     _assert_output_bundle(
         reference_output,
         {
-            "entities.json",
+            "reference_snapshot.json",
             "relationships.tsv",
-            "brite_paths.tsv",
-            "retrieval_provenance.json",
-            "request_contract.json",
             "reference_manifest.json",
         },
     )

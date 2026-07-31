@@ -14,7 +14,7 @@ from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel,
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
-from kegg_mcp.kegg import KeggEntryRef, KeggGetDatabase
+from kegg_mcp.kegg import KeggEntryRef
 from kegg_mcp.services.annotation_audit import (
     AnnotationMappingAuditResult,
     AnnotationMappingTarget,
@@ -23,10 +23,6 @@ from kegg_mcp.services.annotation_audit import (
 from kegg_mcp.services.brite_hierarchy import (
     MapBriteHierarchyRequest,
     MapBriteHierarchyResult,
-)
-from kegg_mcp.services.enrichment_handoff_models import (
-    EnrichmentHandoffRequest,
-    EnrichmentHandoffResult,
 )
 from kegg_mcp.services.entry_cards import ENTRY_CARD_DATABASES
 from kegg_mcp.services.external_handoff_models import (
@@ -246,17 +242,14 @@ class GetKeggEntriesInput(FrozenModel):
 
     @model_validator(mode="after")
     def validate_projection_databases(self) -> Self:
-        if self.projection is KeggEntryProjection.CARD and any(
-            entry.database not in ENTRY_CARD_DATABASES for entry in self.entries
-        ):
+        if self.projection in {
+            KeggEntryProjection.CARD,
+            KeggEntryProjection.REFERENCES,
+        } and any(entry.database not in ENTRY_CARD_DATABASES for entry in self.entries):
             raise ValueError(
-                "card projection supports only KO, MODULE, pathway, reaction, enzyme, "
-                "compound, glycan, gene, and genome entries"
+                "typed card and references projections support only KO, MODULE, pathway, "
+                "reaction, enzyme, compound, glycan, gene, and genome entries"
             )
-        if self.projection is KeggEntryProjection.REFERENCES and any(
-            entry.database is KeggGetDatabase.BRITE for entry in self.entries
-        ):
-            raise ValueError("references projection does not support BRITE htext entries")
         return self
 
 
@@ -270,11 +263,6 @@ class ResolveKeggEntitiesInput(RootModel[ResolveKeggEntitiesRequest]):
 TraceKeggRelationsInput = TraceKeggRelationsRequest
 MapBriteHierarchyInput = MapBriteHierarchyRequest
 CompareKeggReferenceSnapshotsInput = CompareKeggReferenceSnapshotsRequest
-KeggHandoffRequest = Annotated[
-    EnrichmentHandoffRequest | ExternalHandoffRequest,
-    Field(discriminator="target"),
-]
-KeggHandoffResult = EnrichmentHandoffResult | ExternalHandoffBundle
 
 
 class WriteKeggReferenceBundleInput(WriteKeggReferenceBundleRequest):
@@ -289,7 +277,7 @@ class WriteKeggReferenceBundleInput(WriteKeggReferenceBundleRequest):
 
 
 class PrepareKeggHandoffInput(FrozenModel):
-    """Prepare one bounded local enrichment, KEGG Mapper, or KEGG Syntax input bundle."""
+    """Prepare one bounded local KEGG Mapper or KEGG Syntax input bundle."""
 
     output_directory: str = Field(
         min_length=1,
@@ -299,7 +287,7 @@ class PrepareKeggHandoffInput(FrozenModel):
             "keeps every direct handoff result below the MCP response-size budget."
         ),
     )
-    handoff: KeggHandoffRequest
+    handoff: ExternalHandoffRequest
 
 
 class AuditAnnotationMappingInput(FrozenModel):
@@ -452,7 +440,7 @@ BriteHierarchyToolEnvelope = ToolEnvelope[MapBriteHierarchyResult]
 AnnotationAuditToolEnvelope = ToolEnvelope[AnnotationMappingAuditResult]
 ReferenceSnapshotComparisonToolEnvelope = ToolEnvelope[CompareKeggReferenceSnapshotsResult]
 ReferenceBundleToolEnvelope = ToolEnvelope[KeggReferenceBundle]
-PrepareKeggHandoffToolEnvelope = ToolEnvelope[KeggHandoffResult]
+PrepareKeggHandoffToolEnvelope = ToolEnvelope[ExternalHandoffBundle]
 AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
 AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
 AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]

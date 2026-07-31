@@ -30,7 +30,8 @@ def test_server_instructions_fail_closed_for_fasta_only_workflows() -> None:
     assert "kegg-pathway-rendering Skill" in SERVER_INSTRUCTIONS
     assert "kegg-render-mcp renderer" in SERVER_INSTRUCTIONS
     assert "PubMed identifiers explicitly listed in KEGG" in SERVER_INSTRUCTIONS
-    assert "run enrichment statistics" in SERVER_INSTRUCTIONS
+    assert "KEGG Mapper or KEGG Syntax input bundles" in SERVER_INSTRUCTIONS
+    assert "enrichment" not in SERVER_INSTRUCTIONS
     assert "upload files" in SERVER_INSTRUCTIONS
 
 

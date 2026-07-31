@@ -34,8 +34,10 @@ from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvena
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
-from kegg_mcp.services.entry_cards import KeggEntryCardPreviewSet
-from kegg_mcp.services.entry_references import KeggEntryLiteratureReferencePreviewSet
+from kegg_mcp.services.entry_cards import (
+    KeggEntryCardPreviewSet,
+    KeggEntryLiteratureReferencePreviewSet,
+)
 from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle
 from kegg_mcp.services.result_store import (
     RESULT_ID_SCHEMA_PATTERN,
@@ -381,7 +383,6 @@ class KeggEntriesServiceResult(FrozenModel):
     result: ResultMetadata
     artifact: ResultArtifactMetadata
     snapshot_artifact: ResultArtifactMetadata | None = None
-    literature_artifact: ResultArtifactMetadata | None = None
     projection: KeggEntryProjection = KeggEntryProjection.PREVIEW
     requested_count: int = Field(strict=True, ge=1, le=MAX_GET_ENTRY_PREVIEWS)
     returned_count: int = Field(strict=True, ge=0, le=MAX_GET_ENTRY_PREVIEWS)
@@ -403,16 +404,13 @@ class KeggEntriesServiceResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_direct_previews(self) -> Self:
-        expected_artifact_count = (
-            1 + (self.snapshot_artifact is not None) + (self.literature_artifact is not None)
-        )
+        expected_artifact_count = 1 + (self.snapshot_artifact is not None)
         if self.result.artifact_count != expected_artifact_count:
             raise ValueError("result artifact_count must match GET artifact metadata")
         if self.projection is KeggEntryProjection.PREVIEW:
             if (
                 self.snapshot_artifact is not None
                 or self.card_preview is not None
-                or self.literature_artifact is not None
                 or self.literature_preview is not None
             ):
                 raise ValueError("preview projection cannot include a retained typed projection")
@@ -424,7 +422,6 @@ class KeggEntriesServiceResult(FrozenModel):
             if (
                 self.snapshot_artifact is None
                 or self.card_preview is None
-                or self.literature_artifact is not None
                 or self.literature_preview is not None
                 or self.previews
             ):
@@ -435,14 +432,13 @@ class KeggEntriesServiceResult(FrozenModel):
                 raise ValueError("returned_count must match card preview entry_count")
         else:
             if (
-                self.snapshot_artifact is not None
+                self.snapshot_artifact is None
                 or self.card_preview is not None
-                or self.literature_artifact is None
                 or self.literature_preview is None
                 or self.previews
             ):
                 raise ValueError(
-                    "references projection requires only literature preview and artifact metadata"
+                    "references projection requires a card snapshot and literature preview"
                 )
             if self.previews_truncated:
                 raise ValueError("references projection does not use text-preview truncation")

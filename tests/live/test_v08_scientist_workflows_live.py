@@ -304,7 +304,6 @@ async def test_v08_scientist_workflows_through_live_mcp(
     local_handoff_outputs = {
         target: live_campaign.root / f"v08-{target}" for target, _, _ in _local_handoff_cases()
     }
-    enrichment_output = live_campaign.root / "v08-enrichment-handoff"
 
     try:
         async with create_connected_server_and_client_session(server) as session:
@@ -374,12 +373,12 @@ async def test_v08_scientist_workflows_through_live_mcp(
             assert references["literature_preview"]["entry_count"] == len(card_entries)
             assert references["literature_preview"]["referenced_entry_count"] > 0
             assert references["literature_preview"]["pubmed_id_count"] > 0
-            assert set(reference_artifacts) == {"detail", "literature_references"}
+            assert set(reference_artifacts) == {"detail", "entry_snapshot"}
             retained_references = cast(
                 dict[str, Any],
-                json.loads(reference_artifacts["literature_references"]),
+                json.loads(reference_artifacts["entry_snapshot"]),
             )
-            assert retained_references["parser_name"] == "kegg_flat_file_pubmed_references"
+            assert retained_references["parser_name"] == "kegg_flat_file_entry_card"
             assert all(
                 pubmed_id.isdigit()
                 for entry in retained_references["entries"]
@@ -404,11 +403,8 @@ async def test_v08_scientist_workflows_through_live_mcp(
             _assert_durable_output_bundle(
                 reference_output,
                 {
-                    "entities.json",
+                    "reference_snapshot.json",
                     "relationships.tsv",
-                    "brite_paths.tsv",
-                    "retrieval_provenance.json",
-                    "request_contract.json",
                     "reference_manifest.json",
                 },
             )
@@ -423,11 +419,22 @@ async def test_v08_scientist_workflows_through_live_mcp(
             assert reference_manifest["selection"]["returned_entry_count"] == len(card_entries)
             assert str(live_campaign.root) not in reference_manifest_text
             assert first_cards["result"]["result_id"] not in reference_manifest_text
-            reference_entities = cast(
+            reference_snapshot = cast(
                 dict[str, Any],
-                json.loads((reference_output / "entities.json").read_text(encoding="utf-8")),
+                json.loads(
+                    (reference_output / "reference_snapshot.json").read_text(encoding="utf-8")
+                ),
             )
-            assert len(reference_entities["entries"]) == len(card_entries)
+            assert len(reference_snapshot["entries"]) == len(card_entries)
+            assert reference_snapshot["request"] == {
+                "operation": "get",
+                "projection": "card",
+                "entries": card_entries,
+            }
+            assert reference_snapshot["brite"] is None
+            assert reference_snapshot["retrieval"]["entry_batches"]
+            assert reference_snapshot["retrieval"]["brite_relation_batches"] == []
+            assert reference_snapshot["retrieval"]["brite_hierarchy_batches"] == []
             assert (
                 (reference_output / "relationships.tsv")
                 .read_text(encoding="utf-8")
@@ -788,69 +795,6 @@ async def test_v08_scientist_workflows_through_live_mcp(
             assert audited["mapping_execution"]["completed_targets"] == ["pathway"]
             assert set(audit_artifacts) == {"detail"}
 
-            requests_before_enrichment = live_campaign.transport.request_count
-            enrichment_handoff = _filesystem_tool_data(
-                await session.call_tool(
-                    "prepare_kegg_handoff",
-                    {
-                        "output_directory": str(enrichment_output),
-                        "handoff": {
-                            "target": "enrichment",
-                            "foreground": {
-                                "namespace": "ko",
-                                "identifiers": ["K00844"],
-                            },
-                            "universe": {
-                                "namespace": "ko",
-                                "identifiers": ["K00844", "K01810"],
-                            },
-                            "gene_sets": ["pathway"],
-                        },
-                    },
-                )
-            )
-            assert live_campaign.transport.request_count == requests_before_enrichment
-            assert enrichment_handoff["target"] == "enrichment"
-            assert enrichment_handoff["foreground"]["mapped_input_count"] == 1
-            assert enrichment_handoff["universe"]["mapped_input_count"] == 2
-            assert enrichment_handoff["gene_sets"][0]["target"] == "pathway"
-            assert enrichment_handoff["gene_sets"][0]["term_count"] > 0
-            assert Path(enrichment_handoff["bundle"]["output_directory"]) == enrichment_output
-            _assert_durable_output_bundle(
-                enrichment_output,
-                {
-                    "mapped_foreground.tsv",
-                    "mapped_universe.tsv",
-                    "unmapped_identifiers.tsv",
-                    "gene_sets.gmt",
-                    "mapping_audit.json",
-                    "handoff_manifest.json",
-                },
-            )
-            enrichment_manifest_text = (enrichment_output / "handoff_manifest.json").read_text(
-                encoding="utf-8"
-            )
-            enrichment_manifest = cast(
-                dict[str, Any],
-                json.loads(enrichment_manifest_text),
-            )
-            assert enrichment_manifest["bundle_kind"] == "kegg_enrichment_input"
-            assert enrichment_manifest["target"] == "enrichment"
-            assert enrichment_manifest["statistical_tests_performed"] is False
-            assert str(live_campaign.root) not in enrichment_manifest_text
-            mapping_audit = cast(
-                dict[str, Any],
-                json.loads((enrichment_output / "mapping_audit.json").read_text(encoding="utf-8")),
-            )
-            assert mapping_audit["request"]["universe"]["identifiers"] == [
-                "K00844",
-                "K01810",
-            ]
-            assert "p_value" not in mapping_audit
-            gene_sets_gmt = (enrichment_output / "gene_sets.gmt").read_text(encoding="utf-8")
-            assert gene_sets_gmt
-            assert "K00844" in gene_sets_gmt
-
             requests_before_local_audits = live_campaign.transport.request_count
             evidence_only, evidence_artifacts, _ = await _call_retained(
                 session,
@@ -898,11 +842,8 @@ async def test_v08_scientist_workflows_through_live_mcp(
     _assert_durable_output_bundle(
         reference_output,
         {
-            "entities.json",
+            "reference_snapshot.json",
             "relationships.tsv",
-            "brite_paths.tsv",
-            "retrieval_provenance.json",
-            "request_contract.json",
             "reference_manifest.json",
         },
     )
@@ -911,15 +852,4 @@ async def test_v08_scientist_workflows_through_live_mcp(
             local_handoff_outputs[target],
             {data_name, "handoff_manifest.json"},
         )
-    _assert_durable_output_bundle(
-        enrichment_output,
-        {
-            "mapped_foreground.tsv",
-            "mapped_universe.tsv",
-            "unmapped_identifiers.tsv",
-            "gene_sets.gmt",
-            "mapping_audit.json",
-            "handoff_manifest.json",
-        },
-    )
     _assert_private_state_tree(live_campaign)

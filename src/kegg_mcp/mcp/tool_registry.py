@@ -240,14 +240,13 @@ TOOL_SPECS = (
         "prepare_kegg_handoff",
         "Prepare KEGG handoff",
         (
-            "Prepare one bounded local enrichment-input, KEGG Mapper, or KEGG Syntax bundle. "
-            "Enrichment requires an explicit universe and performs deterministic mapping only; "
-            "the tool never runs statistical enrichment, uploads files, starts a browser, "
-            "executes an external tool, or parses external results."
+            "Prepare one bounded local KEGG Mapper or KEGG Syntax input bundle. The tool never "
+            "uploads files, starts a browser, executes an external tool, or parses external "
+            "results."
         ),
         PrepareKeggHandoffInput,
         PrepareKeggHandoffToolEnvelope,
-        _ADDITIVE_OPEN,
+        _ADDITIVE_CLOSED,
         prepare_handoff,
     ),
     ToolSpec(
@@ -341,7 +340,6 @@ _CLIENT_TOOL_NAMES = frozenset(
         "analyze_modules",
         "analyze_pathways",
         "compare_ko_sets",
-        "prepare_kegg_handoff",
         "probe_kegg_connectivity",
     }
 )
@@ -350,6 +348,7 @@ _LOCAL_TOOL_NAMES = frozenset(
         "normalize_ko_annotations",
         "compare_kegg_reference_snapshots",
         "write_kegg_reference_bundle",
+        "prepare_kegg_handoff",
         "list_analysis_results",
         "delete_analysis_result",
     }
@@ -386,12 +385,8 @@ def tool_definitions() -> list[types.Tool]:
     return [_tool(spec) for spec in TOOL_SPECS]
 
 
-def _requires_client_limiter(name: str, request: BaseModel) -> bool:
-    if name != "prepare_kegg_handoff":
-        return name in _CLIENT_TOOL_NAMES
-    if not isinstance(request, PrepareKeggHandoffInput):  # pragma: no cover - registry invariant
-        raise TypeError("prepare_kegg_handoff requires its registered input model")
-    return request.handoff.target == "enrichment"
+def _requires_client_limiter(name: str) -> bool:
+    return name in _CLIENT_TOOL_NAMES
 
 
 async def dispatch_tool(
@@ -430,7 +425,7 @@ async def dispatch_tool(
 
             limiter = (
                 runtime.client_handler_limiter
-                if _requires_client_limiter(name, request)
+                if _requires_client_limiter(name)
                 else runtime.local_handler_limiter
             )
             threaded_outcome: ToolOutcome | None = None

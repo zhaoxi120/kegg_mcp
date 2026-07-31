@@ -52,6 +52,7 @@ MAX_ENTRY_CARD_PREVIEWS = 10
 MAX_ENTRY_CARD_PREVIEW_TEXT_CHARACTERS = 256
 MAX_ENTRY_CARD_PREVIEW_CLASSES = 2
 MAX_ENTRY_CARD_PREVIEW_FIELD_COUNTS = 16
+MAX_PUBMED_REFERENCE_PREVIEW = 10
 
 CardText = Annotated[str, Field(min_length=1, max_length=MAX_ENTRY_CARD_TEXT_CHARACTERS)]
 CardIdentifier = Annotated[str, Field(min_length=1, max_length=100)]
@@ -367,6 +368,49 @@ class KeggEntryCardPreviewSet(FrozenModel):
         return self
 
 
+class KeggEntryLiteratureReferencePreview(FrozenModel):
+    """PubMed identifiers from one canonical entry card."""
+
+    entity: KeggEntryCardEntity
+    pubmed_id_count: int = Field(strict=True, ge=0, le=MAX_ENTRY_CARD_ITEMS)
+    pubmed_ids: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[0-9]+$", max_length=20)], ...],
+        Field(max_length=MAX_PUBMED_REFERENCE_PREVIEW),
+    ]
+    pubmed_ids_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_preview(self) -> Self:
+        if self.pubmed_id_count < len(self.pubmed_ids):
+            raise ValueError("pubmed_id_count cannot be smaller than its preview")
+        if self.pubmed_ids_truncated != (self.pubmed_id_count > len(self.pubmed_ids)):
+            raise ValueError("pubmed_ids_truncated must match the PMID preview")
+        return self
+
+
+class KeggEntryLiteratureReferencePreviewSet(FrozenModel):
+    """Bounded PMID-only view of one canonical entry-card snapshot."""
+
+    entry_count: int = Field(strict=True, ge=0, le=MAX_ENTRY_CARDS)
+    referenced_entry_count: int = Field(strict=True, ge=0, le=MAX_ENTRY_CARDS)
+    pubmed_id_count: int = Field(strict=True, ge=0, le=MAX_ENTRY_CARDS * MAX_ENTRY_CARD_ITEMS)
+    previews: Annotated[
+        tuple[KeggEntryLiteratureReferencePreview, ...],
+        Field(max_length=MAX_ENTRY_CARD_PREVIEWS),
+    ]
+    previews_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> Self:
+        if self.referenced_entry_count > self.entry_count:
+            raise ValueError("referenced_entry_count cannot exceed entry_count")
+        if self.entry_count < len(self.previews):
+            raise ValueError("entry_count cannot be smaller than previews")
+        if self.previews_truncated != (self.entry_count > len(self.previews)):
+            raise ValueError("previews_truncated must match the entry preview")
+        return self
+
+
 class _CommonCardValues(TypedDict):
     entity: KeggEntryCardEntity
     names: tuple[str, ...]
@@ -526,6 +570,33 @@ def entry_card_previews(
     previews = tuple(_entry_card_preview(card) for card in cards)
     return KeggEntryCardPreviewSet(
         entry_count=len(snapshot.entries),
+        previews=previews,
+        previews_truncated=len(previews) < len(snapshot.entries),
+    )
+
+
+def entry_card_reference_previews(
+    snapshot: KeggEntryCardSnapshot,
+    *,
+    limit: int = MAX_ENTRY_CARD_PREVIEWS,
+) -> KeggEntryLiteratureReferencePreviewSet:
+    """Return a PMID-only view without creating a second snapshot schema."""
+    if not 0 <= limit <= MAX_ENTRY_CARD_PREVIEWS:
+        raise ValueError(f"limit must be between zero and {MAX_ENTRY_CARD_PREVIEWS}")
+    previews = tuple(
+        KeggEntryLiteratureReferencePreview(
+            entity=card.entity,
+            pubmed_id_count=len(card.pubmed_ids),
+            pubmed_ids=card.pubmed_ids[:MAX_PUBMED_REFERENCE_PREVIEW],
+            pubmed_ids_truncated=len(card.pubmed_ids) > MAX_PUBMED_REFERENCE_PREVIEW,
+        )
+        for card in snapshot.entries[:limit]
+    )
+    all_ids = {pubmed_id for card in snapshot.entries for pubmed_id in card.pubmed_ids}
+    return KeggEntryLiteratureReferencePreviewSet(
+        entry_count=len(snapshot.entries),
+        referenced_entry_count=sum(bool(card.pubmed_ids) for card in snapshot.entries),
+        pubmed_id_count=len(all_ids),
         previews=previews,
         previews_truncated=len(previews) < len(snapshot.entries),
     )
@@ -1017,6 +1088,8 @@ __all__ = [
     "KeggEntryCardPreviewSet",
     "KeggEntryCardReference",
     "KeggEntryCardSnapshot",
+    "KeggEntryLiteratureReferencePreview",
+    "KeggEntryLiteratureReferencePreviewSet",
     "KeggModuleDefinitionCard",
     "KoEntryCard",
     "ModuleEntryCard",
@@ -1024,5 +1097,6 @@ __all__ = [
     "ReactionEntryCard",
     "build_entry_cards",
     "entry_card_previews",
+    "entry_card_reference_previews",
     "pubmed_ids_from_fields",
 ]

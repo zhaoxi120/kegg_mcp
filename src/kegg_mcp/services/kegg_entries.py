@@ -17,11 +17,7 @@ from kegg_mcp.services.entry_cards import (
     ENTRY_CARD_SNAPSHOT_SECTION,
     build_entry_cards,
     entry_card_previews,
-)
-from kegg_mcp.services.entry_references import (
-    ENTRY_REFERENCE_SNAPSHOT_SECTION,
-    build_entry_literature_references,
-    entry_literature_reference_previews,
+    entry_card_reference_previews,
 )
 from kegg_mcp.services.models import (
     DETAIL_SECTION,
@@ -57,24 +53,16 @@ def retrieve_kegg_entries(
     options: KeggRequestOptions | None = None,
 ) -> KeggEntriesServiceResult:
     """Retrieve approved entries and retain the complete parsed response locally."""
-    if projection is KeggEntryProjection.CARD and any(
+    if projection in {KeggEntryProjection.CARD, KeggEntryProjection.REFERENCES} and any(
         entry.database not in ENTRY_CARD_DATABASES for entry in request.entries
     ):
         fail(
             ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-            "The card projection contains an unsupported KEGG entry type.",
+            "The typed entry projection contains an unsupported KEGG entry type.",
             suggested_action=(
                 "Use preview projection or request only KO, MODULE, pathway, reaction, enzyme, "
                 "compound, glycan, gene, or genome cards."
             ),
-        )
-    if projection is KeggEntryProjection.REFERENCES and any(
-        entry.database is KeggGetDatabase.BRITE for entry in request.entries
-    ):
-        fail(
-            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-            "The literature-reference projection contains unsupported BRITE content.",
-            suggested_action="Use preview projection for BRITE entries.",
         )
     fetched = client.get(request, options=effective_query_options(options))
     payload = fetched.model_dump_json().encode("utf-8")
@@ -85,17 +73,15 @@ def retrieve_kegg_entries(
         else ()
     )
     snapshot_payload: bytes | None = None
-    literature_payload: bytes | None = None
     card_preview = None
     literature_preview = None
-    if projection is KeggEntryProjection.CARD:
+    if projection in {KeggEntryProjection.CARD, KeggEntryProjection.REFERENCES}:
         snapshot = build_entry_cards(fetched)
         snapshot_payload = bounded_query_payload(snapshot.model_dump(mode="json"))
-        card_preview = entry_card_previews(snapshot)
-    elif projection is KeggEntryProjection.REFERENCES:
-        literature = build_entry_literature_references(fetched)
-        literature_payload = bounded_query_payload(literature.model_dump(mode="json"))
-        literature_preview = entry_literature_reference_previews(literature)
+        if projection is KeggEntryProjection.CARD:
+            card_preview = entry_card_previews(snapshot)
+        else:
+            literature_preview = entry_card_reference_previews(snapshot)
     provenance = tuple(fetched.batches[:MAX_GET_PROVENANCE_BATCHES])
     artifact = _artifact_metadata(DETAIL_SECTION, "application/json", payload)
     snapshot_artifact = (
@@ -105,15 +91,6 @@ def retrieve_kegg_entries(
             snapshot_payload,
         )
         if snapshot_payload is not None
-        else None
-    )
-    literature_artifact = (
-        _artifact_metadata(
-            ENTRY_REFERENCE_SNAPSHOT_SECTION,
-            "application/json",
-            literature_payload,
-        )
-        if literature_payload is not None
         else None
     )
     artifacts = [
@@ -131,14 +108,6 @@ def retrieve_kegg_entries(
                 content=snapshot_payload,
             )
         )
-    if literature_payload is not None:
-        artifacts.append(
-            ResultArtifactInput(
-                section=ENTRY_REFERENCE_SNAPSHOT_SECTION,
-                mime_type="application/json",
-                content=literature_payload,
-            )
-        )
     with create_retained_result(
         result_store,
         scope_id,
@@ -148,7 +117,6 @@ def retrieve_kegg_entries(
             result=stored,
             artifact=artifact,
             snapshot_artifact=snapshot_artifact,
-            literature_artifact=literature_artifact,
             projection=projection,
             requested_count=len(request.entries),
             returned_count=len(all_previews),

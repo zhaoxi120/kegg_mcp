@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 from collections.abc import Iterable
@@ -27,6 +26,7 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
 )
 from kegg_mcp.services._atomic_bundle import write_text_bundle
+from kegg_mcp.services._text_artifact import TextArtifactSpec
 from kegg_mcp.services.brite_hierarchy import (
     BRITE_DETAIL_MIME_TYPE,
     BRITE_DETAIL_SECTION,
@@ -59,15 +59,11 @@ from kegg_mcp.services.query_models import MAX_QUERY_PROVENANCE_BATCHES
 from kegg_mcp.services.result_store import RESULT_ID_SCHEMA_PATTERN, SQLiteResultStore
 
 REFERENCE_BUNDLE_SCHEMA_VERSION = "1"
-REFERENCE_ENTITIES_SCHEMA_VERSION = "1"
-REFERENCE_REQUEST_SCHEMA_VERSION = "1"
-REFERENCE_PROVENANCE_SCHEMA_VERSION = "1"
+REFERENCE_SNAPSHOT_SCHEMA_VERSION = "1"
 REFERENCE_MANIFEST_NAME = "reference_manifest.json"
-REFERENCE_ENTITIES_NAME = "entities.json"
+REFERENCE_SNAPSHOT_NAME = "reference_snapshot.json"
 REFERENCE_RELATIONSHIPS_NAME = "relationships.tsv"
 REFERENCE_BRITE_PATHS_NAME = "brite_paths.tsv"
-REFERENCE_PROVENANCE_NAME = "retrieval_provenance.json"
-REFERENCE_REQUEST_NAME = "request_contract.json"
 MAX_REFERENCE_RELATIONSHIPS = 50_000
 MAX_REFERENCE_BRITE_ROWS = MAX_BRITE_PATHS * MAX_BRITE_PATH_DEPTH + MAX_BRITE_ENTITY_IDS
 MAX_REFERENCE_PROVENANCE_BATCHES = MAX_ENTRY_CARDS + 2 * MAX_QUERY_PROVENANCE_BATCHES
@@ -125,13 +121,6 @@ class ReferenceBundleArtifact(ReferenceBundleFileRecord):
 class ReferenceBundleProducer(FrozenModel):
     name: Literal["kegg-mcp"] = "kegg-mcp"
     version: str = Field(min_length=1, max_length=100)
-
-
-class ReferenceBundleSourceSchema(FrozenModel):
-    card_schema_version: str = Field(min_length=1, max_length=32)
-    card_parser_name: str = Field(min_length=1, max_length=100)
-    card_parser_version: str = Field(min_length=1, max_length=32)
-    response_parser_version: str = Field(min_length=1, max_length=32)
 
 
 class ReferenceBundleSelectionSummary(FrozenModel):
@@ -240,26 +229,26 @@ class ReferenceBundleManifest(FrozenModel):
     schema_version: Literal["1"] = REFERENCE_BUNDLE_SCHEMA_VERSION
     bundle_type: Literal["kegg_reference"] = "kegg_reference"
     producer: ReferenceBundleProducer
-    source_schema: ReferenceBundleSourceSchema
     selection: ReferenceBundleSelectionSummary
     brite: ReferenceBundleBriteSummary
     retrieval: ReferenceBundleRetrievalSummary
     artifacts: Annotated[
         tuple[ReferenceBundleFileRecord, ...],
-        Field(min_length=5, max_length=5),
+        Field(min_length=2, max_length=3),
     ]
 
     @model_validator(mode="after")
     def validate_artifacts(self) -> Self:
-        expected = (
-            REFERENCE_ENTITIES_NAME,
+        expected = [
+            REFERENCE_SNAPSHOT_NAME,
             REFERENCE_RELATIONSHIPS_NAME,
-            REFERENCE_BRITE_PATHS_NAME,
-            REFERENCE_PROVENANCE_NAME,
-            REFERENCE_REQUEST_NAME,
-        )
-        if tuple(item.name for item in self.artifacts) != expected:
-            raise ValueError("reference manifest artifacts must use stable order and names")
+        ]
+        if self.brite.status is ReferenceBundleBriteStatus.COMPLETED:
+            expected.append(REFERENCE_BRITE_PATHS_NAME)
+        if tuple(item.name for item in self.artifacts) != tuple(expected):
+            raise ValueError(
+                "reference manifest artifacts must match the selected stable bundle shape"
+            )
         return self
 
 
@@ -300,21 +289,18 @@ class KeggReferenceBundle(FrozenModel):
     total_bytes: int = Field(strict=True, ge=1, le=MAX_REFERENCE_BUNDLE_BYTES)
     artifacts: Annotated[
         tuple[ReferenceBundleArtifact, ...],
-        Field(min_length=6, max_length=6),
+        Field(min_length=3, max_length=4),
     ]
 
     @model_validator(mode="after")
     def validate_artifacts(self) -> Self:
-        expected = (
-            REFERENCE_ENTITIES_NAME,
-            REFERENCE_RELATIONSHIPS_NAME,
-            REFERENCE_BRITE_PATHS_NAME,
-            REFERENCE_PROVENANCE_NAME,
-            REFERENCE_REQUEST_NAME,
-            REFERENCE_MANIFEST_NAME,
-        )
-        if tuple(item.name for item in self.artifacts) != expected:
-            raise ValueError("reference bundle artifacts must use stable order and names")
+        names = tuple(item.name for item in self.artifacts)
+        if names[:2] != (REFERENCE_SNAPSHOT_NAME, REFERENCE_RELATIONSHIPS_NAME):
+            raise ValueError("reference bundle must start with snapshot and relationships")
+        if names[-1] != REFERENCE_MANIFEST_NAME:
+            raise ValueError("reference manifest must be the final bundle artifact")
+        if len(names) == 4 and names[2] != REFERENCE_BRITE_PATHS_NAME:
+            raise ValueError("the optional third reference artifact must contain BRITE paths")
         if sum(item.byte_size for item in self.artifacts) != self.total_bytes:
             raise ValueError("reference bundle total must match artifact sizes")
         return self
@@ -396,26 +382,27 @@ def write_kegg_reference_bundle(
         brite_detail=brite_detail,
         brite_table=brite_table,
     )
+    payload_specs = tuple(
+        TextArtifactSpec(name=name, mime_type=_mime_type(name), content=content)
+        for name, content in payloads.items()
+    )
     artifact_records = tuple(
-        _file_record(name, _mime_type(name), content) for name, content in payloads.items()
+        ReferenceBundleFileRecord.model_validate(spec.integrity_record()) for spec in payload_specs
     )
     manifest = ReferenceBundleManifest(
         producer=ReferenceBundleProducer(version=__version__),
-        source_schema=ReferenceBundleSourceSchema(
-            card_schema_version=snapshot.schema_version,
-            card_parser_name=snapshot.parser_name,
-            card_parser_version=snapshot.parser_version,
-            response_parser_version=snapshot.response_parser_version,
-        ),
         selection=selection,
         brite=brite_summary,
         retrieval=retrieval,
         artifacts=artifact_records,
     )
-    files = {
-        **payloads,
-        REFERENCE_MANIFEST_NAME: _json_text(manifest.model_dump(mode="json")),
-    }
+    manifest_spec = TextArtifactSpec(
+        name=REFERENCE_MANIFEST_NAME,
+        mime_type=_JSON_MIME_TYPE,
+        content=_json_text(manifest.model_dump(mode="json")),
+    )
+    all_specs = (*payload_specs, manifest_spec)
+    files = {spec.name: spec.content for spec in all_specs}
     write_text_bundle(
         output_directory,
         files,
@@ -426,10 +413,13 @@ def write_kegg_reference_bundle(
     )
     artifacts = tuple(
         ReferenceBundleArtifact(
-            **_file_record(name, _mime_type(name), content).model_dump(),
-            path=str(output_directory / name),
+            name=spec.name,
+            mime_type=spec.mime_type,
+            byte_size=spec.byte_size,
+            sha256=spec.sha256,
+            path=str(output_directory / spec.name),
         )
-        for name, content in files.items()
+        for spec in all_specs
     )
     return KeggReferenceBundle(
         output_directory=str(output_directory),
@@ -698,39 +688,21 @@ def _payload_files(
     brite_detail: BriteHierarchyDetail | None,
     brite_table: str,
 ) -> dict[str, str]:
-    entities = {
-        "schema_version": REFERENCE_ENTITIES_SCHEMA_VERSION,
-        "card_schema_version": snapshot.schema_version,
-        "card_parser_name": snapshot.parser_name,
-        "card_parser_version": snapshot.parser_version,
-        "response_parser_version": snapshot.response_parser_version,
+    reference_snapshot = {
+        "schema_version": REFERENCE_SNAPSHOT_SCHEMA_VERSION,
+        "source_schema": {
+            "card_schema_version": snapshot.schema_version,
+            "card_parser_name": snapshot.parser_name,
+            "card_parser_version": snapshot.parser_version,
+            "response_parser_version": snapshot.response_parser_version,
+        },
+        "request": {
+            "operation": KeggOperation.GET.value,
+            "projection": "card",
+            "entries": [entry.model_dump(mode="json") for entry in selected_requests],
+        },
         "entries": [entry.model_dump(mode="json") for entry in selected_entries],
         "missing_entries": [entry.model_dump(mode="json") for entry in selected_missing],
-    }
-    provenance = {
-        "schema_version": REFERENCE_PROVENANCE_SCHEMA_VERSION,
-        "batches": [
-            _sanitized_batch(index, batch).model_dump(mode="json")
-            for index, batch in enumerate(snapshot.provenance)
-        ],
-        "brite_relation_batches": [
-            _sanitized_batch(index, batch).model_dump(mode="json")
-            for index, batch in enumerate(
-                () if brite_detail is None else brite_detail.relation_provenance
-            )
-        ],
-        "brite_hierarchy_batches": [
-            _sanitized_batch(index, batch).model_dump(mode="json")
-            for index, batch in enumerate(
-                () if brite_detail is None else brite_detail.hierarchy_provenance
-            )
-        ],
-    }
-    request_contract = {
-        "schema_version": REFERENCE_REQUEST_SCHEMA_VERSION,
-        "operation": KeggOperation.GET.value,
-        "projection": "card",
-        "entries": [entry.model_dump(mode="json") for entry in selected_requests],
         "brite": (
             None
             if brite_detail is None
@@ -739,14 +711,32 @@ def _payload_files(
                 "request": brite_detail.request.model_dump(mode="json"),
             }
         ),
+        "retrieval": {
+            "entry_batches": [
+                _sanitized_batch(index, batch).model_dump(mode="json")
+                for index, batch in enumerate(snapshot.provenance)
+            ],
+            "brite_relation_batches": [
+                _sanitized_batch(index, batch).model_dump(mode="json")
+                for index, batch in enumerate(
+                    () if brite_detail is None else brite_detail.relation_provenance
+                )
+            ],
+            "brite_hierarchy_batches": [
+                _sanitized_batch(index, batch).model_dump(mode="json")
+                for index, batch in enumerate(
+                    () if brite_detail is None else brite_detail.hierarchy_provenance
+                )
+            ],
+        },
     }
-    return {
-        REFERENCE_ENTITIES_NAME: _json_text(entities),
+    payloads = {
+        REFERENCE_SNAPSHOT_NAME: _json_text(reference_snapshot),
         REFERENCE_RELATIONSHIPS_NAME: _relationships_tsv(relationships),
-        REFERENCE_BRITE_PATHS_NAME: brite_table,
-        REFERENCE_PROVENANCE_NAME: _json_text(provenance),
-        REFERENCE_REQUEST_NAME: _json_text(request_contract),
     }
+    if brite_detail is not None:
+        payloads[REFERENCE_BRITE_PATHS_NAME] = brite_table
+    return payloads
 
 
 def _sanitized_batch(
@@ -958,16 +948,6 @@ def _relationships_tsv(rows: tuple[_ReferenceRelationship, ...]) -> str:
     return target.getvalue()
 
 
-def _file_record(name: str, mime_type: str, content: str) -> ReferenceBundleFileRecord:
-    encoded = content.encode("utf-8")
-    return ReferenceBundleFileRecord(
-        name=name,
-        mime_type=mime_type,
-        byte_size=len(encoded),
-        sha256=hashlib.sha256(encoded).hexdigest(),
-    )
-
-
 def _mime_type(name: str) -> str:
     return _TSV_MIME_TYPE if name.endswith(".tsv") else _JSON_MIME_TYPE
 
@@ -991,11 +971,9 @@ __all__ = [
     "MAX_REFERENCE_RELATIONSHIPS",
     "REFERENCE_BRITE_PATHS_NAME",
     "REFERENCE_BUNDLE_SCHEMA_VERSION",
-    "REFERENCE_ENTITIES_NAME",
     "REFERENCE_MANIFEST_NAME",
-    "REFERENCE_PROVENANCE_NAME",
     "REFERENCE_RELATIONSHIPS_NAME",
-    "REFERENCE_REQUEST_NAME",
+    "REFERENCE_SNAPSHOT_NAME",
     "KeggReferenceBundle",
     "ReferenceBundleArtifact",
     "ReferenceBundleBriteStatus",
