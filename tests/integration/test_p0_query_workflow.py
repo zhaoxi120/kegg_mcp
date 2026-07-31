@@ -1,4 +1,4 @@
-"""Offline end-to-end coverage for the P0 KEGG query workflow."""
+"""Offline end-to-end coverage for the bounded KEGG query workflow."""
 
 from __future__ import annotations
 
@@ -70,6 +70,8 @@ class _RouteTransport:
             return b"C00031\tD-Glucose; Grape sugar\nC00267\talpha-D-Glucose\n"
         if path == "/link/genome/taxid:562/species":
             return b"taxid:562\tgn:eco\ntaxid:562\tgn:T00068\n"
+        if path == "/link/genome/taxid:543/family":
+            return b"taxid:543\tgn:eco\ntaxid:543\tgn:ece\n"
         if path == "/get/gn:eco":
             return (
                 b"ENTRY       T00007            Complete  Genome\n"
@@ -105,12 +107,20 @@ class _RouteTransport:
             return b"gn:ece\ttaxid:562\ngn:eco\ttaxid:562\n"
         if path == "/conv/genes/uniprot:P00533":
             return b"up:P00533\thsa:1956\n"
+        if path == "/conv/compound/chebi:4167":
+            return b"chebi:4167\tcpd:C00031\n"
         if path == "/link/pathway/hsa:1956":
             return b"hsa:1956\tpath:hsa04012\n"
         if path == "/link/ko/hsa:1956":
             return b"hsa:1956\tko:K04361\n"
         if path == "/link/reaction/K00844":
             return b"ko:K00844\trn:R01786\n"
+        if path == "/link/reaction/C00031":
+            return b"cpd:C00031\trn:R01786\n"
+        if path == "/link/pathway/C00031":
+            return b"cpd:C00031\tpath:map00010\n"
+        if path == "/link/eco/K01810":
+            return b"ko:K01810\teco:b4025\n"
         if path == "/link/brite/K00844+K99999":
             return b"ko:K00844\tbr:ko00001\n"
         if path == "/get/br:ko00001":
@@ -207,7 +217,7 @@ async def _read_all_artifacts(
 
 
 @pytest.mark.asyncio
-async def test_p0_query_workflow_through_mcp_and_real_client(
+async def test_query_workflow_through_mcp_and_real_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -332,6 +342,37 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         eco_list_step = next(step for step in list_steps if step["organism"] == "eco")
         assert len(eco_list_step["result"]["document"]["rows"]) == 21
 
+        broad_taxonomy = _tool_data(
+            await session.call_tool(
+                "resolve_kegg_entities",
+                {
+                    "kind": "organism",
+                    "source_namespace": "taxonomy",
+                    "identifiers": ["543"],
+                    "taxonomy_rank": "family",
+                    "candidate_materialization": "auto",
+                    "ambiguity_policy": "report_all",
+                },
+            )
+        )
+        assert broad_taxonomy["resolution_previews"][0]["status"] == "one_to_many"
+        assert {
+            candidate["canonical_entity"]["identifier"]
+            for candidate in broad_taxonomy["resolution_previews"][0]["candidate_preview"]
+        } == {"eco", "ece"}
+        assert all(
+            candidate["organism_materialization"] == "identity_only"
+            for candidate in broad_taxonomy["resolution_previews"][0]["candidate_preview"]
+        )
+        assert all(
+            "get" not in preview["operations_used"]
+            for preview in broad_taxonomy["resolution_previews"]
+        )
+        broad_artifacts = await _read_all_artifacts(session, broad_taxonomy)
+        broad_detail = json.loads(broad_artifacts["detail"])
+        assert broad_detail["request"]["taxonomy_rank"] == "family"
+        assert broad_detail["request"]["candidate_materialization"] == "auto"
+
         gene_resolution = _tool_data(
             await session.call_tool(
                 "resolve_kegg_entities",
@@ -369,6 +410,38 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         assert gene_detail["request"]["kind"] == "gene"
         assert gene_detail["request"]["source_namespace"] == "uniprot"
 
+        substance_resolution = _tool_data(
+            await session.call_tool(
+                "resolve_kegg_entities",
+                {
+                    "kind": "substance",
+                    "source_namespace": "chebi",
+                    "identifiers": ["CHEBI:4167"],
+                    "targets": ["kegg_compound", "reaction", "pathway"],
+                    "ambiguity_policy": "report_all",
+                },
+            )
+        )
+        assert substance_resolution["kind"] == "substance"
+        assert substance_resolution["mapped_input_count"] == 1
+        substance_candidate = substance_resolution["resolution_previews"][0]["candidate_preview"][0]
+        assert substance_candidate["canonical_entity"] == {
+            "kind": "compound",
+            "identifier": "C00031",
+        }
+        assert {
+            (entity["kind"], entity["identifier"])
+            for entity in substance_candidate["entity_preview"]
+        } == {
+            ("compound", "C00031"),
+            ("reaction", "R01786"),
+            ("pathway", "map00010"),
+        }
+        substance_artifacts = await _read_all_artifacts(session, substance_resolution)
+        substance_detail = json.loads(substance_artifacts["detail"])
+        assert substance_detail["request"]["source_namespace"] == "chebi"
+        assert substance_detail["request"]["identifiers"] == ["CHEBI:4167"]
+
         traced = _tool_data(
             await session.call_tool(
                 "trace_kegg_relations",
@@ -399,6 +472,29 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         retained_trace = json.loads(trace_artifacts["detail"])
         assert retained_trace["edges"][0]["depth"] == 1
         assert retained_trace["edges"][0]["provenance_batch_indexes"] == [0]
+
+        scoped_gene_trace = _tool_data(
+            await session.call_tool(
+                "trace_kegg_relations",
+                {
+                    "seeds": [{"kind": "ko", "identifier": "K01810"}],
+                    "edge_types": ["ko_to_gene"],
+                    "organism_scope": "eco",
+                    "max_depth": 1,
+                    "max_nodes": 10,
+                    "max_edges": 10,
+                },
+            )
+        )
+        assert scoped_gene_trace["edge_count"] == 1
+        assert scoped_gene_trace["edge_preview"][0]["target"] == {
+            "kind": "gene",
+            "identifier": "eco:b4025",
+        }
+        scoped_artifacts = await _read_all_artifacts(session, scoped_gene_trace)
+        retained_scoped_trace = json.loads(scoped_artifacts["detail"])
+        assert retained_scoped_trace["request"]["organism_scope"] == "eco"
+        assert retained_scoped_trace["edges"][0]["relationship"] == "ko_to_gene"
 
         brite = _tool_data(
             await session.call_tool(
@@ -459,7 +555,10 @@ async def test_p0_query_workflow_through_mcp_and_real_client(
         assert "contamination_context" in warning_codes
 
     assert "https://rest.kegg.jp/link/genome/taxid:562/species" in transport.urls
+    assert "https://rest.kegg.jp/link/genome/taxid:543/family" in transport.urls
     assert "https://rest.kegg.jp/list/pathway/eco" in transport.urls
     assert "https://rest.kegg.jp/list/pathway/ece" in transport.urls
+    assert "https://rest.kegg.jp/conv/compound/chebi:4167" in transport.urls
+    assert "https://rest.kegg.jp/link/eco/K01810" in transport.urls
     assert transport.urls.count("https://rest.kegg.jp/find/compound/glucose") == 1
-    assert runtime.result_store.list_results(runtime.scope_id).total_items == 7
+    assert runtime.result_store.list_results(runtime.scope_id).total_items == 10

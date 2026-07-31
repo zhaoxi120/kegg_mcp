@@ -342,9 +342,20 @@ class KeggRequestExecutor:
 
         maximum_attempts = self._config.retry.max_retries + 1
         for attempt in range(1, maximum_attempts + 1):
-            self._mandatory_rate_limiter.acquire()
-            if self._additional_rate_limiter is not None:
-                self._additional_rate_limiter.acquire()
+            try:
+                self._mandatory_rate_limiter.acquire()
+                if self._additional_rate_limiter is not None:
+                    self._additional_rate_limiter.acquire()
+            except OSError:
+                fail(
+                    ErrorCode.LOCAL_STATE_FAILED,
+                    "The local KEGG request scheduler state could not be used safely.",
+                    suggested_action="Check local rate-limit state permissions and retry.",
+                    safe_details=(
+                        SafeDetail(name="operation", value=prepared.operation.value),
+                        SafeDetail(name="stage", value="rate_limit_state"),
+                    ),
+                )
             response: TransportResponse | None = None
             terminal_transport_failure = False
             terminal_transport_kind = None
@@ -554,6 +565,10 @@ class KeggRequestExecutor:
             if any(
                 row.source_id not in prepared.expected_pair_source_ids
                 or not pair_target_matches(target_database, row.target_id)
+                or (
+                    prepared.expected_pair_target_prefix is not None
+                    and not row.target_id.startswith(prepared.expected_pair_target_prefix)
+                )
                 for row in document.rows
             ):
                 fail(

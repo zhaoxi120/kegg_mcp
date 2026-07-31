@@ -140,6 +140,20 @@ class RecordingLimiter:
         self.acquire_count += 1
 
 
+class _FailingMandatoryLimiter:
+    def __init__(
+        self,
+        scope: str,
+        requests_per_second: float,
+        *,
+        state_root: str,
+    ) -> None:
+        del scope, requests_per_second, state_root
+
+    def acquire(self) -> NoReturn:
+        raise OSError("/private/rate-limit-state includes API_SECRET=do-not-leak")
+
+
 class WriteFailingCache(SQLiteKeggCache):
     def write(
         self,
@@ -684,6 +698,45 @@ def test_partial_entry_cache_service_bounds_preview_without_losing_mixed_provena
     ]
 
 
+def test_entry_service_defaults_to_fresh_cache_first(tmp_path: Path) -> None:
+    cache_path = tmp_path / "entry-service-fresh-cache.sqlite3"
+    entries = (
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00001"),
+        KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00002"),
+    )
+    transport = QueueTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                body=b"".join(_flat_entry(entry.identifier) for entry in entries),
+            )
+        ]
+    )
+    client = KeggClient(
+        _public_config(cache_path),
+        transport=transport,
+        clock=_clock(_NOW),
+    )
+    store = SQLiteResultStore(tmp_path / "entry-service-fresh-results.sqlite3")
+
+    first = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=client,
+        result_store=store,
+        scope_id="entry-service-fresh-cache",
+    )
+    second = retrieve_kegg_entries(
+        GetRequest(entries=entries),
+        client=client,
+        result_store=store,
+        scope_id="entry-service-fresh-cache",
+    )
+
+    assert transport.urls == ["https://rest.kegg.jp/get/K00001+K00002"]
+    assert all(batch.origin is ResponseOrigin.NETWORK for batch in first.provenance)
+    assert all(batch.origin is ResponseOrigin.CACHE for batch in second.provenance)
+
+
 def test_entry_result_model_failure_compensates_the_created_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1070,6 +1123,31 @@ def test_transient_responses_retry_with_backoff_and_rate_limit_each_attempt(
     assert result.batch.attempt_count == 2
     assert limiter.acquire_count == 2
     assert sleeps == [0.5]
+
+
+def test_rate_limit_state_oserror_is_classified_before_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client_module, "DeploymentRateLimiter", _FailingMandatoryLimiter)
+    transport = QueueTransport([])
+    client = KeggClient(
+        _public_config(tmp_path / "rate-limit-state.sqlite3"),
+        transport=transport,
+        clock=_clock(_NOW),
+    )
+
+    with pytest.raises(KeggMcpError) as caught:
+        client.info(InfoRequest(database=KeggInfoDatabase.KO))
+
+    assert caught.value.detail.code is ErrorCode.LOCAL_STATE_FAILED
+    assert {detail.name: detail.value for detail in caught.value.detail.safe_details} == {
+        "operation": "info",
+        "stage": "rate_limit_state",
+    }
+    assert "/private" not in caught.value.detail.model_dump_json()
+    assert "API_SECRET" not in caught.value.detail.model_dump_json()
+    assert transport.urls == []
 
 
 def test_transient_transport_error_is_retried(tmp_path: Path) -> None:
@@ -1602,19 +1680,20 @@ def test_genome_record_loader_reuses_split_entry_cache_with_exact_batch_indexes(
         clock=_clock(_NOW),
     )
     recorded_batches: list[int] = []
+    planned_batches: list[int] = []
 
     first = load_genome_records(
         ("hsa", "mmu"),
         client=client,
         options=KeggRequestOptions(refresh=False),
-        before_batch=lambda: None,
+        before_batch=planned_batches.append,
         record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
     )
     second = load_genome_records(
         ("hsa", "mmu"),
         client=client,
         options=KeggRequestOptions(refresh=False),
-        before_batch=lambda: None,
+        before_batch=planned_batches.append,
         record_batch=lambda _count, batches: recorded_batches.append(len(batches)),
     )
 
@@ -1633,6 +1712,7 @@ def test_genome_record_loader_reuses_split_entry_cache_with_exact_batch_indexes(
         "T01002": 1,
         "mmu": 1,
     }
+    assert planned_batches == [2, 2]
     assert recorded_batches == [1, 2]
 
 
@@ -1911,6 +1991,11 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
             b"rn:R00001\tcpd:C00031\n",
         ),
         (
+            KeggLinkRelationship.REACTION_TO_GLYCAN,
+            "R05969",
+            b"rn:R05969\tgl:G00001\n",
+        ),
+        (
             KeggLinkRelationship.REACTION_TO_PATHWAY,
             "R00001",
             b"rn:R00001\tpath:map00010\n",
@@ -1924,6 +2009,36 @@ def test_taxonomy_species_resolver_separates_code_and_t_number_get_aliases(
             KeggLinkRelationship.COMPOUND_TO_PATHWAY,
             "C00031",
             b"cpd:C00031\tpath:map00010\n",
+        ),
+        (
+            KeggLinkRelationship.GLYCAN_TO_REACTION,
+            "G00001",
+            b"gl:G00001\trn:R05969\n",
+        ),
+        (
+            KeggLinkRelationship.GLYCAN_TO_PATHWAY,
+            "G00001",
+            b"gl:G00001\tpath:map00510\n",
+        ),
+        (
+            KeggLinkRelationship.DRUG_TO_PATHWAY,
+            "D00109",
+            b"dr:D00109\tpath:map07048\n",
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_KO,
+            "M00001",
+            b"md:M00001\tko:K00844\n",
+        ),
+        (
+            KeggLinkRelationship.MODULE_TO_REACTION,
+            "M00001",
+            b"md:M00001\trn:R01786\n",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_MODULE,
+            "map00010",
+            b"path:map00010\tmd:M00001\n",
         ),
         (
             KeggLinkRelationship.PATHWAY_TO_REACTION,
@@ -1970,6 +2085,54 @@ def test_extended_selected_link_relationships_use_the_typed_client_surface(
     assert len(result.rows) == 1
     assert result.rows[0].source_id == body.decode().split("\t", maxsplit=1)[0]
     assert result.batches[0].operation is KeggOperation.LINK
+
+
+@pytest.mark.parametrize(
+    ("relationship", "organism", "source_identifier", "body", "expected_url"),
+    [
+        (
+            KeggLinkRelationship.KO_TO_GENE,
+            "eco",
+            "K01810",
+            b"ko:K01810\teco:b4025\n",
+            "https://rest.kegg.jp/link/eco/K01810",
+        ),
+        (
+            KeggLinkRelationship.PATHWAY_TO_GENE,
+            "hsa",
+            "hsa00010",
+            b"path:hsa00010\thsa:3098\n",
+            "https://rest.kegg.jp/link/hsa/hsa00010",
+        ),
+    ],
+)
+def test_selected_gene_membership_links_bind_the_target_organism(
+    tmp_path: Path,
+    relationship: KeggLinkRelationship,
+    organism: str,
+    source_identifier: str,
+    body: bytes,
+    expected_url: str,
+) -> None:
+    transport = QueueTransport([TransportResponse(status_code=200, body=body)])
+    client = KeggClient(
+        _public_config(tmp_path / f"{relationship.value}.sqlite3"),
+        transport=transport,
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.link(
+        LinkRequest(
+            relationship=relationship,
+            organism_scope=organism,
+            source_identifiers=(source_identifier,),
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].target_id.startswith(f"{organism}:")
+    assert transport.urls == [expected_url]
 
 
 def test_t_number_genome_link_accepts_an_empty_success_response(tmp_path: Path) -> None:
@@ -2079,6 +2242,55 @@ def test_selected_conversion_uses_the_typed_client_surface(tmp_path: Path) -> No
     assert [(row.source_id, row.target_id) for row in result.rows] == [
         ("up:P12345", "ddi:DDB_G0291764")
     ]
+
+
+@pytest.mark.parametrize(
+    ("target", "source", "identifier", "body"),
+    [
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.CHEBI,
+            "chebi:4167",
+            b"chebi:4167\tcpd:C00031\n",
+        ),
+        (
+            KeggConvDatabase.COMPOUND,
+            KeggConvDatabase.PUBCHEM,
+            "pubchem:3333",
+            b"pubchem:3333\tcpd:C00031\n",
+        ),
+        (
+            KeggConvDatabase.PUBCHEM,
+            KeggConvDatabase.DRUG,
+            "D00109",
+            b"dr:D00109\tpubchem:7847177\n",
+        ),
+    ],
+)
+def test_selected_substance_conversion_uses_strict_pair_namespaces(
+    tmp_path: Path,
+    target: KeggConvDatabase,
+    source: KeggConvDatabase,
+    identifier: str,
+    body: bytes,
+) -> None:
+    client = KeggClient(
+        _public_config(tmp_path / f"substance-{target.value}-{source.value}.sqlite3"),
+        transport=QueueTransport([TransportResponse(status_code=200, body=body)]),
+        rate_limiter=RecordingLimiter(),
+        clock=_clock(_NOW),
+    )
+
+    result = client.conv(
+        ConvRequest(
+            target_database=target,
+            source_database=source,
+            source_identifiers=(identifier,),
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].target_id == body.decode().strip().split("\t")[1]
 
 
 @pytest.mark.parametrize(

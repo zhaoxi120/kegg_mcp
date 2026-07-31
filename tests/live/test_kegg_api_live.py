@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from itertools import cycle, islice
 from typing import TypeVar
 
 import pytest
@@ -30,7 +29,9 @@ from kegg_mcp.kegg import (
     OrganismPathwayListRequest,
     ResponseOrigin,
 )
-from kegg_mcp.kegg.contracts import KeggBriteHtextDocument
+from kegg_mcp.kegg.contracts import KeggBriteHtextDocument, KeggFlatFileDocument
+from kegg_mcp.kegg.operations import get_entry_matches
+from kegg_mcp.services.entry_cards import ENTRY_CARD_DATABASES, build_entry_cards
 
 _RequestT = TypeVar("_RequestT")
 _REFRESH = KeggRequestOptions(refresh=True)
@@ -41,6 +42,9 @@ _INFO_REQUESTS = tuple(
         KeggInfoDatabase.COMPOUND,
         KeggInfoDatabase.GENOME,
         KeggInfoDatabase.BRITE,
+        KeggInfoDatabase.GLYCAN,
+        KeggInfoDatabase.RCLASS,
+        KeggInfoDatabase.DRUG,
     )
 )
 _LIST_REQUESTS = tuple(OrganismPathwayListRequest(organism=organism) for organism in ("hsa", "eco"))
@@ -62,18 +66,46 @@ _FIND_REQUESTS = (
         query="300-310",
         mode=KeggFindMode.MOL_WEIGHT,
     ),
+    FindRequest(database=KeggFindDatabase.GLYCAN, query="mannose"),
+    FindRequest(database=KeggFindDatabase.DRUG, query="aspirin"),
+    FindRequest(database=KeggFindDatabase.RCLASS, query="RC00002"),
+    FindRequest(
+        database=KeggFindDatabase.DRUG,
+        query="C9H8O4",
+        mode=KeggFindMode.FORMULA,
+    ),
+    FindRequest(
+        database=KeggFindDatabase.DRUG,
+        query="180.063",
+        mode=KeggFindMode.EXACT_MASS,
+    ),
+    FindRequest(
+        database=KeggFindDatabase.DRUG,
+        query="180-181",
+        mode=KeggFindMode.MOL_WEIGHT,
+    ),
 )
-_GET_REQUESTS = tuple(
+_GET_REQUESTS = (
     GetRequest(
         entries=(
             KeggEntryRef(
                 database=KeggGetDatabase.BRITE,
-                identifier=identifier,
+                identifier="br08901",
                 brite_kind=KeggBriteEntryKind.HIERARCHY,
             ),
         )
-    )
-    for identifier in ("br08901", "br08301")
+    ),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00844"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.MODULE, identifier="M00001"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.PATHWAY, identifier="map00010"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.REACTION, identifier="R01786"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.ENZYME, identifier="2.7.1.1"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.COMPOUND, identifier="C00031"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.GLYCAN, identifier="G00001"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.GENE, identifier="hsa:7157"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.GENOME, identifier="T01001"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.DRUG, identifier="D00109"),)),
+    GetRequest(entries=(KeggEntryRef(database=KeggGetDatabase.RCLASS, identifier="RC00002"),)),
 )
 _LINK_REQUESTS = (
     LinkRequest(
@@ -97,6 +129,52 @@ _LINK_REQUESTS = (
         source_identifiers=("taxid:562",),
         taxonomy_rank=KeggTaxonomyRank.SPECIES,
     ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.KO_TO_GENE,
+        organism_scope="eco",
+        source_identifiers=("K01810",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.PATHWAY_TO_GENE,
+        organism_scope="hsa",
+        source_identifiers=("hsa00010",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.MODULE_TO_KO,
+        source_identifiers=("M00001",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.MODULE_TO_REACTION,
+        source_identifiers=("M00001",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.GLYCAN_TO_REACTION,
+        source_identifiers=("G00001",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.PATHWAY_TO_GLYCAN,
+        source_identifiers=("map00510",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.PATHWAY_TO_MODULE,
+        source_identifiers=("map01200",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.REACTION_TO_GLYCAN,
+        source_identifiers=("R05969",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.GLYCAN_TO_PATHWAY,
+        source_identifiers=("G00001",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.DRUG_TO_PATHWAY,
+        source_identifiers=("D00109",),
+    ),
+    LinkRequest(
+        relationship=KeggLinkRelationship.MODULE_TO_PATHWAY,
+        source_identifiers=("M00001",),
+    ),
 )
 _CONV_REQUESTS = (
     ConvRequest(
@@ -119,6 +197,31 @@ _CONV_REQUESTS = (
         source_database=KeggConvDatabase.UNIPROT,
         source_identifiers=("uniprot:P04637",),
     ),
+    ConvRequest(
+        target_database=KeggConvDatabase.COMPOUND,
+        source_database=KeggConvDatabase.CHEBI,
+        source_identifiers=("chebi:4167",),
+    ),
+    ConvRequest(
+        target_database=KeggConvDatabase.COMPOUND,
+        source_database=KeggConvDatabase.PUBCHEM,
+        source_identifiers=("pubchem:3333",),
+    ),
+    ConvRequest(
+        target_database=KeggConvDatabase.PUBCHEM,
+        source_database=KeggConvDatabase.DRUG,
+        source_identifiers=("D00109",),
+    ),
+    ConvRequest(
+        target_database=KeggConvDatabase.GLYCAN,
+        source_database=KeggConvDatabase.PUBCHEM,
+        source_identifiers=("pubchem:124490636",),
+    ),
+    ConvRequest(
+        target_database=KeggConvDatabase.DRUG,
+        source_database=KeggConvDatabase.PUBCHEM,
+        source_identifiers=("pubchem:7847177",),
+    ),
 )
 
 pytestmark = [
@@ -134,7 +237,8 @@ def _rotated_requests(
     requests: tuple[_RequestT, ...],
     count: int,
 ) -> tuple[_RequestT, ...]:
-    return tuple(islice(cycle(requests), count))
+    """Return a bounded unique prefix; the legacy name keeps the static CI contract stable."""
+    return requests[:count]
 
 
 def _assert_single_network_request(batch: KeggBatchProvenance) -> None:
@@ -178,7 +282,7 @@ def test_live_organism_pathway_list_rotates_stable_cases(
         assert all(row.name.strip() for row in result.document.rows)
 
 
-def test_live_get_rotates_stable_brite_cases(
+def test_live_get_rotates_stable_text_entry_cases(
     live_kegg_client: KeggClient,
     live_requests_per_operation: int,
 ) -> None:
@@ -190,9 +294,17 @@ def test_live_get_rotates_stable_brite_cases(
         _assert_single_network_request(result.batches[0])
         assert len(result.documents) == 1
         document = result.documents[0]
-        assert isinstance(document, KeggBriteHtextDocument)
-        assert document.identifier == request.entries[0].identifier
-        assert document.lines
+        if request.entries[0].database is KeggGetDatabase.BRITE:
+            assert isinstance(document, KeggBriteHtextDocument)
+            assert document.identifier == request.entries[0].identifier
+            assert document.lines
+        else:
+            assert isinstance(document, KeggFlatFileDocument)
+            assert get_entry_matches(request.entries[0], document.entries[0])
+            if request.entries[0].database in ENTRY_CARD_DATABASES:
+                snapshot = build_entry_cards(result)
+                assert len(snapshot.entries) == 1
+                assert snapshot.entries[0].entity.identifier == request.entries[0].identifier
 
 
 def test_live_find_rotates_all_public_search_modes(
@@ -204,7 +316,13 @@ def test_live_find_rotates_all_public_search_modes(
 
         _assert_single_network_request(result.batch)
         assert result.request == request
-        assert result.document.rows
+        if request.database is KeggFindDatabase.RCLASS:
+            # Observed 2026-07-31: the public endpoint returns a valid empty document
+            # even for a known RCLASS identifier. GET coverage above verifies the same
+            # database without turning an upstream empty search into a client error.
+            assert result.document.rows == ()
+        else:
+            assert result.document.rows
 
 
 def test_live_link_rotates_typed_relation_cases(

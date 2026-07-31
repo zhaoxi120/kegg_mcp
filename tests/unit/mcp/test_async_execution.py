@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
+from typing import cast
 
 import pytest
 from anyio import CancelScope, Event, create_task_group, fail_after, sleep
@@ -22,7 +23,8 @@ from kegg_mcp.kegg import (
 from kegg_mcp.kegg.transport import TransportError, TransportErrorKind, TransportResponse
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import dispatch_tool
-from kegg_mcp.services.result_store import SQLiteResultStore
+from kegg_mcp.services.reference_budget import KeggMcpClient
+from kegg_mcp.services.result_store import ResultStoreError, SQLiteResultStore
 
 
 class _BlockingTransport:
@@ -52,6 +54,20 @@ class _BlockingTransport:
         )
 
 
+class _CountingClient:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def find(self, *_args: object, **_kwargs: object) -> None:
+        self.call_count += 1
+        raise AssertionError("client call must not start when result-store preflight fails")
+
+
+class _PreflightFailingResultStore(SQLiteResultStore):
+    def preflight_write(self) -> None:
+        raise ResultStoreError("preflight_write")
+
+
 def _runtime(tmp_path: Path, transport: _BlockingTransport) -> McpRuntime:
     return McpRuntime(
         client=KeggClient(
@@ -65,6 +81,29 @@ def _runtime(tmp_path: Path, transport: _BlockingTransport) -> McpRuntime:
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
         scope_id="async-execution-scope",
     )
+
+
+@pytest.mark.asyncio
+async def test_retained_network_tool_preflights_store_before_client_call(
+    tmp_path: Path,
+) -> None:
+    client = _CountingClient()
+    runtime = McpRuntime(
+        client=cast(KeggMcpClient, client),
+        result_store=_PreflightFailingResultStore(tmp_path / "results.sqlite3"),
+        scope_id="preflight-failure-scope",
+    )
+
+    result = await dispatch_tool(
+        "search_kegg_entries",
+        {"database": "ko", "query": "glycolysis", "mode": "keyword"},
+        runtime,
+    )
+
+    assert result.isError is True
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "RESULT_STORE_FAILED"
+    assert client.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -146,6 +185,7 @@ async def test_cancelled_request_waits_for_worker_then_propagates(
 
     assert returned_results == []
     assert invocation_finished.is_set() is True
+    assert runtime.result_store.list_results(runtime.scope_id).total_items == 0
 
 
 @pytest.mark.asyncio

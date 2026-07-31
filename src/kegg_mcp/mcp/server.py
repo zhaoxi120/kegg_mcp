@@ -25,9 +25,10 @@ from kegg_mcp.services.result_store import ResultStoreError
 
 SERVER_NAME = "kegg-mcp"
 SERVER_INSTRUCTIONS = (
-    "This core server supports bounded KEGG entity search, resolution, relation tracing, BRITE "
-    "hierarchy mapping, and annotation-mapping audits. For analysis it accepts existing K numbers "
-    "or supported KO annotation evidence, not raw protein FASTA. If the only biological input is "
+    "This core server supports bounded KEGG entity search, typed entry cards, local reference-"
+    "snapshot comparison, identifier resolution, relation tracing, BRITE hierarchy mapping, and "
+    "annotation-mapping audits. For analysis it accepts existing K numbers or supported KO "
+    "annotation evidence, not raw protein FASTA. If the only biological input is "
     "protein FASTA, do not call a core analysis tool. If the user explicitly selected another "
     "annotator, wait for its supported KO evidence "
     "and resume this core server only after that evidence is available. Otherwise prefer the "

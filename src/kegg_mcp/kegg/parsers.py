@@ -44,6 +44,9 @@ _FIND_NUMBERED_IDENTIFIERS = {
     KeggFindDatabase.KO: re.compile(r"^K[0-9]{5}$"),
     KeggFindDatabase.REACTION: re.compile(r"^R[0-9]{5}$"),
     KeggFindDatabase.COMPOUND: re.compile(r"^C[0-9]{5}$"),
+    KeggFindDatabase.GLYCAN: re.compile(r"^G[0-9]{5}$"),
+    KeggFindDatabase.DRUG: re.compile(r"^D[0-9]{5}$"),
+    KeggFindDatabase.RCLASS: re.compile(r"^RC[0-9]{5}$"),
     KeggFindDatabase.GENOME: re.compile(r"^T[0-9]{5}$"),
     KeggFindDatabase.ORGANISM: re.compile(r"^T[0-9]{5}$"),
 }

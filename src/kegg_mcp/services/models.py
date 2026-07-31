@@ -34,6 +34,7 @@ from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvena
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
+from kegg_mcp.services.entry_cards import KeggEntryCardPreviewSet
 from kegg_mcp.services.output_bundle import ManifestPathMode, OutputBundle
 from kegg_mcp.services.result_store import (
     RESULT_ID_SCHEMA_PATTERN,
@@ -53,6 +54,7 @@ MAX_NORMALIZATION_PREVIEW = 100
 MAX_ENTRY_PREVIEW_CHARACTERS = 2_000
 MAX_ENTRY_PREVIEW_FIELDS = 64
 MAX_GET_ENTRY_PREVIEWS = 50
+MAX_GET_DIRECT_ENTRY_PREVIEWS = 10
 MAX_GET_PROVENANCE_BATCHES = 5
 MAX_DIRECT_WARNINGS = 25
 MAX_DIRECT_WARNING_CHARACTERS = 1_000
@@ -76,6 +78,13 @@ class AnnotationInputFormat(StrEnum):
     GENERIC_CSV = "generic_csv"
     GENERIC_TSV = "generic_tsv"
     DEEPKOALA_DETAILED = "deepkoala_detailed"
+
+
+class KeggEntryProjection(StrEnum):
+    """Direct and retained projection selected for bounded KEGG GET."""
+
+    PREVIEW = "preview"
+    CARD = "card"
 
 
 class GenericDecisionPolicy(StrEnum):
@@ -369,12 +378,19 @@ class KeggEntryPreview(FrozenModel):
 class KeggEntriesServiceResult(FrozenModel):
     result: ResultMetadata
     artifact: ResultArtifactMetadata
+    snapshot_artifact: ResultArtifactMetadata | None = None
+    projection: KeggEntryProjection = KeggEntryProjection.PREVIEW
     requested_count: int = Field(strict=True, ge=1, le=MAX_GET_ENTRY_PREVIEWS)
     returned_count: int = Field(strict=True, ge=0, le=MAX_GET_ENTRY_PREVIEWS)
     missing_identifiers: Annotated[
         tuple[EntryIdentifier, ...], Field(max_length=MAX_GET_ENTRY_PREVIEWS)
     ]
-    previews: Annotated[tuple[KeggEntryPreview, ...], Field(max_length=MAX_GET_ENTRY_PREVIEWS)]
+    previews: Annotated[
+        tuple[KeggEntryPreview, ...],
+        Field(max_length=MAX_GET_DIRECT_ENTRY_PREVIEWS),
+    ] = ()
+    previews_truncated: bool = False
+    card_preview: KeggEntryCardPreviewSet | None = None
     provenance_batch_count: int = Field(strict=True, ge=0, le=MAX_GET_ENTRY_PREVIEWS)
     provenance: Annotated[
         tuple[KeggBatchProvenance, ...], Field(max_length=MAX_GET_PROVENANCE_BATCHES)
@@ -383,8 +399,23 @@ class KeggEntriesServiceResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_direct_previews(self) -> Self:
-        if self.returned_count != len(self.previews):
-            raise ValueError("returned_count must match the entry preview count")
+        expected_artifact_count = 1 + (self.snapshot_artifact is not None)
+        if self.result.artifact_count != expected_artifact_count:
+            raise ValueError("result artifact_count must match GET artifact metadata")
+        if self.projection is KeggEntryProjection.PREVIEW:
+            if self.snapshot_artifact is not None or self.card_preview is not None:
+                raise ValueError("preview projection cannot include a card snapshot")
+            if self.returned_count < len(self.previews):
+                raise ValueError("returned_count cannot be smaller than entry previews")
+            if self.previews_truncated != (self.returned_count > len(self.previews)):
+                raise ValueError("previews_truncated must match the entry preview")
+        else:
+            if self.snapshot_artifact is None or self.card_preview is None or self.previews:
+                raise ValueError("card projection requires only card preview and snapshot metadata")
+            if self.previews_truncated:
+                raise ValueError("card projection does not use text-preview truncation")
+            if self.card_preview.entry_count != self.returned_count:
+                raise ValueError("returned_count must match card preview entry_count")
         if self.provenance_batch_count < len(self.provenance):
             raise ValueError("provenance_batch_count cannot be smaller than its preview")
         if self.provenance_truncated != (self.provenance_batch_count > len(self.provenance)):
@@ -493,6 +524,7 @@ class ConnectivityState(StrEnum):
     NETWORK_DISABLED = "network_disabled"
     DNS_FAILURE = "dns_failure"
     CONNECTION_FAILURE = "connection_failure"
+    LOCAL_STORAGE_FAILURE = "local_storage_failure"
     AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
 
 
@@ -517,6 +549,7 @@ __all__ = [
     "MAX_DIRECT_WARNINGS",
     "MAX_ENTRY_PREVIEW_CHARACTERS",
     "MAX_ENTRY_PREVIEW_FIELDS",
+    "MAX_GET_DIRECT_ENTRY_PREVIEWS",
     "MAX_GET_ENTRY_PREVIEWS",
     "MAX_GET_PROVENANCE_BATCHES",
     "MAX_NORMALIZATION_PREVIEW",
@@ -543,6 +576,7 @@ __all__ = [
     "GenericDecisionPolicy",
     "KeggEntriesServiceResult",
     "KeggEntryPreview",
+    "KeggEntryProjection",
     "KoSetComparisonPreview",
     "NormalizeAnnotationsRequest",
     "NormalizeAnnotationsResult",

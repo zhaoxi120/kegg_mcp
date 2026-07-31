@@ -24,6 +24,7 @@ from kegg_mcp.services.brite_hierarchy import (
     MapBriteHierarchyRequest,
     MapBriteHierarchyResult,
 )
+from kegg_mcp.services.entry_cards import ENTRY_CARD_DATABASES
 from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
     AnalyzeKoAnnotationsResult,
@@ -36,6 +37,7 @@ from kegg_mcp.services.models import (
     DatasetSource,
     GenericDecisionPolicy,
     KeggEntriesServiceResult,
+    KeggEntryProjection,
     NormalizeAnnotationsRequest,
     NormalizeAnnotationsResult,
     ServerStatusResult,
@@ -52,6 +54,10 @@ from kegg_mcp.services.query_models import (
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
     canonicalize_pathway_specs,
+)
+from kegg_mcp.services.reference_snapshots import (
+    CompareKeggReferenceSnapshotsRequest,
+    CompareKeggReferenceSnapshotsResult,
 )
 from kegg_mcp.services.result_store import (
     RESULT_ID_FRAGMENT,
@@ -224,17 +230,30 @@ class GetKeggEntriesInput(FrozenModel):
     """Bounded allowlisted GET request; never an arbitrary URL."""
 
     entries: Annotated[tuple[KeggEntryRef, ...], Field(min_length=1, max_length=50)]
+    projection: KeggEntryProjection = KeggEntryProjection.PREVIEW
+
+    @model_validator(mode="after")
+    def validate_projection_databases(self) -> Self:
+        if self.projection is KeggEntryProjection.CARD and any(
+            entry.database not in ENTRY_CARD_DATABASES for entry in self.entries
+        ):
+            raise ValueError(
+                "card projection supports only KO, MODULE, pathway, reaction, enzyme, "
+                "compound, glycan, gene, and genome entries"
+            )
+        return self
 
 
 SearchKeggEntriesInput = SearchKeggEntriesRequest
 
 
 class ResolveKeggEntitiesInput(RootModel[ResolveKeggEntitiesRequest]):
-    """Direct discriminated gene-or-organism resolution input."""
+    """Direct discriminated gene, organism, or chemical-substance resolution input."""
 
 
 TraceKeggRelationsInput = TraceKeggRelationsRequest
 MapBriteHierarchyInput = MapBriteHierarchyRequest
+CompareKeggReferenceSnapshotsInput = CompareKeggReferenceSnapshotsRequest
 
 
 class AuditAnnotationMappingInput(FrozenModel):
@@ -385,6 +404,7 @@ ResolveEntitiesToolEnvelope = ToolEnvelope[ResolveKeggEntitiesResult]
 TraceRelationsToolEnvelope = ToolEnvelope[TraceKeggRelationsResult]
 BriteHierarchyToolEnvelope = ToolEnvelope[MapBriteHierarchyResult]
 AnnotationAuditToolEnvelope = ToolEnvelope[AnnotationMappingAuditResult]
+ReferenceSnapshotComparisonToolEnvelope = ToolEnvelope[CompareKeggReferenceSnapshotsResult]
 AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
 AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
 AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]
@@ -502,6 +522,7 @@ __all__ = [
     "AuditAnnotationMappingInput",
     "BriteHierarchyToolEnvelope",
     "CacheInfoResource",
+    "CompareKeggReferenceSnapshotsInput",
     "CompareKoSetsInput",
     "CompareToolEnvelope",
     "ConnectivityToolEnvelope",
@@ -518,6 +539,7 @@ __all__ = [
     "NormalizeToolEnvelope",
     "OversizedArtifactNotice",
     "ProbeKeggConnectivityInput",
+    "ReferenceSnapshotComparisonToolEnvelope",
     "ResolveEntitiesToolEnvelope",
     "ResolveKeggEntitiesInput",
     "ResultResourceIndex",

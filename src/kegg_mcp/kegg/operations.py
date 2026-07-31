@@ -59,6 +59,10 @@ class PairTargetDatabase(StrEnum):
     NCBI_PROTEINID = "ncbi-proteinid"
     UNIPROT = "uniprot"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    CHEBI = "chebi"
+    PUBCHEM = "pubchem"
     GENOME = "genome"
     TAXONOMY = "taxonomy"
 
@@ -75,6 +79,7 @@ class PreparedRequest:
     requested_identifiers: tuple[str, ...] = ()
     expected_pair_source_ids: frozenset[str] = frozenset()
     pair_target_database: PairTargetDatabase | None = None
+    expected_pair_target_prefix: str | None = None
     find_database: KeggFindDatabase | None = None
     find_organism: str | None = None
     list_organism: str | None = None
@@ -85,6 +90,8 @@ class PreparedRequest:
         )
         if (self.parser is ResponseParser.PAIR_TABLE) != has_pair_contract:
             raise ValueError("pair-table requests require a complete response contract")
+        if self.expected_pair_target_prefix is not None and not has_pair_contract:
+            raise ValueError("pair target prefixes require a complete response contract")
         if (self.parser is ResponseParser.FIND_TABLE) != (self.find_database is not None):
             raise ValueError("find-table requests require an expected database")
         if self.find_organism is not None and self.find_database is not KeggFindDatabase.GENES:
@@ -103,6 +110,10 @@ _PAIR_TARGET_PATTERNS = {
     PairTargetDatabase.NCBI_PROTEINID: re.compile(r"^ncbi-proteinid:[A-Za-z0-9._-]+$"),
     PairTargetDatabase.UNIPROT: re.compile(r"^(?:uniprot|up):[A-Za-z0-9._-]+$"),
     PairTargetDatabase.COMPOUND: re.compile(r"^(?:cpd|compound):C[0-9]{5}$"),
+    PairTargetDatabase.GLYCAN: re.compile(r"^(?:gl|glycan):G[0-9]{5}$"),
+    PairTargetDatabase.DRUG: re.compile(r"^(?:dr|drug):D[0-9]{5}$"),
+    PairTargetDatabase.CHEBI: re.compile(r"^chebi:[1-9][0-9]*$"),
+    PairTargetDatabase.PUBCHEM: re.compile(r"^pubchem:[1-9][0-9]*$"),
     PairTargetDatabase.TAXONOMY: re.compile(r"^(?:taxid|taxonomy):[1-9][0-9]*$"),
 }
 
@@ -245,7 +256,7 @@ def prepare_link(
     """Greedily prepare canonical LINK batches within identifier and URL bounds."""
     _require_identifier_limit(len(request.source_identifiers), limits)
     contract = link_relation_contract(request.relationship)
-    target = contract.target_database
+    target = request.organism_scope or contract.target_database
     path_prefix = f"/link/{target}/"
     path_suffix = request.taxonomy_rank.wire_suffix
     prepared: list[PreparedRequest] = []
@@ -274,6 +285,9 @@ def prepare_link(
                     contract.response_source_identifier(identifier) for identifier in batch
                 ),
                 pair_target_database=PairTargetDatabase(contract.target_database),
+                expected_pair_target_prefix=(
+                    None if request.organism_scope is None else f"{request.organism_scope}:"
+                ),
             )
         )
     return tuple(prepared)
@@ -326,6 +340,12 @@ def pair_target_matches(database: PairTargetDatabase, identifier: str) -> bool:
 def _conversion_source_ids(
     database: KeggConvDatabase, identifiers: tuple[str, ...]
 ) -> frozenset[str]:
+    if database is KeggConvDatabase.COMPOUND:
+        return frozenset(f"cpd:{identifier}" for identifier in identifiers)
+    if database is KeggConvDatabase.GLYCAN:
+        return frozenset(f"gl:{identifier}" for identifier in identifiers)
+    if database is KeggConvDatabase.DRUG:
+        return frozenset(f"dr:{identifier}" for identifier in identifiers)
     expected = set(identifiers)
     if database is KeggConvDatabase.UNIPROT:
         expected.update(f"up:{identifier.removeprefix('uniprot:')}" for identifier in identifiers)
@@ -354,6 +374,7 @@ def _prepared(
     requested_identifiers: tuple[str, ...] = (),
     expected_pair_source_ids: frozenset[str] = frozenset(),
     pair_target_database: PairTargetDatabase | None = None,
+    expected_pair_target_prefix: str | None = None,
     find_database: KeggFindDatabase | None = None,
     find_organism: str | None = None,
     list_organism: str | None = None,
@@ -377,6 +398,7 @@ def _prepared(
         requested_identifiers=requested_identifiers,
         expected_pair_source_ids=expected_pair_source_ids,
         pair_target_database=pair_target_database,
+        expected_pair_target_prefix=expected_pair_target_prefix,
         find_database=find_database,
         find_organism=find_organism,
         list_organism=list_organism,

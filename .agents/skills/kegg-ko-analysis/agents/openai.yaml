@@ -1,7 +1,7 @@
 interface:
   display_name: "KEGG Query and KO Analysis"
-  short_description: "Search KEGG entities and analyze existing KO evidence"
-  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query or KO-analysis route for this request."
+  short_description: "Search KEGG entities, compare snapshots, and analyze KO evidence"
+  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query or KO-analysis route, including card and snapshot requests."
 
 dependencies:
   tools:

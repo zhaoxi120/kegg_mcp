@@ -370,7 +370,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert tool.description
             if tool.name == "resolve_kegg_entities":
                 assert tool.inputSchema["type"] == "object"
-                assert len(tool.inputSchema["oneOf"]) == 2
+                assert len(tool.inputSchema["oneOf"]) == 3
                 assert all(
                     branch["additionalProperties"] is False for branch in tool.inputSchema["oneOf"]
                 )
@@ -418,6 +418,15 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert normalize_annotations.destructiveHint is False
         assert normalize_annotations.idempotentHint is False
         assert normalize_annotations.openWorldHint is False
+        reference_comparison_annotations = _tool_by_name(
+            tools,
+            "compare_kegg_reference_snapshots",
+        ).annotations
+        assert reference_comparison_annotations is not None
+        assert reference_comparison_annotations.readOnlyHint is False
+        assert reference_comparison_annotations.destructiveHint is False
+        assert reference_comparison_annotations.idempotentHint is False
+        assert reference_comparison_annotations.openWorldHint is False
         delete_annotations = _tool_by_name(tools, "delete_analysis_result").annotations
         assert delete_annotations is not None
         assert delete_annotations.readOnlyHint is False
@@ -440,11 +449,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "max_results",
         }
         assert search_schema["properties"]["max_results"]["maximum"] == 100
+        entries_schema = _tool_by_name(tools, "get_kegg_entries").inputSchema
+        assert entries_schema["properties"]["projection"]["default"] == "preview"
         resolution_schema = _tool_by_name(tools, "resolve_kegg_entities").inputSchema
         assert resolution_schema["discriminator"] == {"propertyName": "kind"}
         assert {branch["properties"]["kind"]["const"] for branch in resolution_schema["oneOf"]} == {
             "gene",
             "organism",
+            "substance",
         }
         assert all("kind" in branch["required"] for branch in resolution_schema["oneOf"])
         organism_resolution_schema = next(
@@ -457,6 +469,22 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         ]
         assert pathway_directory_schema["type"] == "boolean"
         assert pathway_directory_schema["default"] is False
+        assert (
+            organism_resolution_schema["properties"]["candidate_materialization"]["default"]
+            == "auto"
+        )
+        substance_resolution_schema = next(
+            branch
+            for branch in resolution_schema["oneOf"]
+            if branch["properties"]["kind"]["const"] == "substance"
+        )
+        assert set(substance_resolution_schema["properties"]["source_namespace"]["enum"]) == {
+            "kegg_compound",
+            "kegg_glycan",
+            "kegg_drug",
+            "chebi",
+            "pubchem_sid",
+        }
         trace_schema = _tool_by_name(tools, "trace_kegg_relations").inputSchema
         assert trace_schema["properties"]["max_depth"]["maximum"] == 2
         assert trace_schema["properties"]["max_nodes"]["maximum"] == 200
@@ -534,7 +562,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         )
         entries_result_properties = entries_output_defs["KeggEntriesServiceResult"]["properties"]
         assert entries_result_properties["missing_identifiers"]["maxItems"] == 50
-        assert entries_result_properties["previews"]["maxItems"] == 50
+        assert entries_result_properties["previews"]["maxItems"] == 10
         assert entries_result_properties["provenance_batch_count"]["maximum"] == 50
         assert entries_result_properties["provenance"]["maxItems"] == 5
 
@@ -674,7 +702,20 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "completed",
             "not_requested",
             "skipped_request_limit",
+            "incomplete_row_limit",
+            "incomplete_response_limit",
         }
+
+        reference_output = _tool_by_name(
+            tools,
+            "compare_kegg_reference_snapshots",
+        ).outputSchema
+        assert reference_output is not None
+        reference_properties = reference_output["$defs"]["CompareKeggReferenceSnapshotsResult"][
+            "properties"
+        ]
+        assert reference_properties["change_preview"]["maxItems"] == 25
+        assert reference_properties["interpretation_caveats"]["maxItems"] == 5
 
         comparison_output = _tool_by_name(tools, "compare_ko_sets").outputSchema
         assert comparison_output is not None

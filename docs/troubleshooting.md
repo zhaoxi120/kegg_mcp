@@ -217,6 +217,11 @@ For live DNS, connection, authorization, or rate-limit failures, confirm the int
 and call `probe_kegg_connectivity` once. Do not loop the probe, bypass the deployment-wide limiter,
 or reinterpret transport failure as an absent KEGG entry.
 
+A probe state of `local_storage_failure` means the endpoint result was not classified as an
+authorization failure: inspect the private cache and rate-limit state permissions. A retained
+query that returns `RESULT_STORE_FAILED` is rejected during its storage preflight before KEGG
+access begins; correct the configured result-store parent and retry.
+
 ## Protocol and support hygiene
 
 Malformed JSON-RPC commonly means a wrapper wrote banners or debug output to stdout. Keep stdout

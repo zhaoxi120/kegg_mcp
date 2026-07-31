@@ -15,8 +15,9 @@ Last architecture and document-ownership review: 2026-07-30.
 KEGG MCP converts supplied KO annotation evidence and bounded entity queries into traceable KEGG
 relationships, conservative MODULE evaluation, descriptive pathway coverage, deterministic KO-set
 comparisons, and bounded static visualizations. Its query surface returns candidates, typed
-crosswalks, relation traces, BRITE classifications, and annotation mapping audits. It does not
-infer experimental validation, expression, activity, flux, phenotype, or statistical significance.
+cards and current-scope reference differences, crosswalks, relation traces, BRITE classifications,
+and annotation mapping audits. It does not infer experimental validation, expression, activity,
+flux, phenotype, or statistical significance.
 
 The supported input routes are:
 
@@ -24,8 +25,8 @@ The supported input routes are:
 - a generic CSV or TSV annotation table with an explicit or unambiguous column mapping;
 - previously generated DeepKOALA detailed output;
 - a protein FASTA processed by the separately installed `deepkoala-mcp` companion;
-- bounded search terms, external gene or organism identifiers, and typed KEGG entity seeds supplied
-  directly to the core query services; and
+- bounded search terms, external gene, organism, or substance identifiers, known KEGG entries, and
+  typed KEGG entity seeds supplied directly to the core query services; and
 - an existing compatible `render_input.json` passed directly to `kegg-render-mcp`.
 
 The common FASTA-to-image workflow is:
@@ -191,24 +192,34 @@ access and compatibility check, not permission to redistribute responses.
 
 ## Bounded query and evidence routing
 
-The Core query layer exposes five focused capabilities:
+The Core query layer exposes seven focused capabilities:
 
-- `search_kegg_entries` performs bounded keyword search and approved compound candidate searches.
-  Results preserve KEGG match text and never invent a relevance score or confirmed identity.
-- `resolve_kegg_entities` resolves gene or organism identifiers through typed FIND, GET, CONV,
-  and LINK steps. Organism-pathway LIST retrieval is an explicit opt-in projection. It reports
-  unmapped, one-to-one, one-to-many, many-to-one, and organism-mismatch outcomes and never silently
-  chooses among ambiguous candidates.
+- `get_kegg_entries` performs bounded typed retrieval and can deterministically project supported
+  flat files into typed cards plus a current-scope, versioned comparison snapshot. Cards do not
+  replace the retained parsed source or become an LLM-generated summary.
+- `search_kegg_entries` performs bounded keyword and approved chemical-candidate searches. Results
+  preserve KEGG match text and never invent a relevance score or confirmed identity.
+- `resolve_kegg_entities` resolves gene, organism, or chemical-substance identifiers through typed
+  FIND, GET, CONV, and LINK steps. Organism-pathway LIST retrieval and broad-taxonomy candidate
+  materialization remain explicit projections. It reports unmapped, one-to-one, one-to-many,
+  many-to-one, and organism-mismatch outcomes and never silently chooses among ambiguous
+  candidates.
 - `trace_kegg_relations` follows an explicit allowlist of typed KEGG relationship directions for
   one or two hops under fixed seed, node, edge, row, response-byte, and provenance bounds.
+  Gene expansion from a KO or pathway is dynamically restricted to one caller-supplied organism.
 - `map_brite_hierarchy` maps supplied typed entities into source-backed BRITE paths, preserves
   multiple memberships when requested, reports unmatched entities, and uses descriptive
   unique-input counts without enrichment or abundance weighting.
 - `audit_annotation_mapping` summarizes normalized evidence, duplicate and conflicting
   assignments, strict and lenient mapping yields across caller-selected fixed KEGG relationship
   classes, unmapped K numbers, retrieval provenance, and missing or mixed source metadata warnings.
-  Its separable remote mapping phase may be omitted or skipped at a preflight request limit without
-  discarding the local evidence audit.
+  Its separable remote mapping phase may be omitted, skipped at a preflight request limit, or
+  stopped cleanly at aggregate row/response limits without discarding the local evidence audit or
+  calculating a partial-target yield.
+- `compare_kegg_reference_snapshots` compares two current-scope, current-schema card snapshots for
+  the same requested entries without a KEGG request. It reports structural field and membership
+  differences with explicit parser, endpoint, cache, retrieval, and release context; it is not a
+  historical KEGG mirror or a biological gain/loss analysis.
 
 These functions are query and evidence-routing operations. A search candidate is not an identified
 entity, a relationship edge is not a regulatory or causal mechanism, a BRITE count is not
@@ -222,11 +233,12 @@ but it does not become a second annotation model. BRITE paths and mapping-audit 
 query results; they are not passed into `deepkoala-mcp`, added to the renderer handoff, or
 recomputed by `kegg-render-mcp`.
 
-All five P0 query and audit direct results are fixed compact projections with explicit counts and
-truncation flags under a shared 64 KiB serialized bound. Complete search matches, crosswalks,
-steps, graph data, BRITE paths, audit distributions, relationship rows, and provenance remain in
-the scoped retained resource. The LLM selects projections and interprets summaries; it does not
-perform server batching, merge relationship shards, or reconstruct discarded detail.
+Bounded retrieval, query, card, audit, and reference-comparison direct results are fixed compact
+projections with explicit counts and truncation flags under a shared 64 KiB serialized bound.
+Complete search matches, cards, crosswalks, steps, graph data, BRITE paths, audit distributions,
+relationship rows, snapshot differences, and provenance remain in scoped retained resources. The
+LLM selects projections and interprets summaries; it does not perform server batching, merge
+relationship shards, reconstruct discarded detail, or treat KEGG-returned text as instructions.
 
 ## MODULE, pathway, and comparison semantics
 
@@ -290,10 +302,10 @@ bounded optional Top-N selection, loads only required references, evaluates requ
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
 reuse the same service and domain functions.
 
-The bounded search, resolver, relation-trace, BRITE, and mapping-audit tools are separate
-transport-independent service workflows. They reuse the same typed client, access policy,
-retrieval provenance, and scoped result storage without being folded into
-`analyze_ko_annotations`.
+The bounded retrieval/card, search, resolver, relation-trace, BRITE, mapping-audit, and local
+snapshot-comparison tools are separate transport-independent service workflows. They reuse the same
+typed client, access policy, retrieval provenance, and scoped result storage without being folded
+into `analyze_ko_annotations`.
 
 Ordinary tool inputs expose only analysis choices. Eligibility, endpoints, cache policy, allowed
 roots, storage, rate limits, and hard service limits remain deployment configuration. Connectivity

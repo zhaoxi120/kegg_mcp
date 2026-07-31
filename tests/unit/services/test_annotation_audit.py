@@ -284,6 +284,9 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
     assert retained["lenient_only_ko_ids"] == ["K00002"]
     assert len(retained["provenance"]) == 10
     assert retained["provenance"][0]["request_key"] == "synthetic:1"
+    assert retained["complete_relationship_rows"]["pathway"][0]["batch_index"] == 0
+    assert retained["complete_relationship_rows"]["module"][0]["batch_index"] == 2
+    assert retained["provenance"][2]["request_key"] == "synthetic:3"
 
 
 def test_audit_warns_for_each_mapping_batch_without_a_database_release(
@@ -474,6 +477,126 @@ def test_audit_request_budget_skip_is_reported_before_network_access(
 
     assert result.mapping_execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
     assert client.requests == []
+
+
+def test_audit_preserves_evidence_and_completed_targets_at_row_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "row-limit.sqlite3")
+    client = _AuditClient(max_identifiers=2)
+    monkeypatch.setattr(annotation_audit, "MAX_AUDIT_RELATIONSHIP_ROWS", 1)
+
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text="K00001"),
+        client=client,
+        result_store=store,
+        scope_id="row-limit-scope",
+        mapping_targets=(
+            AnnotationMappingTarget.PATHWAY,
+            AnnotationMappingTarget.MODULE,
+            AnnotationMappingTarget.REACTION,
+        ),
+    )
+
+    execution = result.mapping_execution
+    assert result.evidence.lenient_unique_ko_count == 1
+    assert execution.status is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT
+    assert execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
+    assert execution.incomplete_target is AnnotationMappingTarget.MODULE
+    assert execution.skipped_targets == (AnnotationMappingTarget.REACTION,)
+    assert execution.limit_kind is annotation_audit.AnnotationMappingLimitKind.ROW_COUNT
+    assert execution.limit_observed == 2
+    assert execution.limit_value == 1
+    assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
+    assert result.strict_without_any_audited_relationship_count is None
+    assert len(client.requests) == 2
+    retained = json.loads(
+        store.read_artifact(
+            "row-limit-scope",
+            result.result.result_id,
+            "detail",
+            limit=store.limits.max_range_bytes,
+        ).content
+    )
+    assert set(retained["complete_relationship_rows"]) == {"pathway"}
+    assert retained["detail"]["mapping_execution"]["incomplete_target"] == "module"
+    assert retained["detail"]["mappings"][0]["target"] == "pathway"
+
+
+def test_audit_preserves_observed_provenance_when_first_target_is_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "partial-provenance.sqlite3")
+    client = _AuditClient(max_identifiers=1)
+    monkeypatch.setattr(annotation_audit, "MAX_AUDIT_RELATIONSHIP_ROWS", 1)
+
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text="K00001\nK00005"),
+        client=client,
+        result_store=store,
+        scope_id="partial-provenance-scope",
+        mapping_targets=(
+            AnnotationMappingTarget.PATHWAY,
+            AnnotationMappingTarget.MODULE,
+        ),
+    )
+
+    assert result.mapping_execution.status is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT
+    assert result.mapping_execution.completed_targets == ()
+    assert result.mapping_execution.incomplete_target is AnnotationMappingTarget.PATHWAY
+    assert result.mapping_execution.skipped_targets == (AnnotationMappingTarget.MODULE,)
+    assert result.mappings == ()
+    assert result.retrieval.batch_count == 2
+    assert result.retrieval.network_request_count == 2
+    assert len(client.requests) == 2
+    retained = json.loads(
+        store.read_artifact(
+            "partial-provenance-scope",
+            result.result.result_id,
+            "detail",
+            limit=store.limits.max_range_bytes,
+        ).content
+    )
+    assert retained["complete_relationship_rows"] == {}
+    assert [item["request_key"] for item in retained["provenance"]] == [
+        "synthetic:1",
+        "synthetic:2",
+    ]
+
+
+def test_audit_preserves_evidence_and_completed_targets_at_response_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "response-limit.sqlite3")
+    client = _AuditClient(max_identifiers=2)
+    monkeypatch.setattr(annotation_audit, "MAX_AUDIT_RESPONSE_BYTES", 150)
+
+    result = audit_annotation_mapping(
+        DatasetSource(ko_text="K00001"),
+        client=client,
+        result_store=store,
+        scope_id="response-limit-scope",
+        mapping_targets=(
+            AnnotationMappingTarget.PATHWAY,
+            AnnotationMappingTarget.MODULE,
+        ),
+    )
+
+    execution = result.mapping_execution
+    assert execution.status is AnnotationMappingExecutionStatus.INCOMPLETE_RESPONSE_LIMIT
+    assert execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
+    assert execution.incomplete_target is AnnotationMappingTarget.MODULE
+    assert execution.skipped_targets == ()
+    assert execution.limit_kind is annotation_audit.AnnotationMappingLimitKind.RESPONSE_BYTES
+    assert execution.limit_observed == 200
+    assert execution.limit_value == 150
+    assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
+    assert result.retrieval.batch_count == 2
+    assert result.retrieval.network_request_count == 2
+    assert result.strict_without_any_audited_relationship_count is None
 
 
 def test_audit_direct_result_cap_compensates_the_retained_result(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated, Literal, Self, TypeAlias
 
@@ -26,6 +27,8 @@ from kegg_mcp.services.result_store import ResultArtifactMetadata, ResultMetadat
 MAX_SEARCH_RESULTS = 100
 MAX_RESOLUTION_IDENTIFIERS = 50
 MAX_RESOLUTION_ENTITIES = 200
+MAX_ORGANISM_RESOLUTION_CANDIDATES = 5_000
+MAX_RESOLUTION_UNIQUE_ENTITIES = 10_000
 MAX_TRACE_SEEDS = 50
 MAX_TRACE_NODES = 200
 MAX_TRACE_EDGES = 500
@@ -59,6 +62,9 @@ class KeggEntityKind(StrEnum):
     REACTION = "reaction"
     ENZYME = "enzyme"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    RCLASS = "rclass"
     BRITE = "brite"
     GENOME = "genome"
     TAXONOMY = "taxonomy"
@@ -88,6 +94,17 @@ class KeggEntityRef(FrozenModel):
             valid = is_ec_number(value)
         elif self.kind is KeggEntityKind.COMPOUND:
             valid = _numbered_identifier(value, "C")
+        elif self.kind is KeggEntityKind.GLYCAN:
+            valid = _numbered_identifier(value, "G")
+        elif self.kind is KeggEntityKind.DRUG:
+            valid = _numbered_identifier(value, "D")
+        elif self.kind is KeggEntityKind.RCLASS:
+            valid = (
+                len(value) == 7
+                and value.startswith("RC")
+                and value[2:].isascii()
+                and value[2:].isdigit()
+            )
         elif self.kind is KeggEntityKind.BRITE:
             valid = is_kegg_brite_identifier(value)
         elif self.kind is KeggEntityKind.GENOME:
@@ -114,12 +131,15 @@ class KeggSearchDatabase(StrEnum):
     REACTION = "reaction"
     ENZYME = "enzyme"
     COMPOUND = "compound"
+    GLYCAN = "glycan"
+    DRUG = "drug"
+    RCLASS = "rclass"
     GENOME = "genome"
     ORGANISM = "organism"
 
 
 class KeggSearchMode(StrEnum):
-    """Supported keyword and compound-candidate search modes."""
+    """Supported keyword and bounded chemical-candidate search modes."""
 
     KEYWORD = "keyword"
     FORMULA = "formula"
@@ -177,11 +197,11 @@ class SearchKeggEntriesRequest(FrozenModel):
 
     @model_validator(mode="after")
     def constrain_chemical_modes(self) -> Self:
-        if (
-            self.mode is not KeggSearchMode.KEYWORD
-            and self.database is not KeggSearchDatabase.COMPOUND
-        ):
-            raise ValueError("formula and mass modes are supported only for compound search")
+        if self.mode is not KeggSearchMode.KEYWORD and self.database not in {
+            KeggSearchDatabase.COMPOUND,
+            KeggSearchDatabase.DRUG,
+        }:
+            raise ValueError("formula and mass modes are supported only for compound or drug")
         self.to_find_request()
         return self
 
@@ -285,6 +305,19 @@ class TaxonomyResolutionRank(StrEnum):
 
     EXACT = "exact"
     SPECIES = "species"
+    GENUS = "genus"
+    FAMILY = "family"
+    ORDER = "order"
+    CLASS = "class"
+    PHYLUM = "phylum"
+
+
+class OrganismCandidateMaterialization(StrEnum):
+    """How candidate-only taxonomy links are expanded into GENOME records."""
+
+    AUTO = "auto"
+    IDENTITY_ONLY = "identity_only"
+    FULL = "full"
 
 
 class GeneResolutionTarget(StrEnum):
@@ -378,6 +411,9 @@ class OrganismResolutionRequest(FrozenModel):
         Field(min_length=1, max_length=MAX_RESOLUTION_IDENTIFIERS),
     ]
     taxonomy_rank: TaxonomyResolutionRank = TaxonomyResolutionRank.EXACT
+    candidate_materialization: OrganismCandidateMaterialization = (
+        OrganismCandidateMaterialization.AUTO
+    )
     include_pathway_directory: bool = False
     ambiguity_policy: Literal["report_all"] = "report_all"
 
@@ -420,11 +456,163 @@ class OrganismResolutionRequest(FrozenModel):
             and self.taxonomy_rank is not TaxonomyResolutionRank.EXACT
         ):
             raise ValueError("taxonomy_rank is valid only for taxonomy resolution")
+        if (
+            self.candidate_materialization is not OrganismCandidateMaterialization.AUTO
+            and self.source_namespace is not OrganismIdentifierNamespace.TAXONOMY
+        ):
+            raise ValueError(
+                "candidate_materialization is configurable only for taxonomy resolution"
+            )
+        if (
+            self.include_pathway_directory
+            and self.effective_candidate_materialization
+            is not OrganismCandidateMaterialization.FULL
+        ):
+            raise ValueError("include_pathway_directory requires full candidate materialization")
         return self
+
+    @property
+    def effective_candidate_materialization(self) -> OrganismCandidateMaterialization:
+        """Return the deterministic projection used for this request."""
+        if self.candidate_materialization is not OrganismCandidateMaterialization.AUTO:
+            return self.candidate_materialization
+        broad_ranks = {
+            TaxonomyResolutionRank.GENUS,
+            TaxonomyResolutionRank.FAMILY,
+            TaxonomyResolutionRank.ORDER,
+            TaxonomyResolutionRank.CLASS,
+            TaxonomyResolutionRank.PHYLUM,
+        }
+        if (
+            self.source_namespace is OrganismIdentifierNamespace.TAXONOMY
+            and self.taxonomy_rank in broad_ranks
+        ):
+            return OrganismCandidateMaterialization.IDENTITY_ONLY
+        return OrganismCandidateMaterialization.FULL
+
+
+class SubstanceIdentifierNamespace(StrEnum):
+    """Selected KEGG or external chemical-substance identifier namespace."""
+
+    KEGG_COMPOUND = "kegg_compound"
+    KEGG_GLYCAN = "kegg_glycan"
+    KEGG_DRUG = "kegg_drug"
+    CHEBI = "chebi"
+    PUBCHEM_SID = "pubchem_sid"
+
+
+class SubstanceResolutionTarget(StrEnum):
+    """Allowlisted KEGG substance identities and one-hop projections."""
+
+    KEGG_COMPOUND = "kegg_compound"
+    KEGG_GLYCAN = "kegg_glycan"
+    KEGG_DRUG = "kegg_drug"
+    REACTION = "reaction"
+    PATHWAY = "pathway"
+
+
+_SUBSTANCE_NAMESPACE_KIND = {
+    SubstanceIdentifierNamespace.KEGG_COMPOUND: KeggEntityKind.COMPOUND,
+    SubstanceIdentifierNamespace.KEGG_GLYCAN: KeggEntityKind.GLYCAN,
+    SubstanceIdentifierNamespace.KEGG_DRUG: KeggEntityKind.DRUG,
+}
+_SUBSTANCE_TARGET_KIND = {
+    SubstanceResolutionTarget.KEGG_COMPOUND: KeggEntityKind.COMPOUND,
+    SubstanceResolutionTarget.KEGG_GLYCAN: KeggEntityKind.GLYCAN,
+    SubstanceResolutionTarget.KEGG_DRUG: KeggEntityKind.DRUG,
+}
+
+
+class SubstanceResolutionRequest(FrozenModel):
+    """Resolve selected chemical crosswalks without claiming compound identification."""
+
+    kind: Literal["substance"]
+    source_namespace: SubstanceIdentifierNamespace
+    identifiers: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=256)], ...],
+        Field(min_length=1, max_length=MAX_RESOLUTION_IDENTIFIERS),
+    ]
+    targets: Annotated[
+        tuple[SubstanceResolutionTarget, ...],
+        Field(min_length=1, max_length=len(SubstanceResolutionTarget)),
+    ]
+    ambiguity_policy: Literal["report_all"] = "report_all"
+
+    @field_validator("identifiers")
+    @classmethod
+    def validate_identifiers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(
+            normalize_identifier_label(value, field_name="substance identifier") for value in values
+        )
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("substance identifiers must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_namespace_and_targets(self) -> Self:
+        if len(self.targets) != len(set(self.targets)):
+            raise ValueError("substance resolution targets must be unique")
+        target_kinds = self.target_kinds
+        if not target_kinds:
+            raise ValueError("substance resolution requires at least one KEGG substance target")
+        source_kind = _SUBSTANCE_NAMESPACE_KIND.get(self.source_namespace)
+        if source_kind is not None:
+            if target_kinds != {source_kind}:
+                raise ValueError(
+                    "a KEGG substance source supports only its own KEGG identity target"
+                )
+            valid = all(
+                _substance_entity_is_valid(source_kind, identifier)
+                for identifier in self.identifiers
+            )
+        else:
+            valid = all(
+                _external_substance_number(self.source_namespace, identifier) is not None
+                for identifier in self.identifiers
+            )
+            if valid:
+                conversion_identifiers = tuple(
+                    self.conversion_identifier(identifier) for identifier in self.identifiers
+                )
+                valid = all(
+                    len(identifier) <= _MAX_RELATION_IDENTIFIER_CHARACTERS
+                    for identifier in conversion_identifiers
+                )
+                if len(conversion_identifiers) != len(set(conversion_identifiers)):
+                    raise ValueError(
+                        "external substance identifiers must be unique after normalization"
+                    )
+        if not valid:
+            raise ValueError("identifier is incompatible with the selected substance namespace")
+        if (
+            SubstanceResolutionTarget.REACTION in self.targets
+            and KeggEntityKind.DRUG in target_kinds
+        ):
+            raise ValueError("drug resolution does not support a reaction projection")
+        return self
+
+    @property
+    def target_kinds(self) -> set[KeggEntityKind]:
+        """Return requested canonical KEGG substance entity kinds."""
+        return {
+            _SUBSTANCE_TARGET_KIND[target]
+            for target in self.targets
+            if target in _SUBSTANCE_TARGET_KIND
+        }
+
+    def conversion_identifier(self, identifier: str) -> str:
+        """Return one external identifier in the exact KEGG CONV wire namespace."""
+        number = _external_substance_number(self.source_namespace, identifier)
+        if number is None:
+            raise ValueError("conversion_identifier requires an external substance namespace")
+        prefix = (
+            "chebi" if self.source_namespace is SubstanceIdentifierNamespace.CHEBI else "pubchem"
+        )
+        return f"{prefix}:{number}"
 
 
 ResolveKeggEntitiesRequest: TypeAlias = Annotated[
-    GeneResolutionRequest | OrganismResolutionRequest,
+    GeneResolutionRequest | OrganismResolutionRequest | SubstanceResolutionRequest,
     Field(discriminator="kind"),
 ]
 
@@ -501,6 +689,7 @@ class ResolvedEntityCandidate(FrozenModel):
         Field(max_length=MAX_TAXONOMY_LINEAGE_DEPTH),
     ] = ()
     organism_pathways: OrganismPathwaySummary | None = None
+    organism_materialization: OrganismCandidateMaterialization | None = None
 
     @field_validator("name")
     @classmethod
@@ -520,6 +709,15 @@ class ResolvedEntityCandidate(FrozenModel):
             self.name is not None or self.taxonomy_lineage or self.organism_pathways is not None
         ):
             raise ValueError("organism metadata is valid only for canonical organism candidates")
+        if self.organism_materialization is OrganismCandidateMaterialization.AUTO:
+            raise ValueError("resolved candidates require an effective materialization value")
+        if self.organism_materialization is not None and self.canonical_entity.kind not in {
+            KeggEntityKind.ORGANISM,
+            KeggEntityKind.GENOME,
+        }:
+            raise ValueError(
+                "organism materialization is valid only for organism or genome candidates"
+            )
         if self.organism_pathways is not None:
             organism = self.canonical_entity.identifier
             if any(
@@ -536,7 +734,8 @@ class EntityResolution(FrozenModel):
     input_identifier: str = Field(min_length=1, max_length=256)
     status: MappingStatus
     candidates: Annotated[
-        tuple[ResolvedEntityCandidate, ...], Field(max_length=MAX_RESOLUTION_ENTITIES)
+        tuple[ResolvedEntityCandidate, ...],
+        Field(max_length=MAX_ORGANISM_RESOLUTION_CANDIDATES),
     ] = ()
     discarded_organism_mismatch_count: int = Field(default=0, strict=True, ge=0)
     operations_used: Annotated[
@@ -625,6 +824,7 @@ class ResolvedEntityCandidatePreview(FrozenModel):
         Field(max_length=MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW),
     ] = ()
     organism_pathways_truncated: bool | None = None
+    organism_materialization: OrganismCandidateMaterialization | None = None
 
     @model_validator(mode="after")
     def validate_preview_counts(self) -> Self:
@@ -669,7 +869,11 @@ class EntityResolutionPreview(FrozenModel):
 
     input_identifier: str = Field(min_length=1, max_length=256)
     status: MappingStatus
-    candidate_count: int = Field(strict=True, ge=0, le=MAX_RESOLUTION_ENTITIES)
+    candidate_count: int = Field(
+        strict=True,
+        ge=0,
+        le=MAX_ORGANISM_RESOLUTION_CANDIDATES,
+    )
     candidate_preview: Annotated[
         tuple[ResolvedEntityCandidatePreview, ...],
         Field(max_length=MAX_RESOLUTION_CANDIDATE_PREVIEW),
@@ -703,7 +907,7 @@ class ResolveKeggEntitiesResult(FrozenModel):
 
     result: ResultMetadata
     artifact: ResultArtifactMetadata
-    kind: Literal["gene", "organism"]
+    kind: Literal["gene", "organism", "substance"]
     input_count: int = Field(strict=True, ge=1, le=MAX_RESOLUTION_IDENTIFIERS)
     mapped_input_count: int = Field(strict=True, ge=0, le=MAX_RESOLUTION_IDENTIFIERS)
     ambiguous_input_count: int = Field(strict=True, ge=0, le=MAX_RESOLUTION_IDENTIFIERS)
@@ -714,7 +918,7 @@ class ResolveKeggEntitiesResult(FrozenModel):
     unique_mapped_entity_count: int = Field(
         strict=True,
         ge=0,
-        le=MAX_RESOLUTION_ENTITIES,
+        le=MAX_RESOLUTION_UNIQUE_ENTITIES,
     )
     resolution_previews: Annotated[
         tuple[EntityResolutionPreview, ...],
@@ -751,6 +955,7 @@ class ResolveKeggEntitiesResult(FrozenModel):
 class KeggRelationType(StrEnum):
     GENE_TO_KO = "gene_to_ko"
     GENE_TO_PATHWAY = "gene_to_pathway"
+    KO_TO_GENE = "ko_to_gene"
     KO_TO_PATHWAY = "ko_to_pathway"
     KO_TO_MODULE = "ko_to_module"
     KO_TO_REACTION = "ko_to_reaction"
@@ -760,12 +965,22 @@ class KeggRelationType(StrEnum):
     REACTION_TO_ENZYME = "reaction_to_enzyme"
     REACTION_TO_KO = "reaction_to_ko"
     REACTION_TO_COMPOUND = "reaction_to_compound"
+    REACTION_TO_GLYCAN = "reaction_to_glycan"
     REACTION_TO_PATHWAY = "reaction_to_pathway"
     COMPOUND_TO_REACTION = "compound_to_reaction"
     COMPOUND_TO_PATHWAY = "compound_to_pathway"
+    GLYCAN_TO_REACTION = "glycan_to_reaction"
+    GLYCAN_TO_PATHWAY = "glycan_to_pathway"
+    DRUG_TO_PATHWAY = "drug_to_pathway"
+    MODULE_TO_KO = "module_to_ko"
+    MODULE_TO_PATHWAY = "module_to_pathway"
+    MODULE_TO_REACTION = "module_to_reaction"
     PATHWAY_TO_KO = "pathway_to_ko"
+    PATHWAY_TO_GENE = "pathway_to_gene"
+    PATHWAY_TO_MODULE = "pathway_to_module"
     PATHWAY_TO_REACTION = "pathway_to_reaction"
     PATHWAY_TO_COMPOUND = "pathway_to_compound"
+    PATHWAY_TO_GLYCAN = "pathway_to_glycan"
     GENOME_TO_TAXONOMY = "genome_to_taxonomy"
     TAXONOMY_TO_GENOME = "taxonomy_to_genome"
 
@@ -775,9 +990,14 @@ def relation_entity_kinds(
 ) -> tuple[KeggEntityKind, KeggEntityKind]:
     """Return the authoritative source and target kinds for one trace edge."""
     contract = link_relation_contract(KeggLinkRelationship(relationship.value))
+    target_kind = (
+        KeggEntityKind.GENE
+        if relationship in {KeggRelationType.KO_TO_GENE, KeggRelationType.PATHWAY_TO_GENE}
+        else KeggEntityKind(contract.target_database)
+    )
     return (
         KeggEntityKind(contract.source_kind.value),
-        KeggEntityKind(contract.target_database),
+        target_kind,
     )
 
 
@@ -788,6 +1008,7 @@ class TraceKeggRelationsRequest(FrozenModel):
     edge_types: Annotated[
         tuple[KeggRelationType, ...], Field(min_length=1, max_length=len(KeggRelationType))
     ]
+    organism_scope: str | None = Field(default=None, min_length=3, max_length=4)
     max_depth: int = Field(default=1, strict=True, ge=1, le=2)
     max_nodes: int = Field(default=MAX_TRACE_NODES, strict=True, ge=1, le=MAX_TRACE_NODES)
     max_edges: int = Field(default=MAX_TRACE_EDGES, strict=True, ge=1, le=MAX_TRACE_EDGES)
@@ -806,6 +1027,31 @@ class TraceKeggRelationsRequest(FrozenModel):
             relation_entity_kinds(relationship)[0] in seed_kinds for relationship in self.edge_types
         ):
             raise ValueError("at least one edge type must be traversable from the supplied seeds")
+        scoped_gene_edges = {
+            KeggRelationType.KO_TO_GENE,
+            KeggRelationType.PATHWAY_TO_GENE,
+        }
+        requested_scoped_edges = set(self.edge_types) & scoped_gene_edges
+        if requested_scoped_edges:
+            if self.organism_scope is None or not is_kegg_organism_code(self.organism_scope):
+                raise ValueError("organism-scoped gene edges require one canonical organism_scope")
+            if KeggRelationType.PATHWAY_TO_GENE in requested_scoped_edges and any(
+                seed.kind is KeggEntityKind.PATHWAY and seed.identifier[:-5] != self.organism_scope
+                for seed in self.seeds
+            ):
+                raise ValueError("organism-specific pathway seeds must match organism_scope")
+        elif self.organism_scope is not None:
+            raise ValueError("organism_scope is valid only for KO-to-gene or pathway-to-gene edges")
+        module_source_edges = {
+            relationship
+            for relationship in self.edge_types
+            if relation_entity_kinds(relationship)[0] is KeggEntityKind.MODULE
+        }
+        if module_source_edges and any(
+            seed.kind is KeggEntityKind.MODULE and not _numbered_identifier(seed.identifier, "M")
+            for seed in self.seeds
+        ):
+            raise ValueError("MODULE-source relation tracing supports only reference M identifiers")
         return self
 
 
@@ -932,6 +1178,31 @@ def _positive_ascii_integer(value: str) -> bool:
     return bool(value) and value.isascii() and value.isdigit() and value[0] in "123456789"
 
 
+def _substance_entity_is_valid(kind: KeggEntityKind, identifier: str) -> bool:
+    try:
+        KeggEntityRef(kind=kind, identifier=identifier)
+    except ValueError:
+        return False
+    return True
+
+
+def _external_substance_number(
+    namespace: SubstanceIdentifierNamespace,
+    identifier: str,
+) -> str | None:
+    if namespace is SubstanceIdentifierNamespace.CHEBI:
+        prefix_pattern = r"(?i:chebi):"
+    elif namespace is SubstanceIdentifierNamespace.PUBCHEM_SID:
+        prefix_pattern = r"(?i:(?:pubchem|sid)):"
+    else:
+        return None
+    match = re.fullmatch(
+        rf"(?:{prefix_pattern})?(?P<number>[1-9][0-9]*)",
+        identifier,
+    )
+    return None if match is None else match.group("number")
+
+
 def _bare_gene_label(value: str) -> bool:
     return (
         value.isascii()
@@ -942,6 +1213,7 @@ def _bare_gene_label(value: str) -> bool:
 
 __all__ = [
     "MAX_ORGANISM_PATHWAY_PREVIEW",
+    "MAX_ORGANISM_RESOLUTION_CANDIDATES",
     "MAX_QUERY_PROVENANCE_BATCHES",
     "MAX_QUERY_RELEASE_PREVIEW",
     "MAX_RESOLUTION_CANDIDATE_PREVIEW",
@@ -952,6 +1224,7 @@ __all__ = [
     "MAX_RESOLUTION_INPUT_PREVIEW",
     "MAX_RESOLUTION_PATHWAY_DIRECT_PREVIEW",
     "MAX_RESOLUTION_TAXONOMY_PREVIEW",
+    "MAX_RESOLUTION_UNIQUE_ENTITIES",
     "MAX_SEARCH_PREVIEW_MATCH_CHARACTERS",
     "MAX_SEARCH_PREVIEW_RESULTS",
     "MAX_SEARCH_RESULTS",
@@ -973,6 +1246,7 @@ __all__ = [
     "KeggSearchDatabase",
     "KeggSearchMode",
     "MappingStatus",
+    "OrganismCandidateMaterialization",
     "OrganismIdentifierNamespace",
     "OrganismPathwayDirectPreviewEntry",
     "OrganismPathwayPreviewEntry",
@@ -986,6 +1260,9 @@ __all__ = [
     "ResolvedEntityCandidatePreview",
     "SearchKeggEntriesRequest",
     "SearchKeggEntriesResult",
+    "SubstanceIdentifierNamespace",
+    "SubstanceResolutionRequest",
+    "SubstanceResolutionTarget",
     "TaxonomyResolutionRank",
     "TraceKeggRelationsRequest",
     "TraceKeggRelationsResult",

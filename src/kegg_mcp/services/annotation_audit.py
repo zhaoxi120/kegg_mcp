@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from enum import StrEnum
+from functools import partial
 from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
@@ -19,7 +20,7 @@ from kegg_mcp.domain.annotations import (
     normalize_identifier_label,
     select_ko_ids,
 )
-from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 from kegg_mcp.kegg import KeggLinkRelationship, KeggRequestOptions
 from kegg_mcp.kegg.contracts import KeggBatchProvenance
@@ -74,6 +75,15 @@ class AnnotationMappingExecutionStatus(StrEnum):
     COMPLETED = "completed"
     NOT_REQUESTED = "not_requested"
     SKIPPED_REQUEST_LIMIT = "skipped_request_limit"
+    INCOMPLETE_ROW_LIMIT = "incomplete_row_limit"
+    INCOMPLETE_RESPONSE_LIMIT = "incomplete_response_limit"
+
+
+class AnnotationMappingLimitKind(StrEnum):
+    """Aggregate mapping limit that stopped an in-progress target."""
+
+    ROW_COUNT = "row_count"
+    RESPONSE_BYTES = "response_bytes"
 
 
 class AnnotationMappingExecution(FrozenModel):
@@ -92,9 +102,13 @@ class AnnotationMappingExecution(FrozenModel):
         tuple[AnnotationMappingTarget, ...],
         Field(max_length=len(AnnotationMappingTarget)),
     ]
+    incomplete_target: AnnotationMappingTarget | None = None
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     planned_request_count: int = Field(strict=True, ge=0)
     request_limit: int = Field(strict=True, ge=1)
+    limit_kind: AnnotationMappingLimitKind | None = None
+    limit_observed: int | None = Field(default=None, strict=True, ge=0)
+    limit_value: int | None = Field(default=None, strict=True, ge=0)
 
     @model_validator(mode="after")
     def validate_execution(self) -> AnnotationMappingExecution:
@@ -107,12 +121,15 @@ class AnnotationMappingExecution(FrozenModel):
                 raise ValueError("mapping execution target lists must be unique")
             if values != tuple(target for target in AnnotationMappingTarget if target in values):
                 raise ValueError("mapping execution targets must use stable enum order")
+        limit_values = (self.limit_kind, self.limit_observed, self.limit_value)
         if self.status is AnnotationMappingExecutionStatus.COMPLETED:
             if (
                 not self.requested_targets
                 or self.completed_targets != self.requested_targets
                 or self.skipped_targets
+                or self.incomplete_target is not None
                 or self.planned_request_count > self.request_limit
+                or any(value is not None for value in limit_values)
             ):
                 raise ValueError("completed mapping execution must cover every requested target")
         elif self.status is AnnotationMappingExecutionStatus.NOT_REQUESTED:
@@ -120,16 +137,48 @@ class AnnotationMappingExecution(FrozenModel):
                 self.requested_targets
                 or self.completed_targets
                 or self.skipped_targets
+                or self.incomplete_target is not None
                 or self.planned_request_count
+                or any(value is not None for value in limit_values)
             ):
                 raise ValueError("not-requested mapping execution cannot contain target work")
-        elif (
-            not self.requested_targets
-            or self.completed_targets
-            or self.skipped_targets != self.requested_targets
-            or self.planned_request_count <= self.request_limit
-        ):
-            raise ValueError("request-limit skips must report every requested target")
+        elif self.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT:
+            if (
+                not self.requested_targets
+                or self.completed_targets
+                or self.skipped_targets != self.requested_targets
+                or self.incomplete_target is not None
+                or self.planned_request_count <= self.request_limit
+                or any(value is not None for value in limit_values)
+            ):
+                raise ValueError("request-limit skips must report every requested target")
+        else:
+            expected_limit_kind = (
+                AnnotationMappingLimitKind.ROW_COUNT
+                if self.status is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT
+                else AnnotationMappingLimitKind.RESPONSE_BYTES
+            )
+            if (
+                not self.requested_targets
+                or self.incomplete_target is None
+                or self.planned_request_count > self.request_limit
+                or self.limit_kind is not expected_limit_kind
+                or self.limit_observed is None
+                or self.limit_value is None
+                or self.limit_observed <= self.limit_value
+                or (
+                    (
+                        *self.completed_targets,
+                        self.incomplete_target,
+                        *self.skipped_targets,
+                    )
+                    != self.requested_targets
+                )
+            ):
+                raise ValueError(
+                    "incomplete mapping execution must partition requested targets and report "
+                    "the exceeded aggregate limit"
+                )
         return self
 
 
@@ -517,29 +566,14 @@ def audit_annotation_mapping(
         mapping_status = AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
     else:
         mapping_status = AnnotationMappingExecutionStatus.COMPLETED
-    completed_targets = (
-        mapping_targets if mapping_status is AnnotationMappingExecutionStatus.COMPLETED else ()
-    )
-    skipped_targets = (
+    skipped_targets: tuple[AnnotationMappingTarget, ...] = (
         mapping_targets
         if mapping_status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
         else ()
     )
-    mapping_execution = AnnotationMappingExecution(
-        status=mapping_status,
-        requested_targets=mapping_targets,
-        completed_targets=completed_targets,
-        skipped_targets=skipped_targets,
-        selected_unique_ko_count=len(lenient_kos),
-        planned_request_count=(
-            0
-            if mapping_status is AnnotationMappingExecutionStatus.NOT_REQUESTED
-            else planned_request_count
-        ),
-        request_limit=MAX_AUDIT_KEGG_REQUESTS,
-    )
 
     mappings: list[AnnotationTargetMappingAudit] = []
+    completed_targets: list[AnnotationMappingTarget] = []
     all_batches: list[KeggBatchProvenance] = []
     mapped_strict_any: set[str] = set()
     mapped_lenient_any: set[str] = set()
@@ -547,24 +581,61 @@ def audit_annotation_mapping(
     remaining_rows = MAX_AUDIT_RELATIONSHIP_ROWS
     remaining_bytes = MAX_AUDIT_RESPONSE_BYTES
     remaining_requests = MAX_AUDIT_KEGG_REQUESTS
+    incomplete_target: AnnotationMappingTarget | None = None
+    limit_kind: AnnotationMappingLimitKind | None = None
+    limit_observed: int | None = None
+    limit_value: int | None = None
 
-    for target in completed_targets:
+    targets_to_map = (
+        mapping_targets if mapping_status is AnnotationMappingExecutionStatus.COMPLETED else ()
+    )
+    for target_index, target in enumerate(targets_to_map):
         if lenient_kos:
-            mapped = bounded_relation_batches(
-                lenient_kos,
-                relationship=_RELATIONSHIPS[target],
-                client=client,
-                options=options,
-                max_total_requests=remaining_requests,
-                max_total_rows=remaining_rows,
-                max_total_response_bytes=remaining_bytes,
-            )
+            observed_target_batches: list[KeggBatchProvenance] = []
+            consumed_rows = MAX_AUDIT_RELATIONSHIP_ROWS - remaining_rows
+            consumed_bytes = MAX_AUDIT_RESPONSE_BYTES - remaining_bytes
+            try:
+                mapped = bounded_relation_batches(
+                    lenient_kos,
+                    relationship=_RELATIONSHIPS[target],
+                    client=client,
+                    options=options,
+                    max_total_requests=remaining_requests,
+                    max_total_rows=remaining_rows,
+                    max_total_response_bytes=remaining_bytes,
+                    observe_batch=partial(
+                        _record_audit_batches,
+                        observed_target_batches,
+                    ),
+                )
+            except KeggMcpError as error:
+                aggregate_limit = _audit_mapping_limit(
+                    error,
+                    consumed_rows=consumed_rows,
+                    consumed_bytes=consumed_bytes,
+                )
+                if aggregate_limit is None:
+                    raise
+                (
+                    mapping_status,
+                    limit_kind,
+                    limit_observed,
+                    limit_value,
+                ) = aggregate_limit
+                incomplete_target = target
+                skipped_targets = targets_to_map[target_index + 1 :]
+                all_batches.extend(observed_target_batches)
+                break
             remaining_requests -= len(mapped.batches)
             remaining_rows -= len(mapped.rows)
             response_bytes = sum(batch.response_bytes for batch in mapped.batches)
             remaining_bytes -= response_bytes
+            batch_offset = len(all_batches)
+            rows = tuple(
+                row.model_copy(update={"batch_index": row.batch_index + batch_offset})
+                for row in mapped.rows
+            )
             all_batches.extend(mapped.batches)
-            rows = mapped.rows
         else:
             rows = ()
         targets_by_ko: dict[str, set[str]] = defaultdict(set)
@@ -601,6 +672,25 @@ def audit_annotation_mapping(
                 ),
             )
         )
+        completed_targets.append(target)
+
+    mapping_execution = AnnotationMappingExecution(
+        status=mapping_status,
+        requested_targets=mapping_targets,
+        completed_targets=tuple(completed_targets),
+        skipped_targets=skipped_targets,
+        incomplete_target=incomplete_target,
+        selected_unique_ko_count=len(lenient_kos),
+        planned_request_count=(
+            0
+            if mapping_status is AnnotationMappingExecutionStatus.NOT_REQUESTED
+            else planned_request_count
+        ),
+        request_limit=MAX_AUDIT_KEGG_REQUESTS,
+        limit_kind=limit_kind,
+        limit_observed=limit_observed,
+        limit_value=limit_value,
+    )
 
     warnings = _audit_warnings(
         dataset.sources,
@@ -735,6 +825,14 @@ def _mapping_summary(
     )
 
 
+def _record_audit_batches(
+    destination: list[KeggBatchProvenance],
+    _row_count: int,
+    batches: tuple[KeggBatchProvenance, ...],
+) -> None:
+    destination.extend(batches)
+
+
 def _mode_mapping_summary(
     mapping: EvidenceModeMappingAudit,
 ) -> EvidenceModeMappingAuditSummary:
@@ -801,6 +899,45 @@ def _canonical_mapping_targets(
     return tuple(target for target in AnnotationMappingTarget if target in targets)
 
 
+def _audit_mapping_limit(
+    error: KeggMcpError,
+    *,
+    consumed_rows: int,
+    consumed_bytes: int,
+) -> (
+    tuple[
+        AnnotationMappingExecutionStatus,
+        AnnotationMappingLimitKind,
+        int,
+        int,
+    ]
+    | None
+):
+    if error.detail.code is not ErrorCode.INPUT_LIMIT_EXCEEDED:
+        return None
+    details = {item.name: item.value for item in error.detail.safe_details}
+    try:
+        observed = int(details["observed"])
+    except (KeyError, ValueError):
+        return None
+    limit_name = details.get("limit_name")
+    if limit_name == "relationship_row_count":
+        return (
+            AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT,
+            AnnotationMappingLimitKind.ROW_COUNT,
+            consumed_rows + observed,
+            MAX_AUDIT_RELATIONSHIP_ROWS,
+        )
+    if limit_name == "relationship_response_bytes":
+        return (
+            AnnotationMappingExecutionStatus.INCOMPLETE_RESPONSE_LIMIT,
+            AnnotationMappingLimitKind.RESPONSE_BYTES,
+            consumed_bytes + observed,
+            MAX_AUDIT_RESPONSE_BYTES,
+        )
+    return None
+
+
 def _audit_caveats(
     execution: AnnotationMappingExecution,
 ) -> tuple[str, ...]:
@@ -814,10 +951,16 @@ def _audit_caveats(
             "KEGG relationship mapping was not requested; the evidence audit remains complete "
             "and no relationship absence was assessed."
         )
-    else:
+    elif execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT:
         mapping_scope = (
             "KEGG relationship mapping was skipped before network access because its planned "
             "request count exceeded the audit limit; the evidence audit remains complete."
+        )
+    else:
+        mapping_scope = (
+            "KEGG relationship mapping stopped at an aggregate row or response-byte limit; "
+            "only completed targets have mapping summaries, partial rows for the incomplete "
+            "target were discarded, and the evidence audit remains complete."
         )
     return (
         mapping_scope,
@@ -953,6 +1096,7 @@ __all__ = [
     "AnnotationMappingAuditResult",
     "AnnotationMappingExecution",
     "AnnotationMappingExecutionStatus",
+    "AnnotationMappingLimitKind",
     "AnnotationMappingTarget",
     "AnnotationQualityContext",
     "AnnotationTargetMappingAudit",
