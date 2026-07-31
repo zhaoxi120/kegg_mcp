@@ -162,9 +162,9 @@ models and fixed operation mappings.
 ### INFO
 
 `InfoRequest` accepts the bounded `KeggInfoDatabase` allowlist: `kegg`, `pathway`, `brite`, `module`,
-`ko`, `genes`, `genome`, `compound`, `reaction`, and `enzyme`. The parser retains every non-empty
-line and conservatively extracts a release string, entry count, and linked database names when the
-document supplies an unambiguous form.
+`ko`, `genes`, `genome`, `compound`, `glycan`, `reaction`, `rclass`, `enzyme`, and `drug`. The
+parser retains every non-empty line and conservatively extracts a release string, entry count, and
+linked database names when the document supplies an unambiguous form.
 
 ### LIST
 
@@ -183,11 +183,11 @@ presence, completeness, activity, or phenotype from directory availability.
 ### FIND
 
 `FindRequest` exposes one bounded candidate search, not an arbitrary database query. Keyword mode
-accepts only `ko`, `pathway`, `module`, `reaction`, `enzyme`, `compound`, and `genome`; the
-high-level `organism` alias uses `genome` on the wire. Formula, exact-mass, and molecular-weight
-modes are valid only for `compound` and use the official `formula`, `exact_mass`, and `mol_weight`
-wire options. Formula and mass values use strict bounded syntax, including an ordered numeric range
-for the two mass modes.
+accepts only `ko`, `pathway`, `module`, `reaction`, `enzyme`, `compound`, `glycan`, `drug`,
+`rclass`, and `genome`; the high-level `organism` alias uses `genome` on the wire. Formula,
+exact-mass, and molecular-weight modes are valid only for `compound` or `drug` and use the official
+`formula`, `exact_mass`, and `mol_weight` wire options. Formula and mass values use strict bounded
+syntax, including an ordered numeric range for the two mass modes.
 
 The query must be non-empty valid UTF-8 without outer whitespace or control characters. Slash,
 backslash, question-mark, fragment, and dot-segment path forms are rejected at the typed boundary.
@@ -215,14 +215,15 @@ relevance score or select a best match.
 ### GET
 
 `GetRequest` contains ordered, unique `KeggEntryRef` values for `ko`, `module`, `pathway`,
-`reaction`, `enzyme`, `compound`, `brite`, `gene`, or `genome`. Each identifier is checked against
-its selected database. A gene entry requires a canonical database-qualified KEGG gene identifier
-such as `hsa:10458`. A genome entry accepts either a T number or a canonical organism code and is
-sent in the qualified `gn:<identifier>` form. Pathway identifiers accept the fixed `map`, `ko`,
-`ec`, `rn`, `vg`, and `vx` prefixes or a three- or four-letter organism code. The configured total
-identifier limit is enforced before preparation. Enzyme identifiers require an EC class from 1
-through 7 and four dot-separated elements. A partial EC number may replace only a continuous
-trailing sequence of elements with a single `-` per element.
+`reaction`, `enzyme`, `compound`, `glycan`, `drug`, `rclass`, `brite`, `gene`, or `genome`. Each
+identifier is checked against its selected database. A gene entry requires a canonical
+database-qualified KEGG gene identifier such as `hsa:10458`. A genome entry accepts either a T
+number or a canonical organism code and is sent in the qualified `gn:<identifier>` form. Pathway
+identifiers accept the fixed `map`, `ko`, `ec`, `rn`, `vg`, and `vx` prefixes or a three- or
+four-letter organism code. The configured total identifier limit is enforced before preparation.
+Enzyme identifiers require an EC class from 1 through 7 and four dot-separated elements. A partial
+EC number may replace only a continuous trailing sequence of elements with a single `-` per
+element.
 
 The project does not bundle or mirror the KEGG organism catalog. Organism-code validation checks
 the documented three- or four-letter wire syntax and excludes fixed database prefixes that are
@@ -273,35 +274,47 @@ and is intentionally not exposed as a core MCP tool.
 
 `LinkRequest` supports only these directions:
 
-- KO to pathway;
-- KO to module;
-- KO to reaction;
-- KO to enzyme;
-- KO to BRITE;
-- pathway to KO, reaction, or compound;
+- KO to pathway, MODULE, reaction, enzyme, BRITE, or an explicitly scoped organism gene;
+- pathway to KO, MODULE, reaction, compound, or glycan;
+- an organism-specific pathway to a gene in the same explicitly scoped organism;
 - gene to KO or pathway;
 - enzyme to reaction;
-- reaction to enzyme, KO, compound, or pathway;
+- reaction to enzyme, KO, compound, glycan, or pathway;
 - compound to reaction or pathway;
+- glycan to reaction or pathway;
+- drug to pathway;
+- MODULE to KO, pathway, or reaction;
 - genome to taxonomy; and
 - taxonomy to genome.
 
-These 19 directions are defined by one authoritative relation contract. It binds each direction to
+These 30 directions are defined by one authoritative relation contract. It binds each direction to
 one source identifier kind, one fixed wire formatter, the exact source namespace expected in the
 response, and one target namespace validator. Source identifiers must match the selected direction
 and must be unique. Gene sources use canonical KEGG gene identifiers; enzyme sources use
 caller-facing EC numbers that are qualified with `ec:` on the wire; reaction and compound sources
-use R and C numbers; genome sources accept an organism code or T number and are qualified with
-`gn:`; taxonomy sources require `taxid:<positive integer>`. Taxonomy-to-genome targets may be an
-organism-code or T-number form under the fixed `gn:` namespace.
+use R and C numbers; glycan, drug, and MODULE sources use G, D, and M numbers; genome sources
+accept an organism code or T number and are qualified with `gn:`; taxonomy sources require
+`taxid:<positive integer>`. Taxonomy-to-genome targets may be an organism-code or T-number form
+under the fixed `gn:` namespace.
 
-`LinkRequest.taxonomy_rank` is a strict `exact` or `species` selector and defaults to `exact`.
-Only taxonomy-to-genome accepts the non-default `species` value. Exact lookup uses
-`/link/genome/<taxid>`, while species lookup appends the fixed `/species` suffix; the suffix is
-included in URL-size validation and the cache key. The client never retries an empty exact result
-as species automatically. On 2026-07-30, the official endpoint returned an empty exact result for
+`LinkRequest.taxonomy_rank` accepts `exact`, `species`, `genus`, `family`, `order`, `class`, or
+`phylum` and defaults to `exact`. Only taxonomy-to-genome accepts a non-default value. Exact lookup
+uses `/link/genome/<taxid>`; the other ranks append their fixed rank suffix, which participates in
+URL-size validation and the cache key. The client never retries an empty narrower result at a
+broader rank automatically. On 2026-07-30, the official endpoint returned an empty exact result for
 `taxid:562` and multiple strain genomes for its species-ranked request, so callers must select the
 intended taxonomy semantics explicitly.
+
+KO-to-gene and pathway-to-gene require `organism_scope`; the wire target database is that canonical
+organism code rather than the global `genes` collection, and response targets must use the same
+prefix. The public contract therefore never expands one KO into all KEGG genes.
+
+Selected-entry reaction-to-RCLASS or RCLASS-to-reaction LINK directions are not exposed. Live
+public endpoint probes on 2026-07-30 did not establish a non-empty, selected-entry response shape
+even though database-wide forms could return rows, and database-wide expansion is outside this
+client. RMODULE was also omitted because its INFO/GET/LIST/LINK behavior did not establish one
+consistent typed selected-entry contract in the same review. RCLASS remains available through
+typed INFO, FIND, and GET; RMODULE is not a public client database.
 
 Every LINK call remains selected-entry and bounded; database-to-database expansion is not exposed.
 Preparation canonicalizes identifier order and greedily packs the largest next batch that satisfies
@@ -316,13 +329,15 @@ genome T-number source, remains an empty relation result and is not interpreted 
 
 ### CONV
 
-`ConvRequest` converts only an explicitly supplied, bounded identifier set between KEGG genes and
-one of `ncbi-geneid`, `ncbi-proteinid`, or `uniprot`. Both source and target databases are typed,
-and source identifiers must include the matching namespace prefix. KEGG gene identifiers may use
-a three- or four-letter organism code, an official T number, or the bounded KEGG GENES collection
-prefixes `ag`, `vg`, and `vp`. Response sources and target namespaces are reconciled before caching.
-Whole-database conversion is not exposed. Organism-scoped candidate gene discovery uses the
-separate typed FIND contract and does not widen CONV.
+`ConvRequest` converts only an explicitly supplied, bounded identifier set. Gene conversion links
+KEGG genes with `ncbi-geneid`, `ncbi-proteinid`, or `uniprot`; substance conversion links KEGG
+compound, glycan, or drug entries with ChEBI or PubChem SID. The wire database name `pubchem`
+denotes SID in this contract and never accepts or implies a PubChem CID. Both source and target
+databases are typed, and source identifiers must include the matching namespace prefix. KEGG gene
+identifiers may use a three- or four-letter organism code, an official T number, or the bounded
+KEGG GENES collection prefixes `ag`, `vg`, and `vp`. Response sources and target namespaces are
+reconciled before caching. Whole-database conversion is not exposed. Organism-scoped candidate
+gene discovery uses the separate typed FIND contract and does not widen CONV.
 
 Other `LIST` forms, arbitrary database pairs, arbitrary endpoint paths, and operations whose
 contract is whole-database enumeration are not public client operations. The one
@@ -361,7 +376,9 @@ silently reinterpret malformed output:
 
 Parsing a response is separate from interpreting biology. A missing entry, a source-rejected
 annotation, or an empty LINK result must not be presented as experimental evidence that a function
-is absent.
+is absent. Every endpoint-returned name, definition, hierarchy label, equation, reference, raw
+match, and other payload string remains untrusted database data; it is never an instruction to an
+LLM, MCP client, parser, or service.
 
 ## Local SQLite cache
 
@@ -444,9 +461,10 @@ At lookup time:
 - `cache_only=True` requires `refresh=False`, never calls the HTTP transport, and returns
   `CACHE_ENTRY_NOT_FOUND` on a miss or disallowed stale entry.
 
-The five high-level P0 query and audit services supply `refresh=False` when no explicit options are
-provided. This preserves the low-level public default while making repeated MCP calls fresh-cache
-first. An explicit `KeggRequestOptions(refresh=True)` still forces a bounded live refresh.
+The high-level KEGG retrieval, query, and audit services supply `refresh=False` when no explicit
+options are provided. This preserves the low-level public default while making repeated MCP calls
+fresh-cache first. An explicit `KeggRequestOptions(refresh=True)` still forces a bounded live
+refresh.
 
 Network responses are parsed and reconciled with their typed request before being committed to the
 cache. The active response-size bound is rechecked for both injected transports and cached payloads,

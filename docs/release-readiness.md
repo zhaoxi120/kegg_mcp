@@ -11,9 +11,9 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Contract |
 | --- | --- | --- |
-| `kegg-mcp` | `0.6.0` | Core analysis and bounded KEGG query server; `RenderInput` producer |
+| `kegg-mcp` | `0.7.0` | Core analysis and bounded KEGG query server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.4.0` | Optional controlled detailed-CSV handoff |
-| `kegg-render-mcp` | `0.3.1` | Optional renderer requiring `kegg-mcp>=0.5,<0.7` |
+| `kegg-render-mcp` | `0.3.2` | Optional renderer requiring `kegg-mcp>=0.5,<0.8` |
 
 All distributions support Linux with Python 3.11.x. They remain independently packaged, locked,
 installed, and executed as separate stdio processes. The suite installer provisions them together
@@ -179,6 +179,21 @@ advice.
 - [ ] Renderer XML, images, SVG, and resources remain static and free of active external content.
 - [ ] The vulnerability-reporting route in `SECURITY.md` matches repository visibility.
 - [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
+- [ ] Core advertises exactly sixteen tools with self-contained schemas, including deterministic
+      card projection and local current-scope reference comparison.
+- [ ] Entry cards retain the complete parsed GET detail, preserve unrecognized fields, and create
+      no additional KEGG request; reference comparison accepts only current-schema snapshots for
+      the same requested entries and makes no network request.
+- [ ] Substance resolution distinguishes PubChem SID from CID and preserves all ChEBI/PubChem
+      crosswalk candidates without chemical-identification claims.
+- [ ] KO/pathway-to-gene LINK requires one matching organism scope; unbounded KO-to-all-genes,
+      selected-entry RCLASS relations, and RMODULE remain unavailable.
+- [ ] Taxonomy rank and candidate-materialization behavior is bounded and does not present
+      identity-only candidates as fully retrieved GENOME records.
+- [ ] An audit stopped by request, relationship-row, or response-byte limits preserves the complete
+      local evidence audit, discards incomplete-target rows, and reports no partial-target yield.
+- [ ] KEGG-returned text is preserved as untrusted database data and is never treated as an
+      instruction to the LLM, MCP client, parser, or service.
 - [ ] Only accepted plus policy-defined uncertain evidence may enter lenient analysis.
 - [ ] Exact MODULE completion and block coverage remain separate.
 - [ ] Unsupported MODULE syntax is preserved; a required block whose truth cannot be established

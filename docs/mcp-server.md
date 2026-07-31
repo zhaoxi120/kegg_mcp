@@ -88,7 +88,7 @@ can display nested object fields and enum values without resolving `$defs`.
 
 ## Tools
 
-The server exposes fifteen tools:
+The server exposes sixteen tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
@@ -100,30 +100,48 @@ The server exposes fifteen tools:
   `selected_unique_ko_count` ranking policy before reference loading.
 - `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
-- `get_kegg_entries`: retrieve selected allowlisted KEGG entries. The direct response reports the
-  total retrieval-batch count, returns at most five provenance records with an explicit truncation
-  flag, and retains every batch in the scoped `detail` artifact. It is not an arbitrary URL proxy.
-- `search_kegg_entries`: search one allowlisted database by keyword, or search compounds by
-  formula, exact mass, or molecular weight. It returns bounded endpoint candidates without an
-  invented relevance score, canonical-name claim, or automatic best-match selection. The endpoint
-  match text remains explicit. The direct result returns at most ten candidate previews with
-  128-character text previews and compact retrieval counts; full rows and provenance remain in the
-  scoped `detail` artifact. Exact-mass results are candidates, not compound identifications.
-- `resolve_kegg_entities`: resolve a discriminated gene or organism request through typed FIND,
-  GET, CONV, and LINK steps. Gene symbols require organism context; organism mismatches and all
-  ambiguous candidates remain explicit. Organism-specific pathway LIST retrieval is disabled by
-  default and runs only when `include_pathway_directory=true`. The direct result returns at most
-  five input previews, two candidates per input, five projected entities per candidate, three
-  taxonomy labels, and two pathway entries, plus compact retrieval counts. Candidate, lineage, and
-  pathway text clipping has explicit field-level flags; the complete bounded crosswalk and
-  provenance remain in the scoped `detail` artifact. Unmapped identifiers are not treated as
-  absent entities, and pathway directory entries are references rather than evidence of pathway
-  presence, completeness, activity, flux, or phenotype.
+- `get_kegg_entries`: retrieve selected allowlisted KEGG entries with `projection="preview"`
+  (default) or `"card"`. Preview returns at most ten compact flat-file or BRITE text previews. Card
+  projection
+  accepts KO, MODULE, pathway, reaction, enzyme, compound, glycan, gene, and genome entries,
+  deterministically parses their supported fields into typed cards, returns at most ten card
+  previews, and retains a versioned `entry_snapshot` beside the complete parsed GET `detail`.
+  Unknown flat-file field names remain recorded on the cards, while their complete content remains
+  in the parsed detail; a card is a field projection, not an LLM summary. The snapshot is
+  current-scope retained data for local comparison and preserves the original database-qualified
+  GET request independently from returned canonical identifiers. It is not a durable KEGG archive
+  or a new retrieval endpoint. Both projections report total provenance-batch count and at most
+  five provenance records; complete provenance remains in `detail`.
+- `search_kegg_entries`: perform keyword FIND over KO, pathway, MODULE, reaction, enzyme, compound,
+  glycan, drug, reaction class, genome, or organism. Formula, exact-mass, and molecular-weight
+  modes are limited to compound or drug. It returns bounded endpoint candidates without an
+  invented relevance score, canonical-name claim, or automatic best-match selection. The direct
+  result returns at most ten candidate previews with 128-character match-text previews and compact
+  retrieval counts; full rows and provenance remain in the scoped `detail` artifact. Chemical
+  search results are candidates, not identifications.
+- `resolve_kegg_entities`: resolve a discriminated gene, organism, or substance request through
+  typed FIND, GET, CONV, LINK, and optional organism-pathway LIST steps. Substance resolution
+  accepts KEGG compound, glycan, or drug identifiers, ChEBI identifiers, and explicitly named
+  PubChem SIDs; it never interprets PubChem input as a CID or claims compound identification.
+  Gene symbols require organism context, and organism mismatches and all ambiguous candidates
+  remain explicit. Taxonomy resolution supports `exact`, `species`, `genus`, `family`, `order`,
+  `class`, and `phylum`; `candidate_materialization="auto"` fully materializes exact/species
+  results but uses identity-only candidates for broader ranks unless the caller selects `"full"`.
+  Organism pathway LIST retrieval remains explicit and requires full materialization. The direct
+  result returns bounded input, candidate, projected-entity, taxonomy, and pathway previews plus
+  compact retrieval counts; complete crosswalks and provenance remain in `detail`. Unmapped
+  identifiers are mapping outcomes rather than evidence of biological absence.
 - `trace_kegg_relations`: traverse one or two levels over a fixed relation allowlist with at most
-  200 nodes and 500 edges. The direct result returns retrieval counts and at most 25 node and 25
-  edge previews; the complete bounded graph, provenance, and edge provenance indexes remain
-  retained. Typed edges are database cross-references, not evidence of regulation, causality,
-  activity, flux, phenotype, or mechanism.
+  200 nodes and 500 edges. The allowlist includes the existing gene, KO, enzyme, reaction,
+  compound, pathway, BRITE, genome, and taxonomy directions plus MODULE-to-KO/pathway/reaction,
+  pathway-to-MODULE, glycan-to/from reaction or pathway, and drug-to-pathway directions.
+  KO-to-gene and organism-specific pathway-to-gene require one canonical `organism_scope`; no
+  global KO-to-all-genes expansion is exposed. The direct result returns retrieval counts and at
+  most 25 node and 25 edge previews; the complete bounded graph, provenance, and edge provenance
+  indexes remain retained. Typed edges are database cross-references, not evidence of regulation,
+  causality, activity, flux, phenotype, or mechanism. Selected-entry reaction-class edges and
+  RMODULE routes are not exposed because the live public endpoint shapes checked on 2026-07-30 did
+  not support a safe selected-entry contract.
 - `map_brite_hierarchy`: preserve all matched BRITE paths, multi-parent memberships, unmatched
   entities, and descriptive unique-input classification counts. The direct result returns at most
   three lightweight path and classification previews, ten unmatched-entity previews, clipped node
@@ -136,10 +154,22 @@ The server exposes fifteen tools:
   it defaults to all five and an empty list requests an evidence-only audit. The server preflights
   exact LINK batches. If the selected mapping would exceed the 100-request audit budget, it reports
   `skipped_request_limit` while preserving the complete local evidence audit instead of failing the
-  whole call. The direct result contains evidence counts, execution state, compact per-target
-  yields, compact retrieval counts, and at most five warning previews. Complete degree
-  distributions, KO previews, warnings, rows, and provenance remain retained. It never corrects
-  scores, fills missing K numbers, or interprets an unmapped KO as biological absence.
+  whole call. If an in-progress target exceeds the aggregate row or response-byte limit, the
+  result instead reports `incomplete_row_limit` or `incomplete_response_limit`, retains summaries
+  only for previously completed targets, discards partial rows for the incomplete target, and
+  preserves the complete local evidence audit. The direct result contains evidence counts,
+  execution state, compact per-target yields, compact retrieval counts, and at most five warning
+  previews. Complete degree distributions, KO previews, warnings, completed relationship rows, and
+  provenance remain retained. It never corrects scores, fills missing K numbers, or interprets an
+  unmapped KO as biological absence.
+- `compare_kegg_reference_snapshots`: compare two `entry_snapshot` artifacts produced by card
+  projection in the current stdio scope. Both snapshots must use the current card schema and cover
+  the same database-qualified requested entries. The caller selects any of entry fields,
+  relationships, MODULE definitions, and pathway KO denominators; membership changes from returned
+  to missing or vice versa remain explicit. The operation is local and makes no KEGG request. Its
+  direct result reports parser, endpoint, retrieval, and release compatibility plus at most 25
+  value-free change locations; the complete deterministic diff is retained. A structural
+  difference is not biological gain, loss, validation, or a general KEGG release history.
 - `analyze_modules`: evaluate exact MODULE completion and required-block coverage from inline or
   retained evidence.
 - `analyze_pathways`: calculate descriptive unique-KO coverage after inferring and validating the
@@ -160,7 +190,7 @@ The advertised MCP behavior hints describe local effects as well as remote effec
 | Tool class | Read-only | Destructive | Idempotent | Open world |
 | --- | --- | --- | --- | --- |
 | `get_server_status`, `list_analysis_results` | Yes | No | Yes | No |
-| `normalize_ko_annotations` | No | No | No | No |
+| `normalize_ko_annotations`, `compare_kegg_reference_snapshots` | No | No | No | No |
 | KEGG retrieval and analysis tools | No | No | No | Yes |
 | `probe_kegg_connectivity` | No | No | No | Yes |
 | `delete_analysis_result` | No | Yes | Yes | No |
@@ -177,19 +207,49 @@ Minimal compound candidate search:
 {"database":"compound","query":"glucose","mode":"keyword","max_results":20}
 ```
 
-Minimal taxonomy-to-organism resolution that preserves all species candidates:
+Minimal typed card snapshot:
+
+```json
+{
+  "entries": [
+    {"database":"reaction","identifier":"R01786"},
+    {"database":"compound","identifier":"C00031"}
+  ],
+  "projection": "card"
+}
+```
+
+Minimal ChEBI-to-compound resolution:
+
+```json
+{
+  "kind": "substance",
+  "source_namespace": "chebi",
+  "identifiers": ["CHEBI:17234"],
+  "targets": ["kegg_compound", "reaction", "pathway"],
+  "ambiguity_policy": "report_all"
+}
+```
+
+The related PubChem namespace is `pubchem_sid`; PubChem CIDs are not accepted or reinterpreted.
+
+Minimal taxonomy-to-organism resolution that preserves all family candidates without materializing
+every GENOME record:
 
 ```json
 {
   "kind": "organism",
   "source_namespace": "taxonomy",
-  "identifiers": ["taxid:562"],
-  "taxonomy_rank": "species"
+  "identifiers": ["taxid:543"],
+  "taxonomy_rank": "family",
+  "candidate_materialization": "identity_only"
 }
 ```
 
 Set `"include_pathway_directory": true` only when the caller needs each resolved organism's
-available KEGG pathway-reference directory. Omitting it performs no organism-pathway LIST request.
+available KEGG pathway-reference directory; that option requires effective full materialization
+(`"auto"` already provides it for exact/species, while broader ranks require explicit `"full"`).
+Omitting it performs no organism-pathway LIST request.
 
 Minimal one-level typed relation trace:
 
@@ -201,9 +261,32 @@ Minimal one-level typed relation trace:
 }
 ```
 
-All five P0 query and audit direct results are independently limited to 64 KiB. A projection that
-violates that bound fails closed and compensates the newly created retained result; callers use the
-returned scoped resource to read complete bounded detail when the projection succeeds.
+Organism-scoped KO-to-gene trace:
+
+```json
+{
+  "seeds": [{"kind":"ko","identifier":"K01810"}],
+  "edge_types": ["ko_to_gene"],
+  "organism_scope": "eco",
+  "max_depth": 1
+}
+```
+
+Minimal local reference comparison after two successful card-projection calls for the same
+requested entries:
+
+```json
+{
+  "left": {"result_id":"<opaque-left-result-id>"},
+  "right": {"result_id":"<opaque-right-result-id>"},
+  "compare": ["entry_fields", "relationships", "module_definitions", "pathway_denominators"]
+}
+```
+
+Bounded query, card, audit, and reference-comparison direct results are independently limited to
+64 KiB. A projection that violates that bound fails closed and compensates the newly created
+retained result; callers use a returned scoped resource to read complete bounded detail only after
+the projection succeeds.
 
 Minimal single-relationship mapping audit:
 
@@ -317,6 +400,18 @@ completion is distinct from
 the project block-coverage metric, and pathway coverage does not establish pathway presence,
 activity, flux, phenotype, or statistical significance.
 
+### Migration from v0.5.0
+
+Version 0.6.0 was implemented but not released, so v0.7.0 upgrades from the last public v0.5.0
+contract. The former `map_ko_ids` tool is not part of the v0.7.0 surface:
+
+- use `trace_kegg_relations` for a bounded one- or two-hop relationship graph; and
+- use `audit_annotation_mapping` with one explicit `mapping_targets` value for a large
+  deterministic single-relation KO mapping.
+
+The server, rather than the LLM, performs batching, deduplication, provenance indexing, and
+retention for both routes.
+
 ## Resources and retention
 
 Fixed resources:
@@ -339,7 +434,8 @@ abnormal exit; it is not a cross-process persistence promise. `get_server_status
 `durable_output="output_bundle"` explicitly. The result index lists validated section URIs.
 High-level analysis normally retains `structured`, `summary`, and `annotations`; automatic target
 selection also retains the applicable MODULE and pathway ranking and relationship artifacts.
-Normalization retains `dataset`, and primitive tools retain `detail`.
+Normalization retains `dataset`; primitive query tools retain `detail`; card projection also
+retains `entry_snapshot`; and local reference comparison retains `reference_diff`.
 
 `delete_analysis_result` removes one active result only when it belongs to the current scope.
 Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.

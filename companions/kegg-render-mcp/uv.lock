@@ -237,7 +237,7 @@ wheels = [
 
 [[package]]
 name = "kegg-mcp"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "../../" }
 dependencies = [
     { name = "anyio" },
@@ -262,7 +262,7 @@ dev = [
 
 [[package]]
 name = "kegg-render-mcp"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "kegg-mcp" },

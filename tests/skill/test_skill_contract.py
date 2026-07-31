@@ -24,6 +24,7 @@ CORE_TOOLS = {
     "trace_kegg_relations",
     "map_brite_hierarchy",
     "audit_annotation_mapping",
+    "compare_kegg_reference_snapshots",
     "analyze_modules",
     "analyze_pathways",
     "compare_ko_sets",

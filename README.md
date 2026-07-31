@@ -20,9 +20,13 @@ CSV evidence. It:
 - derives accepted-only strict and policy-defined lenient evidence views;
 - uses bounded typed KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
   operations through a local cache;
-- returns bounded search candidates and resolves gene or organism identifiers without silently
-  choosing an ambiguous match;
-- traces allowlisted KEGG relationships for one or two hops with typed nodes and edges;
+- returns bounded KEGG, glycan, drug, and reaction-class search candidates and resolves gene,
+  organism, ChEBI, PubChem SID, or typed KEGG substance identifiers without silently choosing an
+  ambiguous match;
+- projects selected GET flat files into deterministic typed entity cards and compares two
+  same-session snapshots locally for the same requested entries;
+- traces allowlisted KEGG relationships for one or two hops, including explicitly
+  organism-scoped KO/pathway-to-gene edges;
 - maps supplied entities into bounded BRITE hierarchy paths and audits annotation evidence and
   KEGG relationship mapping yields;
 - evaluates exact MODULE completion separately from project block coverage;
@@ -98,9 +102,10 @@ reports the resolved DeepKOALA model version. Target ranking selects what to ana
 enrichment, completion, or pathway-presence inference.
 
 Requests that already contain KO evidence start at `kegg-mcp`. Requests that provide a compatible
-`render_input.json` may start at `kegg-render-mcp`. Bounded KEGG search, gene or organism
-resolution, relation tracing, and BRITE classification requests also start directly at
-`kegg-mcp`; they do not require an annotation run.
+`render_input.json` may start at `kegg-render-mcp`. Bounded KEGG search, entity-card retrieval,
+gene, organism, or substance resolution, relation tracing, BRITE classification, and local
+reference-snapshot comparison also start directly at `kegg-mcp`; they do not require an
+annotation run.
 
 ## Components and contracts
 
@@ -114,10 +119,11 @@ The core produces `render_input.json` schema version 3 and preserves
 `AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. Source KEGG PNG and KGML
 assets remain local.
 
-Core tools cover normalization, high-level analysis, bounded KEGG search and retrieval,
-gene/organism resolution, typed relation tracing, BRITE hierarchy mapping, annotation mapping
-audit, MODULE and pathway analysis, KO-set comparison, connectivity/status, and scoped result
-listing/deletion. Full tool and resource schemas are documented in
+The sixteen Core tools cover normalization, high-level analysis, bounded KEGG search and retrieval,
+gene/organism/substance resolution, typed relation tracing, BRITE hierarchy mapping, annotation
+mapping audit, local reference-snapshot comparison, MODULE and pathway analysis, KO-set comparison,
+connectivity/status, and scoped result listing/deletion. Full tool and resource schemas are
+documented in
 [MCP server](docs/mcp-server.md).
 
 Each Skill declares exactly one MCP dependency. Stable versioned files, not private process-scoped

@@ -17,8 +17,10 @@ DeepKOALA detailed output. It:
 - derives accepted-only strict and policy-defined lenient evidence views;
 - retrieves bounded KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
   references through a local cache;
-- searches endpoint candidates, resolves gene or organism identifiers, and traces allowlisted
-  typed relations without hiding ambiguity or inferring causality;
+- searches endpoint candidates, projects supported GET entries into deterministic typed cards,
+  resolves gene, organism, or substance identifiers, and traces allowlisted typed relations
+  without hiding ambiguity or inferring causality;
+- compares two same-session, same-request card snapshots locally without building a KEGG archive;
 - maps BRITE hierarchy paths and audits fixed KO relationship classes descriptively;
 - evaluates exact MODULE completion separately from project block coverage;
 - reports descriptive pathway KO coverage with an explicit reference type and denominator;

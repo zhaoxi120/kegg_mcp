@@ -3,7 +3,8 @@
 This document describes the current transport-independent orchestration, reporting, output-bundle,
 and retained-result contracts. MCP tools call these public services; they do not reimplement
 normalization, KEGG retrieval, entity resolution, relation tracing, BRITE classification,
-annotation mapping audit, MODULE evaluation, pathway coverage, or result retention.
+typed card projection, annotation mapping audit, local reference comparison, MODULE evaluation,
+pathway coverage, or result retention.
 
 This document owns service composition, serializer behavior, transactional bundle writing, and
 storage internals. The [Core MCP server](mcp-server.md) owns public tool schemas, direct-response
@@ -15,9 +16,11 @@ fields, resource URIs, pagination, protocol errors, and deployment environment v
   batching, strict parsing, limits, and retrieval provenance.
 - `kegg_mcp.services` composes importers, the typed KEGG client, query workflows, analysis,
   reporting, and storage.
-- `kegg_mcp.services.kegg_search`, `kegg_mcp.services.entity_resolution`,
-  `kegg_mcp.services.relation_tracing`, `kegg_mcp.services.brite_hierarchy`, and
-  `kegg_mcp.services.annotation_audit` own bounded query and evidence-routing semantics.
+- `kegg_mcp.services.kegg_entries`, `kegg_mcp.services.entry_cards`,
+  `kegg_mcp.services.kegg_search`, `kegg_mcp.services.entity_resolution`,
+  `kegg_mcp.services.relation_tracing`, `kegg_mcp.services.brite_hierarchy`,
+  `kegg_mcp.services.annotation_audit`, and `kegg_mcp.services.reference_snapshots` own bounded
+  retrieval, query, evidence-routing, and local reference-comparison semantics.
 - `kegg_mcp.reporting` serializes already-computed evidence and analysis without network or file I/O.
 - `SQLiteResultStore` retains immutable artifacts under an explicit local scope.
 - `kegg_mcp.mcp` owns transport schemas, resources, protocol errors, and stdio lifecycle.
@@ -61,17 +64,32 @@ remain bounded across the complete operation.
 
 ## Bounded KEGG query services
 
+`get_kegg_entries` retains the complete parsed typed GET response. Its default preview projection
+returns bounded flat-file or BRITE text previews. The optional card projection accepts only KO,
+MODULE, pathway, reaction, enzyme, compound, glycan, gene, and genome flat files. It
+deterministically extracts typed common and entity-specific fields, preserves unrecognized field
+names, and retains a versioned `entry_snapshot` with the original database-qualified request and
+exact GET provenance. Card construction performs no additional KEGG request and is not an LLM
+summary. Snapshot data is scoped to the current result store and is not a durable database archive.
+
 `search_kegg_entries` composes one typed FIND request and returns a bounded projection of ordered
 database-validated candidates. The complete response remains in a scoped retained artifact.
 The direct result reports observed and bounded candidate counts, clipped candidate previews with
 explicit flags, and compact retrieval accounting without full provenance.
-Keyword, formula, exact-mass, and molecular-weight matches are candidates only: the service does
-not calculate relevance, choose a best match, or claim compound identification.
+Keyword search supports the public KO, pathway, MODULE, reaction, enzyme, compound, glycan, drug,
+reaction-class, genome, and organism scopes. Formula, exact-mass, and molecular-weight modes are
+limited to compound or drug. Matches are candidates only: the service does not calculate
+relevance, choose a best match, or claim chemical identification.
 
-`resolve_kegg_entities` uses a discriminated gene or organism request. Gene resolution accepts
-typed external or KEGG namespaces and an explicit organism where required; organism resolution
-accepts code, genome, taxonomy, or name inputs. The service retains all candidates and reports
-mapping yield, ambiguity, many-to-one mappings, organism mismatches, and the typed operations used.
+`resolve_kegg_entities` uses a discriminated gene, organism, or substance request. Gene resolution
+accepts typed external or KEGG namespaces and an explicit organism where required; organism
+resolution accepts code, genome, taxonomy, or name inputs. Taxonomy lookup supports exact, species,
+genus, family, order, class, and phylum ranks. Its automatic materialization policy fully validates
+exact and species candidates but retains identity-only candidate rows for broader ranks unless the
+caller explicitly selects full materialization. Substance resolution accepts KEGG compound,
+glycan, or drug identifiers and selected ChEBI or PubChem SID crosswalks. PubChem CID is not an
+alias for SID. The service retains all candidates and reports mapping yield, ambiguity, many-to-one
+mappings, organism mismatches, and the typed operations used.
 When a gene request supplies an organism code, a bounded typed GENOME GET establishes its
 code/T-number identity before direct or converted gene prefixes are filtered; a lexical prefix
 difference alone is not treated as a cross-organism mismatch. Organism pathway-directory retrieval
@@ -86,6 +104,11 @@ flux, or phenotype. Mapping failure is not evidence that an entity does not exis
 
 `trace_kegg_relations` traverses an allowlist of typed KEGG LINK directions for one or two hops.
 Seeds, edge types, nodes, edges, raw relationship rows, response bytes, and provenance are bounded.
+The allowlist includes selected MODULE, glycan, and drug relations. KO-to-gene and
+organism-specific pathway-to-gene are dynamically bound to one required canonical organism code;
+the service does not expose unscoped KO-to-all-genes expansion. Selected-entry reaction-class
+relations and RMODULE are not exposed because the public endpoint behavior checked on 2026-07-30
+did not provide a safe selected-entry contract for them.
 The direct result contains retrieval counts plus bounded node and edge previews without embedding
 complete provenance batches. The retained graph is complete within the service bounds, and every
 retained edge contains sorted indexes into its complete provenance sequence for the LINK and any
@@ -98,8 +121,8 @@ preparation to issue one client call per actual endpoint batch. Before another b
 checks the aggregate request count and records that batch's rows, response bytes, and provenance.
 Reference-loading budgets likewise count returned provenance batches rather than treating a
 multi-batch client result as one request; GET callers submit chunks of no more than ten entries.
-When a caller does not supply cache options, all five high-level services prefer a fresh local
-cache entry and preserve an explicit refresh request unchanged.
+When a caller does not supply cache options, the high-level KEGG query services prefer a fresh
+local cache entry and preserve an explicit refresh request unchanged.
 
 `map_brite_hierarchy` maps bounded typed entities into selected or safely discovered BRITE
 hierarchies. It preserves source-backed hierarchy paths, supports multiple memberships, reports
@@ -123,9 +146,25 @@ evidence summary, mapping execution state, compact per-target counts and yields,
 accounting, and bounded clipped warning previews. Complete degree distributions, KO previews,
 warnings, relationship rows, and provenance remain retained.
 
+If an in-progress target exceeds the aggregate relationship-row or response-byte limit, the audit
+reports `incomplete_row_limit` or `incomplete_response_limit`. Previously completed target
+summaries and rows remain valid; partial rows for the incomplete target are discarded, later
+targets are marked skipped, and the complete local evidence audit is still returned. Mapping yield
+is never calculated from a partial target.
+
+`compare_kegg_reference_snapshots` is a local deterministic service over two current-scope
+`entry_snapshot` artifacts. It requires the current card schema and the same requested
+database-qualified entry set on both sides. It can compare common entry fields, typed relationship
+fields, parsed MODULE definitions, and pathway KO denominators while separately recording whether
+an entry changed between returned and missing. Parser, endpoint, cache, retrieval, and release
+contexts remain explicit. The direct projection contains counts and value-free change locations;
+the retained artifact contains the complete bounded field diff. The service makes no KEGG request,
+does not build a historical mirror, and does not interpret a structural difference as biological
+gain, loss, or validation.
+
 These services are query and evidence-routing paths, not extensions of the annotator or renderer.
-Their retained BRITE and audit artifacts do not enter `render_input.json`, and neither companion
-retrieves or recomputes them.
+Their retained cards, snapshots, BRITE, audit, and diff artifacts do not enter
+`render_input.json`, and neither companion retrieves or recomputes them.
 
 ## Direct and retained results
 
@@ -136,11 +175,12 @@ hierarchy paths, audit metrics, rankings, relationships, and evaluations. Public
 and retrieval behavior are specified only in
 [Core MCP server](mcp-server.md#tools).
 
-All five P0 query and audit services enforce a separate 64 KiB serialized direct-result bound after
-constructing their fixed previews. A projection-model or byte-bound failure compensates the newly
-created retained result instead of leaving an inaccessible artifact. Full search matches,
-candidate crosswalks, resolution steps, graph nodes and edges, BRITE paths and classifications,
-audit distributions and rows, and provenance remain retained and are never rebuilt by the LLM.
+Bounded retrieval, query, card, audit, and reference-comparison services enforce a separate 64 KiB
+serialized direct-result bound after constructing their fixed previews. A projection-model or
+byte-bound failure compensates the newly created retained result instead of leaving an inaccessible
+artifact. Full search matches, entry cards, candidate crosswalks, resolution steps, graph nodes and
+edges, BRITE paths and classifications, audit distributions and rows, snapshot differences, and
+provenance remain retained and are never rebuilt by the LLM.
 
 ## Report artifacts
 
