@@ -237,6 +237,77 @@ def test_state_file_open_remains_bound_to_the_validated_root_descriptor(
     assert not (state_root / state_name).exists()
 
 
+def test_darwin_boot_identity_uses_bounded_sysctl_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run_sysctl(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=b"{ sec = 1720000000, usec = 123456 } Mon Jul  1 00:00:00 2024\n",
+        )
+
+    monkeypatch.setattr(rate_limit_module.sys, "platform", "darwin")
+    monkeypatch.setattr(rate_limit_module.subprocess, "run", run_sysctl)
+
+    boot_id = rate_limit_module._boot_identifier()  # pyright: ignore[reportPrivateUsage]
+
+    assert boot_id == "darwin-1720000000-123456"
+    assert calls == [["/usr/sbin/sysctl", "-n", "kern.boottime"]]
+
+
+def test_darwin_boot_identity_rejects_unrecognized_sysctl_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run_sysctl(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(command, 0, stdout=b"unexpected")
+
+    monkeypatch.setattr(rate_limit_module.sys, "platform", "darwin")
+    monkeypatch.setattr(rate_limit_module.subprocess, "run", run_sysctl)
+
+    with pytest.raises(RuntimeError, match="boot identifier"):
+        rate_limit_module._boot_identifier()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_native_windows_reports_an_explicit_platform_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rate_limit_module.os, "name", "nt")
+
+    with pytest.raises(
+        rate_limit_module.UnsupportedRuntimePlatformError,
+        match=r"native Windows.*WSL",
+    ):
+        rate_limit_module.ensure_rate_limit_platform_supported()
+
+
+def test_native_windows_module_import_does_not_require_fcntl() -> None:
+    script = (
+        "import builtins,importlib,os,sys; "
+        "import kegg_mcp.kegg.rate_limit; "
+        "sys.modules.pop('kegg_mcp.kegg.rate_limit'); "
+        "real_import=builtins.__import__; os.name='nt'; "
+        "builtins.__import__=lambda name,*args,**kwargs: "
+        "(_ for _ in ()).throw(AssertionError('fcntl imported')) "
+        "if name=='fcntl' else real_import(name,*args,**kwargs); "
+        "module=importlib.import_module('kegg_mcp.kegg.rate_limit'); "
+        "assert module._fcntl is None"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10.0,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     "rate",
     [

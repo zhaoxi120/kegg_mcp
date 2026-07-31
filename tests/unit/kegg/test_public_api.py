@@ -13,11 +13,11 @@ from kegg_mcp.kegg import (
     KeggFindRow,
     KeggGetDatabase,
     KeggTaxonomyRank,
+    OfflineCacheAccess,
     OrganismPathwayListRequest,
     OrganismPathwayListResult,
     PathwayAssetKind,
     PathwayAssetRequest,
-    PublicAcademicAccess,
 )
 
 
@@ -35,7 +35,7 @@ def test_public_client_contracts_are_importable_from_kegg_package() -> None:
     )
 
     assert KeggClient
-    assert isinstance(config.access, PublicAcademicAccess)
+    assert isinstance(config.access, OfflineCacheAccess)
     assert request.entries[0].identifier == "K00001"
     assert find_request.database is KeggFindDatabase.COMPOUND
     assert FindResult

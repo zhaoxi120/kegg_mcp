@@ -26,6 +26,7 @@ from kegg_mcp.kegg import (
     PathwayAssetKind,
     PathwayAssetRequest,
     PathwayAssetResult,
+    PublicAcademicAccess,
     ResponseOrigin,
     RetrievalEndpointClass,
 )
@@ -121,6 +122,7 @@ def replace_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _config(cache_path: Path) -> KeggClientConfig:
     return KeggClientConfig(
+        access=PublicAcademicAccess(academic_use_confirmed=True),
         cache=CachePolicy(path=str(cache_path), ttl_seconds=60),
         limits=KeggClientLimits(max_response_bytes=1_000_000),
     )

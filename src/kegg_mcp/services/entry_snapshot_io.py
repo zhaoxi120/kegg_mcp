@@ -32,7 +32,8 @@ def read_entry_card_snapshot(
                 ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
                 "The retained entry-card snapshot has an incompatible media type.",
                 suggested_action=(
-                    "Use a result identifier returned by get_kegg_entries card projection."
+                    "Use a result identifier returned by get_kegg_entries with projection set "
+                    "to card or references."
                 ),
             )
         if page.total_bytes > MAX_QUERY_ARTIFACT_BYTES:
@@ -57,7 +58,8 @@ def read_entry_card_snapshot(
             ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
             "The retained result does not contain a compatible KEGG entry-card snapshot.",
             suggested_action=(
-                "Use result identifiers returned by get_kegg_entries with projection set to card."
+                "Use result identifiers returned by get_kegg_entries with projection set to "
+                "card or references."
             ),
             safe_details=(SafeDetail(name="required_snapshot_schema_version", value="1"),),
         )

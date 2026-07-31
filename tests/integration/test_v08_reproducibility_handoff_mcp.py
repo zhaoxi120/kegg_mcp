@@ -18,6 +18,7 @@ from kegg_mcp.kegg import (
     GetResult,
     KeggClientConfig,
     KeggRequestOptions,
+    PublicAcademicAccess,
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
@@ -63,7 +64,7 @@ class _V08Client:
     """Minimal typed fake that makes local versus KEGG-backed behavior observable."""
 
     def __init__(self) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.get_calls: list[GetRequest] = []
 
     @property

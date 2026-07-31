@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import stat
 import sys
 from datetime import UTC, datetime, timedelta, timezone
@@ -55,10 +56,12 @@ def _environment(tmp_path: Path, checkout: Path) -> dict[str, str]:
     }
 
 
-def test_load_runtime_config_has_bounded_single_runner_defaults(
+def test_load_runtime_config_has_bounded_linux_single_runner_defaults(
     tmp_path: Path,
     checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
     config = load_runtime_config(_environment(tmp_path, checkout))
     assert config.allowed_models == ("full", "frag")
     assert config.allowed_devices == ("cpu", "cuda")
@@ -67,6 +70,60 @@ def test_load_runtime_config_has_bounded_single_runner_defaults(
     assert config.profiles_dir is None
     assert config.hmmsearch_executable is None
     assert config.max_timeout_seconds == 3_600
+
+
+def test_load_runtime_config_uses_mps_default_and_rejects_cuda_on_macos(
+    tmp_path: Path,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(platform, "mac_ver", lambda: ("14.0", ("", "", ""), ""))
+    environment = _environment(tmp_path, checkout)
+    assert load_runtime_config(environment).allowed_devices == ("cpu", "mps")
+
+    environment[ALLOWED_DEVICES_ENV] = "cpu,cuda"
+    with pytest.raises(ValidationError, match=r"CUDA.*macOS"):
+        load_runtime_config(environment)
+
+
+@pytest.mark.parametrize(
+    ("machine", "macos_version"),
+    [("x86_64-private", "14.0"), ("arm64", "13.6"), ("arm64", "private-version")],
+)
+def test_load_runtime_config_rejects_unsupported_macos_hosts_without_echoing_metadata(
+    tmp_path: Path,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    machine: str,
+    macos_version: str,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(
+        platform,
+        "mac_ver",
+        lambda: (macos_version, ("", "", ""), ""),
+    )
+
+    with pytest.raises(ValidationError, match=r"Apple Silicon macOS 14 or later") as raised:
+        load_runtime_config(_environment(tmp_path, checkout))
+
+    assert machine not in str(raised.value)
+    assert macos_version not in str(raised.value)
+
+
+def test_load_runtime_config_rejects_mps_allowlist_on_linux(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    checkout: Path,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    environment = _environment(tmp_path, checkout)
+    environment[ALLOWED_DEVICES_ENV] = "cpu,mps"
+    with pytest.raises(ValidationError, match=r"MPS.*Linux"):
+        load_runtime_config(environment)
 
 
 @pytest.mark.parametrize(
@@ -163,12 +220,18 @@ def test_run_contract_requires_absolute_paths_and_service_owned_device() -> None
         device="cuda",
     )
     assert cuda_request.device == "cuda"
+    mps_request = RunDeepKoalaInput(
+        fasta_path="/allowed/proteins.faa",
+        output_directory="/allowed/run-3",
+        device="mps",
+    )
+    assert mps_request.device == "mps"
     with pytest.raises(ValidationError):
         RunDeepKoalaInput(
             fasta_path="proteins.faa",
             output_directory="/allowed/run-1",
         )
-    for device in ("auto", "mps"):
+    for device in ("auto", "rocm"):
         with pytest.raises(ValidationError):
             RunDeepKoalaInput.model_validate(
                 {

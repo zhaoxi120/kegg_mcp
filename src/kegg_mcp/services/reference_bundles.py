@@ -77,7 +77,7 @@ _BUNDLE_FILE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 
 class ReferenceBundleSource(FrozenModel):
-    """One retained current-scope card snapshot selected for durable export."""
+    """One retained current-scope result selected as input to a durable bundle."""
 
     result_id: str = Field(pattern=RESULT_ID_SCHEMA_PATTERN)
 
@@ -351,6 +351,8 @@ def write_kegg_reference_bundle(
             request.brite_source.result_id,
         )
     )
+    if brite_detail is not None:
+        _require_brite_source_selection(brite_detail, selected_requests)
     brite_table, brite_summary = _brite_paths_tsv(brite_detail)
     selection = ReferenceBundleSelectionSummary(
         requested_entry_count=len(selected_requests),
@@ -485,6 +487,95 @@ def _card_matches_request(card: KeggEntryCard, request: KeggEntryCardEntity) -> 
         and request.database is KeggEntryCardKind.GENOME
         and card.organism_code == request.identifier
     )
+
+
+def _require_brite_source_selection(
+    detail: BriteHierarchyDetail,
+    selected: tuple[KeggEntryCardEntity, ...],
+) -> None:
+    selected_keys = {(item.database.value, item.identifier) for item in selected}
+    source_keys = {(item.kind.value, item.identifier) for item in detail.request.entity_ids}
+    unavailable = source_keys - selected_keys
+    if unavailable:
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "BRITE source entities must be an exact match or subset of the selected entries.",
+            suggested_action=(
+                "Create a BRITE result from only the entries selected for this reference bundle."
+            ),
+            safe_details=(
+                SafeDetail(name="selected_entry_count", value=str(len(selected_keys))),
+                SafeDetail(name="brite_source_entity_count", value=str(len(source_keys))),
+                SafeDetail(name="unavailable_entity_count", value=str(len(unavailable))),
+            ),
+        )
+    path_keys = {
+        (path.input_entity.kind.value, path.input_entity.identifier) for path in detail.paths
+    }
+    unmatched_sequence = tuple(
+        (item.kind.value, item.identifier) for item in detail.unmatched_entities
+    )
+    unmatched_keys = set(unmatched_sequence)
+    path_identities = tuple(
+        (
+            path.input_entity.kind.value,
+            path.input_entity.identifier,
+            path.brite_id,
+            tuple(_brite_node_key(node) for node in path.nodes),
+        )
+        for path in detail.paths
+    )
+    resolved_brite_ids = set(detail.resolved_brite_ids)
+    invalid_entity_accounting = (
+        not path_keys.issubset(source_keys)
+        or not unmatched_keys.issubset(source_keys)
+        or bool(path_keys & unmatched_keys)
+        or len(unmatched_sequence) != len(unmatched_keys)
+        or len(path_identities) != len(set(path_identities))
+        or any(path.brite_id not in resolved_brite_ids for path in detail.paths)
+        or (
+            bool(detail.request.brite_ids) and detail.selected_brite_ids != detail.request.brite_ids
+        )
+        or (detail.request.include_unmatched and path_keys | unmatched_keys != source_keys)
+    )
+    if invalid_entity_accounting:
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "The retained BRITE detail is inconsistent with its source request.",
+            suggested_action="Create a new BRITE hierarchy result and retry.",
+        )
+
+    entities_by_classification: dict[
+        tuple[str, tuple[tuple[str, str | None, str], ...]],
+        set[tuple[str, str]],
+    ] = {}
+    for path in detail.paths:
+        entity_key = (path.input_entity.kind.value, path.input_entity.identifier)
+        for length in range(1, len(path.nodes) + 1):
+            key = (
+                path.brite_id,
+                tuple(_brite_node_key(node) for node in path.nodes[:length]),
+            )
+            entities_by_classification.setdefault(key, set()).add(entity_key)
+    expected_classifications = {
+        key: len(entities) for key, entities in entities_by_classification.items()
+    }
+    actual_classifications = {
+        (
+            item.brite_id,
+            tuple(_brite_node_key(node) for node in item.path),
+        ): item.unique_input_count
+        for item in detail.classifications
+    }
+    if (
+        len(actual_classifications) != len(detail.classifications)
+        or actual_classifications != expected_classifications
+    ):
+        fail(
+            ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+            "The retained BRITE classifications do not match the retained hierarchy paths.",
+            suggested_action="Create a new BRITE hierarchy result and retry.",
+        )
 
 
 def _read_brite_detail(

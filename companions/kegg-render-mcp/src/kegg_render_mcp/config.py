@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, Self, cast
 
 from kegg_mcp.kegg import CachePolicy, LicensedAccess, RateLimitPolicy
-from kegg_mcp.kegg.contracts import default_rate_limit_root
+from kegg_mcp.kegg.contracts import default_cache_path, default_rate_limit_root
 from kegg_mcp.services.render_contracts import (
     MODULE_RENDER_MAX_CANVAS_PIXELS,
     MODULE_RENDER_MAX_SVG_NODES,
@@ -18,6 +18,7 @@ from kegg_mcp.services.render_contracts import (
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kegg_render_mcp._filesystem import open_absolute_directory
+from kegg_render_mcp._platform import validate_renderer_platform
 
 ENV_PREFIX = "KEGG_RENDER_MCP_"
 STATE_ROOT_ENV = f"{ENV_PREFIX}STATE_ROOT"
@@ -88,7 +89,7 @@ class RendererRuntimeConfig(BaseModel):
 
     state_root: Path
     allowed_roots: tuple[Path, ...]
-    access_mode: RendererAccessMode = "public_academic"
+    access_mode: RendererAccessMode = "unconfigured"
     licensed_endpoint: str | None = Field(default=None, min_length=1, max_length=2048, repr=False)
     cache_path: Path | None = Field(default=None, repr=False)
     offline_allow_stale: bool = False
@@ -98,7 +99,7 @@ class RendererRuntimeConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_paths(self) -> Self:
-        _validate_posix()
+        validate_renderer_platform()
         state = _safe_absolute(self.state_root, "state_root")
         if state == Path(state.anchor):
             raise ValueError("state_root must not be a filesystem root")
@@ -139,17 +140,18 @@ class RendererRuntimeConfig(BaseModel):
 
 
 def load_runtime_config(environment: Mapping[str, str] | None = None) -> RendererRuntimeConfig:
+    validate_renderer_platform()
     values = os.environ if environment is None else environment
     state_raw = _required(values, STATE_ROOT_ENV)
     roots_raw = _required(values, ALLOWED_ROOTS_ENV)
     roots = tuple(_existing_root(part) for part in roots_raw.split(os.pathsep) if part)
     if len(roots) != len(roots_raw.split(os.pathsep)):
         raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an empty root")
-    raw_mode = values.get(ACCESS_MODE_ENV, "public_academic")
+    raw_mode = values.get(ACCESS_MODE_ENV, "unconfigured")
     if raw_mode not in {"public_academic", "licensed", "offline_cache", "unconfigured"}:
         raise ValueError(f"{ACCESS_MODE_ENV} is invalid")
     mode = cast(RendererAccessMode, raw_mode)
-    if mode == "public_academic" and values.get(ACADEMIC_CONFIRMATION_ENV, "true") != "true":
+    if mode == "public_academic" and values.get(ACADEMIC_CONFIRMATION_ENV) != "true":
         raise ValueError(f"{ACADEMIC_CONFIRMATION_ENV}=true is required")
     licensed_endpoint: str | None = None
     licensed_namespace_requested = (
@@ -164,6 +166,8 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         cache_path = _safe_absolute(Path(_required(values, CACHE_PATH_ENV)), CACHE_PATH_ENV)
     elif raw_cache_path := values.get(CACHE_PATH_ENV):
         cache_path = _safe_absolute(Path(raw_cache_path), CACHE_PATH_ENV)
+    elif mode in {"public_academic", "licensed"}:
+        cache_path = _safe_absolute(Path(default_cache_path(values)), CACHE_PATH_ENV)
     limits = RendererLimits(
         max_disk_bytes=_integer(
             values, MAX_DISK_BYTES_ENV, DEFAULT_MAX_DISK_BYTES, 1, 2 * 1024 * 1024 * 1024
@@ -180,14 +184,9 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         retention_seconds=_integer(
             values, RETENTION_SECONDS_ENV, DEFAULT_RETENTION_SECONDS, 1, 2_592_000
         ),
-        rate_limit_root=values.get(RATE_LIMIT_ROOT_ENV, default_rate_limit_root()),
+        rate_limit_root=values.get(RATE_LIMIT_ROOT_ENV, default_rate_limit_root(values)),
         limits=limits,
     )
-
-
-def _validate_posix() -> None:
-    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or os.open not in os.supports_dir_fd:
-        raise ValueError("kegg-render-mcp requires POSIX no-follow filesystem operations")
 
 
 def _required(values: Mapping[str, str], name: str) -> str:

@@ -7,9 +7,13 @@ import os
 from pathlib import Path
 
 import pytest
+from kegg_mcp.kegg import contracts as core_contracts
 from pydantic import ValidationError
 
+from kegg_render_mcp import config as config_module
+from kegg_render_mcp._platform import UnsupportedRendererPlatformError
 from kegg_render_mcp.config import (
+    ACADEMIC_CONFIRMATION_ENV,
     ACCESS_MODE_ENV,
     ALLOWED_ROOTS_ENV,
     CACHE_PATH_ENV,
@@ -46,6 +50,57 @@ def test_config_requires_private_state_and_nonempty_allowed_roots(tmp_path: Path
     assert config.limits.max_results == 7
     with pytest.raises(ValueError, match=ALLOWED_ROOTS_ENV):
         load_runtime_config({STATE_ROOT_ENV: str(tmp_path / "state")})
+
+
+def test_default_access_is_unconfigured_and_public_requires_confirmation(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    environment = {
+        STATE_ROOT_ENV: str(tmp_path / "state"),
+        ALLOWED_ROOTS_ENV: str(allowed),
+    }
+
+    assert load_runtime_config(environment).access_mode == "unconfigured"
+    environment[ACCESS_MODE_ENV] = "public_academic"
+    with pytest.raises(ValueError, match=ACADEMIC_CONFIRMATION_ENV):
+        load_runtime_config(environment)
+    environment[ACADEMIC_CONFIRMATION_ENV] = "true"
+    assert load_runtime_config(environment).access_mode == "public_academic"
+
+
+def test_platform_gate_runs_before_required_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    def reject_platform() -> None:
+        raise UnsupportedRendererPlatformError("synthetic unsupported platform")
+
+    monkeypatch.setattr(config_module, "validate_renderer_platform", reject_platform)
+
+    with pytest.raises(UnsupportedRendererPlatformError, match="unsupported platform"):
+        load_runtime_config({})
+
+
+def test_darwin_uses_the_shared_core_cache_and_rate_limit_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    monkeypatch.setattr(core_contracts.sys, "platform", "darwin")
+
+    config = load_runtime_config(
+        {
+            "HOME": str(tmp_path),
+            STATE_ROOT_ENV: str(tmp_path / "state"),
+            ALLOWED_ROOTS_ENV: str(allowed),
+            ACCESS_MODE_ENV: "public_academic",
+            ACADEMIC_CONFIRMATION_ENV: "true",
+        }
+    )
+
+    expected_root = tmp_path / "Library" / "Caches" / "kegg-mcp"
+    assert config.cache_path == expected_root / "kegg.sqlite3"
+    assert str(config.cache_path) == core_contracts.default_cache_path({"HOME": str(tmp_path)})
+    assert config.rate_limit_root == str(expected_root / "rate-limit")
+    assert config.rate_limit_root == core_contracts.default_rate_limit_root({"HOME": str(tmp_path)})
 
 
 def test_omitted_output_selects_fresh_candidate_beneath_last_configured_root(

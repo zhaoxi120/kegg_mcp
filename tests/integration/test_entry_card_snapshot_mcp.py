@@ -17,6 +17,7 @@ from kegg_mcp.kegg import (
     KeggClientConfig,
     KeggGetDatabase,
     KeggRequestOptions,
+    PublicAcademicAccess,
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
@@ -45,7 +46,7 @@ class _CountingEntryClient:
     """GET-only fake whose call count makes local-only comparison observable."""
 
     def __init__(self) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.get_calls: list[GetRequest] = []
 
     @property

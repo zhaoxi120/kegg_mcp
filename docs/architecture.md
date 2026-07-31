@@ -5,10 +5,11 @@ This document owns the cross-component architecture and active development contr
 release status, and publication gates. Component documents own their public runtime details.
 
 The repository contains three independently packaged local stdio MCP servers and three focused
-repository Skills. All three distributions support Linux with CPython 3.11.x only. Wider Python or
-operating-system support requires separate compatibility work.
+repository Skills. The complete three-server suite supports Linux and Apple Silicon macOS with
+CPython 3.11.x. Core and Renderer also support independent installation on macOS. Windows hosts
+use the Linux route through WSL2; native Windows server execution is unsupported.
 
-Last architecture and document-ownership review: 2026-07-31.
+Last architecture and document-ownership review: 2026-08-01.
 
 ## Product boundary
 
@@ -70,8 +71,9 @@ The current product does not provide:
 Bounded organism-scoped gene-symbol lookup is candidate discovery and preserves every match; it is
 not genome annotation or automatic identity selection. Local input preparation does not turn Core
 into a KEGG Mapper or KEGG Syntax execution engine. Abundance-aware methods, statistical
-enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, and
-wider platform support require separately assigned work.
+enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, native
+Windows execution, and additional component or Python-version support require separately assigned
+work.
 
 ## Process, package, and Skill architecture
 
@@ -82,6 +84,27 @@ The repository keeps three process boundaries:
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
 | `kegg-render-mcp` | Validate a version 3 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
+
+### Platform boundary
+
+| Deployment | Supported components | Installation boundary |
+| --- | --- | --- |
+| Linux, CPython 3.11.x | Core, DeepKOALA, and Renderer | Independent distributions or the unified suite installer |
+| Apple Silicon, macOS 14+, native CPython 3.11.x | Core, DeepKOALA, and Renderer | Independent distributions or the unified suite installer |
+| Intel macOS, CPython 3.11.x | Core and Renderer | Independent distributions only |
+| Windows host with WSL2 Linux | Linux component set | Install, store data, and execute inside the WSL Linux filesystem |
+| Native Windows | None | Diagnostic routing only; server startup is rejected |
+
+Core and Renderer preserve the same POSIX filesystem, no-follow path, atomic-publication, process,
+and deployment-wide locking guarantees on Linux and macOS. No native Windows fallback weakens
+those controls. DeepKOALA uses the Linux parent-death signal backend or the Darwin parent-sentinel
+backend without weakening process-group cleanup. The unified installer provisions all three
+components on Linux, including WSL2, and on native Apple Silicon macOS.
+
+Platform capabilities were reviewed on 2026-08-01 against the Python 3.11
+[`fcntl` documentation](https://docs.python.org/3.11/library/fcntl.html) and
+[`os` platform-availability documentation](https://docs.python.org/3.11/library/os.html). Release
+claims still require the exact-candidate evidence in the release-readiness checklist.
 
 The distributions remain independently versioned, locked, installed, and reviewed. The renderer
 declares a bounded compatible Core range for the typed pathway-asset interface. The Core package
@@ -360,9 +383,10 @@ classification, or annotation mapping audit nor consumes their retained artifact
 detailed CSV remains immutable source evidence at the Core importer boundary.
 
 The companion owns allowed-root FASTA validation, one deployment-wide runner lease, fixed direct
-subprocess arguments, explicit CPU/CUDA policy, bounded polling and cleanup, and stable
-`deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves detailed
-source evidence and resolved model provenance; it never normalizes K numbers.
+subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the configured checkout's CLI
+and device-resolver contract plus its target interpreter platform, bounded polling and cleanup, and
+stable `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves
+detailed source evidence and resolved model provenance; it never normalizes K numbers.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The
@@ -386,10 +410,12 @@ configuration, public tools, resource lifecycle, and output behavior.
 
 ## Unified Codex installation contract
 
-`scripts/install-suite.py` is the supported Codex installation path. It creates three independent
-locked runtimes and one generated local plugin containing the canonical Skills and absolute MCP
-launch commands. Publication is transactional, private deployment data stays outside the plugin,
-and the default dependency path is offline.
+`scripts/install-suite.py` is the supported complete-suite Codex installation path on Linux and
+native Apple Silicon macOS. It creates three independent locked runtimes and one generated local
+plugin containing the canonical Skills and absolute MCP launch commands. Publication is
+transactional, private deployment data stays outside the plugin, and the default dependency path
+is offline. It pins and verifies the reviewed DeepKOALA revision. Native Windows is rejected,
+Windows hosts use WSL2 Linux, and Intel macOS remains an independent Core/Renderer route.
 
 The [installation guide](installation.md) owns operator configuration and lifecycle. The
 [release-readiness checklist](release-readiness.md) owns exact-candidate installation, discovery,
@@ -460,14 +486,15 @@ on 2026-07-31:
 - [KEGG Mapper](https://www.kegg.jp/kegg/mapper/) and
   [KEGG Syntax KO sequence](https://www.kegg.jp/kegg/syntax/synteny.html)
 
-DeepKOALA behavior and detailed-output fields were reviewed on 2026-07-14. The explicit CPU/CUDA
-device choices, optional multi-domain CLI, HMMER invocation boundary, and short-sequence output were
-reviewed again on 2026-07-21 against official commit
+DeepKOALA behavior and detailed-output fields were reviewed again on 2026-08-01. The explicit
+CPU/CUDA/MPS device choices, Apple Silicon instructions, optional multi-domain CLI, HMMER invocation
+boundary, and short-sequence output were reviewed against official commit
 `bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
 
 - [DeepKOALA GenomeNet page](https://www.genome.jp/tools/deepkoala/) and
   [official repository](https://github.com/zhaoxi120/deepkoala)
 - [official CLI](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/cli.py) and
+  [device resolver](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/utils.py) and
   [multi-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer_multi.py)
 
 The official `frag` versus `full` usage descriptions were reviewed again on 2026-07-22 against the

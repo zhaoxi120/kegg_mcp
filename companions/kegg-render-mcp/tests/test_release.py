@@ -21,6 +21,9 @@ def test_distribution_declares_compatible_core_without_annotation_or_browser_sta
     project = document["project"]
     assert project["name"] == "kegg-render-mcp"
     assert project["version"] == kegg_render_mcp.__version__
+    assert "Operating System :: MacOS :: MacOS X" in project["classifiers"]
+    assert "Operating System :: POSIX :: Linux" in project["classifiers"]
+    assert not any("Windows" in classifier for classifier in project["classifiers"])
     dependencies = " ".join(project["dependencies"]).lower()
     assert "kegg-mcp>=0.5,<0.9" in dependencies
     for forbidden in ("deepkoala", "torch", "selenium", "playwright", "cairosvg"):

@@ -26,9 +26,14 @@ After installing the project, configure an MCP client to run:
 uv run kegg-mcp
 ```
 
-The raw Core distribution defaults to confirmed `public_academic`; the suite installer does not
-inherit that default and requires the operator to select an access mode explicitly. Server logs
-and configuration failures are written to stderr; stdout is reserved for MCP protocol messages.
+The raw Core distribution defaults to network-disabled `offline_cache`. A cache miss never enables
+live access. The suite installer does not inherit this default and requires the operator to select
+an access mode explicitly. Server logs and configuration failures are written to stderr; stdout is
+reserved for MCP protocol messages.
+
+Core supports CPython 3.11.x on Linux and macOS. Native Windows server execution is unsupported;
+Windows hosts use WSL2 as the Linux route. The native Windows diagnostic reports that platform
+boundary without starting the server or replacing the required POSIX security and lock backends.
 
 Local pytest skips live requests by default. Pull-request CI explicitly runs the bounded
 at-most-120-request public-academic compatibility campaign once.
@@ -48,8 +53,8 @@ default stdio command.
 
 | Environment variable | Meaning |
 | --- | --- |
-| `KEGG_MCP_ACCESS_MODE` | `public_academic` (default), `licensed`, or network-disabled `offline_cache` |
-| `KEGG_MCP_ACADEMIC_USE_CONFIRMED` | Defaults to `true`; an explicit value other than `true` is rejected |
+| `KEGG_MCP_ACCESS_MODE` | `public_academic`, `licensed`, or network-disabled `offline_cache` (default) |
+| `KEGG_MCP_ACADEMIC_USE_CONFIRMED` | Must equal `true` before `public_academic` access is enabled |
 | `KEGG_MCP_LICENSED_ENDPOINT` | Authorized HTTPS endpoint for licensed access |
 | `KEGG_MCP_LICENSED_USE_CONFIRMED` | Must equal `true` before licensed access is enabled |
 | `KEGG_MCP_CACHE_PATH` | Optional absolute path to the user-local KEGG cache |

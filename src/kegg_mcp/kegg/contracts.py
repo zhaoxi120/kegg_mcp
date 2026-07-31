@@ -4,6 +4,8 @@ import hashlib
 import ipaddress
 import os
 import re
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -36,19 +38,24 @@ NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 KeggIdentifier = Annotated[str, Field(min_length=1, max_length=256)]
 
 
-def _default_cache_root() -> Path:
-    cache_home = os.environ.get("XDG_CACHE_HOME")
-    return Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+def _default_cache_root(environment: Mapping[str, str] | None = None) -> Path:
+    values = os.environ if environment is None else environment
+    cache_home = values.get("XDG_CACHE_HOME")
+    if cache_home:
+        return Path(cache_home).expanduser()
+    configured_home = values.get("HOME")
+    home = Path(configured_home).expanduser() if configured_home else Path.home()
+    return home / "Library" / "Caches" if sys.platform == "darwin" else home / ".cache"
 
 
-def default_cache_path() -> str:
+def default_cache_path(environment: Mapping[str, str] | None = None) -> str:
     """Return the user-local default cache path without creating it."""
-    return str(_default_cache_root() / "kegg-mcp" / "kegg.sqlite3")
+    return str(_default_cache_root(environment) / "kegg-mcp" / "kegg.sqlite3")
 
 
-def default_rate_limit_root() -> str:
+def default_rate_limit_root(environment: Mapping[str, str] | None = None) -> str:
     """Return the user-local shared rate-limit root without creating it."""
-    return str(_default_cache_root() / "kegg-mcp" / "rate-limit")
+    return str(_default_cache_root(environment) / "kegg-mcp" / "rate-limit")
 
 
 def endpoint_fingerprint(endpoint: str) -> str:
@@ -79,10 +86,10 @@ class RetrievalEndpointClass(StrEnum):
 
 
 class PublicAcademicAccess(FrozenModel):
-    """Academic public API access enabled by the project default."""
+    """Academic public API access enabled only by explicit operator confirmation."""
 
     mode: Literal[AccessMode.PUBLIC_ACADEMIC] = AccessMode.PUBLIC_ACADEMIC
-    academic_use_confirmed: Literal[True] = True
+    academic_use_confirmed: Literal[True]
     endpoint: Literal["https://rest.kegg.jp"] = PUBLIC_KEGG_ENDPOINT
 
 
@@ -317,7 +324,7 @@ class KeggClientConfig(FrozenModel):
         },
     )
 
-    access: KeggAccess = Field(default_factory=PublicAcademicAccess)
+    access: KeggAccess = Field(default_factory=OfflineCacheAccess)
     limits: KeggClientLimits = Field(default_factory=KeggClientLimits)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     cache: CachePolicy = Field(default_factory=CachePolicy)

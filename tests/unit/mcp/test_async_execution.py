@@ -17,6 +17,7 @@ from kegg_mcp.kegg import (
     CachePolicy,
     KeggClient,
     KeggClientConfig,
+    PublicAcademicAccess,
     RateLimitPolicy,
     RetryPolicy,
 )
@@ -72,6 +73,7 @@ def _runtime(tmp_path: Path, transport: _BlockingTransport) -> McpRuntime:
     return McpRuntime(
         client=KeggClient(
             KeggClientConfig(
+                access=PublicAcademicAccess(academic_use_confirmed=True),
                 cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")),
                 rate_limit=RateLimitPolicy(state_root=str(tmp_path / "rate-limit")),
                 retry=RetryPolicy(max_retries=0),

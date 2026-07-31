@@ -20,10 +20,10 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    unready tools, read the canonical readiness matrix in
    [deployment-and-handoff.md](references/deployment-and-handoff.md). Stop before annotation until
    that route permits a job.
-3. Call `get_deepkoala_runner_status`. Inspect `device_policy`, `allowed_devices`, and
-   `cuda_available` separately, as well as `allow_multi` and `multi_ready`. Report the stable route
-   state and follow the referenced readiness action. Never install, download, or replace required
-   resources silently.
+3. Call `get_deepkoala_runner_status`. Inspect `device_policy`, `allowed_devices`,
+   `cuda_available`, and `mps_available` separately, as well as `allow_multi` and `multi_ready`.
+   Report the stable route state and follow the referenced readiness action. Never install,
+   download, or replace required resources silently.
 4. Before the first `run_deepkoala_job` call, make a small LLM routing decision between `frag` and
    `full` from the user's description and available project provenance. An explicit user model
    choice wins. Select `frag` when the input is described as fragmented, truncated, partial, or as
@@ -36,20 +36,22 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    ready, stop and report that deployment gap rather than silently substituting another model.
 5. Before the first `run_deepkoala_job` call in the current Codex task, explicitly tell the user
    that the default job uses the `cpu` device. Also tell them that GPU execution requires an
-   explicit request to the LLM, which will check readiness and change a later job to `device=cuda`
-   only when status allows it. This is an informational first-run notice, not a confirmation gate:
-   do not pause, wait for a reply, or repeat the notice in the same task before continuing an
-   already authorized CPU job.
+   explicit request to the LLM, which will check readiness and select the deployment's explicit
+   `cuda` or `mps` device only when status allows it. This is an informational first-run notice, not
+   a confirmation gate: do not pause, wait for a reply, or repeat the notice in the same task before
+   continuing an already authorized CPU job.
 6. Treat an explicit request to annotate the FASTA as authorization to call
    `run_deepkoala_job` once. Omit `model_date` for the default call; supply it only when the user
    explicitly requests a specific installed model version. Do not ask for an ACK, notice digest, or
-   second confirmation. Omit `device` for the default CPU call. Pass `device=cuda` only after the
+   second confirmation. Omit `device` for the default CPU call. Pass `device=cuda` only when the
    user explicitly requests GPU execution and status reports both `cuda` in `allowed_devices` and
-   `cuda_available=true`. If either condition is false, stop before annotation, report the required
-   CUDA-compatible deployment change, and never silently substitute CPU or `device=auto`. A GPU
-   request authorizes the device choice for a new job; it does not authorize installing or replacing
-   PyTorch, CUDA, or drivers, which requires separate permission. Let the companion enforce model,
-   device, timeout, input, concurrency, and no-download policy. Omit `multi` by default. Pass
+   `cuda_available=true`. Pass `device=mps` only when status instead reports both `mps` in
+   `allowed_devices` and `mps_available=true`. If the deployment's explicit accelerator is not
+   both allowed and available, stop before annotation, report the required deployment change, and
+   never silently substitute CPU or `device=auto`. A GPU request authorizes the device choice for
+   a new job; it does not authorize installing or replacing PyTorch, CUDA, Metal support, or
+   drivers, which requires separate permission. Let the companion enforce model, device, timeout,
+   input, concurrency, and no-download policy. Omit `multi` by default. Pass
    `multi=true` only when the user explicitly requests multi-domain annotation and status reports
    both `allow_multi=true` and `multi_ready=true`; keep `batch_size=1` because upstream multi-domain
    execution does not use configurable batching.

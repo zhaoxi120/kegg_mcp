@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import os
 import re
 import secrets
@@ -15,6 +14,10 @@ from pathlib import Path
 from typing import Final
 
 from kegg_render_mcp._filesystem import bounded_directory_names, open_absolute_directory
+from kegg_render_mcp._platform import (
+    acquire_exclusive_lock,
+    release_lock,
+)
 from kegg_render_mcp.contracts import ARTIFACT_NAME_PATTERN, MAX_ARTIFACTS, RENDER_ID_PATTERN
 
 _ARTIFACT_NAME = re.compile(rf"{ARTIFACT_NAME_PATTERN}\Z")
@@ -166,7 +169,8 @@ def _allocate_scope(state_fd: int) -> tuple[int, str, int]:
             validate_owner_only_directory(scope_fd)
             _validate_named_directory(state_fd, scope_name, scope_fd, "renderer scope")
             scope_lock_fd = _create_private_lock(scope_fd, _SCOPE_LOCK_NAME)
-            fcntl.flock(scope_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not acquire_exclusive_lock(scope_lock_fd, nonblocking=True):
+                raise OSError("new renderer scope lease could not be locked")
             _validate_named_lock(scope_fd, _SCOPE_LOCK_NAME, scope_lock_fd)
         except Exception:
             if scope_lock_fd is not None:
@@ -209,9 +213,7 @@ def _cleanup_abandoned_scopes(state_fd: int, max_results: int) -> int:
             validate_owner_only_directory(scope_fd)
             _validate_named_directory(state_fd, scope_name, scope_fd, "renderer scope")
             scope_lock_fd = _open_private_lock(scope_fd, _SCOPE_LOCK_NAME)
-            try:
-                fcntl.flock(scope_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+            if not acquire_exclusive_lock(scope_lock_fd, nonblocking=True):
                 active_scopes += 1
                 continue
             scope_is_locked = True
@@ -239,7 +241,7 @@ def _cleanup_abandoned_scopes(state_fd: int, max_results: int) -> int:
             if scope_lock_fd is not None:
                 if scope_is_locked:
                     with contextlib.suppress(OSError):
-                        fcntl.flock(scope_lock_fd, fcntl.LOCK_UN)
+                        release_lock(scope_lock_fd)
                 os.close(scope_lock_fd)
             os.close(scope_fd)
     return active_scopes
@@ -289,11 +291,11 @@ def _remove_abandoned_result(scope_descriptor: int, result_name: str) -> None:
 
 @contextmanager
 def _exclusive_lock(descriptor: int) -> Generator[None]:
-    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    acquire_exclusive_lock(descriptor)
     try:
         yield
     finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        release_lock(descriptor)
 
 
 def _open_or_create_private_lock(directory_descriptor: int, name: str) -> int:
@@ -394,7 +396,7 @@ def _release_descriptors(
 ) -> None:
     if scope_lock_fd is not None:
         with contextlib.suppress(OSError):
-            fcntl.flock(scope_lock_fd, fcntl.LOCK_UN)
+            release_lock(scope_lock_fd)
         os.close(scope_lock_fd)
     if scope_fd is not None:
         os.close(scope_fd)

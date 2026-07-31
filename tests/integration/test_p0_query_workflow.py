@@ -18,6 +18,7 @@ from kegg_mcp.kegg import (
     KeggClient,
     KeggClientConfig,
     KeggClientLimits,
+    PublicAcademicAccess,
     RateLimitPolicy,
     RetryPolicy,
 )
@@ -229,6 +230,7 @@ async def test_query_workflow_through_mcp_and_real_client(
     transport = _RouteTransport()
     client = KeggClient(
         KeggClientConfig(
+            access=PublicAcademicAccess(academic_use_confirmed=True),
             limits=KeggClientLimits(requests_per_second=3.0),
             retry=RetryPolicy(max_retries=0),
             cache=CachePolicy(path=str(tmp_path / "kegg-cache.sqlite3")),

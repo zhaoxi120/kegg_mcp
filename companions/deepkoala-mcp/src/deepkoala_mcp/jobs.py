@@ -165,6 +165,8 @@ class DeepKoalaJobManager:
                 fail_runtime_unavailable()
             if request.device == "cuda" and not runtime.cuda_available:
                 fail_runtime_unavailable(cuda_requested=True)
+            if request.device == "mps" and not runtime.mps_available:
+                fail_runtime_unavailable(mps_requested=True)
             if request.multi and not await self._multi_ready(runtime):
                 fail_multi_unavailable()
 
@@ -374,7 +376,11 @@ class DeepKoalaJobManager:
         try:
             runtime = await self._probe_runtime()
         except Exception:
-            runtime = RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+            runtime = RuntimeProbeResult(
+                runtime_ready=False,
+                cuda_available=False,
+                mps_available=False,
+            )
         multi_ready = await self._multi_ready(runtime)
         route = classify_readiness_route(
             checkout_ready=checkout_ready,
@@ -391,6 +397,7 @@ class DeepKoalaJobManager:
             ready=runtime.runtime_ready and bool(resources),
             runtime_ready=runtime.runtime_ready,
             cuda_available=runtime.cuda_available,
+            mps_available=runtime.mps_available,
             deepkoala_version=version,
             installed_resources=resources,
             allowed_models=self.config.allowed_models,
@@ -477,6 +484,8 @@ class DeepKoalaJobManager:
                 reason = "The configured DeepKOALA runtime became unavailable."
             elif record.plan.device == "cuda" and not runtime.cuda_available:
                 reason = "CUDA became unavailable before DeepKOALA started."
+            elif record.plan.device == "mps" and not runtime.mps_available:
+                reason = "MPS became unavailable before DeepKOALA started."
             elif record.plan.multi and not await self._multi_ready(runtime):
                 reason = "Configured multi-domain dependencies became unavailable."
             else:
@@ -517,6 +526,7 @@ class DeepKoalaJobManager:
                         annotations_path=annotations,
                         report_path=report,
                         completed_at=completed_at,
+                        runtime=runtime,
                     )
                     state = JobState.SUCCEEDED
                     reason = None

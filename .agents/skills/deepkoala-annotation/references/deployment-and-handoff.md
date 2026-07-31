@@ -29,9 +29,9 @@ use MCP tools added after its tool snapshot was created; that is a stale tool sn
 that state into a second install request: do not request or perform another installation; use a new
 task first.
 
-A CUDA readiness or policy failure stops the requested GPU job; do not substitute CPU or automatic
-device selection. Installing or replacing PyTorch, CUDA, drivers, or other runtime resources still
-requires separate permission.
+An explicit CUDA or Apple MPS readiness or policy failure stops the requested GPU job; do not
+substitute CPU or automatic device selection. Installing or replacing PyTorch, CUDA, Metal support,
+drivers, or other runtime resources still requires separate permission.
 
 DeepKOALA is the preferred first route for protein FASTA unless the user explicitly selected
 another annotator. In that case, this Skill stops and the independent core stage can resume only

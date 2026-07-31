@@ -127,6 +127,20 @@ def _cuda_ready_probe(
     return RuntimeProbeResult(runtime_ready=True, cuda_available=True)
 
 
+def _mps_ready_probe(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    del checkout, python_executable, cpu_threads
+    return RuntimeProbeResult(
+        runtime_ready=True,
+        cuda_available=False,
+        mps_available=True,
+    )
+
+
 async def _wait_terminal(manager: DeepKoalaJobManager, job_id: str) -> JobState:
     async with asyncio.timeout(5):
         while True:
@@ -170,6 +184,8 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert handoff.source.annotation_date.utcoffset() is not None
         metadata = {field.name: field.value for field in handoff.source.source_metadata}
         assert metadata["device_requested"] == "cpu"
+        assert metadata["cuda_available_at_preflight"] is False
+        assert metadata["mps_available_at_preflight"] is False
         assert "sha" not in handoff.model_dump_json().lower()
 
 
@@ -177,9 +193,10 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
 async def test_explicit_cuda_request_reaches_the_execution_plan(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "cuda")})
     runner = SuccessfulRunner()
-    async with _manager(runtime_config, runner, runtime_probe=_cuda_ready_probe) as manager:
-        started = await manager.run(_request(runtime_config, name="cuda", device="cuda"))
+    async with _manager(config, runner, runtime_probe=_cuda_ready_probe) as manager:
+        started = await manager.run(_request(config, name="cuda", device="cuda"))
         assert started.plan.device == "cuda"
         assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
         assert runner.calls[0].device == "cuda"
@@ -187,6 +204,8 @@ async def test_explicit_cuda_request_reaches_the_execution_plan(
         assert result.handoff is not None
         metadata = {field.name: field.value for field in result.handoff.source.source_metadata}
         assert metadata["device_requested"] == "cuda"
+        assert metadata["cuda_available_at_preflight"] is True
+        assert metadata["mps_available_at_preflight"] is False
         assert "- Device policy: `cuda`" in Path(result.handoff.report_path).read_text(
             encoding="utf-8"
         )
@@ -196,9 +215,10 @@ async def test_explicit_cuda_request_reaches_the_execution_plan(
 async def test_cuda_request_requires_available_runtime_without_staging(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "cuda")})
     runner = SuccessfulRunner()
-    request = _request(runtime_config, name="cuda-unavailable", device="cuda")
-    async with _manager(runtime_config, runner) as manager:
+    request = _request(config, name="cuda-unavailable", device="cuda")
+    async with _manager(config, runner) as manager:
         with pytest.raises(DeepKoalaMcpError) as captured:
             await manager.run(request)
 
@@ -211,6 +231,7 @@ async def test_cuda_request_requires_available_runtime_without_staging(
 async def test_cuda_is_rechecked_before_runner_execution(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "cuda")})
     runner = SuccessfulRunner()
     probes = iter(
         (
@@ -222,12 +243,87 @@ async def test_cuda_is_rechecked_before_runner_execution(
     def changing_cuda_probe(**_: object) -> RuntimeProbeResult:
         return next(probes)
 
-    async with _manager(runtime_config, runner, runtime_probe=changing_cuda_probe) as manager:
-        started = await manager.run(_request(runtime_config, name="cuda-disappears", device="cuda"))
+    async with _manager(config, runner, runtime_probe=changing_cuda_probe) as manager:
+        started = await manager.run(_request(config, name="cuda-disappears", device="cuda"))
         assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
         result = await manager.get_job(started.job.job_id)
 
     assert result.job.failure_reason == "CUDA became unavailable before DeepKOALA started."
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_mps_request_is_preflighted_rechecked_and_reported(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "mps")})
+    runner = SuccessfulRunner()
+    async with _manager(config, runner, runtime_probe=_mps_ready_probe) as manager:
+        started = await manager.run(_request(config, name="mps", device="mps"))
+        assert started.plan.device == "mps"
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+        result = await manager.get_job(started.job.job_id)
+
+    assert runner.calls[0].device == "mps"
+    assert result.handoff is not None
+    metadata = {field.name: field.value for field in result.handoff.source.source_metadata}
+    assert metadata["device_requested"] == "mps"
+    assert metadata["cuda_available_at_preflight"] is False
+    assert metadata["mps_available_at_preflight"] is True
+    report = Path(result.handoff.report_path).read_text(encoding="utf-8")
+    assert "- Device policy: `mps`" in report
+    assert "- MPS available at preflight: `true`" in report
+
+
+@pytest.mark.asyncio
+async def test_mps_request_requires_available_runtime_without_staging(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "mps")})
+    runner = SuccessfulRunner()
+    request = _request(config, name="mps-unavailable", device="mps")
+    async with _manager(config, runner) as manager:
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(request)
+
+    assert captured.value.detail.code is ErrorCode.RUNTIME_UNAVAILABLE
+    assert captured.value.detail.message == (
+        "The requested MPS device is unavailable in the configured runtime."
+    )
+    assert not _explicit_output_path(request).exists()
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mps_is_rechecked_before_runner_execution(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    config = runtime_config.model_copy(update={"allowed_devices": ("cpu", "mps")})
+    runner = SuccessfulRunner()
+    probes = iter(
+        (
+            RuntimeProbeResult(
+                runtime_ready=True,
+                cuda_available=False,
+                mps_available=True,
+            ),
+            RuntimeProbeResult(
+                runtime_ready=True,
+                cuda_available=False,
+                mps_available=False,
+            ),
+        )
+    )
+
+    def changing_mps_probe(**_: object) -> RuntimeProbeResult:
+        return next(probes)
+
+    async with _manager(config, runner, runtime_probe=changing_mps_probe) as manager:
+        started = await manager.run(_request(config, name="mps-disappears", device="mps"))
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+        result = await manager.get_job(started.job.job_id)
+
+    assert result.job.failure_reason == "MPS became unavailable before DeepKOALA started."
     assert runner.calls == []
 
 
@@ -527,9 +623,10 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.ready is True
         assert status.runtime_ready is True
         assert status.cuda_available is False
+        assert status.mps_available is False
         assert status.allowed_models == ("full", "frag")
         assert status.device_policy == "cpu"
-        assert status.allowed_devices == ("cpu", "cuda")
+        assert status.allowed_devices == ("cpu",)
         assert status.max_concurrent_jobs == 1
         assert status.allow_multi is False
         assert status.multi_ready is False

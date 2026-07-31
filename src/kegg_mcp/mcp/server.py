@@ -13,6 +13,10 @@ from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl
 
 from kegg_mcp import __version__
+from kegg_mcp.kegg.rate_limit import (
+    UNSUPPORTED_PLATFORM_DIAGNOSTIC,
+    UnsupportedRuntimePlatformError,
+)
 from kegg_mcp.mcp.resources import (
     MAX_INLINE_RESOURCE_BYTES,
     read_resource,
@@ -126,6 +130,12 @@ def main() -> None:
     """Run the local stdio server without application output on stdout."""
     try:
         anyio.run(_run_stdio)
+    except UnsupportedRuntimePlatformError:
+        print(
+            f"kegg-mcp startup failed: {UNSUPPORTED_PLATFORM_DIAGNOSTIC}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     except (OSError, ValueError) as error:
         raise SystemExit(
             "Invalid KEGG MCP local configuration; review the documented environment variables."

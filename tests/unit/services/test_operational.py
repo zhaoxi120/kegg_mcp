@@ -8,7 +8,12 @@ from typing import NoReturn
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError
-from kegg_mcp.kegg import InfoRequest, KeggClientConfig, KeggRequestOptions
+from kegg_mcp.kegg import (
+    InfoRequest,
+    KeggClientConfig,
+    KeggRequestOptions,
+    PublicAcademicAccess,
+)
 from kegg_mcp.services.models import ConnectivityState
 from kegg_mcp.services.operational import probe_kegg_connectivity_service
 
@@ -17,7 +22,7 @@ _NOW = datetime(2026, 7, 31, 3, 0, 0, tzinfo=UTC)
 
 class _LocalStorageFailingClient:
     def __init__(self, error_code: ErrorCode) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self._error_code = error_code
         self.call_count = 0
 

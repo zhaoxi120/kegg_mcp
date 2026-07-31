@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
-from kegg_mcp.kegg import KeggClientConfig, KeggRequestOptions
+from kegg_mcp.kegg import KeggClientConfig, KeggRequestOptions, PublicAcademicAccess
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
     PUBLIC_KEGG_ENDPOINT_LABEL,
@@ -55,7 +55,7 @@ _NOW = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
 
 class _UnexpectedGetClient:
     def __init__(self) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.get_call_count = 0
 
     @property
@@ -75,7 +75,7 @@ class _UnexpectedGetClient:
 
 class _StaticGetClient:
     def __init__(self, result: GetResult) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.result = result
         self.get_call_count = 0
 

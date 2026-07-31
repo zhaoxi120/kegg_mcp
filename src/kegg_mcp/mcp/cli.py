@@ -13,6 +13,7 @@ from kegg_mcp import __version__
 from kegg_mcp.domain.errors import KeggMcpError
 from kegg_mcp.kegg import AccessMode
 from kegg_mcp.kegg.cache import SQLiteKeggCache
+from kegg_mcp.kegg.rate_limit import UnsupportedRuntimePlatformError
 from kegg_mcp.mcp.config import load_runtime_config
 from kegg_mcp.mcp.server import main as run_stdio
 from kegg_mcp.services.result_store import ResultStoreError, SQLiteResultStore
@@ -106,6 +107,30 @@ def _parser() -> argparse.ArgumentParser:
 def _doctor_document(environment: Mapping[str, str] | None) -> tuple[_DoctorDocument, int]:
     try:
         config = load_runtime_config(environment)
+    except UnsupportedRuntimePlatformError:
+        return (
+            {
+                "status": "error",
+                "server_version": __version__,
+                "configuration_valid": False,
+                "access_mode": None,
+                "network_enabled": None,
+                "file_handoff_enabled": None,
+                "allowed_root_count": None,
+                "allowed_root_paths": "redacted",
+                "network_probe": "not_run",
+                "storage_probe": "not_run",
+                "issues": [
+                    "This host cannot provide the POSIX advisory locking required for safe "
+                    "deployment-wide KEGG rate limiting."
+                ],
+                "next_actions": [
+                    "On native Windows, run kegg-mcp under WSL; otherwise use a supported POSIX "
+                    "environment.",
+                ],
+            },
+            2,
+        )
     except ValueError:
         return (
             {

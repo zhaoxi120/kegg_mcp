@@ -709,7 +709,10 @@ def test_read_only_connection_remains_bound_to_the_validated_descriptor_during_r
     ) -> sqlite3.Connection:
         nonlocal swapped
         if not swapped and kwargs.get("uri") is True:
-            assert "/proc/self/fd/" in os.fsdecode(database)
+            expected_root = (
+                "/dev/fd/" if cache_module.sys.platform == "darwin" else "/proc/self/fd/"
+            )
+            assert expected_root in os.fsdecode(database)
             if swap_kind == "file":
                 moved_path = original_directory / "validated.sqlite3"
                 original_path.rename(moved_path)
@@ -728,6 +731,38 @@ def test_read_only_connection_remains_bound_to_the_validated_descriptor_during_r
     assert swapped is True
     assert lookup.response is not None
     assert lookup.response.body == b"validated-original"
+
+
+@pytest.mark.parametrize(
+    ("runtime_platform", "expected_root"),
+    [("linux", "/proc/self/fd"), ("darwin", "/dev/fd")],
+)
+def test_read_only_descriptor_path_uses_the_native_descriptor_filesystem(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_platform: str,
+    expected_root: str,
+) -> None:
+    monkeypatch.setattr(cache_module.sys, "platform", runtime_platform)
+
+    path = cache_module._read_only_descriptor_path(17)  # pyright: ignore[reportPrivateUsage]
+
+    assert path == Path(expected_root) / "17"
+
+
+def test_read_only_cache_opens_through_the_darwin_descriptor_path_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not Path("/dev/fd").is_dir():
+        pytest.skip("the Darwin descriptor filesystem is unavailable")
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path), body=b"darwin-descriptor")
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+
+    lookup = _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    assert lookup.response is not None
+    assert lookup.response.body == b"darwin-descriptor"
 
 
 def test_read_only_connection_verifies_trusted_schema_was_disabled(

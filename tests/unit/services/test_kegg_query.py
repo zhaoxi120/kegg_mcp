@@ -31,6 +31,7 @@ from kegg_mcp.kegg import (
     LinkResult,
     OrganismPathwayListRequest,
     OrganismPathwayListResult,
+    PublicAcademicAccess,
 )
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
@@ -116,7 +117,9 @@ def _provenance(
 
 class _QueryClient:
     def __init__(self, config: KeggClientConfig | None = None) -> None:
-        self._config = config or KeggClientConfig.model_validate({})
+        self._config = config or KeggClientConfig(
+            access=PublicAcademicAccess(academic_use_confirmed=True)
+        )
         self.find_rows: dict[
             tuple[KeggFindDatabase, str, str | None],
             tuple[tuple[str, str], ...],
@@ -1849,6 +1852,7 @@ def test_organism_pathway_preflight_counts_url_limited_taxonomy_batches(
 ) -> None:
     client = _QueryClient(
         KeggClientConfig(
+            access=PublicAcademicAccess(academic_use_confirmed=True),
             limits=KeggClientLimits(max_url_bytes=256),
         )
     )

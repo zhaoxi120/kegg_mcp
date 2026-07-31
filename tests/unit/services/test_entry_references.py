@@ -10,7 +10,7 @@ from typing import cast
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
-from kegg_mcp.kegg import KeggClientConfig, KeggRequestOptions
+from kegg_mcp.kegg import KeggClientConfig, KeggRequestOptions, PublicAcademicAccess
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
     PUBLIC_KEGG_ENDPOINT_LABEL,
@@ -64,7 +64,7 @@ def _provenance() -> KeggBatchProvenance:
 
 class _StaticGetClient:
     def __init__(self, result: GetResult) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.result = result
         self.calls = 0
 
@@ -86,7 +86,7 @@ class _StaticGetClient:
 
 class _UnexpectedGetClient:
     def __init__(self) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.calls = 0
 
     @property

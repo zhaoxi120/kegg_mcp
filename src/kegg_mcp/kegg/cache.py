@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,6 +38,16 @@ _MAX_REQUEST_KEY_CHARACTERS: Final = 65_536
 _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
 _ENDPOINT_FINGERPRINT_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
+
+
+def _read_only_descriptor_path(descriptor: int) -> Path:
+    """Return the native descriptor filesystem path used for race-bound SQLite opens."""
+    if sys.platform.startswith("linux"):
+        return Path("/proc/self/fd") / str(descriptor)
+    if sys.platform == "darwin":
+        return Path("/dev/fd") / str(descriptor)
+    raise OSError("cache descriptor binding is unavailable")
+
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS kegg_responses (
@@ -521,7 +532,7 @@ class SQLiteKeggCache:
                 path_stat.st_ino,
             ):
                 raise OSError("cache changed while it was opened")
-            descriptor_path = Path("/proc/self/fd") / str(descriptor)
+            descriptor_path = _read_only_descriptor_path(descriptor)
             descriptor_path_stat = descriptor_path.stat()
             if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
                 descriptor_path_stat.st_dev,

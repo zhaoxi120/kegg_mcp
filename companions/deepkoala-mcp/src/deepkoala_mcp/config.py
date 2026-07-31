@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 import sys
 from collections.abc import Mapping
@@ -40,6 +41,12 @@ HMMSEARCH_EXECUTABLE_ENV = f"{ENV_PREFIX}HMMSEARCH_EXECUTABLE"
 
 DEFAULT_CPU_THREADS = 2
 DEFAULT_MAX_TIMEOUT_SECONDS = 3_600
+MINIMUM_MACOS_MAJOR_VERSION = 14
+_MACOS_VERSION = re.compile(r"(?P<major>[1-9][0-9]*)(?:\.[0-9]+){0,2}\Z")
+
+
+def _default_devices() -> tuple[Literal["cpu", "cuda", "mps"], ...]:
+    return ("cpu", "mps") if sys.platform == "darwin" else ("cpu", "cuda")
 
 
 class DeepKoalaRuntimeConfig(BaseModel):
@@ -59,7 +66,9 @@ class DeepKoalaRuntimeConfig(BaseModel):
     input_roots: tuple[Path, ...]
     output_roots: tuple[Path, ...]
     allowed_models: tuple[ModelName, ...] = ("full", "frag")
-    allowed_devices: tuple[Literal["cpu", "cuda"], ...] = ("cpu", "cuda")
+    allowed_devices: tuple[Literal["cpu", "cuda", "mps"], ...] = Field(
+        default_factory=_default_devices
+    )
     cpu_threads: int = Field(default=DEFAULT_CPU_THREADS, strict=True, ge=1, le=4)
     max_fasta_bytes: int = Field(default=MAX_FASTA_BYTES, strict=True, ge=1, le=MAX_FASTA_BYTES)
     max_sequences: int = Field(
@@ -151,8 +160,12 @@ class DeepKoalaRuntimeConfig(BaseModel):
             raise ValueError("allowed_models must be unique")
         if not self.allowed_models:
             raise ValueError("allowed_models must not be empty")
-        if self.allowed_devices not in {("cpu",), ("cpu", "cuda")}:
-            raise ValueError("the device allowlist must be 'cpu' or 'cpu,cuda'")
+        if self.allowed_devices not in {("cpu",), ("cpu", "cuda"), ("cpu", "mps")}:
+            raise ValueError("the device allowlist must be 'cpu', 'cpu,cuda', or 'cpu,mps'")
+        if sys.platform == "darwin" and self.allowed_devices == ("cpu", "cuda"):
+            raise ValueError("the CUDA device allowlist is unavailable on macOS")
+        if sys.platform == "linux" and self.allowed_devices == ("cpu", "mps"):
+            raise ValueError("the MPS device allowlist is unavailable on Linux")
         if self.allow_multi and (self.profiles_dir is None or self.hmmsearch_executable is None):
             raise ValueError(
                 "multi-domain execution requires profiles_dir and hmmsearch_executable"
@@ -186,7 +199,7 @@ def load_runtime_config(
         input_roots=_roots(_required(values, INPUT_ROOTS_ENV), INPUT_ROOTS_ENV),
         output_roots=_roots(_required(values, OUTPUT_ROOTS_ENV), OUTPUT_ROOTS_ENV),
         allowed_models=_models(values.get(ALLOWED_MODELS_ENV, "full,frag")),
-        allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, "cpu,cuda")),
+        allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, ",".join(_default_devices()))),
         cpu_threads=_integer(values, CPU_THREADS_ENV, DEFAULT_CPU_THREADS, 1, 4),
         max_fasta_bytes=_integer(
             values,
@@ -228,7 +241,7 @@ def _require_posix_runtime() -> None:
     except ImportError:
         resource = None  # type: ignore[assignment]
     if (
-        sys.platform != "linux"
+        sys.platform not in {"linux", "darwin"}
         or os.name != "posix"
         or not hasattr(os, "killpg")
         or not hasattr(os, "setsid")
@@ -241,8 +254,19 @@ def _require_posix_runtime() -> None:
         or not hasattr(resource, "setrlimit")
     ):
         raise ValueError(
-            "deepkoala-mcp requires Linux process groups, parent-death signals, and RLIMIT_FSIZE"
+            "deepkoala-mcp requires Linux or macOS POSIX process and filesystem controls"
         )
+    if sys.platform == "darwin":
+        version = _MACOS_VERSION.fullmatch(platform.mac_ver()[0])
+        if (
+            platform.machine().strip().lower() != "arm64"
+            or version is None
+            or int(version.group("major")) < MINIMUM_MACOS_MAJOR_VERSION
+        ):
+            raise ValueError(
+                "deepkoala-mcp requires native Apple Silicon macOS 14 or later; "
+                "Intel macOS and Rosetta are unsupported"
+            )
 
 
 def _required(values: Mapping[str, str], name: str) -> str:
@@ -305,11 +329,11 @@ def _models(value: str) -> tuple[ModelName, ...]:
     return cast(tuple[ModelName, ...], values)
 
 
-def _devices(value: str) -> tuple[Literal["cpu", "cuda"], ...]:
+def _devices(value: str) -> tuple[Literal["cpu", "cuda", "mps"], ...]:
     devices = tuple(value.split(","))
-    if devices not in {("cpu",), ("cpu", "cuda")}:
-        raise ValueError(f"{ALLOWED_DEVICES_ENV} must be exactly cpu or cpu,cuda")
-    return cast(tuple[Literal["cpu", "cuda"], ...], devices)
+    if devices not in {("cpu",), ("cpu", "cuda"), ("cpu", "mps")}:
+        raise ValueError(f"{ALLOWED_DEVICES_ENV} must be exactly cpu, cpu,cuda, or cpu,mps")
+    return cast(tuple[Literal["cpu", "cuda", "mps"], ...], devices)
 
 
 def _integer(

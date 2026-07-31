@@ -156,3 +156,242 @@ jobs:
           --distribution kegg-render-mcp
           --module kegg_render_mcp
           --expected-version 0.3.2
+
+  validate-macos-core:
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      KEGG_MCP_ACCESS_MODE: offline_cache
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Synchronize locked Core environment
+        run: uv sync --locked
+
+      - name: Validate Core offline on macOS
+        run: >-
+          uv run --frozen pytest
+          tests/unit
+          tests/contract
+          tests/integration
+          --ignore=tests/integration/test_deepkoala_companion_handoff.py
+
+      - name: Validate unified installer contracts on macOS
+        run: uv run --frozen pytest tests/release/test_suite_installation.py
+
+      - name: Build Core wheel on macOS
+        run: uv build --no-sources --wheel --out-dir "${RUNNER_TEMP}/kegg-mcp-macos-dist"
+
+      - name: Smoke-test installed Core wheel on macOS
+        run: >-
+          python tests/release/smoke_wheel.py
+          --wheel "${RUNNER_TEMP}"/kegg-mcp-macos-dist/kegg_mcp-*.whl
+          --distribution kegg-mcp
+          --module kegg_mcp
+          --expected-version 0.8.0
+          --console kegg-mcp
+
+  validate-macos-deepkoala-companion:
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: companions/deepkoala-mcp
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          cache-dependency-glob: "companions/deepkoala-mcp/uv.lock"
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Require native Apple Silicon
+        run: python -c "import platform; assert platform.machine() == 'arm64'"
+
+      - name: Synchronize companion locked environment
+        run: uv sync --locked
+
+      - name: Lint companion on macOS
+        run: uv run --frozen ruff check .
+
+      - name: Check companion formatting on macOS
+        run: uv run --frozen ruff format --check .
+
+      - name: Type-check companion on macOS
+        run: uv run --frozen pyright
+
+      - name: Test companion lifecycle and contracts on macOS
+        run: uv run --frozen pytest
+
+      - name: Build independent DeepKOALA distributions on macOS
+        run: uv build --no-sources --out-dir "${RUNNER_TEMP}/deepkoala-mcp-macos-dist"
+
+      - name: Smoke-test installed DeepKOALA wheel on macOS
+        run: >-
+          python ../../tests/release/smoke_wheel.py
+          --wheel "${RUNNER_TEMP}"/deepkoala-mcp-macos-dist/deepkoala_mcp-*.whl
+          --distribution deepkoala-mcp
+          --module deepkoala_mcp
+          --expected-version 0.4.0
+          --console deepkoala-mcp
+
+  validate-macos-renderer:
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: companions/kegg-render-mcp
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          cache-dependency-glob: |
+            companions/kegg-render-mcp/uv.lock
+            uv.lock
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Synchronize locked renderer environment
+        run: uv sync --locked --all-groups
+
+      - name: Validate renderer with synthetic assets on macOS
+        run: uv run --frozen pytest
+
+      - name: Build Core and renderer wheels on macOS
+        run: |
+          uv build --no-sources --wheel --out-dir "${RUNNER_TEMP}/kegg-render-macos-dist"
+          uv build --no-sources --wheel --out-dir "${RUNNER_TEMP}/kegg-render-macos-dist" ../..
+
+      - name: Smoke-test installed renderer wheel on macOS
+        run: >-
+          python ../../tests/release/smoke_wheel.py
+          --wheel "${RUNNER_TEMP}"/kegg-render-macos-dist/kegg_mcp-*.whl
+          --wheel "${RUNNER_TEMP}"/kegg-render-macos-dist/kegg_render_mcp-*.whl
+          --distribution kegg-render-mcp
+          --module kegg_render_mcp
+          --expected-version 0.3.2
+
+  validate-macos-intel-components:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    env:
+      KEGG_MCP_ACCESS_MODE: offline_cache
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          cache-dependency-glob: |
+            uv.lock
+            companions/kegg-render-mcp/uv.lock
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Require native Intel macOS
+        run: python -c "import platform; assert platform.machine() == 'x86_64'"
+
+      - name: Synchronize locked Core environment
+        run: uv sync --locked
+
+      - name: Validate Core offline on Intel macOS
+        run: >-
+          uv run --frozen pytest
+          tests/unit
+          tests/contract
+          tests/integration
+          --ignore=tests/integration/test_deepkoala_companion_handoff.py
+
+      - name: Build Core wheel on Intel macOS
+        run: uv build --no-sources --wheel --out-dir "${RUNNER_TEMP}/kegg-mcp-intel-dist"
+
+      - name: Smoke-test installed Core wheel on Intel macOS
+        run: >-
+          python tests/release/smoke_wheel.py
+          --wheel "${RUNNER_TEMP}"/kegg-mcp-intel-dist/kegg_mcp-*.whl
+          --distribution kegg-mcp
+          --module kegg_mcp
+          --expected-version 0.8.0
+          --console kegg-mcp
+
+      - name: Synchronize locked Renderer environment
+        working-directory: companions/kegg-render-mcp
+        run: uv sync --locked --all-groups
+
+      - name: Validate Renderer with synthetic assets on Intel macOS
+        working-directory: companions/kegg-render-mcp
+        run: uv run --frozen pytest
+
+      - name: Build Renderer wheel on Intel macOS
+        working-directory: companions/kegg-render-mcp
+        run: >-
+          uv build --no-sources --wheel
+          --out-dir "${RUNNER_TEMP}/kegg-render-intel-dist"
+
+      - name: Smoke-test installed Renderer wheel on Intel macOS
+        working-directory: companions/kegg-render-mcp
+        run: >-
+          python ../../tests/release/smoke_wheel.py
+          --wheel "${RUNNER_TEMP}"/kegg-mcp-intel-dist/kegg_mcp-*.whl
+          --wheel "${RUNNER_TEMP}"/kegg-render-intel-dist/kegg_render_mcp-*.whl
+          --distribution kegg-render-mcp
+          --module kegg_render_mcp
+          --expected-version 0.3.2
+
+  validate-windows-unsupported:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.11"
+          version: "0.11.28"
+
+      - name: Build native-Windows diagnostic wheels
+        shell: pwsh
+        run: |
+          uv build --no-sources --wheel --out-dir "$env:RUNNER_TEMP/kegg-mcp-windows-dist"
+          uv build --no-sources --wheel --out-dir "$env:RUNNER_TEMP/kegg-mcp-windows-dist" companions/kegg-render-mcp
+
+      - name: Smoke-test installed Core wheel and structured unsupported-platform diagnostic
+        shell: pwsh
+        run: |
+          $coreWheel = (Get-ChildItem "$env:RUNNER_TEMP/kegg-mcp-windows-dist/kegg_mcp-*.whl").FullName
+          python tests/release/smoke_wheel.py --wheel $coreWheel --distribution kegg-mcp --module kegg_mcp --expected-version 0.8.0 --console kegg-mcp --native-windows-probe core
+
+      - name: Smoke-test installed renderer wheel and static unsupported-platform diagnostic
+        shell: pwsh
+        run: |
+          $coreWheel = (Get-ChildItem "$env:RUNNER_TEMP/kegg-mcp-windows-dist/kegg_mcp-*.whl").FullName
+          $rendererWheel = (Get-ChildItem "$env:RUNNER_TEMP/kegg-mcp-windows-dist/kegg_render_mcp-*.whl").FullName
+          python tests/release/smoke_wheel.py --wheel $coreWheel --wheel $rendererWheel --distribution kegg-render-mcp --module kegg_render_mcp --expected-version 0.3.2 --native-windows-probe renderer

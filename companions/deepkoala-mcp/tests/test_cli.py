@@ -11,6 +11,7 @@ import pytest
 from deepkoala_mcp import cli
 from deepkoala_mcp.config import (
     ALLOW_MULTI_ENV,
+    ALLOWED_DEVICES_ENV,
     CHECKOUT_ENV,
     HMMSEARCH_EXECUTABLE_ENV,
     INPUT_ROOTS_ENV,
@@ -29,6 +30,7 @@ def _environment(config: DeepKoalaRuntimeConfig) -> dict[str, str]:
         STATE_ROOT_ENV: str(config.state_root),
         INPUT_ROOTS_ENV: str(config.input_roots[0]),
         OUTPUT_ROOTS_ENV: str(config.output_roots[0]),
+        ALLOWED_DEVICES_ENV: ",".join(config.allowed_devices),
     }
     if config.allow_multi:
         assert config.profiles_dir is not None
@@ -56,6 +58,9 @@ def test_doctor_reports_ready_without_exposing_paths(
     assert exit_code == 0
     assert document["route_state"] == "local_ready"
     assert document["runtime_ready"] is True
+    assert document["cuda_available"] is False
+    assert document["mps_available"] is False
+    assert document["allowed_devices"] == ["cpu"]
     assert document["downloads_enabled"] is False
     assert document["input_root_count"] == 1
     assert document["output_root_count"] == 1
@@ -75,6 +80,7 @@ def test_doctor_rejects_bin_false_runtime(runtime_config: DeepKoalaRuntimeConfig
     assert exit_code == 2
     assert document["route_state"] == "deepkoala_runtime_unavailable"
     assert document["runtime_ready"] is False
+    assert document["mps_available"] is False
     assert document["downloads_enabled"] is False
 
 
@@ -89,6 +95,7 @@ def test_doctor_reports_invalid_configuration_without_mutation(
     assert exit_code == 2
     assert document["route_state"] == "runner_misconfigured"
     assert document["configuration_valid"] is False
+    assert document["allowed_devices"] == []
     assert not runtime_config.state_root.exists()
     assert environment[CHECKOUT_ENV] not in output.getvalue()
 

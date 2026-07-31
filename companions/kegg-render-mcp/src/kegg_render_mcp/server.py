@@ -22,6 +22,10 @@ from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl, BaseModel, ValidationError
 
 from kegg_render_mcp import SERVER_NAME, __version__
+from kegg_render_mcp._platform import (
+    UNSUPPORTED_PLATFORM_DIAGNOSTIC,
+    UnsupportedRendererPlatformError,
+)
 from kegg_render_mcp.config import RendererRuntimeConfig, load_runtime_config
 from kegg_render_mcp.contracts import (
     ARTIFACT_NAME_PATTERN,
@@ -721,6 +725,12 @@ def main() -> None:
         anyio.run(_run_stdio)
     except (KeyboardInterrupt, BrokenPipeError):
         return
+    except UnsupportedRendererPlatformError:
+        print(
+            f"kegg-render-mcp startup failed: {UNSUPPORTED_PLATFORM_DIAGNOSTIC}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     except (OSError, RuntimeError, ValueError) as error:
         print(f"kegg-render-mcp startup failed: {type(error).__name__}", file=sys.stderr)
         raise SystemExit(2) from None

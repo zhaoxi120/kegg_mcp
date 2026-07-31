@@ -22,16 +22,45 @@ _PROBE_TIMEOUT_SECONDS = 20
 _CUDA_AVAILABLE_EXIT_CODE = 42
 _MULTI_COMPATIBLE_EXIT_CODE = 43
 _CUDA_AND_MULTI_EXIT_CODE = 44
+_MPS_AVAILABLE_EXIT_CODE = 45
+_MPS_AND_MULTI_EXIT_CODE = 46
+_CUDA_AND_MPS_EXIT_CODE = 47
+_CUDA_MPS_AND_MULTI_EXIT_CODE = 48
 _HMMSEARCH_PROBE_TIMEOUT_SECONDS = 5
 _PROFILE = re.compile(r"^K[0-9]{5}\.hmm$")
 _MAX_PROFILE_ENTRIES = 100_000
 _RUNTIME_PROBE = f"""\
+import argparse
 import importlib
 import inspect
+import platform
 import sys
 
+macos_parts = platform.mac_ver()[0].split(".")
+macos_major = (
+    int(macos_parts[0])
+    if 1 <= len(macos_parts) <= 3
+    and all(part.isdigit() and part for part in macos_parts)
+    else 0
+)
+runtime_supported = (
+    platform.python_implementation() == "CPython"
+    and sys.version_info[:2] == (3, 11)
+    and (
+        sys.platform.startswith("linux")
+        or (
+            sys.platform == "darwin"
+            and platform.machine().strip().lower() == "arm64"
+            and macos_major >= 14
+        )
+    )
+)
+if not runtime_supported:
+    raise SystemExit(1)
+
 importlib.import_module("deepkoala")
-importlib.import_module("deepkoala.utils")
+utils = importlib.import_module("deepkoala.utils")
+cli = importlib.import_module("deepkoala.cli")
 torch = importlib.import_module("torch")
 try:
     infer_multi = importlib.import_module("deepkoala.infer_multi")
@@ -47,10 +76,88 @@ try:
 except Exception:
     multi_compatible = False
 cuda_available = torch.cuda.is_available()
+try:
+    mps_available = torch.backends.mps.is_available()
+except (AttributeError, RuntimeError):
+    mps_available = False
+
+resolver = getattr(utils, "resolve_device", None)
+resolver_compatible = callable(resolver)
+if resolver_compatible:
+    try:
+        resolver_compatible = getattr(resolver("cpu"), "type", None) == "cpu"
+        if cuda_available:
+            resolver_compatible = (
+                resolver_compatible and getattr(resolver("cuda"), "type", None) == "cuda"
+            )
+        if mps_available:
+            resolver_compatible = (
+                resolver_compatible and getattr(resolver("mps"), "type", None) == "mps"
+            )
+    except Exception:
+        resolver_compatible = False
+
+cli_compatible = False
+multi_cli_compatible = False
+original_parse_args = argparse.ArgumentParser.parse_args
+
+class ParserInspected(Exception):
+    pass
+
+def inspect_parser(parser, *_args, **_kwargs):
+    global cli_compatible, multi_cli_compatible
+    option_actions = {{}}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_actions[option] = action
+    required_options = (
+        "--input_path",
+        "--output_path",
+        "--model",
+        "--date",
+        "--device",
+        "--detail",
+        "--batch_size",
+        "--num_workers",
+        "--topk",
+    )
+    device_action = option_actions.get("--device")
+    choices = getattr(device_action, "choices", None)
+    cli_compatible = (
+        all(option in option_actions for option in required_options)
+        and choices is not None
+        and set(choices) == set(("auto", "cpu", "cuda", "mps"))
+    )
+    multi_cli_compatible = (
+        "--multi" in option_actions and "--profiles_dir" in option_actions
+    )
+    raise ParserInspected
+
+argparse.ArgumentParser.parse_args = inspect_parser
+try:
+    cli.main()
+except ParserInspected:
+    pass
+except BaseException:
+    cli_compatible = False
+finally:
+    argparse.ArgumentParser.parse_args = original_parse_args
+
+multi_compatible = multi_compatible and multi_cli_compatible
+if not resolver_compatible or not cli_compatible:
+    raise SystemExit(1)
+if cuda_available and mps_available and multi_compatible:
+    raise SystemExit({_CUDA_MPS_AND_MULTI_EXIT_CODE})
+if cuda_available and mps_available:
+    raise SystemExit({_CUDA_AND_MPS_EXIT_CODE})
 if cuda_available and multi_compatible:
     raise SystemExit({_CUDA_AND_MULTI_EXIT_CODE})
+if mps_available and multi_compatible:
+    raise SystemExit({_MPS_AND_MULTI_EXIT_CODE})
 if cuda_available:
     raise SystemExit({_CUDA_AVAILABLE_EXIT_CODE})
+if mps_available:
+    raise SystemExit({_MPS_AVAILABLE_EXIT_CODE})
 raise SystemExit({_MULTI_COMPATIBLE_EXIT_CODE} if multi_compatible else 0)
 """
 
@@ -69,6 +176,7 @@ class RuntimeProbeResult:
 
     runtime_ready: bool
     cuda_available: bool
+    mps_available: bool = False
     multi_adapter_compatible: bool = False
 
 
@@ -164,7 +272,11 @@ def probe_runtime(
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+        return RuntimeProbeResult(
+            runtime_ready=False,
+            cuda_available=False,
+            mps_available=False,
+        )
     return _runtime_probe_result(completed.returncode)
 
 
@@ -187,14 +299,22 @@ async def probe_runtime_async(
             stderr=subprocess.DEVNULL,
         )
     except OSError:
-        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+        return RuntimeProbeResult(
+            runtime_ready=False,
+            cuda_available=False,
+            mps_available=False,
+        )
     try:
         async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
             return_code = await process.wait()
     except TimeoutError:
         process.kill()
         await process.wait()
-        return RuntimeProbeResult(runtime_ready=False, cuda_available=False)
+        return RuntimeProbeResult(
+            runtime_ready=False,
+            cuda_available=False,
+            mps_available=False,
+        )
     return _runtime_probe_result(return_code)
 
 
@@ -311,18 +431,23 @@ def fail_multi_unavailable() -> NoReturn:
     )
 
 
-def fail_runtime_unavailable(*, cuda_requested: bool = False) -> NoReturn:
+def fail_runtime_unavailable(
+    *,
+    cuda_requested: bool = False,
+    mps_requested: bool = False,
+) -> NoReturn:
     """Return a bounded repair route for the configured DeepKOALA runtime."""
-    message = (
-        "The requested CUDA device is unavailable in the configured runtime."
-        if cuda_requested
-        else "The configured Python cannot import the required DeepKOALA runtime."
-    )
-    action = (
-        "Use the default CPU device or explicitly repair and verify the CUDA runtime."
-        if cuda_requested
-        else "Run the redacted doctor command and repair the configured environment."
-    )
+    if cuda_requested and mps_requested:
+        raise ValueError("only one accelerator may be requested")
+    if cuda_requested:
+        message = "The requested CUDA device is unavailable in the configured runtime."
+        action = "Use the default CPU device or explicitly repair and verify the CUDA runtime."
+    elif mps_requested:
+        message = "The requested MPS device is unavailable in the configured runtime."
+        action = "Use the default CPU device or explicitly repair and verify the MPS runtime."
+    else:
+        message = "The configured Python cannot import the required DeepKOALA runtime."
+        action = "Run the redacted doctor command and repair the configured environment."
     fail(ErrorCode.RUNTIME_UNAVAILABLE, message, suggested_action=action)
 
 
@@ -469,12 +594,39 @@ def _hmmsearch_probe_environment(executable: Path) -> dict[str, str]:
 
 
 def _runtime_probe_result(return_code: int) -> RuntimeProbeResult:
+    ready_exit_codes = {
+        0,
+        _CUDA_AVAILABLE_EXIT_CODE,
+        _MULTI_COMPATIBLE_EXIT_CODE,
+        _CUDA_AND_MULTI_EXIT_CODE,
+        _MPS_AVAILABLE_EXIT_CODE,
+        _MPS_AND_MULTI_EXIT_CODE,
+        _CUDA_AND_MPS_EXIT_CODE,
+        _CUDA_MPS_AND_MULTI_EXIT_CODE,
+    }
     return RuntimeProbeResult(
-        runtime_ready=return_code
-        in {0, _CUDA_AVAILABLE_EXIT_CODE, _MULTI_COMPATIBLE_EXIT_CODE, _CUDA_AND_MULTI_EXIT_CODE},
-        cuda_available=return_code in {_CUDA_AVAILABLE_EXIT_CODE, _CUDA_AND_MULTI_EXIT_CODE},
+        runtime_ready=return_code in ready_exit_codes,
+        cuda_available=return_code
+        in {
+            _CUDA_AVAILABLE_EXIT_CODE,
+            _CUDA_AND_MULTI_EXIT_CODE,
+            _CUDA_AND_MPS_EXIT_CODE,
+            _CUDA_MPS_AND_MULTI_EXIT_CODE,
+        },
+        mps_available=return_code
+        in {
+            _MPS_AVAILABLE_EXIT_CODE,
+            _MPS_AND_MULTI_EXIT_CODE,
+            _CUDA_AND_MPS_EXIT_CODE,
+            _CUDA_MPS_AND_MULTI_EXIT_CODE,
+        },
         multi_adapter_compatible=return_code
-        in {_MULTI_COMPATIBLE_EXIT_CODE, _CUDA_AND_MULTI_EXIT_CODE},
+        in {
+            _MULTI_COMPATIBLE_EXIT_CODE,
+            _CUDA_AND_MULTI_EXIT_CODE,
+            _MPS_AND_MULTI_EXIT_CODE,
+            _CUDA_MPS_AND_MULTI_EXIT_CODE,
+        },
     )
 
 

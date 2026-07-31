@@ -69,29 +69,54 @@ def test_build_argv_is_fixed_cpu_device_and_worker_free(checkout: Path, tmp_path
     assert argv[0] == str(plan.python_executable)
     assert argv[1] == "-c"
     assert argv[3] == str(os.getpid())
+    assert argv[4] == "-1"
     assert argv[argv.index("--device") + 1] == "cpu"
     assert argv[argv.index("--num_workers") + 1] == "0"
     assert argv[argv.index("--model") + 1] == "frag"
     assert "--detail" in argv
-    assert len(argv) == 27
+    assert len(argv) == 28
     assert "--multi" not in argv
     assert "--profiles_dir" not in argv
 
 
-def test_build_argv_accepts_explicit_validated_cuda_device(
+@pytest.mark.parametrize("device", ("cuda", "mps"))
+def test_build_argv_accepts_explicit_validated_accelerator_device(
     checkout: Path,
     tmp_path: Path,
+    device: str,
 ) -> None:
-    plan = _plan(checkout, tmp_path, device="cuda")
+    plan = _plan(checkout, tmp_path, device=device)
 
     argv = build_argv(plan)
 
-    assert argv[argv.index("--device") + 1] == "cuda"
+    assert argv[argv.index("--device") + 1] == device
 
 
 def test_runner_plan_rejects_automatic_device_selection(checkout: Path, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="device"):
         _plan(checkout, tmp_path, device="auto")
+
+
+def test_darwin_parent_guard_uses_one_non_inheritable_child_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner_module, "_requires_parent_guard", lambda: True)
+    guard = runner_module._ParentDeathGuard.create()  # pyright: ignore[reportPrivateUsage]
+    child_descriptor = guard.child_read_fd
+    parent_descriptor = guard.parent_write_fd
+    try:
+        assert guard.passed_fds == (child_descriptor,)
+        assert child_descriptor > 2
+        assert parent_descriptor > 2
+        assert not os.get_inheritable(child_descriptor)
+        assert not os.get_inheritable(parent_descriptor)
+        guard.close_child_end()
+        with pytest.raises(OSError):
+            os.fstat(child_descriptor)
+    finally:
+        guard.close()
+    with pytest.raises(OSError):
+        os.fstat(parent_descriptor)
 
 
 def test_child_environment_inherits_gpu_visibility_and_bounds_threads(
@@ -391,7 +416,93 @@ Path(args.output_path).write_text(str(child.pid), encoding='ascii')
 
 
 @pytest.mark.asyncio
-async def test_parent_sigkill_terminates_deepkoala_child(checkout: Path, tmp_path: Path) -> None:
+async def test_parent_guard_survives_leader_exit_until_descendants_are_gone(
+    checkout: Path,
+    tmp_path: Path,
+) -> None:
+    _write_cli(
+        checkout,
+        """
+import subprocess
+from pathlib import Path
+child = subprocess.Popen(['sleep', '30'])
+Path(args.output_path).write_text(str(child.pid), encoding='ascii')
+""",
+    )
+    plan = _plan(checkout, tmp_path, timeout_seconds=30)
+    cleanup_marker = tmp_path / "cleanup-pending"
+    parent_code = """
+import asyncio
+import sys
+from pathlib import Path
+import deepkoala_mcp.runner as runner_module
+from deepkoala_mcp.runner import DeepKoalaProcessRunner, RunnerPlan
+
+runner_module._requires_parent_guard = lambda: True
+original_finish_termination = runner_module._finish_termination
+
+async def delay_cleanup(process):
+    if process.returncode is not None:
+        Path(sys.argv[4]).write_text('pending', encoding='ascii')
+        await asyncio.sleep(30)
+    return await original_finish_termination(process)
+
+runner_module._finish_termination = delay_cleanup
+plan = RunnerPlan(
+    python_executable=Path(sys.argv[1]),
+    checkout=Path(sys.argv[2]),
+    job_directory=Path(sys.argv[3]),
+    model='full',
+    resolved_date='202502',
+    device='cpu',
+    batch_size=1,
+    topk=1,
+    timeout_seconds=30,
+    cpu_threads=2,
+)
+asyncio.run(DeepKoalaProcessRunner().run(plan))
+"""
+    parent = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        parent_code,
+        str(plan.python_executable),
+        str(plan.checkout),
+        str(plan.job_directory),
+        str(cleanup_marker),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        async with asyncio.timeout(5):
+            while not plan.output_path.exists() or not cleanup_marker.exists():
+                await asyncio.sleep(0.01)
+        child_pid = int(plan.output_path.read_text(encoding="ascii"))
+        parent.kill()
+        await parent.wait()
+        async with asyncio.timeout(3):
+            while _pid_exists(child_pid):
+                await asyncio.sleep(0.01)
+    finally:
+        if parent.returncode is None:
+            parent.kill()
+            await parent.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "force_parent_guard",
+    (False, True) if sys.platform == "linux" else (False,),
+    ids=("native-linux-prctl", "darwin-parent-guard")
+    if sys.platform == "linux"
+    else ("native-darwin-parent-guard",),
+)
+async def test_parent_sigkill_terminates_deepkoala_child(
+    checkout: Path,
+    tmp_path: Path,
+    force_parent_guard: bool,
+) -> None:
     _write_cli(
         checkout,
         """
@@ -410,7 +521,11 @@ time.sleep(30)
 import asyncio
 import sys
 from pathlib import Path
+import deepkoala_mcp.runner as runner_module
 from deepkoala_mcp.runner import DeepKoalaProcessRunner, RunnerPlan
+
+if sys.argv[4] == '1':
+    runner_module._requires_parent_guard = lambda: True
 
 plan = RunnerPlan(
     python_executable=Path(sys.argv[1]),
@@ -433,6 +548,7 @@ asyncio.run(DeepKoalaProcessRunner().run(plan))
         str(plan.python_executable),
         str(plan.checkout),
         str(plan.job_directory),
+        "1" if force_parent_guard else "0",
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from kegg_mcp.kegg import (
     RetrievalEndpointClass,
     endpoint_fingerprint,
 )
+from kegg_mcp.kegg.contracts import default_cache_path, default_rate_limit_root
+from kegg_mcp.kegg.rate_limit import ensure_rate_limit_platform_supported
 
 ACCESS_MODE_ENV = "KEGG_MCP_ACCESS_MODE"
 ACADEMIC_CONFIRMATION_ENV = "KEGG_MCP_ACADEMIC_USE_CONFIRMED"
@@ -48,14 +51,20 @@ def default_result_store_path(environment: Mapping[str, str] | None = None) -> s
     """Return a user-local result path without creating it."""
     values = os.environ if environment is None else environment
     cache_home = values.get("XDG_CACHE_HOME")
-    root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+    if cache_home:
+        root = Path(cache_home).expanduser()
+    else:
+        configured_home = values.get("HOME")
+        home = Path(configured_home).expanduser() if configured_home else Path.home()
+        root = home / "Library" / "Caches" if sys.platform == "darwin" else home / ".cache"
     return str(root / "kegg-mcp" / "results.sqlite3")
 
 
 def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRuntimeConfig:
-    """Load public-default runtime settings with an explicit network-disabled profile."""
+    """Load network-disabled defaults with explicitly confirmed live-access profiles."""
+    ensure_rate_limit_platform_supported()
     values = os.environ if environment is None else environment
-    raw_mode = values.get(ACCESS_MODE_ENV, AccessMode.PUBLIC_ACADEMIC.value)
+    raw_mode = values.get(ACCESS_MODE_ENV, AccessMode.OFFLINE_CACHE.value)
     try:
         mode = AccessMode(raw_mode)
     except ValueError as error:
@@ -64,7 +73,7 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRunt
         ) from error
 
     if mode is AccessMode.PUBLIC_ACADEMIC:
-        if values.get(ACADEMIC_CONFIRMATION_ENV, "true") != "true":
+        if values.get(ACADEMIC_CONFIRMATION_ENV) != "true":
             raise ValueError(
                 f"{ACADEMIC_CONFIRMATION_ENV}=true is required for public_academic access"
             )
@@ -101,9 +110,9 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRunt
                 endpoint_fingerprint=endpoint_fingerprint(licensed.endpoint),
                 endpoint_label=licensed.endpoint_label,
             )
-    cache_defaults = CachePolicy()
+    cache_defaults = CachePolicy(path=default_cache_path(values))
     cache = CachePolicy(
-        path=values.get(CACHE_PATH_ENV, cache_defaults.path),
+        path=values.get(CACHE_PATH_ENV, default_cache_path(values)),
         max_entries=_positive_integer(
             values,
             CACHE_MAX_ENTRIES_ENV,
@@ -120,9 +129,8 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> McpRunt
             cache_defaults.max_database_bytes,
         ),
     )
-    rate_defaults = RateLimitPolicy()
     rate_limit = RateLimitPolicy(
-        state_root=values.get(RATE_LIMIT_ROOT_ENV, rate_defaults.state_root)
+        state_root=values.get(RATE_LIMIT_ROOT_ENV, default_rate_limit_root(values))
     )
     result_path = values.get(RESULT_STORE_PATH_ENV, default_result_store_path(values))
     allowed_roots = _load_allowed_roots(values.get(ALLOWED_ROOTS_ENV))

@@ -35,7 +35,7 @@ The `tests/skill/` suite verifies that:
 - absent explicit output paths, each server allocates a fresh directory beneath its configured
   project output root, while explicit user paths win;
 - the first annotation call discloses the CPU default without adding a confirmation gate, while
-  CUDA requires an explicit user request and compatible status;
+  CUDA or Apple MPS requires an explicit user request and compatible status;
 - DeepKOALA model routing uses explicit provenance rather than an invented length cutoff; and
 - biological and data-rights language remains conservative.
 
@@ -74,7 +74,7 @@ candidate:
 | Fragmented or metagenomic protein calls | Select `frag` before the first annotation call and briefly report why; an explicit user model choice wins. |
 | Complete/reference proteins or ambiguous provenance | Select `full`; do not infer completeness from a sequence-length threshold. |
 | No requested output directory | Omit `output_directory` so each server allocates beneath its configured project output root; never guess a writable root from an input path. |
-| Explicit GPU annotation request | Use `device=cuda` only when status both allows CUDA and reports it available; otherwise stop instead of silently substituting CPU or automatic device selection. |
+| Explicit GPU annotation request | Use `device=cuda` or `device=mps` only when status both allows that explicit backend and reports it available; otherwise stop instead of silently substituting CPU or automatic device selection. |
 | DeepKOALA detailed CSV | Use `kegg-ko-analysis` and preserve source evidence and model provenance. |
 | Plain K-number column | Normalize once, then run requested MODULE/pathway analysis through the core server. |
 | Two KO sets | Report deterministic set and shared-reference differences without statistical claims. |

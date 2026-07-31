@@ -5,17 +5,51 @@ from pathlib import Path
 
 import pytest
 
+import kegg_mcp.mcp.config as config_module
 from kegg_mcp.kegg import AccessMode, RetrievalEndpointClass, endpoint_fingerprint
-from kegg_mcp.mcp.config import load_runtime_config
+from kegg_mcp.mcp.config import default_result_store_path, load_runtime_config
 
 
-def test_empty_environment_defaults_to_confirmed_public_academic_access() -> None:
+def test_empty_environment_defaults_to_network_disabled_offline_cache_access() -> None:
     config = load_runtime_config({"HOME": "/tmp/test-home"})
-    assert config.kegg.access.mode is AccessMode.PUBLIC_ACADEMIC
-    assert config.kegg.access.academic_use_confirmed is True
+    assert config.kegg.access.mode is AccessMode.OFFLINE_CACHE
 
 
-def test_public_academic_defaults_confirmation_but_rejects_explicit_false() -> None:
+def test_mapping_home_controls_all_linux_default_storage_locations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_module.sys, "platform", "linux")
+    config = load_runtime_config({"HOME": str(tmp_path)})
+
+    assert config.kegg.cache.path == str(tmp_path / ".cache/kegg-mcp/kegg.sqlite3")
+    assert config.kegg.rate_limit.state_root == str(tmp_path / ".cache/kegg-mcp/rate-limit")
+    assert config.result_store_path == str(tmp_path / ".cache/kegg-mcp/results.sqlite3")
+
+
+def test_darwin_result_store_defaults_to_the_native_user_cache_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_module.sys, "platform", "darwin")
+
+    path = default_result_store_path({"HOME": "/Users/tester"})
+
+    assert path == "/Users/tester/Library/Caches/kegg-mcp/results.sqlite3"
+
+
+def test_result_store_honors_explicit_xdg_cache_home_on_darwin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_module.sys, "platform", "darwin")
+
+    path = default_result_store_path({"HOME": "/Users/tester", "XDG_CACHE_HOME": "/private/cache"})
+
+    assert path == "/private/cache/kegg-mcp/results.sqlite3"
+
+
+def test_public_academic_requires_explicit_literal_confirmation() -> None:
+    with pytest.raises(ValueError, match="ACADEMIC_USE_CONFIRMED"):
+        load_runtime_config({"KEGG_MCP_ACCESS_MODE": "public_academic"})
     with pytest.raises(ValueError, match="ACADEMIC_USE_CONFIRMED"):
         load_runtime_config(
             {
@@ -23,7 +57,12 @@ def test_public_academic_defaults_confirmation_but_rejects_explicit_false() -> N
                 "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "false",
             }
         )
-    config = load_runtime_config({"KEGG_MCP_ACCESS_MODE": "public_academic"})
+    config = load_runtime_config(
+        {
+            "KEGG_MCP_ACCESS_MODE": "public_academic",
+            "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true",
+        }
+    )
     assert config.kegg.access.mode is AccessMode.PUBLIC_ACADEMIC
 
 
