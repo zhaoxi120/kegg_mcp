@@ -20,6 +20,7 @@ from kegg_mcp.mcp.contracts import (
     AnnotationAuditToolEnvelope,
     AuditAnnotationMappingInput,
     BriteHierarchyToolEnvelope,
+    CompareKeggReferenceSnapshotsInput,
     CompareKoSetsInput,
     CompareToolEnvelope,
     ConnectivityToolEnvelope,
@@ -34,6 +35,7 @@ from kegg_mcp.mcp.contracts import (
     NormalizeKoAnnotationsInput,
     NormalizeToolEnvelope,
     ProbeKeggConnectivityInput,
+    ReferenceSnapshotComparisonToolEnvelope,
     ResolveEntitiesToolEnvelope,
     ResolveKeggEntitiesInput,
     SearchEntriesToolEnvelope,
@@ -54,6 +56,7 @@ from kegg_mcp.mcp.tool_handlers import (
     analyze_modules,
     analyze_pathways,
     audit_mapping,
+    compare_reference_snapshots,
     compare_sets,
     delete_result,
     get_entries,
@@ -126,7 +129,11 @@ TOOL_SPECS = (
     ToolSpec(
         "get_kegg_entries",
         "Get KEGG entries",
-        "Retrieve allowlisted KEGG entries with bounded batching; this is not a URL proxy.",
+        (
+            "Retrieve allowlisted KEGG entries with bounded batching. The card projection "
+            "returns deterministic typed field previews and retains a versioned local snapshot; "
+            "this is not a URL proxy or an LLM-generated summary."
+        ),
         GetKeggEntriesInput,
         EntriesToolEnvelope,
         _ADDITIVE_OPEN,
@@ -148,9 +155,9 @@ TOOL_SPECS = (
         "resolve_kegg_entities",
         "Resolve KEGG entities",
         (
-            "Resolve bounded gene or organism identifiers through typed FIND, GET, CONV, LINK, "
-            "and optional organism-pathway LIST steps while preserving ambiguity, mismatch, and "
-            "unmapped outcomes."
+            "Resolve bounded gene, organism, or chemical-substance identifiers through typed "
+            "FIND, GET, CONV, LINK, and optional organism-pathway LIST steps while preserving "
+            "ambiguity, mismatch, and unmapped outcomes. PubChem inputs are SIDs, not CIDs."
         ),
         ResolveKeggEntitiesInput,
         ResolveEntitiesToolEnvelope,
@@ -192,6 +199,19 @@ TOOL_SPECS = (
         AnnotationAuditToolEnvelope,
         _ADDITIVE_OPEN,
         audit_mapping,
+    ),
+    ToolSpec(
+        "compare_kegg_reference_snapshots",
+        "Compare KEGG reference snapshots",
+        (
+            "Compare two current-session entry-card snapshots for the same requested KEGG "
+            "entries. The comparison is deterministic and local, makes no network requests, "
+            "and does not interpret structural differences as biological gain or loss."
+        ),
+        CompareKeggReferenceSnapshotsInput,
+        ReferenceSnapshotComparisonToolEnvelope,
+        _ADDITIVE_CLOSED,
+        compare_reference_snapshots,
     ),
     ToolSpec(
         "analyze_modules",
@@ -290,6 +310,7 @@ _CLIENT_TOOL_NAMES = frozenset(
 _LOCAL_TOOL_NAMES = frozenset(
     {
         "normalize_ko_annotations",
+        "compare_kegg_reference_snapshots",
         "list_analysis_results",
         "delete_analysis_result",
     }

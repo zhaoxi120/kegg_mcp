@@ -15,6 +15,7 @@ from kegg_mcp.mcp.contracts import (
     AnalyzeModulesInput,
     AnalyzePathwaysInput,
     AuditAnnotationMappingInput,
+    CompareKeggReferenceSnapshotsInput,
     CompareKoSetsInput,
     DeleteAnalysisResultInput,
     GetKeggEntriesInput,
@@ -50,6 +51,7 @@ from kegg_mcp.services.operational import (
 )
 from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
 from kegg_mcp.services.query_models import KeggSearchMode
+from kegg_mcp.services.reference_snapshots import compare_kegg_reference_snapshots
 from kegg_mcp.services.relation_tracing import trace_kegg_relations
 
 
@@ -143,10 +145,19 @@ def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
+        projection=request.projection,
+    )
+    projection_summary = (
+        " Typed cards and a versioned local comparison snapshot were retained."
+        if request.projection.value == "card"
+        else ""
     )
     return ToolOutcome(
         result,
-        f"Retrieved {result.returned_count} of {result.requested_count} KEGG entries.",
+        (
+            f"Retrieved {result.returned_count} of {result.requested_count} KEGG entries."
+            f"{projection_summary}"
+        ),
         result.result.result_id,
     )
 
@@ -161,7 +172,10 @@ def search_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
         scope_id=runtime.scope_id,
     )
     identification_caveat = (
-        " Exact-mass matches are compound candidates, not compound identifications."
+        (
+            f" Exact-mass matches are {request.database.value} candidates, not "
+            "chemical identifications."
+        )
         if result.mode is KeggSearchMode.EXACT_MASS
         else ""
     )
@@ -252,10 +266,7 @@ def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
         summary = (
             "Completed the annotation evidence audit; no KEGG relationship mapping was requested."
         )
-    elif (
-        result.mapping_execution.status
-        is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
-    ):
+    elif result.mapping_execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT:
         summary = (
             "Completed the annotation evidence audit; KEGG relationship mapping was skipped "
             "before network access because the planned request count exceeded the limit."
@@ -275,6 +286,29 @@ def audit_mapping(context: ToolContext, model: BaseModel) -> ToolOutcome:
     return ToolOutcome(
         result,
         summary,
+        result.result.result_id,
+    )
+
+
+def compare_reference_snapshots(
+    context: ToolContext,
+    model: BaseModel,
+) -> ToolOutcome:
+    request = cast(CompareKeggReferenceSnapshotsInput, model)
+    runtime = context.runtime
+    result = compare_kegg_reference_snapshots(
+        request,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+    )
+    return ToolOutcome(
+        result,
+        (
+            "Compared two retained KEGG entry-card snapshots locally and reported "
+            f"{result.added_entry_count + result.removed_entry_count} membership changes and "
+            f"{result.field_change_count} selected field changes; no biological gain, loss, "
+            "or validation was inferred."
+        ),
         result.result.result_id,
     )
 
@@ -390,6 +424,7 @@ __all__ = [
     "analyze_modules",
     "analyze_pathways",
     "audit_mapping",
+    "compare_reference_snapshots",
     "compare_sets",
     "delete_result",
     "get_entries",

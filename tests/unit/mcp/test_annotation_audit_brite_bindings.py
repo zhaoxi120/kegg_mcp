@@ -293,8 +293,17 @@ def test_audit_handler_summary_reflects_mapping_execution(
     assert outcome.summary == expected
 
 
+@pytest.mark.parametrize(
+    ("database", "candidate_label"),
+    (
+        (KeggSearchDatabase.COMPOUND, "compound candidates"),
+        (KeggSearchDatabase.DRUG, "drug candidates"),
+    ),
+)
 def test_exact_mass_search_handler_summary_marks_candidates_as_not_identifications(
     monkeypatch: pytest.MonkeyPatch,
+    database: KeggSearchDatabase,
+    candidate_label: str,
 ) -> None:
     result = SearchKeggEntriesResult.model_construct(
         result=_result_metadata(artifact_count=1),
@@ -312,10 +321,10 @@ def test_exact_mass_search_handler_summary_marks_candidates_as_not_identificatio
             cast(SQLiteResultStore, object()),
         ),
         SearchKeggEntriesRequest(
-            database=KeggSearchDatabase.COMPOUND,
+            database=database,
             query="180.063",
             mode=KeggSearchMode.EXACT_MASS,
         ),
     )
 
-    assert "compound candidates, not compound identifications" in outcome.summary
+    assert f"{candidate_label}, not chemical identifications" in outcome.summary
