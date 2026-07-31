@@ -1,6 +1,6 @@
 ---
 name: kegg-ko-analysis
-description: Search bounded KEGG entries, retrieve typed cards, resolve gene or organism identifiers and substance crosswalks, trace typed KEGG relations, compare current-session reference snapshots, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment, flux inference, or non-KEGG ontology analysis.
+description: Search bounded KEGG entries, retrieve typed cards or KEGG-listed PubMed identifiers, resolve gene or organism identifiers and substance crosswalks, trace typed KEGG relations, compare or durably export selected references, prepare statistics-free enrichment or KEGG web-tool inputs, map BRITE hierarchies, audit KO mappings, normalize existing K numbers or KO annotation tables, evaluate MODULE logic and descriptive pathway KO coverage, and compare KO sets through the local core kegg-mcp server. Use for KEGG entity lookup or when the user already has KO evidence or a DeepKOALA detailed CSV. Do not use for protein-sequence annotation, external annotator execution, model management, rendering, statistical enrichment execution, flux inference, or non-KEGG ontology analysis.
 ---
 
 # KEGG query and KO analysis
@@ -37,7 +37,8 @@ upstream or rendering MCP.
   canonicalize `ko`/`map` views, rank, batch, and summarize.
 - Route `get_kegg_entries`, `search_kegg_entries`, `resolve_kegg_entities`,
   `trace_kegg_relations`, `map_brite_hierarchy`, `audit_annotation_mapping`, and
-  `compare_kegg_reference_snapshots` exactly as specified in
+  `compare_kegg_reference_snapshots`, `write_kegg_reference_bundle`, and
+  `prepare_kegg_handoff` exactly as specified in
   [workflow-selection.md](references/workflow-selection.md).
 - Query, card, audit, and reference-comparison direct responses are bounded previews. Read the
   returned resource URI only when complete cards, search matches, crosswalks, graph data, BRITE
@@ -53,9 +54,12 @@ upstream or rendering MCP.
 - Follow discovered schemas and field-level errors. Do not fabricate identifiers, parameters,
   successful retrievals, resource URIs, or unsupported results.
 - Prefer output-bundle files for durable KO-analysis handoff. Query and audit resources are
-  same-session retained detail, not durable cross-process files. A result identifier is opaque and
-  valid only in the current stdio process. Use `list_analysis_results` for bounded discovery within
-  the current scope, then use a result identifier only for same-session retrieval or requested
+  same-session retained detail, not durable cross-process files. Export a successful card snapshot
+  with `write_kegg_reference_bundle` before its result ID expires when the user needs a durable
+  selected reference. Prepared enrichment/Mapper/Syntax bundles are likewise durable local files,
+  not retained resources. A result identifier is opaque and valid only in the current stdio
+  process. Use `list_analysis_results` for bounded discovery within the current scope, then use a
+  result identifier only for same-session retrieval, selected-reference export, or requested
   cleanup.
 - Call `delete_analysis_result` only after all required sections and bundle files are committed and
   only when the user requests immediate cleanup.

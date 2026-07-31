@@ -25,6 +25,8 @@ CORE_TOOLS = {
     "map_brite_hierarchy",
     "audit_annotation_mapping",
     "compare_kegg_reference_snapshots",
+    "write_kegg_reference_bundle",
+    "prepare_kegg_handoff",
     "analyze_modules",
     "analyze_pathways",
     "compare_ko_sets",
@@ -77,6 +79,8 @@ def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None
         "Search bounded KEGG entries",
         "resolve gene or organism identifiers",
         "trace typed KEGG relations",
+        "durably export selected references",
+        "statistics-free enrichment or KEGG web-tool inputs",
         "map BRITE hierarchies",
         "audit KO mappings",
         "existing K numbers",
@@ -85,7 +89,7 @@ def test_ko_analysis_frontmatter_has_only_name_and_trigger_description() -> None
         "pathway KO coverage",
         "Do not use for protein-sequence annotation",
         "rendering",
-        "statistical enrichment",
+        "statistical enrichment execution",
     ):
         assert fragment in frontmatter
 
@@ -103,9 +107,9 @@ def test_ko_analysis_metadata_declares_only_core_stdio_dependency() -> None:
     assert "allow_implicit_invocation: true" in metadata
     for fragment in (
         'display_name: "KEGG Query and KO Analysis"',
-        "Search KEGG entities",
-        "smallest bounded KEGG query or KO-analysis route",
-        "Local bounded KEGG query and KO analysis MCP server",
+        "export selected references",
+        "smallest bounded KEGG query, selected-reference export",
+        "Local bounded KEGG query, reference, handoff, and KO analysis MCP server",
     ):
         assert fragment in metadata
 

@@ -1,13 +1,13 @@
 interface:
   display_name: "KEGG Query and KO Analysis"
-  short_description: "Search KEGG entities, compare snapshots, and analyze KO evidence"
-  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query or KO-analysis route, including card and snapshot requests."
+  short_description: "Query KEGG, export selected references, prepare inputs, and analyze KOs"
+  default_prompt: "Use $kegg-ko-analysis to choose the smallest bounded KEGG query, selected-reference export, statistics-free input handoff, or KO-analysis route."
 
 dependencies:
   tools:
     - type: "mcp"
       value: "kegg-mcp"
-      description: "Local bounded KEGG query and KO analysis MCP server"
+      description: "Local bounded KEGG query, reference, handoff, and KO analysis MCP server"
       transport: "stdio"
 policy:
   allow_implicit_invocation: true

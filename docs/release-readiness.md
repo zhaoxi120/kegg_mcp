@@ -11,9 +11,9 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Contract |
 | --- | --- | --- |
-| `kegg-mcp` | `0.7.0` | Core analysis and bounded KEGG query server; `RenderInput` producer |
+| `kegg-mcp` | `0.8.0` | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.4.0` | Optional controlled detailed-CSV handoff |
-| `kegg-render-mcp` | `0.3.2` | Optional renderer requiring `kegg-mcp>=0.5,<0.8` |
+| `kegg-render-mcp` | `0.3.2` | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
 
 All distributions support Linux with Python 3.11.x. They remain independently packaged, locked,
 installed, and executed as separate stdio processes. The suite installer provisions them together
@@ -179,11 +179,29 @@ advice.
 - [ ] Renderer XML, images, SVG, and resources remain static and free of active external content.
 - [ ] The vulnerability-reporting route in `SECURITY.md` matches repository visibility.
 - [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
-- [ ] Core advertises exactly sixteen tools with self-contained schemas, including deterministic
-      card projection and local current-scope reference comparison.
+- [ ] Core advertises exactly eighteen tools with self-contained schemas, including deterministic
+      card/citation projection, local current-scope reference comparison, selected-reference
+      export, and statistics-free handoff preparation.
 - [ ] Entry cards retain the complete parsed GET detail, preserve unrecognized fields, and create
       no additional KEGG request; reference comparison accepts only current-schema snapshots for
       the same requested entries and makes no network request.
+- [ ] Citation projection returns only PubMed identifiers explicitly present in KEGG flat-file
+      `REFERENCE` fields, retains bounded provenance, rejects BRITE, and neither retrieves nor
+      summarizes papers or upgrades a citation into mechanism or validation evidence.
+- [ ] Selected-reference bundles contain only the requested bounded card snapshot and optional
+      BRITE result. They do not export cache payloads or mirror KEGG; their manifest excludes result
+      IDs, request keys, endpoint values, credentials, and local paths while recording hashes,
+      parser/schema, selection, retrieval/cache/release, MIME, and size metadata.
+- [ ] Enrichment handoff requires a non-empty explicit universe and foreground subset, preserves
+      namespace, ambiguity, organism mismatch, unmapped outcomes, denominators, and provenance, and
+      contains no statistical test, p-value, FDR, GSEA score, significance, activity, presence, or
+      absence result.
+- [ ] KEGG Mapper and Syntax handoffs only validate and serialize local inputs. They do not issue a
+      KEGG request, upload, start a browser, execute an external tool, or parse a downstream result;
+      Syntax KO Sequence order is explicitly caller supplied.
+- [ ] All selected-reference and input-handoff files are bounded, owner-only, non-overwriting,
+      transactionally rolled back on failure, and committed by a manifest installed last beneath
+      an allowed root; tabular cells protect formula-like caller or endpoint text.
 - [ ] Substance resolution distinguishes PubChem SID from CID and preserves all ChEBI/PubChem
       crosswalk candidates without chemical-identification claims.
 - [ ] KO/pathway-to-gene LINK requires one matching organism scope; unbounded KO-to-all-genes,

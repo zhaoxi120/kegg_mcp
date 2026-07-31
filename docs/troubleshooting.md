@@ -189,8 +189,8 @@ or discovered.
 
 ### `OUTPUT_ALREADY_EXISTS`
 
-Output bundles do not overwrite entries. Choose a new or empty directory; there is no overwrite
-flag.
+KO-analysis, selected-reference, and external-input bundles do not overwrite entries. Choose a new
+or empty directory; there is no overwrite flag.
 
 ### `OUTPUT_WRITE_FAILED` with an allowed output root
 
@@ -204,7 +204,9 @@ user-owned direct directories with no group/world write bit or symlink component
 ### `RESULT_NOT_FOUND`
 
 A `result_id` belongs to one stdio process and may also have expired or been deleted. Do not copy it
-between sessions. Rerun the analysis or request an output bundle for durable handoff. Use
+between sessions. Rerun the analysis or request an output bundle for durable handoff. A successful
+card result can be passed to `write_kegg_reference_bundle` only while that ID remains valid; the
+committed selected-reference bundle itself is independent of the session. Use
 `delete_analysis_result` for current-session deletion or `kegg-mcp cleanup --expired` for expired
 orphan rows; neither operation removes live KEGG cache entries.
 
@@ -216,6 +218,12 @@ MODULE, pathway, or function is absent.
 For live DNS, connection, authorization, or rate-limit failures, confirm the intended access mode
 and call `probe_kegg_connectivity` once. Do not loop the probe, bypass the deployment-wide limiter,
 or reinterpret transport failure as an absent KEGG entry.
+
+The HTTPS transport intentionally ignores process proxy variables. A managed runner that permits
+outbound traffic only through an injected proxy therefore needs operator-approved direct DNS and
+HTTPS egress for the configured KEGG endpoint, or an explicitly prepared `offline_cache`
+deployment. Do not weaken this boundary by placing proxy credentials in environment-derived
+application configuration.
 
 A probe state of `local_storage_failure` means the endpoint result was not classified as an
 authorization failure: inspect the private cache and rate-limit state permissions. A retained

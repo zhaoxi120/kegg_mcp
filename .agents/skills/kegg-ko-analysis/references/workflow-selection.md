@@ -21,7 +21,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 - Ask for disambiguating context only when the next requested step requires one canonical entity.
   Do not silently carry one search candidate into resolution, relation tracing, or analysis.
 
-## Typed entry cards and local snapshot comparison
+## Typed entry cards, citations, and selected-reference persistence
 
 - Use `get_kegg_entries` with `projection="card"` when the user wants supported fields for known
   KO, MODULE, pathway, reaction, enzyme, compound, glycan, gene, or genome identifiers. Cards are
@@ -35,6 +35,17 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   denominators. Report parser, endpoint, retrieval/cache, and release compatibility. A returned
   field or membership change is not biological gain, loss, correction, or validation, and the
   comparison is not a general KEGG release history.
+- Use `get_kegg_entries` with `projection="references"` only when the user asks which PubMed
+  identifiers KEGG explicitly lists for known flat-file entries. Report these as KEGG-listed PMID
+  identifiers; do not retrieve papers, summarize their conclusions, infer a mechanism, or imply
+  that KEGG endorses every paper claim. BRITE htext does not support this projection.
+- Use `write_kegg_reference_bundle` when the user needs one successful card snapshot to survive the
+  current stdio session. Pass the card result ID while it is still valid, preserve an explicit
+  entry subset when supplied, and attach a BRITE result only when requested. Require a
+  user-selected allowed `output_directory`; do not infer it from a cache, result, or input path.
+  The server writes the versioned selected-reference files and manifest. Do not reconstruct cards,
+  relationships, BRITE paths, hashes, or provenance in the LLM, and do not call the bundle a KEGG
+  cache export, database mirror, or release archive.
 
 ## Gene, organism, and substance identifiers
 
@@ -105,6 +116,29 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   reason; do not calculate yield from discarded partial rows, discard the evidence result, infer
   biological absence, or fill missing K numbers.
 
+## Statistics-free and KEGG web-tool input handoffs
+
+- Use `prepare_kegg_handoff` only to prepare validated local input files. Require a
+  user-selected allowed `output_directory`; this workflow never guesses a destination, uploads
+  data, opens a browser, executes a downstream service or package, or parses a downstream result.
+- For `target="enrichment"`, require a non-empty explicit universe and a foreground that is its
+  explicit subset in the same namespace. Supported namespaces are KO, KEGG gene, NCBI GeneID,
+  NCBI Protein ID, and UniProt; do not route gene symbols. Gene namespaces require one canonical
+  organism, while direct KO input does not use one. Request only the pathway, MODULE, or BRITE
+  gene-set classes needed by the user. BRITE requires explicit hierarchy IDs. Report mapping
+  yield, ambiguity, organism mismatch, unmapped identifiers, denominator, requested gene-set
+  membership, and provenance. The GMT and audit are inputs for a separately chosen statistical
+  tool; do not say enrichment was run and do not report p-values, FDR, GSEA scores, significance,
+  pathway activity, presence, or absence.
+- For KEGG Mapper Reconstruct, Search, Color, Join, or MWsearch and KEGG Syntax KO Composition,
+  use the matching discriminated target and preserve validated caller order. For KEGG Syntax KO
+  Sequence, proceed only when the caller confirms that the rows are already in genomic order and
+  set `order_semantics="caller_supplied_genomic_order"`. Do not infer order from identifiers,
+  annotation rows, coordinates, or biological familiarity.
+- Return the data-file and manifest paths as prepared inputs. Any upload, execution, statistical
+  analysis, or result interpretation is a separate workflow and requires separately authorized
+  tooling.
+
 ## Plain K numbers
 
 - Preserve the analysis unit and context.
@@ -174,5 +208,6 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   declines that action, remain stopped until a selected route supplies supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
   `kegg-pathway-rendering` Skill without rerunning core analysis.
-- Statistical enrichment, abundance testing, nucleotide assembly, sequence alignment, and
-  non-KEGG ontologies require a separate workflow.
+- Statistical enrichment execution, abundance testing, nucleotide assembly, sequence alignment,
+  and non-KEGG ontologies require a separate workflow. Core may prepare the explicitly requested
+  enrichment input bundle, but it does not run the test.

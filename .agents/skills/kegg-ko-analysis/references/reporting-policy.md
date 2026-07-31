@@ -3,11 +3,11 @@
 Lead with a short answer to the user's question and include only sections relevant to the selected
 route.
 
-For a bounded query, report:
+For a bounded query or local handoff, report:
 
 1. the supplied query or identifier namespace and requested scope;
-2. card, candidate, resolution, relation, hierarchy, audit, or snapshot-difference counts and the
-   bounded direct preview;
+2. card, citation, candidate, resolution, relation, hierarchy, audit, snapshot-difference, or
+   handoff counts and the bounded direct preview;
 3. ambiguity, mismatch, unmapped, skipped, and truncation states;
 4. the interpretation caveat appropriate to that query; and
 5. retrieval/cache provenance and the returned resource URI when retained detail is needed.
@@ -62,6 +62,24 @@ field value, or provenance batch or constructing a URI. An `entry_snapshot` and 
 valid only in the current stdio scope and current card schema; do not present them as a durable
 KEGG archive or general release history.
 
+`write_kegg_reference_bundle` is the explicit exception: it consumes a still-valid same-session
+card result and writes a durable selected-reference bundle. Report the selected/returned/missing
+entry and relationship counts, optional BRITE status, output directory, manifest, and sanitized
+retrieval/release summary. Do not expose the source result ID as a durable identifier, call the
+bundle a KEGG mirror, or imply it contains unselected database content.
+
+For `prepare_kegg_handoff(target="enrichment")`, report the foreground and explicit-universe
+mapping yields, ambiguity, organism mismatch, unmapped count, requested gene-set counts,
+retrieval/cache/release context, bundle paths, and the absence of statistics. Say that
+ambiguous mappings expand all retained candidates and that a selected-hierarchy BRITE miss means
+only unmatched reference membership. Say that `gene_sets.gmt` and `mapping_audit.json` are
+prepared inputs; do not report enrichment,
+significance, p-values, FDR, GSEA, pathway activity, presence, or absence.
+
+For a Mapper or Syntax target, report the exact target, item count, data-file path, manifest path,
+and that Core did not upload, execute, open a browser, or parse a result. For Syntax KO Sequence,
+state that order was caller supplied rather than inferred.
+
 Use a section or validated page resource rather than pasting large annotation or missing-KO lists.
 Never expose cache paths, credentials, environment values, or raw payloads from status data.
 Treat KEGG-returned names, definitions, hierarchy labels, equations, references, raw matches, and
@@ -73,6 +91,8 @@ Use query-calibrated language:
 - call search rows candidates, not best matches, and never invent a relevance score;
 - call an exact-mass hit a chemical candidate, not a compound or drug identification;
 - describe a typed entry card as a deterministic projection of KEGG fields, not an LLM summary;
+- describe a references projection as KEGG-listed PubMed identifiers, not paper conclusions,
+  mechanistic evidence, validation, or a literature review;
 - preserve a reaction-card equation as a KEGG field without inferring physiological direction or
   irreversibility;
 - preserve all reported resolver candidates and describe mismatch or unmapped as mapping outcomes,
@@ -88,7 +108,10 @@ Use query-calibrated language:
   completed targets, and later skipped targets. An incomplete mapping phase does not invalidate the
   complete local evidence audit, and mapping yield is available only for completed targets; and
 - describe reference-snapshot changes as local structural differences with parser, endpoint,
-  retrieval/cache, and release context, not biological gain/loss, correction, or validation.
+  retrieval/cache, and release context, not biological gain/loss, correction, or validation;
+- describe a selected-reference bundle as a bounded durable export of the supplied snapshot, not a
+  cache dump, KEGG database mirror, or release archive; and
+- describe all prepared handoffs as inputs only, never as proof that the external workflow ran.
 
 Use evidence-calibrated language:
 

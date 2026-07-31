@@ -56,7 +56,9 @@ KEGG_MCP_RESULT_STORE_PATH=/absolute/private/core/results.sqlite3
 ```
 
 Inputs and output directories must resolve beneath an allowed root. Traversal, symlink escapes, and
-non-empty output targets are rejected.
+non-empty output targets are rejected. KO-analysis bundles, selected-reference bundles, and
+statistics-free enrichment or KEGG Mapper/Syntax input bundles all use this same boundary; the
+latter two require an explicit output directory.
 
 ## Generic JSON client configuration
 
