@@ -23,13 +23,16 @@ from kegg_mcp.mcp.contracts import (
     ListAnalysisResultsInput,
     MapBriteHierarchyInput,
     NormalizeKoAnnotationsInput,
+    PrepareKeggHandoffInput,
     ProbeKeggConnectivityInput,
     ResolveKeggEntitiesInput,
     SearchKeggEntriesInput,
     TraceKeggRelationsInput,
+    WriteKeggReferenceBundleInput,
 )
 from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
 from kegg_mcp.mcp.runtime import McpRuntime
+from kegg_mcp.services._atomic_bundle import preflight_text_bundle_output
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
 from kegg_mcp.services.annotation_audit import (
     AnnotationMappingExecutionStatus,
@@ -37,7 +40,10 @@ from kegg_mcp.services.annotation_audit import (
 )
 from kegg_mcp.services.brite_hierarchy import map_brite_hierarchy
 from kegg_mcp.services.comparison import compare_annotation_sets
+from kegg_mcp.services.enrichment_handoff import prepare_enrichment_handoff
+from kegg_mcp.services.enrichment_handoff_models import EnrichmentHandoffRequest
 from kegg_mcp.services.entity_resolution import resolve_kegg_entities
+from kegg_mcp.services.external_handoff import prepare_external_handoff
 from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
 from kegg_mcp.services.kegg_search import search_kegg_entries
 from kegg_mcp.services.models import NormalizeAnnotationsRequest
@@ -51,6 +57,7 @@ from kegg_mcp.services.operational import (
 )
 from kegg_mcp.services.pathway_analysis import analyze_pathway_targets
 from kegg_mcp.services.query_models import KeggSearchMode
+from kegg_mcp.services.reference_bundles import write_kegg_reference_bundle
 from kegg_mcp.services.reference_snapshots import compare_kegg_reference_snapshots
 from kegg_mcp.services.relation_tracing import trace_kegg_relations
 
@@ -147,11 +154,15 @@ def get_entries(context: ToolContext, model: BaseModel) -> ToolOutcome:
         scope_id=runtime.scope_id,
         projection=request.projection,
     )
-    projection_summary = (
-        " Typed cards and a versioned local comparison snapshot were retained."
-        if request.projection.value == "card"
-        else ""
-    )
+    if request.projection.value == "card":
+        projection_summary = " Typed cards and a versioned local comparison snapshot were retained."
+    elif request.projection.value == "references":
+        projection_summary = (
+            " KEGG-listed PubMed identifiers were projected as citation metadata; "
+            "no papers were retrieved or interpreted."
+        )
+    else:
+        projection_summary = ""
     return ToolOutcome(
         result,
         (
@@ -313,6 +324,65 @@ def compare_reference_snapshots(
     )
 
 
+def write_reference_bundle(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(WriteKeggReferenceBundleInput, model)
+    runtime = context.runtime
+    output_directory = resolve_output_directory(
+        request.output_directory,
+        runtime.allowed_roots,
+    )
+    if output_directory is None:  # pragma: no cover - input requires a value
+        raise AssertionError("validated reference bundle request omitted output_directory")
+    result = write_kegg_reference_bundle(
+        request.to_service_request(),
+        output_directory=output_directory,
+        result_store=runtime.result_store,
+        scope_id=runtime.scope_id,
+    )
+    return ToolOutcome(
+        result,
+        (
+            f"Wrote {result.returned_entry_count} selected KEGG entry cards and "
+            f"{result.relationship_count} deterministic reference relationships to a "
+            "local versioned bundle."
+        ),
+    )
+
+
+def prepare_handoff(context: ToolContext, model: BaseModel) -> ToolOutcome:
+    request = cast(PrepareKeggHandoffInput, model)
+    runtime = context.runtime
+    output_directory = resolve_output_directory(
+        request.output_directory,
+        runtime.allowed_roots,
+    )
+    if output_directory is None:  # pragma: no cover - input requires a value
+        raise AssertionError("validated handoff request omitted output_directory")
+    preflight_text_bundle_output(output_directory)
+    if isinstance(request.handoff, EnrichmentHandoffRequest):
+        result = prepare_enrichment_handoff(
+            request.handoff,
+            client=runtime.client,
+            output_directory=output_directory,
+            remove_created_directory_on_failure=True,
+        )
+        summary = (
+            "Prepared a deterministic enrichment-input bundle with an explicit universe; "
+            "no enrichment statistic, p-value, FDR, GSEA score, or pathway activity was computed."
+        )
+    else:
+        result = prepare_external_handoff(
+            request.handoff,
+            output_directory=output_directory,
+            remove_created_directory_on_failure=True,
+        )
+        summary = (
+            f"Prepared a local {result.target.value} input bundle; no external tool was "
+            "executed, uploaded to, or opened."
+        )
+    return ToolOutcome(result, summary)
+
+
 def analyze_modules(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeModulesInput, model)
     runtime = context.runtime
@@ -432,8 +502,10 @@ __all__ = [
     "list_results",
     "map_brite",
     "normalize",
+    "prepare_handoff",
     "probe_connectivity",
     "resolve_entities",
     "search_entries",
     "trace_relations",
+    "write_reference_bundle",
 ]

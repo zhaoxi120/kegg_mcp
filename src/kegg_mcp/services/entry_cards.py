@@ -674,7 +674,7 @@ def _common_card_values(
         "definition": _joined_field(entry.fields, "DEFINITION"),
         "classes": classes,
         "dblinks": _dblinks(entry.fields),
-        "pubmed_ids": _pubmed_ids(entry.fields),
+        "pubmed_ids": pubmed_ids_from_fields(entry.fields),
         "unparsed_field_names": unknown_names,
     }
 
@@ -916,7 +916,8 @@ def _dblinks(fields: tuple[KeggFlatFileField, ...]) -> tuple[KeggEntryCardDbLink
     )
 
 
-def _pubmed_ids(fields: tuple[KeggFlatFileField, ...]) -> tuple[str, ...]:
+def pubmed_ids_from_fields(fields: tuple[KeggFlatFileField, ...]) -> tuple[str, ...]:
+    """Return bounded, ordered PubMed identifiers explicitly listed by KEGG."""
     values = (
         match.group(1)
         for field in fields
@@ -1023,4 +1024,5 @@ __all__ = [
     "ReactionEntryCard",
     "build_entry_cards",
     "entry_card_previews",
+    "pubmed_ids_from_fields",
 ]

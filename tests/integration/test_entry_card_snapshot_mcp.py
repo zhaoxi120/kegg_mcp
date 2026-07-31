@@ -32,6 +32,7 @@ from kegg_mcp.kegg.parsers import parse_flat_file_response
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import dispatch_tool, tool_definitions
 from kegg_mcp.services.entry_cards import ENTRY_CARD_SNAPSHOT_SECTION
+from kegg_mcp.services.entry_references import ENTRY_REFERENCE_SNAPSHOT_SECTION
 from kegg_mcp.services.query_support import MAX_QUERY_DIRECT_BYTES
 from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.reference_snapshots import REFERENCE_DIFF_SECTION
@@ -66,6 +67,7 @@ class _CountingEntryClient:
                 f"NAME        Synthetic {entry.identifier} {'n' * 500}\n"
                 f"DEFINITION  Synthetic definition {'d' * 2_000}\n"
                 "PATHWAY     map00010  Synthetic pathway\n"
+                "REFERENCE   PMID:123456 PMID:234567 PMID:123456\n"
                 "///\n"
             ).encode("ascii")
             for entry in request.entries
@@ -161,6 +163,7 @@ def test_registry_declares_card_and_local_snapshot_comparison_contracts() -> Non
     assert get_tool.inputSchema["properties"]["projection"]["enum"] == [
         "preview",
         "card",
+        "references",
     ]
     assert set(compare_tool.inputSchema["properties"]) == {"left", "right", "compare"}
     Draft202012Validator.check_schema(get_tool.inputSchema)
@@ -169,6 +172,41 @@ def test_registry_declares_card_and_local_snapshot_comparison_contracts() -> Non
     assert compare_tool.outputSchema is not None
     Draft202012Validator.check_schema(get_tool.outputSchema)
     Draft202012Validator.check_schema(compare_tool.outputSchema)
+
+
+@pytest.mark.asyncio
+async def test_literature_references_round_trip_without_card_snapshot(tmp_path: Path) -> None:
+    tools = _tool_map()
+    store = SQLiteResultStore(tmp_path / "literature-results.sqlite3")
+    client = _CountingEntryClient()
+    runtime = _runtime(store, client, scope_id="literature-scope")
+    arguments = _card_arguments()
+    arguments["projection"] = "references"
+
+    result = await dispatch_tool("get_kegg_entries", arguments, runtime)
+
+    assert result.isError is False
+    _validate_output(tools["get_kegg_entries"], result)
+    data = _data(result)
+    assert data["projection"] == "references"
+    assert data["snapshot_artifact"] is None
+    assert data["card_preview"] is None
+    assert data["literature_artifact"]["section"] == ENTRY_REFERENCE_SNAPSHOT_SECTION
+    assert data["literature_preview"]["entry_count"] == _ENTRY_COUNT
+    assert data["literature_preview"]["referenced_entry_count"] == _ENTRY_COUNT
+    assert data["literature_preview"]["pubmed_id_count"] == 2
+    assert len(data["literature_preview"]["previews"]) == 10
+    assert data["literature_preview"]["previews"][0]["pubmed_ids"] == [
+        "123456",
+        "234567",
+    ]
+    assert data["literature_preview"]["previews_truncated"] is True
+    result_id = cast(str, data["result"]["result_id"])
+    artifacts = store.list_artifacts(runtime.scope_id, result_id)
+    assert tuple(item.section for item in artifacts.items) == (
+        "detail",
+        ENTRY_REFERENCE_SNAPSHOT_SECTION,
+    )
 
 
 @pytest.mark.asyncio

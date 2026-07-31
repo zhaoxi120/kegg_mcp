@@ -364,6 +364,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
     async with create_connected_server_and_client_session(server) as session:
         tools = (await session.list_tools()).tools
         assert tuple(tool.name for tool in tools) == TOOL_NAMES
+        assert len(TOOL_NAMES) == 18
         assert len(TOOL_NAMES) == len(set(TOOL_NAMES))
         for tool in tools:
             assert tool.title
@@ -403,6 +404,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "analyze_modules",
             "analyze_pathways",
             "compare_ko_sets",
+            "prepare_kegg_handoff",
             "probe_kegg_connectivity",
         ):
             annotations = _tool_by_name(tools, name).annotations
@@ -427,6 +429,15 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert reference_comparison_annotations.destructiveHint is False
         assert reference_comparison_annotations.idempotentHint is False
         assert reference_comparison_annotations.openWorldHint is False
+        reference_bundle_annotations = _tool_by_name(
+            tools,
+            "write_kegg_reference_bundle",
+        ).annotations
+        assert reference_bundle_annotations is not None
+        assert reference_bundle_annotations.readOnlyHint is False
+        assert reference_bundle_annotations.destructiveHint is False
+        assert reference_bundle_annotations.idempotentHint is False
+        assert reference_bundle_annotations.openWorldHint is False
         delete_annotations = _tool_by_name(tools, "delete_analysis_result").annotations
         assert delete_annotations is not None
         assert delete_annotations.readOnlyHint is False
@@ -451,6 +462,28 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert search_schema["properties"]["max_results"]["maximum"] == 100
         entries_schema = _tool_by_name(tools, "get_kegg_entries").inputSchema
         assert entries_schema["properties"]["projection"]["default"] == "preview"
+        assert entries_schema["properties"]["projection"]["enum"] == [
+            "preview",
+            "card",
+            "references",
+        ]
+        reference_bundle_schema = _tool_by_name(
+            tools,
+            "write_kegg_reference_bundle",
+        ).inputSchema
+        assert set(reference_bundle_schema["properties"]) == {
+            "source",
+            "brite_source",
+            "entries",
+            "output_directory",
+        }
+        handoff_schema = _tool_by_name(tools, "prepare_kegg_handoff").inputSchema
+        assert set(handoff_schema["properties"]) == {"output_directory", "handoff"}
+        handoff_union = handoff_schema["properties"]["handoff"]
+        assert handoff_union["discriminator"] == {"propertyName": "target"}
+        assert len(handoff_union["oneOf"]) == 8
+        assert all(branch["additionalProperties"] is False for branch in handoff_union["oneOf"])
+        assert all("target" in branch["required"] for branch in handoff_union["oneOf"])
         resolution_schema = _tool_by_name(tools, "resolve_kegg_entities").inputSchema
         assert resolution_schema["discriminator"] == {"propertyName": "kind"}
         assert {branch["properties"]["kind"]["const"] for branch in resolution_schema["oneOf"]} == {
@@ -565,6 +598,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert entries_result_properties["previews"]["maxItems"] == 10
         assert entries_result_properties["provenance_batch_count"]["maximum"] == 50
         assert entries_result_properties["provenance"]["maxItems"] == 5
+        literature_preview_properties = entries_output_defs[
+            "KeggEntryLiteratureReferencePreviewSet"
+        ]["properties"]
+        assert literature_preview_properties["previews"]["maxItems"] == 10
+        literature_item_properties = entries_output_defs["KeggEntryLiteratureReferencePreview"][
+            "properties"
+        ]
+        assert literature_item_properties["pubmed_ids"]["maxItems"] == 10
 
         normalize_output = _tool_by_name(tools, "normalize_ko_annotations").outputSchema
         assert normalize_output is not None
@@ -734,7 +775,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         status_properties = status_output["$defs"]["ServerStatusResult"]["properties"]
         assert status_properties["allowed_root_count"]["minimum"] == 0
         assert status_properties["supported_input_formats"]["maxItems"] == 4
-        assert status_properties["supported_tools"]["maxItems"] == 16
+        assert status_properties["supported_tools"]["maxItems"] == 18
 
         resources = (await session.list_resources()).resources
         assert {str(resource.uri) for resource in resources} == {

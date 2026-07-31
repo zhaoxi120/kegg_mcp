@@ -14,7 +14,7 @@ from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel,
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
-from kegg_mcp.kegg import KeggEntryRef
+from kegg_mcp.kegg import KeggEntryRef, KeggGetDatabase
 from kegg_mcp.services.annotation_audit import (
     AnnotationMappingAuditResult,
     AnnotationMappingTarget,
@@ -24,7 +24,15 @@ from kegg_mcp.services.brite_hierarchy import (
     MapBriteHierarchyRequest,
     MapBriteHierarchyResult,
 )
+from kegg_mcp.services.enrichment_handoff_models import (
+    EnrichmentHandoffRequest,
+    EnrichmentHandoffResult,
+)
 from kegg_mcp.services.entry_cards import ENTRY_CARD_DATABASES
+from kegg_mcp.services.external_handoff_models import (
+    ExternalHandoffBundle,
+    ExternalHandoffRequest,
+)
 from kegg_mcp.services.models import (
     DEFAULT_IMPORT_LIMITS,
     AnalyzeKoAnnotationsResult,
@@ -50,6 +58,10 @@ from kegg_mcp.services.query_models import (
     SearchKeggEntriesResult,
     TraceKeggRelationsRequest,
     TraceKeggRelationsResult,
+)
+from kegg_mcp.services.reference_bundles import (
+    KeggReferenceBundle,
+    WriteKeggReferenceBundleRequest,
 )
 from kegg_mcp.services.reference_loading import (
     PathwaySpec,
@@ -241,6 +253,10 @@ class GetKeggEntriesInput(FrozenModel):
                 "card projection supports only KO, MODULE, pathway, reaction, enzyme, "
                 "compound, glycan, gene, and genome entries"
             )
+        if self.projection is KeggEntryProjection.REFERENCES and any(
+            entry.database is KeggGetDatabase.BRITE for entry in self.entries
+        ):
+            raise ValueError("references projection does not support BRITE htext entries")
         return self
 
 
@@ -254,6 +270,36 @@ class ResolveKeggEntitiesInput(RootModel[ResolveKeggEntitiesRequest]):
 TraceKeggRelationsInput = TraceKeggRelationsRequest
 MapBriteHierarchyInput = MapBriteHierarchyRequest
 CompareKeggReferenceSnapshotsInput = CompareKeggReferenceSnapshotsRequest
+KeggHandoffRequest = Annotated[
+    EnrichmentHandoffRequest | ExternalHandoffRequest,
+    Field(discriminator="target"),
+]
+KeggHandoffResult = EnrichmentHandoffResult | ExternalHandoffBundle
+
+
+class WriteKeggReferenceBundleInput(WriteKeggReferenceBundleRequest):
+    """Persist one current-scope card snapshot as a bounded local reference bundle."""
+
+    output_directory: str = Field(min_length=1, max_length=4_096)
+
+    def to_service_request(self) -> WriteKeggReferenceBundleRequest:
+        return WriteKeggReferenceBundleRequest.model_validate(
+            self.model_dump(exclude={"output_directory"})
+        )
+
+
+class PrepareKeggHandoffInput(FrozenModel):
+    """Prepare one bounded local enrichment, KEGG Mapper, or KEGG Syntax input bundle."""
+
+    output_directory: str = Field(
+        min_length=1,
+        max_length=2_048,
+        description=(
+            "New or empty directory beneath a configured allowed root. The tighter path bound "
+            "keeps every direct handoff result below the MCP response-size budget."
+        ),
+    )
+    handoff: KeggHandoffRequest
 
 
 class AuditAnnotationMappingInput(FrozenModel):
@@ -405,6 +451,8 @@ TraceRelationsToolEnvelope = ToolEnvelope[TraceKeggRelationsResult]
 BriteHierarchyToolEnvelope = ToolEnvelope[MapBriteHierarchyResult]
 AnnotationAuditToolEnvelope = ToolEnvelope[AnnotationMappingAuditResult]
 ReferenceSnapshotComparisonToolEnvelope = ToolEnvelope[CompareKeggReferenceSnapshotsResult]
+ReferenceBundleToolEnvelope = ToolEnvelope[KeggReferenceBundle]
+PrepareKeggHandoffToolEnvelope = ToolEnvelope[KeggHandoffResult]
 AnalyzeKoAnnotationsToolEnvelope = ToolEnvelope[AnalyzeKoAnnotationsResult]
 AnalyzeModulesToolEnvelope = ToolEnvelope[AnalyzeModulesResult]
 AnalyzePathwaysToolEnvelope = ToolEnvelope[AnalyzePathwaysResult]
@@ -538,7 +586,10 @@ __all__ = [
     "NormalizeKoAnnotationsInput",
     "NormalizeToolEnvelope",
     "OversizedArtifactNotice",
+    "PrepareKeggHandoffInput",
+    "PrepareKeggHandoffToolEnvelope",
     "ProbeKeggConnectivityInput",
+    "ReferenceBundleToolEnvelope",
     "ReferenceSnapshotComparisonToolEnvelope",
     "ResolveEntitiesToolEnvelope",
     "ResolveKeggEntitiesInput",
@@ -550,6 +601,7 @@ __all__ = [
     "ToolPayload",
     "TraceKeggRelationsInput",
     "TraceRelationsToolEnvelope",
+    "WriteKeggReferenceBundleInput",
     "constrain_mcp_input_schema",
     "constrain_mcp_output_schema",
 ]

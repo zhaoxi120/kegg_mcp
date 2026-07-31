@@ -6,11 +6,70 @@ from pathlib import Path
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
-from kegg_mcp.services.output_bundle import (
-    _open_directory_fd_with_creation,  # pyright: ignore[reportPrivateUsage]
+from kegg_mcp.services._atomic_bundle import (
     _validate_output_directory_fd,  # pyright: ignore[reportPrivateUsage]
-    _write_files,  # pyright: ignore[reportPrivateUsage]
+    preflight_text_bundle_output,
 )
+from kegg_mcp.services.output_bundle import _write_files  # pyright: ignore[reportPrivateUsage]
+
+
+def test_output_preflight_is_read_only_for_missing_and_empty_directories(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing-bundle"
+    preflight_text_bundle_output(missing)
+    assert not missing.exists()
+
+    empty = tmp_path / "empty-bundle"
+    empty.mkdir(mode=0o700)
+    preflight_text_bundle_output(empty)
+    assert tuple(empty.iterdir()) == ()
+
+
+def test_output_preflight_rejects_nonempty_directory_without_modification(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "occupied-bundle"
+    output.mkdir(mode=0o700)
+    sentinel = output / "caller-owned.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(KeggMcpError) as raised:
+        preflight_text_bundle_output(output)
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert {item.name for item in output.iterdir()} == {"caller-owned.txt"}
+
+
+def test_output_preflight_rejects_symlink_target(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(KeggMcpError) as raised:
+        preflight_text_bundle_output(alias)
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert tuple(real.iterdir()) == ()
+
+
+def test_output_preflight_rejects_empty_directory_without_write_permission(
+    tmp_path: Path,
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can bypass directory write permission bits")
+    output = tmp_path / "read-only-bundle"
+    output.mkdir(mode=0o500)
+    output.chmod(0o500)
+    try:
+        with pytest.raises(KeggMcpError) as raised:
+            preflight_text_bundle_output(output)
+        assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+        assert tuple(output.iterdir()) == ()
+    finally:
+        output.chmod(0o700)
 
 
 def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
@@ -19,9 +78,16 @@ def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
     alias = tmp_path / "alias"
     alias.symlink_to(real, target_is_directory=True)
 
-    with pytest.raises(OSError):
-        _open_directory_fd_with_creation(alias / "bundle")
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            alias / "bundle",
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+        )
 
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
     assert not (real / "bundle").exists()
 
 
@@ -242,9 +308,17 @@ def test_created_directory_replacement_is_rejected_and_preserved(
         return real_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "open", replace_before_output_open)
-    with pytest.raises(OSError, match="replaced"):
-        _open_directory_fd_with_creation(output)
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+            remove_created_directory_on_failure=True,
+        )
 
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
     assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
     assert displaced.is_dir()
     assert tuple(displaced.iterdir()) == ()
@@ -322,5 +396,46 @@ def test_failed_install_does_not_remove_replacement_directory(
         )
 
     assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert displaced.is_dir()
+    assert tuple(displaced.iterdir()) == ()
+
+
+def test_replacement_after_manifest_publication_cannot_report_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    output.mkdir(mode=0o700)
+    displaced = tmp_path / "displaced-bundle"
+    real_unlink = os.unlink
+    replaced = False
+
+    def replace_on_temporary_cleanup(
+        path: str,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            output.rename(displaced)
+            output.mkdir(mode=0o700)
+            (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
+        real_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "unlink", replace_on_temporary_cleanup)
+    with pytest.raises(KeggMcpError) as raised:
+        _write_files(
+            output,
+            {
+                "one.txt": "one",
+                "bundle_manifest.json": "new",
+            },
+        )
+
+    assert replaced is True
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
+    assert {item.name for item in output.iterdir()} == {"caller-owned.txt"}
     assert displaced.is_dir()
     assert tuple(displaced.iterdir()) == ()
