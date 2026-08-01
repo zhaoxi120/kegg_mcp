@@ -11,11 +11,11 @@ Skills or another server. Build and inspect release wheels by following the
 
 ## Platform boundary
 
-Core and Renderer can be installed independently on Linux or macOS with CPython 3.11.x. DeepKOALA
-supports Linux and the reviewed Apple Silicon macOS route. The all-component suite installer also
-supports those two targets, while Intel macOS remains a Core/Renderer-only manual route. Native
-Windows is unsupported because the servers require reviewed POSIX path, lock, ownership, and
-atomic-publication guarantees; use WSL2 as the Linux route instead.
+Core, DeepKOALA, and Renderer support Linux and the reviewed native Apple Silicon route on macOS 14
+or later with CPython 3.11.x. The all-component suite installer supports those same two targets.
+Native Intel macOS and native Windows are unsupported because the servers require reviewed POSIX
+path, lock, ownership, and atomic-publication guarantees; use WSL2 as the Linux route on Windows
+hosts.
 
 On the DeepKOALA macOS route, both `deepkoala-mcp` and the separately configured DeepKOALA Python
 must be native arm64 CPython 3.11 on macOS 14 or later. Rosetta-translated runtimes are rejected.

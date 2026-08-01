@@ -458,7 +458,6 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
         "validate-macos-core",
         "validate-macos-deepkoala-companion",
         "validate-macos-renderer",
-        "validate-macos-intel-components",
     ):
         assert "uv sync --locked" in _workflow_job(ci, job_name)
     assert "uv sync --frozen" not in ci
@@ -477,7 +476,6 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
         "validate-macos-core",
         "validate-macos-deepkoala-companion",
         "validate-macos-renderer",
-        "validate-macos-intel-components",
         "validate-windows-unsupported",
     ):
         job = _workflow_job(ci, job_name)
@@ -494,18 +492,17 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
         assert isolation_marker in smoke
 
 
-def test_ci_has_bounded_macos_evidence_and_native_windows_diagnostics() -> None:
+def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() -> None:
     ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     smoke = (PROJECT_ROOT / "tests/release/smoke_wheel.py").read_text(encoding="utf-8")
     macos_core = _workflow_job(ci, "validate-macos-core")
     macos_deepkoala = _workflow_job(ci, "validate-macos-deepkoala-companion")
     macos_renderer = _workflow_job(ci, "validate-macos-renderer")
-    macos_intel = _workflow_job(ci, "validate-macos-intel-components")
     windows = _workflow_job(ci, "validate-windows-unsupported")
 
     checkout = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
     setup_uv = "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990"
-    for job in (macos_core, macos_deepkoala, macos_renderer, macos_intel, windows):
+    for job in (macos_core, macos_deepkoala, macos_renderer, windows):
         assert job.count(checkout) == 1
         assert job.count(setup_uv) == 1
         assert 'python-version: "3.11"' in job
@@ -514,6 +511,7 @@ def test_ci_has_bounded_macos_evidence_and_native_windows_diagnostics() -> None:
         assert "KEGG_MCP_ACADEMIC_USE_CONFIRMED" not in job
 
     assert "runs-on: macos-14" in macos_core
+    assert "platform.machine() == 'arm64'" in macos_core
     assert "KEGG_MCP_ACCESS_MODE: offline_cache" in macos_core
     assert "tests/unit" in macos_core
     assert "tests/contract" in macos_core
@@ -523,6 +521,7 @@ def test_ci_has_bounded_macos_evidence_and_native_windows_diagnostics() -> None:
     assert "--console kegg-mcp" in macos_core
 
     assert "runs-on: macos-14" in macos_renderer
+    assert "platform.machine() == 'arm64'" in macos_renderer
     assert "working-directory: companions/kegg-render-mcp" in macos_renderer
     assert "uv sync --locked --all-groups" in macos_renderer
     assert "uv run --frozen pytest" in macos_renderer
@@ -542,17 +541,8 @@ def test_ci_has_bounded_macos_evidence_and_native_windows_diagnostics() -> None:
     ):
         assert command in macos_deepkoala
 
-    assert "runs-on: macos-15-intel" in macos_intel
-    assert "platform.machine() == 'x86_64'" in macos_intel
-    assert "tests/unit" in macos_intel
-    assert "tests/contract" in macos_intel
-    assert "tests/integration" in macos_intel
-    assert "uv sync --locked --all-groups" in macos_intel
-    assert "uv run --frozen pytest" in macos_intel
-    assert "--distribution kegg-mcp" in macos_intel
-    assert "--distribution kegg-render-mcp" in macos_intel
-    assert "tests/release/test_suite_installation.py" not in macos_intel
-    assert "companions/deepkoala-mcp" not in macos_intel
+    assert "validate-macos-intel-components:" not in ci
+    assert "macos-15-intel" not in ci
 
     assert "runs-on: windows-latest" in windows
     assert "uv sync" not in windows

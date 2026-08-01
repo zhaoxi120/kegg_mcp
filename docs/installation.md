@@ -23,7 +23,7 @@ installation evidence, and archive review. Tool schemas and result resources are
 | --- | --- | --- | --- | --- |
 | Linux with CPython 3.11.x | Supported and tested | Supported and tested | Supported and tested | Supported and tested |
 | Apple Silicon, macOS 14+, native CPython 3.11.x | Supported | Supported with CPU or explicit MPS | Supported | Supported; exact-candidate smoke required |
-| Intel macOS with CPython 3.11.x | Supported as an independent component | Unsupported | Supported as an independent component | Unsupported |
+| Native Intel macOS | Unsupported | Unsupported | Unsupported | Unsupported |
 | Windows host with WSL2 Linux | Use the Linux route | Use the Linux route | Use the Linux route | Use the Linux route |
 | Native Windows | Unsupported | Unsupported | Unsupported | Unsupported |
 
@@ -35,8 +35,7 @@ platform instead of starting a server.
 WSL2 is the formal Windows-host route. Install and run the Linux suite entirely inside WSL2. Keep
 the source checkout, installation, state, cache, biological inputs, and generated outputs in the
 WSL Linux filesystem, such as beneath `/home`, rather than under `/mnt/c`. Apple Silicon macOS uses
-the complete suite with a native arm64 interpreter. Intel macOS deployments install only Core and
-Renderer independently by following [Manual component deployment](manual-component-deployment.md).
+the complete suite with a native arm64 interpreter. Native Intel macOS is unsupported.
 
 The WSL route was reviewed on 2026-08-01 against Microsoft's official
 [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install) and
@@ -94,7 +93,7 @@ included in tests, packages, or releases.
 ## Install the complete Codex suite
 
 Run this section on Linux, including a WSL2 Linux environment, or on native Apple Silicon macOS.
-It does not apply to Intel macOS or native Windows.
+Native Intel macOS and native Windows are unsupported.
 
 ### 1. Prepare private and shared directories
 

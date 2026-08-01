@@ -6,7 +6,8 @@ suite and its Codex installer.
 
 `kegg-mcp` is a local stdio MCP server for bounded KEGG entity queries and traceable analysis of
 supplied KEGG Orthology (KO) evidence. The release-supported runtime is CPython 3.11.x on Linux and
-macOS. Native Windows is unsupported; Windows hosts use the Linux distribution through WSL2.
+native Apple Silicon macOS 14 or later. Native Intel macOS and native Windows are unsupported;
+Windows hosts use the Linux distribution through WSL2.
 
 ## Core capabilities
 
@@ -52,8 +53,8 @@ kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
 ```
 
 Use the repository [suite installation guide](installation.md) for the complete Linux or Apple
-Silicon macOS Codex path. Other MCP clients may install and register Core independently on Linux or
-macOS by following [manual component deployment](manual-component-deployment.md).
+Silicon macOS Codex path. Other MCP clients may install and register Core independently on either
+supported platform by following [manual component deployment](manual-component-deployment.md).
 
 ## Start and configure Core
 

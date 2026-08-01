@@ -28,17 +28,17 @@ DeepKOALA companion while preserving three independent stdio processes. DeepKOAL
 CUDA on Linux or explicit MPS on supported macOS only when the configured runtime reports that
 backend available; CPU remains the default.
 
-For component development or manual registration by another MCP client, use Linux or macOS with
-CPython 3.11 and synchronize this directory independently:
+For component development or manual registration by another MCP client, use Linux or native Apple
+Silicon macOS 14 or later with CPython 3.11 and synchronize this directory independently:
 
 ```bash
 uv sync --frozen --all-groups
 ```
 
-Native Windows is unsupported because the Renderer requires POSIX no-follow path operations,
-ownership checks, atomic publication, and file locks. Windows hosts use WSL2 as the Linux route;
-keep the checkout, state, cache, input, and output paths in the WSL Linux filesystem rather than
-under `/mnt/c`.
+Native Intel macOS and native Windows are unsupported because the Renderer requires reviewed POSIX
+no-follow path operations, ownership checks, atomic publication, and file locks. Windows hosts use
+WSL2 as the Linux route; keep the checkout, state, cache, input, and output paths in the WSL Linux
+filesystem rather than under `/mnt/c`.
 
 The package declares its compatible `kegg-mcp` range for the renderer contract and typed pathway
 asset client. It bundles no KEGG payload, database, model, weight, or font. Pillow performs bounded

@@ -15,8 +15,8 @@ reference requests to the configured KEGG endpoint; `offline_cache` mode makes n
 
 > [!IMPORTANT]
 > **Project status:** Alpha. The complete three-server suite and unified Codex installer target
-> Linux and Apple Silicon macOS with CPython 3.11.x. Core and Renderer also support independent
-> macOS installation. Native Windows is unsupported; use the documented WSL2 Linux route. Unified
+> Linux and native Apple Silicon macOS 14 or later with CPython 3.11.x. Native Intel macOS and
+> native Windows are unsupported; Windows hosts use the documented WSL2 Linux route. Unified
 > installation on every claimed platform remains release-gated until the exact candidate passes
 > the documented real-Codex new-task smoke and
 > [release-readiness checklist](docs/release-readiness.md).
@@ -222,8 +222,7 @@ copies the three canonical Skills into one generated local plugin, and registers
 stdio launch commands while keeping every process and state root independent.
 
 This complete-suite path runs on Linux and native Apple Silicon macOS. On Windows, install and run
-it inside WSL2 as a Linux deployment. Native Intel macOS remains limited to independently installed
-Core and Renderer components.
+it inside WSL2 as a Linux deployment. Native Intel macOS is unsupported.
 
 ### Requirements
 
@@ -369,13 +368,12 @@ Review the [KEGG API documentation](https://www.kegg.jp/kegg/rest/) and
 
 For Codex on Linux and Apple Silicon macOS, the suite installer is the supported complete-suite
 path because it installs the matched Skills, servers, locked runtimes, and registrations together.
-WSL2 uses the Linux path. Native Windows and Intel macOS do not use the all-component installer.
+WSL2 uses the Linux path. Native Intel macOS and native Windows are unsupported.
 
 A Python wheel contains one MCP distribution only; it does not install either companion or any
 repository-scoped Skill. **Installing a wheel alone does not make repository-scoped Skills
 available.** Other MCP clients can install distributions independently and register their stdio
-commands manually. Core and Renderer support this route on Linux and macOS; DeepKOALA supports
-Linux and the release-reviewed Apple Silicon macOS route:
+commands manually on Linux or the release-reviewed native Apple Silicon route on macOS 14 or later:
 
 - [Manual component deployment](docs/manual-component-deployment.md)
 - [Core distribution reference](docs/core-package.md)

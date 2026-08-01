@@ -11,15 +11,14 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Supported platform | Contract |
 | --- | --- | --- | --- |
-| `kegg-mcp` | `0.8.0` | Linux and macOS, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
-| `deepkoala-mcp` | `0.4.0` | Linux and Apple Silicon macOS, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
-| `kegg-render-mcp` | `0.3.2` | Linux and macOS, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
+| `kegg-mcp` | `0.8.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
+| `deepkoala-mcp` | `0.4.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
+| `kegg-render-mcp` | `0.3.2` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
 processes. The suite installer provisions all three together on Linux or Apple Silicon macOS and
-generates one local Codex plugin; that plugin is not a fourth distribution. Intel macOS supports
-independently installed Core and Renderer only. Windows hosts use the Linux path through WSL2;
-native Windows server execution is unsupported.
+generates one local Codex plugin; that plugin is not a fourth distribution. Native Intel macOS and
+native Windows server execution are unsupported. Windows hosts use the Linux path through WSL2.
 
 The core Python wheel does not install either companion or any repository-scoped Skill. The suite
 installer is the supported complete-suite Codex installation path on Linux and Apple Silicon
@@ -85,9 +84,9 @@ Renderer tests use generated synthetic assets and make no live KEGG requests.
 
 ### Platform evidence
 
-- [ ] Run the full Core profile and installed-wheel smoke on both Linux and macOS.
+- [ ] Run the full Core profile and installed-wheel smoke on both Linux and Apple Silicon macOS.
 - [ ] Run the full Renderer profile, synthetic pipeline, and installed-wheel smoke on both Linux
-      and macOS.
+      and Apple Silicon macOS.
 - [ ] Run the full DeepKOALA companion profile, process-lifecycle tests, and installed-wheel smoke
       on both Linux and Apple Silicon macOS.
 - [ ] On real Apple Silicon hardware with MPS visible, verify `torch.backends.mps.is_available()`,
@@ -104,8 +103,8 @@ GitHub-hosted CI evidence and a local exact-artifact smoke are complementary. Re
 unavailable operating-system evidence explicitly; one platform's result does not establish another
 platform claim. Hosted-runner labels and images were reviewed on 2026-08-01 against GitHub's
 [hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Passing a macOS portability job does not establish MPS availability; record the separate
-MPS-visible hardware smoke above.
+Passing an Apple Silicon macOS portability job does not establish MPS availability; record the
+separate MPS-visible hardware smoke above.
 
 Run `companions/kegg-render-mcp/tests/test_synthetic_pipeline.py` in the exact candidate. It carries
 a FASTA-derived companion handoff through core high-level analysis and into renderer output across
@@ -115,8 +114,8 @@ composition of the three MCP boundaries without real inference, network access, 
 ## Suite installation evidence
 
 Run the all-component installer evidence independently on Linux and native Apple Silicon macOS.
-Linux evidence includes WSL2 only when the separate WSL2 checklist item passes. Neither route
-establishes native Windows or Intel macOS installer support.
+Linux evidence includes WSL2 only when the separate WSL2 checklist item passes. Native Intel macOS
+and native Windows are outside the supported platform boundary.
 
 Validate `scripts/install-suite.py` independently from the three Python distributions:
 

@@ -31,9 +31,10 @@ live access. The suite installer does not inherit this default and requires the 
 an access mode explicitly. Server logs and configuration failures are written to stderr; stdout is
 reserved for MCP protocol messages.
 
-Core supports CPython 3.11.x on Linux and macOS. Native Windows server execution is unsupported;
-Windows hosts use WSL2 as the Linux route. The native Windows diagnostic reports that platform
-boundary without starting the server or replacing the required POSIX security and lock backends.
+Core supports CPython 3.11.x on Linux and native Apple Silicon macOS 14 or later. Native Intel
+macOS and native Windows server execution are unsupported; Windows hosts use WSL2 as the Linux
+route. The native Windows diagnostic reports that platform boundary without starting the server
+or replacing the required POSIX security and lock backends.
 
 Local pytest skips live requests by default. Pull-request CI explicitly runs the bounded
 at-most-120-request public-academic compatibility campaign once.

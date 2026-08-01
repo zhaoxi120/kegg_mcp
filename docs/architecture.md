@@ -5,9 +5,9 @@ This document owns the cross-component architecture and active development contr
 release status, and publication gates. Component documents own their public runtime details.
 
 The repository contains three independently packaged local stdio MCP servers and three focused
-repository Skills. The complete three-server suite supports Linux and Apple Silicon macOS with
-CPython 3.11.x. Core and Renderer also support independent installation on macOS. Windows hosts
-use the Linux route through WSL2; native Windows server execution is unsupported.
+repository Skills. The complete three-server suite supports Linux and native Apple Silicon macOS
+14 or later with CPython 3.11.x. Windows hosts use the Linux route through WSL2; native Intel macOS
+and native Windows server execution are unsupported.
 
 Last architecture and document-ownership review: 2026-08-01.
 
@@ -91,15 +91,15 @@ The repository keeps three process boundaries:
 | --- | --- | --- |
 | Linux, CPython 3.11.x | Core, DeepKOALA, and Renderer | Independent distributions or the unified suite installer |
 | Apple Silicon, macOS 14+, native CPython 3.11.x | Core, DeepKOALA, and Renderer | Independent distributions or the unified suite installer |
-| Intel macOS, CPython 3.11.x | Core and Renderer | Independent distributions only |
+| Native Intel macOS | None | Unsupported; no release claim or CI gate |
 | Windows host with WSL2 Linux | Linux component set | Install, store data, and execute inside the WSL Linux filesystem |
 | Native Windows | None | Diagnostic routing only; server startup is rejected |
 
 Core and Renderer preserve the same POSIX filesystem, no-follow path, atomic-publication, process,
-and deployment-wide locking guarantees on Linux and macOS. No native Windows fallback weakens
-those controls. DeepKOALA uses the Linux parent-death signal backend or the Darwin parent-sentinel
-backend without weakening process-group cleanup. The unified installer provisions all three
-components on Linux, including WSL2, and on native Apple Silicon macOS.
+and deployment-wide locking guarantees on Linux and native Apple Silicon macOS. No unsupported
+platform fallback weakens those controls. DeepKOALA uses the Linux parent-death signal backend or
+the Darwin parent-sentinel backend without weakening process-group cleanup. The unified installer
+provisions all three components on Linux, including WSL2, and on native Apple Silicon macOS.
 
 Platform capabilities were reviewed on 2026-08-01 against the Python 3.11
 [`fcntl` documentation](https://docs.python.org/3.11/library/fcntl.html) and
@@ -415,7 +415,7 @@ native Apple Silicon macOS. It creates three independent locked runtimes and one
 plugin containing the canonical Skills and absolute MCP launch commands. Publication is
 transactional, private deployment data stays outside the plugin, and the default dependency path
 is offline. It pins and verifies the reviewed DeepKOALA revision. Native Windows is rejected,
-Windows hosts use WSL2 Linux, and Intel macOS remains an independent Core/Renderer route.
+Windows hosts use WSL2 Linux, and native Intel macOS is unsupported.
 
 The [installation guide](installation.md) owns operator configuration and lifecycle. The
 [release-readiness checklist](release-readiness.md) owns exact-candidate installation, discovery,
