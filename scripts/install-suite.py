@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import json
 import os
+import platform
 import re
 import selectors
 import shutil
@@ -26,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_NAME = "kegg-mcp"
 DEFAULT_MARKETPLACE_NAME = "kegg-mcp-local"
 DEEPKOALA_REPOSITORY = "https://github.com/zhaoxi120/deepkoala.git"
+DEEPKOALA_REVISION = "bebbe0c43f50a26488f7092f6b355aae870a4ed9"
 DEFAULT_DEEPKOALA_MODEL_DATE = "202502"
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
 DEPLOYMENT_MANIFEST_SCHEMA_VERSION = 1
@@ -53,6 +55,8 @@ UV_VERSION_PATTERN = re.compile(
     r"(?P<patch>0|[1-9][0-9]*)(?:[ \t].*)?\Z"
 )
 MINIMUM_UV_VERSION = (0, 11, 16)
+MINIMUM_MACOS_MAJOR_VERSION = 14
+MACOS_VERSION_PATTERN = re.compile(r"(?P<major>[1-9][0-9]*)(?:\.[0-9]+){0,2}\Z")
 UV_REQUIRED_SYNC_OPTIONS = (
     "--locked",
     "--no-dev",
@@ -90,6 +94,28 @@ class InstallError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+@dataclass(frozen=True)
+class PlatformProfile:
+    """One supported native host and its explicit DeepKOALA accelerator policy."""
+
+    name: str
+    deepkoala_allowed_devices: tuple[str, ...]
+
+
+LINUX_PLATFORM_PROFILE = PlatformProfile(
+    name="linux",
+    deepkoala_allowed_devices=("cpu", "cuda"),
+)
+DARWIN_ARM64_PLATFORM_PROFILE = PlatformProfile(
+    name="darwin-arm64",
+    deepkoala_allowed_devices=("cpu", "mps"),
+)
+UNSUPPORTED_PLATFORM_MESSAGE = (
+    "the full suite requires Linux or native Apple Silicon macOS 14 or later; Intel macOS, "
+    "Rosetta, older macOS releases, and native Windows are unsupported"
+)
 
 
 @dataclass(frozen=True)
@@ -149,6 +175,7 @@ class InstallRequest:
     codex: Path
     git: Path
     python: Path
+    platform_profile: PlatformProfile
     allow_locked_dependency_downloads: bool
     dry_run: bool
     allow_deepkoala_install: bool = False
@@ -164,6 +191,21 @@ class RegistrationJournal:
 
 def _error(code: str, message: str) -> NoReturn:
     raise InstallError(code, message)
+
+
+def _host_platform_profile() -> PlatformProfile:
+    """Return the supported native host profile without exposing detected values."""
+    if sys.platform.startswith("linux"):
+        return LINUX_PLATFORM_PROFILE
+    if sys.platform == "darwin":
+        version = MACOS_VERSION_PATTERN.fullmatch(platform.mac_ver()[0])
+        if (
+            platform.machine().strip().lower() == "arm64"
+            and version is not None
+            and int(version.group("major")) >= MINIMUM_MACOS_MAJOR_VERSION
+        ):
+            return DARWIN_ARM64_PLATFORM_PROFILE
+    _error("platform_unsupported", UNSUPPORTED_PLATFORM_MESSAGE)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -206,8 +248,9 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-deepkoala-install",
         action="store_true",
         help=(
-            "confirm the first-time clone of official DeepKOALA and installation of its "
-            "upstream requirements; model updates and multi-domain dependencies are excluded"
+            "confirm the first-time fetch of the pinned official DeepKOALA revision and "
+            "installation of its upstream requirements; model updates and multi-domain "
+            "dependencies are excluded"
         ),
     )
     parser.add_argument(
@@ -749,7 +792,7 @@ def _run_command(
     timeout_seconds = DEFAULT_COMMAND_TIMEOUT_SECONDS
     if len(arguments) > 1 and arguments[1] == "sync":
         timeout_seconds = UV_SYNC_TIMEOUT_SECONDS
-    elif "clone" in arguments[1:3] or (
+    elif "fetch" in arguments[1:5] or (
         "-m" in arguments and any(module in arguments for module in ("pip", "venv"))
     ):
         timeout_seconds = DEEPKOALA_INSTALL_TIMEOUT_SECONDS
@@ -854,10 +897,11 @@ def _json_command(
         _error(code, message)
 
 
-def _validate_python(python: Path) -> None:
+def _validate_python(python: Path, platform_profile: PlatformProfile) -> None:
     script = (
         "import json,platform,sys;"
-        "print(json.dumps([list(sys.version_info[:2]),platform.python_implementation()]))"
+        "print(json.dumps([list(sys.version_info[:2]),platform.python_implementation(),"
+        "sys.platform,platform.machine(),platform.mac_ver()[0]]))"
     )
     result = _successful(
         [str(python), "-I", "-c", script],
@@ -870,8 +914,39 @@ def _validate_python(python: Path) -> None:
         _error(
             "python_runtime_unsupported", "the selected Python runtime returned invalid metadata"
         )
-    if version != [[3, 11], "CPython"]:
+    if not isinstance(version, list):
         _error("python_runtime_unsupported", "the suite requires CPython 3.11")
+    metadata = cast(list[object], version)
+    if len(metadata) != 5 or metadata[:2] != [[3, 11], "CPython"]:
+        _error("python_runtime_unsupported", "the suite requires CPython 3.11")
+    runtime_platform = metadata[2]
+    runtime_machine = metadata[3]
+    macos_version = metadata[4]
+    if (
+        not isinstance(runtime_platform, str)
+        or not isinstance(runtime_machine, str)
+        or not isinstance(macos_version, str)
+    ):
+        _error("python_runtime_unsupported", "the suite requires CPython 3.11")
+    normalized_runtime_machine = runtime_machine.strip().lower()
+    if platform_profile is LINUX_PLATFORM_PROFILE and not runtime_platform.startswith("linux"):
+        _error(
+            "python_runtime_unsupported",
+            "the selected Python runtime does not match the native Linux host",
+        )
+    if platform_profile is DARWIN_ARM64_PLATFORM_PROFILE:
+        version_match = MACOS_VERSION_PATTERN.fullmatch(macos_version)
+        if (
+            runtime_platform != "darwin"
+            or normalized_runtime_machine != "arm64"
+            or version_match is None
+            or int(version_match.group("major")) < MINIMUM_MACOS_MAJOR_VERSION
+        ):
+            _error(
+                "python_runtime_unsupported",
+                "native Apple Silicon macOS 14 or later with CPython 3.11 is required; "
+                "Rosetta is unsupported",
+            )
 
 
 def _validate_uv(uv: Path) -> None:
@@ -924,7 +999,9 @@ def _validate_install_root(install_root: Path, config_path: Path, config: Deploy
 
 
 def _request_from_arguments(
-    arguments: argparse.Namespace, config: DeploymentConfig
+    arguments: argparse.Namespace,
+    config: DeploymentConfig,
+    platform_profile: PlatformProfile,
 ) -> InstallRequest:
     dry_run = cast(bool, arguments.dry_run)
     allow_deepkoala_install = cast(bool, arguments.allow_deepkoala_install)
@@ -945,7 +1022,7 @@ def _request_from_arguments(
     git = _resolve_executable(cast(Path, arguments.git), "git")
     python = _resolve_executable(cast(Path, arguments.python), "python")
     _validate_uv(uv)
-    _validate_python(python)
+    _validate_python(python, platform_profile)
     return InstallRequest(
         install_root=install_root,
         marketplace_name=marketplace_name,
@@ -953,6 +1030,7 @@ def _request_from_arguments(
         codex=codex,
         git=git,
         python=python,
+        platform_profile=platform_profile,
         allow_locked_dependency_downloads=cast(bool, arguments.allow_locked_dependency_downloads),
         dry_run=dry_run,
         allow_deepkoala_install=allow_deepkoala_install,
@@ -1125,8 +1203,11 @@ def _managed_deepkoala_paths(install_root: Path) -> tuple[Path, Path]:
 
 
 def _deployment_environments(
-    config: DeploymentConfig, install_root: Path
+    config: DeploymentConfig,
+    install_root: Path,
+    platform_profile: PlatformProfile | None = None,
 ) -> dict[str, dict[str, str]]:
+    selected_platform = platform_profile or _host_platform_profile()
     core = {
         "KEGG_MCP_ACCESS_MODE": config.kegg.mode,
         RATE_LIMIT_ROOT_ENV: str(config.kegg.rate_limit_root),
@@ -1166,7 +1247,7 @@ def _deployment_environments(
             str(root) for root in config.deepkoala.output_roots
         ),
         "DEEPKOALA_MCP_ALLOWED_MODELS": ",".join(config.deepkoala.allowed_models),
-        "DEEPKOALA_MCP_ALLOWED_DEVICES": "cpu,cuda",
+        "DEEPKOALA_MCP_ALLOWED_DEVICES": ",".join(selected_platform.deepkoala_allowed_devices),
         "DEEPKOALA_MCP_CPU_THREADS": str(config.deepkoala.cpu_threads),
         "DEEPKOALA_MCP_ALLOW_MULTI": str(config.deepkoala.allow_multi).lower(),
     }
@@ -1315,16 +1396,56 @@ def _install_managed_deepkoala(request: InstallRequest, config: DeepKoalaConfig)
     _successful(
         [
             str(request.git),
-            "clone",
-            "--depth",
-            "1",
-            DEEPKOALA_REPOSITORY,
+            "init",
+            "--quiet",
             str(checkout),
         ],
         code="deepkoala_install_failed",
-        message="the official DeepKOALA repository could not be cloned",
+        message="the private DeepKOALA checkout could not be initialized",
         environment=git_environment,
     )
+    _successful(
+        [
+            str(request.git),
+            "-C",
+            str(checkout),
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "--no-tags",
+            DEEPKOALA_REPOSITORY,
+            DEEPKOALA_REVISION,
+        ],
+        code="deepkoala_install_failed",
+        message="the pinned DeepKOALA revision could not be fetched",
+        environment=git_environment,
+    )
+    _successful(
+        [
+            str(request.git),
+            "-C",
+            str(checkout),
+            "checkout",
+            "--quiet",
+            "--detach",
+            "FETCH_HEAD",
+        ],
+        code="deepkoala_install_failed",
+        message="the pinned DeepKOALA revision could not be checked out",
+        environment=git_environment,
+    )
+    revision = _successful(
+        [str(request.git), "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+        code="deepkoala_install_failed",
+        message="the pinned DeepKOALA revision could not be verified",
+        environment=git_environment,
+    ).stdout.strip()
+    if revision != DEEPKOALA_REVISION:
+        _error(
+            "deepkoala_install_failed",
+            "the checked-out DeepKOALA revision does not match the release pin",
+        )
     requirements = checkout / "requirements.txt"
     if not requirements.is_file():
         _error("deepkoala_install_failed", "the DeepKOALA requirements file is unavailable")
@@ -1445,9 +1566,13 @@ def _verify_runtime_configuration(
     if not isinstance(deep_document, dict):
         _error("runtime_configuration_invalid", "the DeepKOALA MCP rejected the deployment policy")
     typed_deep_document = cast(dict[str, object], deep_document)
+    expected_devices = list(request.platform_profile.deepkoala_allowed_devices)
     if (
         typed_deep_document.get("configuration_valid") is not True
         or typed_deep_document.get("route_state") != "local_ready"
+        or typed_deep_document.get("allowed_devices") != expected_devices
+        or type(typed_deep_document.get("cuda_available")) is not bool
+        or type(typed_deep_document.get("mps_available")) is not bool
     ):
         _error("runtime_configuration_invalid", "the installed DeepKOALA runtime is not ready")
 
@@ -1949,7 +2074,11 @@ def _perform_install(
         _fsync_directory(request.install_root)
         _install_runtimes(request, snapshot)
         _install_managed_deepkoala(request, config.deepkoala)
-        environments = _deployment_environments(config, request.install_root)
+        environments = _deployment_environments(
+            config,
+            request.install_root,
+            request.platform_profile,
+        )
         _verify_distribution_versions(request, snapshot)
         _verify_runtime_configuration(request, environments)
         launcher = _materialize_deployment(request, snapshot, environments)
@@ -1966,6 +2095,7 @@ def _perform_install(
                 "servers": list(SERVER_NAMES),
                 "skills": list(SKILL_NAMES),
                 "deepkoala_repository": DEEPKOALA_REPOSITORY,
+                "deepkoala_revision": DEEPKOALA_REVISION,
                 "deepkoala_default_model_date": DEFAULT_DEEPKOALA_MODEL_DATE,
             },
             mode=0o600,
@@ -2007,6 +2137,7 @@ def _safe_summary(snapshot: SourceSnapshot, *, dry_run: bool) -> dict[str, objec
         "server_count": len(SERVER_NAMES),
         "skill_count": len(SKILL_NAMES),
         "deepkoala_default_model_date": DEFAULT_DEEPKOALA_MODEL_DATE,
+        "deepkoala_revision": DEEPKOALA_REVISION,
         "new_task_required": not dry_run,
         "current_task_reload_supported": False,
         "repeat_installation_required": False,
@@ -2017,9 +2148,10 @@ def _safe_summary(snapshot: SourceSnapshot, *, dry_run: bool) -> dict[str, objec
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         arguments = _parser().parse_args(argv)
+        platform_profile = _host_platform_profile()
         config_path = cast(Path, arguments.config)
         config = _load_deployment_config(config_path)
-        request = _request_from_arguments(arguments, config)
+        request = _request_from_arguments(arguments, config, platform_profile)
         _preflight_codex(request)
         snapshot = _prepare_source_snapshot()
         if not request.dry_run:

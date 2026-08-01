@@ -17,7 +17,8 @@ root, installs the official DeepKOALA checkout with its bundled `202502` resourc
 
 Manual and development deployments require:
 
-- Linux with CPython 3.11;
+- Linux, or Apple Silicon with macOS 14 or later, and CPython 3.11; on macOS both the companion and
+  configured DeepKOALA interpreter must run natively as arm64 rather than through Rosetta;
 - an existing official DeepKOALA checkout;
 - a Python environment that imports `deepkoala`, `deepkoala.utils`, and `torch`;
 - a readable `weights_{full|frag}.pt` and matching `ko_config_{full|frag}.json` under a dated
@@ -35,7 +36,7 @@ python -m pip install -e ./companions/deepkoala-mcp
 ## Deployment configuration
 
 Configuration is environment-only. Every path is absolute; root lists use the platform path
-separator (`:` on Linux).
+separator (`:` on Linux and macOS).
 
 | Variable | Required | Meaning |
 |---|---:|---|
@@ -45,7 +46,7 @@ separator (`:` on Linux).
 | `DEEPKOALA_MCP_INPUT_ROOTS` | yes | Roots containing caller FASTA files |
 | `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories; the last is the default |
 | `DEEPKOALA_MCP_ALLOWED_MODELS` | no | Subset of `full,frag`; default `full,frag` |
-| `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu` or `cpu,cuda`; default `cpu,cuda` |
+| `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu`, Linux `cpu,cuda`, or macOS `cpu,mps`; defaults to the matching platform pair |
 | `DEEPKOALA_MCP_CPU_THREADS` | no | 1 through 4; default 2 |
 | `DEEPKOALA_MCP_MAX_FASTA_BYTES` | no | FASTA cap up to 5,000,000 bytes |
 | `DEEPKOALA_MCP_MAX_SEQUENCES` | no | Sequence cap up to 100,000 |
@@ -96,21 +97,25 @@ Omitting `output_directory` allocates a fresh directory beneath the deployment's
 output root; an explicit path may select a new or existing empty owner-only directory beneath an
 allowed output root. Other optional fields are `model` (`full` by default, or `frag`), `model_date`
 (`202502` by default,
-`latest`, or an installed `YYYYMM`), `device` (`cpu` by default, or explicit `cuda` when allowed),
-`batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap. GPU execution
-requires an explicit user request and status with both `cuda` in `allowed_devices` and
-`cuda_available=true`. `multi` is a strict boolean and defaults to `false`. Set it to `true` only
-when the user requests multi-domain annotation and status reports both `allow_multi=true` and
-`multi_ready=true`; multi-domain requests must keep `batch_size=1` because the upstream
-multi-domain path does not use configurable batching.
+`latest`, or an installed `YYYYMM`), `device` (`cpu` by default, or explicit `cuda` or `mps` when
+allowed), `batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap. GPU
+execution requires an explicit user request and status that both allows the selected backend and
+reports its matching `cuda_available` or `mps_available` field as true. `multi` is a strict boolean
+and defaults to `false`. Set it to `true` only when the user requests multi-domain annotation and
+status reports both `allow_multi=true` and `multi_ready=true`; multi-domain requests must keep
+`batch_size=1` because the upstream multi-domain path does not use configurable batching. HMMER
+remains a CPU subprocess even when neural inference uses MPS.
 
-DeepKOALA always receives detailed-output, an explicit `device=cpu|cuda`, and `num_workers=0`; it
-never receives `device=auto`. A multi-domain job also receives `--multi --profiles_dir`; the handoff
-and report record the actual device and `multi` value. Only one job runs in a deployment; another
-request, including one received by another stdio process using the same state root, returns
-`RUNNER_BUSY` instead of entering a queue. Multiple client processes may share one deployment state
-root; each receives an isolated process scope while the runner lease remains deployment-wide.
-Status lists installed resources and the device allowlist. A successful handoff and report identify
+DeepKOALA always receives detailed-output, an explicit `device=cpu|cuda|mps`, and `num_workers=0`;
+it never receives `device=auto` and the companion does not enable silent MPS-to-CPU fallback. A
+multi-domain job also receives `--multi --profiles_dir`; the handoff and report record the actual
+device and `multi` value. Only one job runs in a deployment; another request, including one received
+by another stdio process using the same state root, returns `RUNNER_BUSY` instead of entering a
+queue. Multiple client processes may share one deployment state root; each receives an isolated
+process scope while the runner lease remains deployment-wide. Status lists installed resources,
+the device allowlist, and separate CUDA and MPS readiness. Runtime readiness also verifies the
+configured interpreter's platform contract plus the checkout's explicit CLI device choices and
+device resolver before advertising an accelerator. A successful handoff and report identify
 the DeepKOALA source and the actual resolved model resource version used by that job.
 
 ## Stable output and lifecycle
@@ -156,11 +161,13 @@ passed to another server as result identity.
   configured absolute executable, bounded CPU count, private scratch files, and rejects any other
   attempted shell execution.
 - The service may inherit operator accelerator visibility, defaults to `device=cpu`, and accepts
-  `device=cuda` only through its deployment allowlist; it never requests `device=auto`.
+  explicit `device=cuda` or `device=mps` only through the platform deployment allowlist; it never
+  requests `device=auto` or enables silent backend fallback.
 - One job runs at a time across all companion processes sharing a deployment state root, with
   bounded CPU threads, input, output, sequences, and elapsed time.
-- Timeout, cancellation, process-group termination, descendant cleanup, and Linux parent-death
-  control bound the external process lifecycle.
+- Timeout, cancellation, process-group termination, descendant cleanup, Linux parent-death signals,
+  and a Darwin sentinel process that outlives an exited group leader bound the external process
+  lifecycle.
 - Inputs must be direct files beneath allowed roots; output must be a new or empty owner-only
   directory beneath an allowed root. Traversal, unsafe ancestry, replacement, and symlink escape
   are rejected.
@@ -170,6 +177,12 @@ passed to another server as result identity.
 
 Enabling multi-domain policy never installs HMMER, profiles, or a different DeepKOALA revision.
 Provision or repair those dependencies outside the serving companion, then rerun `doctor`.
+
+Apple GPU execution uses PyTorch's MPS backend. It requires an MPS-capable native arm64 PyTorch
+runtime and the official DeepKOALA device interface introduced by
+[`bebbe0c43f50a26488f7092f6b355aae870a4ed9`](https://github.com/zhaoxi120/deepkoala/commit/bebbe0c43f50a26488f7092f6b355aae870a4ed9).
+The suite installer pins and verifies that revision; a manual deployment must provide an equally
+reviewed compatible checkout.
 
 K number assignments are computational annotations, not experimental validation. A source-rejected
 prediction is not evidence that a function is biologically absent.

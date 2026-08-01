@@ -11,15 +11,41 @@ from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.installation import RuntimeProbeResult
 
 DETAILED_CSV = b"name,predict_label,probability,threshold,annotate\nprotein-1,K00001,0.95,0.50,*\n"
+_COMPATIBLE_CLI = """\
+import argparse
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_path", required=True)
+    parser.add_argument("--output_path", required=True)
+    parser.add_argument("--model")
+    parser.add_argument("--date")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"))
+    parser.add_argument("--detail", action="store_true")
+    parser.add_argument("--batch_size")
+    parser.add_argument("--num_workers")
+    parser.add_argument("--topk")
+    parser.add_argument("--multi", action="store_true")
+    parser.add_argument("--profiles_dir")
+    parser.parse_args()
+"""
 
 
-def build_checkout(root: Path, *, cli_source: str = "# test CLI\n") -> Path:
+def build_checkout(root: Path, *, cli_source: str = _COMPATIBLE_CLI) -> Path:
     """Create the bounded official-layout surface inspected by the companion."""
     checkout = root / "deepkoala-checkout"
     package = checkout / "deepkoala"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "utils.py").write_text("def resolve_device(value): return value\n", encoding="utf-8")
+    (package / "utils.py").write_text(
+        "class _Device:\n"
+        "    def __init__(self, value):\n"
+        "        self.type = value\n"
+        "\n"
+        "def resolve_device(value):\n"
+        "    return _Device(value)\n",
+        encoding="utf-8",
+    )
     (package / "cli.py").write_text(cli_source, encoding="utf-8")
     torch_package = checkout / "torch"
     torch_package.mkdir()
@@ -73,6 +99,7 @@ def runtime_config(tmp_path: Path, checkout: Path) -> DeepKoalaRuntimeConfig:
         state_root=(tmp_path / "state").resolve(),
         input_roots=(inputs.resolve(),),
         output_roots=(outputs.resolve(),),
+        allowed_devices=("cpu",),
         cpu_threads=2,
         max_timeout_seconds=30,
     )

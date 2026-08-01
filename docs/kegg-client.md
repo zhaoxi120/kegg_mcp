@@ -28,13 +28,14 @@ decimal value after the `ncbi-geneid:` prefix. The
 [IUBMB enzyme nomenclature rules](https://iubmb.qmul.ac.uk/enzyme/rules.html) define the four-part
 EC number form and the use of a hyphen for a missing classification level.
 
-The project defaults to public-academic live access:
+The project defaults to network-disabled access:
 
-- `public_academic` defaults `academic_use_confirmed=True` and always uses
+- `offline_cache` is the default, is network-disabled, and selects the public endpoint's cache
+  namespace unless an explicitly confirmed licensed namespace is configured.
+- `public_academic` requires explicit `academic_use_confirmed=True` and always uses
   `https://rest.kegg.jp`.
 - `licensed` requires `authorized_use_confirmed=True`, a caller-supplied authorized HTTPS endpoint,
   and a non-sensitive logical endpoint label.
-- `offline_cache` is explicit, network-disabled, and selects one endpoint-scoped cache namespace.
 
 The readable label is used only in status and provenance. Cache and rate-limit isolation use an
 opaque SHA-256 fingerprint of the canonical endpoint; the licensed URL and its fingerprint are not
@@ -46,18 +47,17 @@ authorized to use an endpoint. This documentation is not legal advice.
 
 ## Configuration
 
-`KeggClientConfig` is an immutable, strict Pydantic model. Its default is public-academic network
+`KeggClientConfig` is an immutable, strict Pydantic model. Its default is network-disabled cache
 access:
 
 ```python
 from kegg_mcp.kegg.contracts import KeggClientConfig
 
 config = KeggClientConfig()
-assert config.access.mode == "public_academic"
-assert config.access.academic_use_confirmed is True
+assert config.access.mode == "offline_cache"
 ```
 
-The equivalent explicit construction is:
+Public-academic access is always explicit:
 
 ```python
 from kegg_mcp.kegg.contracts import KeggClientConfig, PublicAcademicAccess
@@ -67,8 +67,7 @@ config = KeggClientConfig(
 )
 ```
 
-Internal iteration can explicitly disable network access while retaining the public cache
-namespace:
+Callers can also construct the default network-disabled profile explicitly:
 
 ```python
 from kegg_mcp.kegg.contracts import KeggClientConfig, OfflineCacheAccess
@@ -129,7 +128,8 @@ separately limited to 4,096 Unicode characters, and percent encoding is accounte
 complete URL-byte limit.
 
 Rate limiting is deployment-wide for one endpoint fingerprint. Core and Renderer use the same
-owner-only state root, `${XDG_CACHE_HOME:-~/.cache}/kegg-mcp/rate-limit`, unless
+owner-only state root beneath `XDG_CACHE_HOME` when set; otherwise the base is `~/.cache` on Linux
+and `~/Library/Caches` on macOS. The relative path is `kegg-mcp/rate-limit`, unless
 `KEGG_MCP_RATE_LIMIT_ROOT` selects another shared absolute root. Advisory file locks serialize
 request starts across processes, starts are spaced uniformly, and idle time does not accumulate
 burst capacity. If clients configure different rates for one endpoint and state root, the strictest
@@ -389,7 +389,8 @@ LLM, MCP client, parser, or service.
 
 ## Local SQLite cache
 
-The default cache is `${XDG_CACHE_HOME:-~/.cache}/kegg-mcp/kegg.sqlite3`. Newly created cache
+The default cache is `kegg-mcp/kegg.sqlite3` beneath `XDG_CACHE_HOME` when set. Without that
+override, its base is `~/.cache` on Linux and `~/Library/Caches` on macOS. Newly created cache
 directories and files are tightened to user-only permissions where the platform permits. Cache
 payloads are local runtime data and must remain outside version control, packages, examples, test
 artifacts, and releases.
@@ -451,13 +452,25 @@ kegg-mcp cache cleanup --expired --json
 When the configured database does not exist, status and expired-row cleanup return zero counts
 without creating the database or its parent directory.
 
-An `offline_cache` client opens only an existing owner-controlled database through SQLite
-`mode=ro`, enables query-only and untrusted-schema protections, and requires an owner-only `0600`
-regular file beneath a safe owner-controlled parent. It validates the schema version,
+An `offline_cache` client opens only an existing owner-controlled database through a validated
+file descriptor, enables query-only and untrusted-schema protections, and requires an owner-only
+`0600` regular file beneath a safe owner-controlled parent. Linux uses SQLite `mode=ro`; Darwin
+holds a non-blocking POSIX shared lock on the descriptor for the connection lifetime and uses
+SQLite's read-only immutable descriptor URI to avoid path-derived locking and sidecar access on
+the descriptor filesystem. Cache connections are serialized inside the process so closing another
+SQLite descriptor cannot release the process-scoped POSIX lock while an immutable reader is active.
+Operators must not bypass SQLite locking to modify that database while an offline deployment uses
+it. The client validates the schema version,
 auto-vacuum mode, journal mode, parser metadata, and configured logical and physical size bounds
 before serving a row. It does not initialize or migrate a database and cannot write, clean up, or
 fall back to HTTP. Operators must populate or refresh the selected public-academic or confirmed
 licensed endpoint namespace in a separately authorized live deployment.
+
+The Darwin descriptor-open behavior was reviewed on 2026-08-01 against SQLite's
+[URI filename contract](https://www.sqlite.org/uri.html) and its official
+[file-descriptor-only discussion](https://sqlite.org/forum/forumpost/c15bf2e7df289a5f). The bounded
+pre-open journal check follows SQLite's documented
+[database-header read/write version bytes](https://www.sqlite.org/fileformat2.html#the_database_header).
 
 At lookup time:
 
@@ -469,9 +482,9 @@ At lookup time:
   `CACHE_ENTRY_NOT_FOUND` on a miss or disallowed stale entry.
 
 The high-level KEGG retrieval, query, and audit services supply `refresh=False` when no explicit
-options are provided. This preserves the low-level public default while making repeated MCP calls
-fresh-cache first. An explicit `KeggRequestOptions(refresh=True)` still forces a bounded live
-refresh.
+options are provided, making repeated MCP calls fresh-cache first. In an explicitly configured
+live deployment, `KeggRequestOptions(refresh=True)` still forces a bounded live refresh. Offline
+mode never invokes the transport regardless of refresh intent.
 
 Network responses are parsed and reconciled with their typed request before being committed to the
 cache. The active response-size bound is rechecked for both injected transports and cached payloads,

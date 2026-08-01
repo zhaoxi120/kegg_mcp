@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import kegg_mcp.kegg.rate_limit as rate_limit_module
 from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import (
     PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
@@ -40,8 +41,8 @@ def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None
     assert exit_code == 0
     assert document["status"] == "ok"
     assert document["configuration_valid"] is True
-    assert document["access_mode"] == "public_academic"
-    assert document["network_enabled"] is True
+    assert document["access_mode"] == "offline_cache"
+    assert document["network_enabled"] is False
     assert document["file_handoff_enabled"] is True
     assert document["allowed_root_count"] == 1
     assert document["allowed_root_paths"] == "redacted"
@@ -125,6 +126,22 @@ def test_doctor_rejects_invalid_configuration_without_echoing_values() -> None:
     assert document["storage_probe"] == "not_run"
     assert private_endpoint not in output.getvalue()
     assert "operator-secret" not in output.getvalue()
+
+
+def test_doctor_reports_unsupported_locking_as_a_structured_platform_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = StringIO()
+    monkeypatch.setattr(rate_limit_module, "_fcntl", None)
+
+    exit_code = cli.main(["doctor", "--json"], environment={}, stdout=output)
+
+    document = json.loads(output.getvalue())
+    assert exit_code == 2
+    assert document["status"] == "error"
+    assert document["configuration_valid"] is False
+    assert "POSIX advisory locking" in document["issues"][0]
+    assert "WSL" in document["next_actions"][0]
 
 
 def test_default_and_serve_commands_preserve_stdio_dispatch(

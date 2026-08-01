@@ -7,7 +7,10 @@ import os
 import re
 import sqlite3
 import stat
-from contextlib import closing
+import sys
+import threading
+from collections.abc import Generator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -37,6 +40,48 @@ _MAX_REQUEST_KEY_CHARACTERS: Final = 65_536
 _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
 _ENDPOINT_FINGERPRINT_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
+_CACHE_CONNECTION_LOCK: Final = threading.Lock()
+_SQLITE_HEADER_PREFIX: Final = b"SQLite format 3\x00"
+_SQLITE_ROLLBACK_JOURNAL_VERSION: Final = 1
+
+
+def _read_only_descriptor_path(descriptor: int) -> Path:
+    """Return the native descriptor filesystem path used for race-bound SQLite opens."""
+    if sys.platform.startswith("linux"):
+        return Path("/proc/self/fd") / str(descriptor)
+    if sys.platform == "darwin":
+        return Path("/dev/fd") / str(descriptor)
+    raise OSError("cache descriptor binding is unavailable")
+
+
+def _read_only_descriptor_uri(descriptor_path: Path) -> str:
+    """Build the platform-specific race-bound SQLite read-only URI."""
+    uri_options = "mode=ro&immutable=1" if sys.platform == "darwin" else "mode=ro"
+    return f"{descriptor_path.as_uri()}?{uri_options}"
+
+
+def _lock_read_only_descriptor(descriptor: int) -> None:
+    """Pin one Darwin cache snapshot against cooperating SQLite writers."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import fcntl
+
+        fcntl.lockf(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except (ImportError, OSError, ValueError) as error:
+        raise OSError("cache descriptor could not be locked safely") from error
+
+
+def _validate_rollback_journal_header(descriptor: int) -> None:
+    """Reject non-SQLite and WAL-mode files before an immutable descriptor open."""
+    if not hasattr(os, "pread"):
+        raise OSError("bounded cache header reads are unavailable")
+    header = os.pread(descriptor, 20, 0)
+    if len(header) != 20 or not header.startswith(_SQLITE_HEADER_PREFIX):
+        raise _CacheIntegrityError("invalid SQLite database header")
+    if header[18:20] != bytes((_SQLITE_ROLLBACK_JOURNAL_VERSION, _SQLITE_ROLLBACK_JOURNAL_VERSION)):
+        raise _CacheIntegrityError("read-only cache requires rollback journal format")
+
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS kegg_responses (
@@ -275,11 +320,14 @@ class SQLiteKeggCache:
             _raise_cache_failed(operation, "request_validation")
 
         try:
-            connection = self._connect_existing() if self._read_only else self._connect()
-            if connection is None:
-                return CacheLookup(state=CacheReadState.MISS, response=None)
-            with closing(connection):
-                raw_row = connection.execute(_READ_RESPONSE, namespace).fetchone()
+            if self._read_only:
+                with self._open_existing_connection() as connection:
+                    if connection is None:
+                        return CacheLookup(state=CacheReadState.MISS, response=None)
+                    raw_row = connection.execute(_READ_RESPONSE, namespace).fetchone()
+            else:
+                with self._open_connection() as connection:
+                    raw_row = connection.execute(_READ_RESPONSE, namespace).fetchone()
         except (OSError, RuntimeError, sqlite3.Error, _CacheIntegrityError):
             _raise_cache_failed(operation, "read")
 
@@ -340,7 +388,7 @@ class SQLiteKeggCache:
             metadata_json,
         )
         try:
-            with closing(self._connect()) as connection:
+            with self._open_connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     connection.execute(
@@ -390,18 +438,17 @@ class SQLiteKeggCache:
         """Return cache counts and configured limits without paths or endpoint identities."""
         try:
             checked_now = _normalize_datetime(now)
-            connection = self._connect_existing()
-            if connection is None:
-                return CacheStatus(
-                    entry_count=0,
-                    expired_entry_count=0,
-                    payload_bytes=0,
-                    database_bytes=0,
-                    max_entries=self._max_entries,
-                    max_payload_bytes=self._max_payload_bytes,
-                    max_database_bytes=self._max_database_bytes,
-                )
-            with closing(connection):
+            with self._open_existing_connection() as connection:
+                if connection is None:
+                    return CacheStatus(
+                        entry_count=0,
+                        expired_entry_count=0,
+                        payload_bytes=0,
+                        database_bytes=0,
+                        max_entries=self._max_entries,
+                        max_payload_bytes=self._max_payload_bytes,
+                        max_database_bytes=self._max_database_bytes,
+                    )
                 aggregate = connection.execute(
                     "SELECT COUNT(*), COALESCE(SUM(length(response_body)), 0) FROM kegg_responses"
                 ).fetchone()
@@ -430,16 +477,15 @@ class SQLiteKeggCache:
             _raise_cache_failed("cleanup", "read_only")
         try:
             checked_now = _normalize_datetime(now)
-            connection = self._connect_existing()
-            if connection is None:
-                return CacheCleanupSummary(
-                    expired_entries=0,
-                    expired_payload_bytes=0,
-                    remaining_entries=0,
-                    remaining_payload_bytes=0,
-                    database_bytes=0,
-                )
-            with closing(connection):
+            with self._open_existing_connection() as connection:
+                if connection is None:
+                    return CacheCleanupSummary(
+                        expired_entries=0,
+                        expired_payload_bytes=0,
+                        remaining_entries=0,
+                        remaining_payload_bytes=0,
+                        database_bytes=0,
+                    )
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     expired = connection.execute(
@@ -485,18 +531,39 @@ class SQLiteKeggCache:
     def _connect(self) -> sqlite3.Connection:
         return self._connect_path(self._prepare_location(), create=True)
 
-    def _connect_existing(self) -> sqlite3.Connection | None:
-        path = self._existing_location()
-        if path is None:
-            return None
-        try:
-            if self._read_only:
-                return self._connect_read_only(path)
-            return self._connect_path(path, create=False)
-        except FileNotFoundError:
-            return None
+    @contextmanager
+    def _open_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        with _CACHE_CONNECTION_LOCK, closing(self._connect()) as connection:
+            yield connection
 
-    def _connect_read_only(self, path: Path) -> sqlite3.Connection:
+    @contextmanager
+    def _open_existing_connection(
+        self,
+    ) -> Generator[sqlite3.Connection | None, None, None]:
+        with _CACHE_CONNECTION_LOCK:
+            path = self._existing_location()
+            if path is None:
+                yield None
+                return
+            try:
+                if self._read_only:
+                    connection, descriptor = self._connect_read_only(path)
+                else:
+                    connection = self._connect_path(path, create=False)
+                    descriptor = None
+            except FileNotFoundError:
+                yield None
+                return
+            try:
+                yield connection
+            finally:
+                try:
+                    connection.close()
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+    def _connect_read_only(self, path: Path) -> tuple[sqlite3.Connection, int]:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -521,15 +588,33 @@ class SQLiteKeggCache:
                 path_stat.st_ino,
             ):
                 raise OSError("cache changed while it was opened")
-            descriptor_path = Path("/proc/self/fd") / str(descriptor)
-            descriptor_path_stat = descriptor_path.stat()
+            descriptor_path = _read_only_descriptor_path(descriptor)
+            binding_flags = os.O_RDONLY
+            if hasattr(os, "O_CLOEXEC"):
+                binding_flags |= os.O_CLOEXEC
+            binding_descriptor = os.open(descriptor_path, binding_flags)
+            try:
+                descriptor_path_stat = os.fstat(binding_descriptor)
+            finally:
+                os.close(binding_descriptor)
             if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
                 descriptor_path_stat.st_dev,
                 descriptor_path_stat.st_ino,
             ):
                 raise OSError("cache descriptor binding is unavailable")
+            _lock_read_only_descriptor(descriptor)
+            locked_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(locked_stat.st_mode):
+                raise OSError("cache is not a regular file")
+            if hasattr(os, "geteuid") and locked_stat.st_uid != os.geteuid():
+                raise OSError("cache must be owned by the current user")
+            if stat.S_IMODE(locked_stat.st_mode) != 0o600:
+                raise OSError("read-only cache mode must be 0600")
+            if locked_stat.st_size > self._max_database_bytes:
+                raise OSError("cache database exceeds the configured physical-size bound")
+            _validate_rollback_journal_header(descriptor)
             connection = sqlite3.connect(
-                f"{descriptor_path.as_uri()}?mode=ro",
+                _read_only_descriptor_uri(descriptor_path),
                 uri=True,
                 timeout=5.0,
             )
@@ -572,12 +657,13 @@ class SQLiteKeggCache:
                 raise _CacheIntegrityError("cache database must use full auto-vacuum")
             _validate_cache_schema(connection)
         except BaseException:
-            if connection is not None:
-                connection.close()
+            try:
+                if connection is not None:
+                    connection.close()
+            finally:
+                os.close(descriptor)
             raise
-        finally:
-            os.close(descriptor)
-        return connection
+        return connection, descriptor
 
     def _connect_path(self, path: Path, *, create: bool) -> sqlite3.Connection:
         flags = os.O_RDWR | (os.O_CREAT if create else 0)

@@ -14,10 +14,12 @@ generated results stay inside operator-configured local roots. Live KEGG modes s
 reference requests to the configured KEGG endpoint; `offline_cache` mode makes none.
 
 > [!IMPORTANT]
-> **Project status:** Alpha. The implemented suite supports Linux with Python 3.11.x only. The
-> unified Codex installation remains release-gated until the exact candidate passes the documented
-> real-Codex new-task smoke and [release-readiness checklist](docs/release-readiness.md). Use a
-> reviewed release checkout or source archive when evaluating the installer.
+> **Project status:** Alpha. The complete three-server suite and unified Codex installer target
+> Linux and native Apple Silicon macOS 14 or later with CPython 3.11.x. Native Intel macOS and
+> native Windows are unsupported; Windows hosts use the documented WSL2 Linux route. Unified
+> installation on every claimed platform remains release-gated until the exact candidate passes
+> the documented real-Codex new-task smoke and
+> [release-readiness checklist](docs/release-readiness.md).
 
 > [!NOTE]
 > Results describe annotation evidence and KEGG reference relationships. They do not prove
@@ -200,7 +202,8 @@ KEGG MCP is a good fit when you:
 - need source decisions, thresholds, multiple assignments, ambiguity, and provenance to survive
   analysis;
 - prefer bounded local files and explicit network access over a hosted multi-user service; and
-- work on Linux with an operator-managed Python 3.11.x and KEGG access configuration.
+- work on Linux or Apple Silicon macOS, with an operator-managed CPython 3.11.x runtime and
+  explicit KEGG access configuration.
 
 It is not designed to provide:
 
@@ -218,9 +221,12 @@ The complete Codex path uses the repository suite installer. It creates three lo
 copies the three canonical Skills into one generated local plugin, and registers three absolute
 stdio launch commands while keeping every process and state root independent.
 
+This complete-suite path runs on Linux and native Apple Silicon macOS. On Windows, install and run
+it inside WSL2 as a Linux deployment. Native Intel macOS is unsupported.
+
 ### Requirements
 
-- Linux with a CPython 3.11.x executable
+- Linux, or Apple Silicon with macOS 14 or later, with a native CPython 3.11.x executable
 - `uv` 0.11.16 or later with locked-sync support
 - Git
 - A Codex CLI that supports local plugin commands
@@ -228,6 +234,12 @@ stdio launch commands while keeping every process and state root independent.
 - Existing absolute, non-symlink private-state and project input/output directories
 - A not-yet-created installation root beneath an owner-only, writable, non-symlink parent directory
 - One explicit KEGG access mode
+
+For WSL2, keep the source checkout, installation root, state, cache, inputs, and outputs in the WSL
+Linux filesystem, such as beneath `/home`, rather than under `/mnt/c`.
+
+On macOS, use a native arm64 interpreter rather than a Rosetta-translated x86 executable. The
+installer verifies the selected interpreter architecture before creating any persistent state.
 
 Follow [Installation and operation](docs/installation.md) to create the owner-only directories,
 copy [`examples/config/kegg-mcp-suite.toml`](examples/config/kegg-mcp-suite.toml) to a private
@@ -240,6 +252,11 @@ Choose one access mode:
 - Use `licensed` with an appropriately authorized HTTPS endpoint for other live deployments.
 - Use `offline_cache` when the deployment must issue no KEGG HTTP requests and an eligible local
   cache already exists.
+
+The suite deployment always requires this explicit selection. A directly configured Core defaults
+to network-disabled `offline_cache`, while a directly configured Renderer defaults to
+`unconfigured` MODULE-only operation. `public_academic` never activates without explicit academic
+use confirmation.
 
 ### 1. Run the non-mutating preflight
 
@@ -275,17 +292,18 @@ root, run:
   --allow-deepkoala-install
 ```
 
-`--allow-deepkoala-install` authorizes one clone of the official DeepKOALA repository and
+`--allow-deepkoala-install` authorizes one fetch of the pinned official DeepKOALA revision and
 installation of its upstream requirements for a new suite root. Dependency resolution for the
 three checked-in lockfiles is offline by default. A separate
 `--allow-locked-dependency-downloads` option permits only missing artifacts selected by those
 lockfiles and their declared build requirements.
 
 DeepKOALA defaults to the bundled `202502` resources, the `cpu` device, and single-domain mode.
-GPU execution requires an explicit request and a readiness check that permits CUDA. Multi-domain
-execution remains off unless the operator has separately configured local HMMER and KOfam
-resources, the companion reports both `allow_multi=true` and `multi_ready=true`, and the user
-explicitly requests it. The suite does not download those resources or update DeepKOALA models.
+GPU execution requires an explicit request and a readiness check that permits CUDA on Linux or
+Apple MPS on macOS. Multi-domain execution remains off unless the operator has separately
+configured local HMMER and KOfam resources, the companion reports both `allow_multi=true` and
+`multi_ready=true`, and the user explicitly requests it. The suite does not download those
+resources or update DeepKOALA models.
 
 ### 3. Open a new Codex task
 
@@ -348,13 +366,14 @@ Review the [KEGG API documentation](https://www.kegg.jp/kegg/rest/) and
 
 ## Other installation paths
 
-For Codex, the suite installer is the supported path because it installs the matched Skills,
-servers, locked runtimes, and registrations together.
+For Codex on Linux and Apple Silicon macOS, the suite installer is the supported complete-suite
+path because it installs the matched Skills, servers, locked runtimes, and registrations together.
+WSL2 uses the Linux path. Native Intel macOS and native Windows are unsupported.
 
 A Python wheel contains one MCP distribution only; it does not install either companion or any
 repository-scoped Skill. **Installing a wheel alone does not make repository-scoped Skills
-available.** Other MCP clients can install the three distributions independently and register
-their stdio commands manually:
+available.** Other MCP clients can install distributions independently and register their stdio
+commands manually on Linux or the release-reviewed native Apple Silicon route on macOS 14 or later:
 
 - [Manual component deployment](docs/manual-component-deployment.md)
 - [Core distribution reference](docs/core-package.md)

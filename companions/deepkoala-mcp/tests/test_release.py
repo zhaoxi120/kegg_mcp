@@ -78,6 +78,8 @@ def test_source_uses_validated_device_launch_without_a_network_client() -> None:
     assert '"--num_workers",\n        "0"' in corpus
     assert '"CUDA_VISIBLE_DEVICES": ""' not in corpus
     assert "PR_SET_PDEATHSIG" in corpus
+    assert "os.fork()" in corpus
+    assert "pass_fds=parent_guard.passed_fds" in corpus
 
 
 def test_offline_build_archives_only_the_companion(tmp_path: Path) -> None:

@@ -82,6 +82,14 @@ def _project_table() -> dict[str, object]:
     return cast(dict[str, object], document["project"])
 
 
+def _workflow_job(workflow: str, name: str) -> str:
+    marker = f"\n  {name}:\n"
+    assert marker in workflow
+    remainder = workflow.split(marker, maxsplit=1)[1]
+    next_job = re.search(r"\n  [a-z][a-z0-9-]*:\n", remainder)
+    return remainder if next_job is None else remainder[: next_job.start()]
+
+
 def _release_files() -> tuple[Path, ...]:
     completed = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -186,6 +194,29 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
 
     assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
     assert "Distribution boundary" in readiness
+
+
+def test_platform_classifiers_match_the_supported_component_matrix() -> None:
+    core = _project_table()
+    renderer = tomllib.loads(
+        (PROJECT_ROOT / "companions/kegg-render-mcp/pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+    deepkoala = tomllib.loads(
+        (PROJECT_ROOT / "companions/deepkoala-mcp/pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+    macos = "Operating System :: MacOS :: MacOS X"
+    linux = "Operating System :: POSIX :: Linux"
+
+    for project in (core, renderer):
+        classifiers = cast(list[str], project["classifiers"])
+        assert macos in classifiers
+        assert linux in classifiers
+        assert not any("Windows" in classifier for classifier in classifiers)
+
+    deepkoala_classifiers = cast(list[str], deepkoala["classifiers"])
+    assert linux in deepkoala_classifiers
+    assert macos in deepkoala_classifiers
+    assert not any("Windows" in classifier for classifier in deepkoala_classifiers)
 
 
 def test_v08_reference_and_handoff_boundaries_are_release_gated() -> None:
@@ -368,7 +399,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (readme, installation, server_doc, readiness):
         assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
 
-    renderer_job = ci.split("validate-renderer-companion:", maxsplit=1)[1]
+    renderer_job = _workflow_job(ci, "validate-renderer-companion")
     for command in (
         "uv sync --locked",
         "uv run --frozen ruff check .",
@@ -401,9 +432,7 @@ def test_deepkoala_companion_has_an_independent_build_gate() -> None:
     assert project["name"] == "deepkoala-mcp"
     assert project["scripts"] == {"deepkoala-mcp": "deepkoala_mcp.cli:main"}
 
-    companion_job = ci.split("validate-deepkoala-companion:", maxsplit=1)[1].split(
-        "validate-renderer-companion:", maxsplit=1
-    )[0]
+    companion_job = _workflow_job(ci, "validate-deepkoala-companion")
     for command in (
         "uv sync --locked",
         "uv run --frozen ruff check .",
@@ -422,10 +451,17 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     smoke_path = PROJECT_ROOT / "tests/release/smoke_wheel.py"
     smoke = smoke_path.read_text(encoding="utf-8")
 
-    assert ci.count("uv sync --locked") == 3
+    for job_name in (
+        "validate",
+        "validate-deepkoala-companion",
+        "validate-renderer-companion",
+        "validate-macos-core",
+        "validate-macos-deepkoala-companion",
+        "validate-macos-renderer",
+    ):
+        assert "uv sync --locked" in _workflow_job(ci, job_name)
     assert "uv sync --frozen" not in ci
     assert smoke_path.is_file()
-    assert ci.count("tests/release/smoke_wheel.py") == 3
     for distribution, version in (
         ("kegg-mcp", "0.8.0"),
         ("deepkoala-mcp", "0.4.0"),
@@ -433,15 +469,101 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci
-    assert ci.count("Smoke-test installed") == 3
+    for job_name in (
+        "validate",
+        "validate-deepkoala-companion",
+        "validate-renderer-companion",
+        "validate-macos-core",
+        "validate-macos-deepkoala-companion",
+        "validate-macos-renderer",
+        "validate-windows-unsupported",
+    ):
+        job = _workflow_job(ci, job_name)
+        assert "Smoke-test installed" in job
+        assert "tests/release/smoke_wheel.py" in job
     assert "uv build --no-sources --wheel" in ci
     for isolation_marker in (
         '"-I"',
         "module_path.is_relative_to(environment_path)",
         "environment.pop(name, None)",
         "cwd=root",
+        'environment_root / "Scripts" / "python.exe"',
     ):
         assert isolation_marker in smoke
+
+
+def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() -> None:
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = (PROJECT_ROOT / "tests/release/smoke_wheel.py").read_text(encoding="utf-8")
+    macos_core = _workflow_job(ci, "validate-macos-core")
+    macos_deepkoala = _workflow_job(ci, "validate-macos-deepkoala-companion")
+    macos_renderer = _workflow_job(ci, "validate-macos-renderer")
+    windows = _workflow_job(ci, "validate-windows-unsupported")
+
+    checkout = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+    setup_uv = "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990"
+    for job in (macos_core, macos_deepkoala, macos_renderer, windows):
+        assert job.count(checkout) == 1
+        assert job.count(setup_uv) == 1
+        assert 'python-version: "3.11"' in job
+        assert 'version: "0.11.28"' in job
+        assert "KEGG_MCP_RUN_LIVE_TESTS" not in job
+        assert "KEGG_MCP_ACADEMIC_USE_CONFIRMED" not in job
+
+    assert "runs-on: macos-14" in macos_core
+    assert "platform.machine() == 'arm64'" in macos_core
+    assert "KEGG_MCP_ACCESS_MODE: offline_cache" in macos_core
+    assert "tests/unit" in macos_core
+    assert "tests/contract" in macos_core
+    assert "tests/integration" in macos_core
+    assert "--ignore=tests/integration/test_deepkoala_companion_handoff.py" in macos_core
+    assert "--distribution kegg-mcp" in macos_core
+    assert "--console kegg-mcp" in macos_core
+
+    assert "runs-on: macos-14" in macos_renderer
+    assert "platform.machine() == 'arm64'" in macos_renderer
+    assert "working-directory: companions/kegg-render-mcp" in macos_renderer
+    assert "uv sync --locked --all-groups" in macos_renderer
+    assert "uv run --frozen pytest" in macos_renderer
+    assert "--distribution kegg-render-mcp" in macos_renderer
+
+    assert "runs-on: macos-14" in macos_deepkoala
+    assert "working-directory: companions/deepkoala-mcp" in macos_deepkoala
+    assert "platform.machine() == 'arm64'" in macos_deepkoala
+    for command in (
+        "uv sync --locked",
+        "uv run --frozen ruff check .",
+        "uv run --frozen ruff format --check .",
+        "uv run --frozen pyright",
+        "uv run --frozen pytest",
+        "uv build --no-sources",
+        "--distribution deepkoala-mcp",
+    ):
+        assert command in macos_deepkoala
+
+    assert "validate-macos-intel-components:" not in ci
+    assert "macos-15-intel" not in ci
+
+    assert "runs-on: windows-latest" in windows
+    assert "uv sync" not in windows
+    assert "pytest" not in windows
+    assert "deepkoala" not in windows.lower()
+    assert "--native-windows-probe core" in windows
+    assert "--native-windows-probe renderer" in windows
+    assert "--console kegg-mcp" in windows
+    assert "--console kegg-render-mcp" not in windows
+    for marker in (
+        'choices=("core", "renderer")',
+        '"configuration_valid": False',
+        '"allowed_root_paths": "redacted"',
+        "UNSUPPORTED_PLATFORM_DIAGNOSTIC",
+        '_venv_console(environment_root, "kegg-render-mcp")',
+        "core console did not fail closed on native Windows",
+        "renderer console did not fail closed on native Windows",
+        '"native Windows"',
+        '"WSL"',
+    ):
+        assert marker in smoke
 
 
 def test_rights_and_release_status_are_prominent() -> None:

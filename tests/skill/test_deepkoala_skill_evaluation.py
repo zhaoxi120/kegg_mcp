@@ -18,6 +18,7 @@ def test_explicit_request_runs_without_second_confirmation() -> None:
 
 
 def test_first_run_discloses_cpu_and_gpu_requires_explicit_ready_request() -> None:
+    normalized = " ".join(CORPUS.split())
     for fragment in (
         "Before the first `run_deepkoala_job` call in the current Codex task",
         "default job uses the `cpu` device",
@@ -26,11 +27,13 @@ def test_first_run_discloses_cpu_and_gpu_requires_explicit_ready_request() -> No
         "repeat the notice in the same task",
         "`cuda` in `allowed_devices`",
         "`cuda_available=true`",
+        "`mps` in `allowed_devices`",
+        "`mps_available=true`",
         "never silently substitute CPU or `device=auto`",
         "does not authorize installing or replacing",
     ):
-        assert fragment in CORPUS
-    assert CORPUS.index("Before the first `run_deepkoala_job` call") < CORPUS.index(
+        assert fragment in normalized
+    assert normalized.index("Before the first `run_deepkoala_job` call") < normalized.index(
         "Treat an explicit request to annotate the FASTA as authorization"
     )
 
@@ -71,6 +74,7 @@ def test_default_output_is_fresh_project_local_and_explicit_path_wins() -> None:
 
 
 def test_unready_route_and_handoff_remain_bounded() -> None:
+    normalized = " ".join(CORPUS.split())
     for fragment in (
         "ask permission only for the missing installation",
         "Never install, download, or replace",
@@ -78,7 +82,7 @@ def test_unready_route_and_handoff_remain_bounded() -> None:
         'input_format="deepkoala_detailed"',
         "must not parse, transform, or validate CSV rows itself",
     ):
-        assert fragment in CORPUS
+        assert fragment in normalized
 
 
 def test_annotation_stage_preserves_scientific_boundaries() -> None:

@@ -30,6 +30,8 @@ class _DoctorDocument(TypedDict):
     checkout_ready: bool
     runtime_ready: bool
     cuda_available: bool
+    mps_available: bool
+    allowed_devices: list[str]
     model_resources_ready: bool
     allow_multi: bool
     multi_ready: bool
@@ -107,6 +109,8 @@ def _doctor_document(environment: Mapping[str, str]) -> tuple[_DoctorDocument, i
             checkout_ready=checkout_ready,
             runtime_ready=runtime.runtime_ready,
             cuda_available=runtime.cuda_available,
+            mps_available=runtime.mps_available,
+            allowed_devices=list(config.allowed_devices),
             model_resources_ready=resources_ready,
             allow_multi=config.allow_multi,
             multi_ready=multi_ready,
@@ -127,6 +131,8 @@ def _document(
     checkout_ready: bool = False,
     runtime_ready: bool = False,
     cuda_available: bool = False,
+    mps_available: bool = False,
+    allowed_devices: Sequence[str] = (),
     model_resources_ready: bool = False,
     allow_multi: bool = False,
     multi_ready: bool = False,
@@ -142,6 +148,8 @@ def _document(
         "checkout_ready": checkout_ready,
         "runtime_ready": runtime_ready,
         "cuda_available": cuda_available,
+        "mps_available": mps_available,
+        "allowed_devices": list(allowed_devices),
         "model_resources_ready": model_resources_ready,
         "allow_multi": allow_multi,
         "multi_ready": multi_ready,

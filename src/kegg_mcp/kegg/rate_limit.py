@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import math
 import os
 import re
 import stat
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -17,9 +18,52 @@ from typing import ClassVar, Final, cast
 
 from kegg_mcp.kegg.contracts import MIN_REQUESTS_PER_SECOND, default_rate_limit_root
 
+if os.name == "posix":
+    try:
+        import fcntl as _fcntl
+    except ModuleNotFoundError:  # pragma: no cover - defensive broken-POSIX diagnostic
+        _fcntl = None
+else:  # Native Windows has no safe equivalent for the required POSIX lock contract.
+    _fcntl = None
+
 MAX_REQUESTS_PER_SECOND = 3.0
 _STATE_BYTES: Final = 1_024
+_STATE_OPEN_ATTEMPTS: Final = 3
 _SCOPE_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
+_DARWIN_BOOT_TIME_PATTERN: Final = re.compile(
+    rb"\{\s*sec\s*=\s*([0-9]+)\s*,\s*usec\s*=\s*([0-9]+)\s*\}"
+)
+UNSUPPORTED_PLATFORM_DIAGNOSTIC: Final = (
+    "native Windows is unsupported because deployment-wide KEGG rate limiting requires "
+    "POSIX advisory file locks; run kegg-mcp under WSL or another supported POSIX environment"
+)
+
+
+class UnsupportedRuntimePlatformError(ValueError):
+    """The host cannot provide the file-locking guarantees required by Core."""
+
+
+def ensure_rate_limit_platform_supported() -> None:
+    """Reject hosts that cannot preserve the deployment-wide lock contract."""
+    if os.name == "nt":
+        raise UnsupportedRuntimePlatformError(UNSUPPORTED_PLATFORM_DIAGNOSTIC)
+    required_os_features = (
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "fchmod",
+        "geteuid",
+        "pread",
+        "pwrite",
+    )
+    if (
+        os.name != "posix"
+        or _fcntl is None
+        or any(not hasattr(os, feature) for feature in required_os_features)
+    ):
+        raise UnsupportedRuntimePlatformError(
+            "the local platform cannot provide the POSIX file-locking and owner-only state "
+            "guarantees required by deployment-wide KEGG rate limiting"
+        )
 
 
 class DeploymentRateLimiter:
@@ -42,6 +86,7 @@ class DeploymentRateLimiter:
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
+        ensure_rate_limit_platform_supported()
         raw_scope = cast(object, scope)
         raw_rate = cast(object, requests_per_second)
         if not isinstance(raw_scope, str) or _SCOPE_PATTERN.fullmatch(raw_scope) is None:
@@ -84,7 +129,8 @@ class DeploymentRateLimiter:
         try:
             descriptor = _open_state_file(root_descriptor, self._scope)
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                assert _fcntl is not None
+                _fcntl.flock(descriptor, _fcntl.LOCK_EX)
                 state, malformed = _read_state(descriptor)
                 if state is not None:
                     # Persist the validated prior reservation before measuring
@@ -114,7 +160,8 @@ class DeploymentRateLimiter:
                 )
             finally:
                 try:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    assert _fcntl is not None
+                    _fcntl.flock(descriptor, _fcntl.LOCK_UN)
                 finally:
                     os.close(descriptor)
         finally:
@@ -164,8 +211,31 @@ def _open_state_root(path: Path) -> int:
 
 def _open_state_file(root_descriptor: int, scope: str) -> int:
     name = f"{scope}.state"
-    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(name, flags, 0o600, dir_fd=root_descriptor)
+    flags = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    missing_error: FileNotFoundError | None = None
+    # Make one concurrent first-start creator win explicitly while keeping
+    # every lookup anchored to the already validated state-root descriptor.
+    for _ in range(_STATE_OPEN_ATTEMPTS):
+        try:
+            descriptor = os.open(name, flags, dir_fd=root_descriptor)
+            break
+        except FileNotFoundError as error:
+            missing_error = error
+        try:
+            descriptor = os.open(
+                name,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=root_descriptor,
+            )
+            break
+        except FileExistsError:
+            continue
+        except FileNotFoundError as error:
+            missing_error = error
+    else:
+        assert missing_error is not None
+        raise missing_error
     try:
         opened = os.fstat(descriptor)
         named = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
@@ -244,13 +314,41 @@ def _write_state(
 
 
 def _boot_identifier() -> str:
-    try:
-        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    except OSError:
-        value = f"proc1-{os.stat('/proc/1').st_ctime_ns}"
-    if not value or len(value) > 128 or any(ord(character) < 33 for character in value):
+    ensure_rate_limit_platform_supported()
+    if sys.platform == "darwin":
+        value = _darwin_boot_identifier()
+    else:
+        try:
+            value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        except OSError:
+            try:
+                value = f"proc1-{os.stat('/proc/1').st_ctime_ns}"
+            except OSError as error:
+                raise RuntimeError("the local boot identifier is unavailable") from error
+    if not value or len(value) > 128 or any(not 33 <= ord(character) <= 126 for character in value):
         raise RuntimeError("the local boot identifier is unavailable")
     return value
+
+
+def _darwin_boot_identifier() -> str:
+    try:
+        completed = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.boottime"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError("the local boot identifier is unavailable") from error
+    output = completed.stdout
+    if completed.returncode != 0 or len(output) > 256:
+        raise RuntimeError("the local boot identifier is unavailable")
+    match = _DARWIN_BOOT_TIME_PATTERN.search(output)
+    if match is None:
+        raise RuntimeError("the local boot identifier is unavailable")
+    seconds, microseconds = match.groups()
+    return f"darwin-{seconds.decode('ascii')}-{microseconds.decode('ascii')}"
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -262,4 +360,10 @@ def _reject_symlink_components(path: Path) -> None:
             raise OSError("rate-limit state root must not contain symlinks")
 
 
-__all__ = ["MAX_REQUESTS_PER_SECOND", "DeploymentRateLimiter"]
+__all__ = [
+    "MAX_REQUESTS_PER_SECOND",
+    "UNSUPPORTED_PLATFORM_DIAGNOSTIC",
+    "DeploymentRateLimiter",
+    "UnsupportedRuntimePlatformError",
+    "ensure_rate_limit_platform_supported",
+]

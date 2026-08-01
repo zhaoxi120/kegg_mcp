@@ -76,9 +76,9 @@ only artifacts required by checked-in lockfiles and declared build requirements.
 authorize Python, Codex, model updates, optional multi-domain resources, or KEGG data. Optional
 resources may be provisioned separately after explicit user authorization.
 
-`--allow-deepkoala-install` is separate: it confirms the initial official DeepKOALA clone and
-upstream requirements for one new suite root. Later models and optional multi-domain dependencies
-remain operator-managed.
+`--allow-deepkoala-install` is separate: it confirms the initial pinned DeepKOALA revision fetch
+and upstream requirements for one new suite root. Later models and optional multi-domain
+dependencies remain operator-managed.
 
 ### Multi-domain mode is unavailable
 

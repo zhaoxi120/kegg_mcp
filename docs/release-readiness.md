@@ -9,19 +9,20 @@ discovery before creating the next tag. Record the final evidence in the release
 
 ## Distribution boundary
 
-| Distribution | Source version | Contract |
-| --- | --- | --- |
-| `kegg-mcp` | `0.8.0` | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
-| `deepkoala-mcp` | `0.4.0` | Optional controlled detailed-CSV handoff |
-| `kegg-render-mcp` | `0.3.2` | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
+| Distribution | Source version | Supported platform | Contract |
+| --- | --- | --- | --- |
+| `kegg-mcp` | `0.8.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
+| `deepkoala-mcp` | `0.4.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
+| `kegg-render-mcp` | `0.3.2` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
 
-All distributions support Linux with Python 3.11.x. They remain independently packaged, locked,
-installed, and executed as separate stdio processes. The suite installer provisions them together
-and generates one local Codex plugin; that plugin is not a fourth distribution.
+The distributions remain independently packaged, locked, installed, and executed as separate stdio
+processes. The suite installer provisions all three together on Linux or Apple Silicon macOS and
+generates one local Codex plugin; that plugin is not a fourth distribution. Native Intel macOS and
+native Windows server execution are unsupported. Windows hosts use the Linux path through WSL2.
 
 The core Python wheel does not install either companion or any repository-scoped Skill. The suite
-installer is the supported Codex installation path. Other MCP clients register independently
-installed stdio servers manually.
+installer is the supported complete-suite Codex installation path on Linux and Apple Silicon
+macOS. Other MCP clients register independently installed stdio servers manually.
 
 The core produces `render_input.json` version 3 and preserves
 `AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. The renderer consumes
@@ -32,7 +33,7 @@ that authoritative handoff without normalizing evidence or recomputing analysis.
 Record these values in the release notes:
 
 - [ ] exact commit and unused tag;
-- [ ] operating system and Python 3.11.x version;
+- [ ] operating system, architecture, and Python 3.11.x version for each platform claim;
 - [ ] versions of all wheels and source distributions;
 - [ ] `uv`, Git, and Codex CLI versions used for suite validation;
 - [ ] generated plugin and runtime identities, with private paths redacted;
@@ -81,12 +82,40 @@ uv build --no-sources
 
 Renderer tests use generated synthetic assets and make no live KEGG requests.
 
+### Platform evidence
+
+- [ ] Run the full Core profile and installed-wheel smoke on both Linux and Apple Silicon macOS.
+- [ ] Run the full Renderer profile, synthetic pipeline, and installed-wheel smoke on both Linux
+      and Apple Silicon macOS.
+- [ ] Run the full DeepKOALA companion profile, process-lifecycle tests, and installed-wheel smoke
+      on both Linux and Apple Silicon macOS.
+- [ ] On real Apple Silicon hardware with MPS visible, verify `torch.backends.mps.is_available()`,
+      run a small private FASTA through the bundled `202502` `full` and `frag` models with explicit
+      `device=mps`, and compare the high-confidence classifications with CPU output.
+- [ ] Verify MPS timeout, cancellation, and parent-process death leave no annotation descendants.
+- [ ] Verify that a native Windows diagnostic reports the unsupported platform without starting a
+      server or weakening POSIX filesystem and lock requirements.
+- [ ] Before describing WSL2 as validated for an exact release, complete the Linux suite smoke
+      inside WSL2 with all checkout, state, cache, input, and output paths in its Linux filesystem,
+      not under `/mnt/c`.
+
+GitHub-hosted CI evidence and a local exact-artifact smoke are complementary. Record skipped or
+unavailable operating-system evidence explicitly; one platform's result does not establish another
+platform claim. Hosted-runner labels and images were reviewed on 2026-08-01 against GitHub's
+[hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Passing an Apple Silicon macOS portability job does not establish MPS availability; record the
+separate MPS-visible hardware smoke above.
+
 Run `companions/kegg-render-mcp/tests/test_synthetic_pipeline.py` in the exact candidate. It carries
 a FASTA-derived companion handoff through core high-level analysis and into renderer output across
 three independent MCP sessions without manually rebuilding an intermediate contract. This verifies
 composition of the three MCP boundaries without real inference, network access, or KEGG assets.
 
 ## Suite installation evidence
+
+Run the all-component installer evidence independently on Linux and native Apple Silicon macOS.
+Linux evidence includes WSL2 only when the separate WSL2 checklist item passes. Native Intel macOS
+and native Windows are outside the supported platform boundary.
 
 Validate `scripts/install-suite.py` independently from the three Python distributions:
 
@@ -98,9 +127,13 @@ Validate `scripts/install-suite.py` independently from the three Python distribu
 - [ ] prove default `uv` operation is offline;
 - [ ] confirm that `--allow-locked-dependency-downloads` is limited to locked dependencies and
       declared build requirements;
-- [ ] confirm that the separate `--allow-deepkoala-install` path alone may clone the official
-      repository and install its upstream requirements;
+- [ ] confirm that the separate `--allow-deepkoala-install` path alone may initialize a private
+      checkout, fetch the pinned official revision, and install its upstream requirements;
+- [ ] confirm that the installer fetches and verifies DeepKOALA revision
+      `bebbe0c43f50a26488f7092f6b355aae870a4ed9` and records it without following mutable `main`;
 - [ ] confirm the bundled `202502` resources are selected and reported by default;
+- [ ] confirm Linux emits the `cpu,cuda` allowlist, macOS emits `cpu,mps`, and a CPU-ready macOS
+      install remains valid when the current process cannot observe MPS;
 - [ ] confirm multi-domain capability defaults off, requires explicit deployment resources, and is
       enabled per request only after status reports it ready;
 - [ ] confirm neither the default nor opt-in path downloads HMMER or KOfam profiles;
@@ -150,13 +183,15 @@ Reproduce the generated plugin from reviewed source rather than attaching a seco
 bundle. Audit its manifest and MCP configuration for exact absolute launchers, version binding, and
 absence of secrets or private configuration.
 
-Clean-install each wheel outside the checkout. Verify import and version, then exercise applicable
-stdio startup, tool/resource discovery, schema-conforming output, clean stdout, redacted status,
-scoped deletion, and safe bundle/export behavior.
+Clean-install each wheel outside the checkout on every claimed platform. Verify import and version,
+then exercise applicable stdio startup, tool/resource discovery, schema-conforming output, clean
+stdout, redacted status, scoped deletion, and safe bundle/export behavior.
 
 ## Rights and data gates
 
 - [ ] Public KEGG REST access is shown only for eligible academic users performing academic work.
+- [ ] Core defaults to network-disabled `offline_cache`, Renderer defaults to `unconfigured`, and
+      `public_academic` requires explicit confirmation in both components.
 - [ ] Licensed mode requires explicit confirmation and an authorized HTTPS endpoint.
 - [ ] Core and Renderer share a deployment-wide no-burst rate no greater than three requests per
       second, and GET requests contain at most ten entries.
@@ -170,6 +205,8 @@ advice.
 ## Security and scientific gates
 
 - [ ] All servers remain local stdio processes and never use `shell=True`.
+- [ ] Native Windows startup fails closed rather than substituting weaker path, ownership, locking,
+      or atomic-publication behavior.
 - [ ] Inputs, identifiers, resources, retained bytes, outputs, and summaries remain bounded.
 - [ ] Allowed-root paths reject traversal, unsafe ancestry, replacement races, and symlink escape.
 - [ ] Outputs never replace existing entries and publish their manifest last.

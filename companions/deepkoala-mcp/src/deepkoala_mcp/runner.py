@@ -1,4 +1,4 @@
-"""Fixed local subprocess adapter with bounded Linux lifecycle ownership."""
+"""Fixed local subprocess adapter with bounded POSIX lifecycle ownership."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import contextlib
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
@@ -57,26 +58,52 @@ def terminate_process_group(_signal_number, _frame):
 expected_parent_pid = int(sys.argv[1])
 if expected_parent_pid <= 1:
     raise SystemExit("invalid parent process")
+parent_guard_fd = int(sys.argv[2])
+if parent_guard_fd < -1 or 0 <= parent_guard_fd <= 2:
+    raise SystemExit("invalid parent guard")
 signal.signal(signal.SIGTERM, terminate_process_group)
-libc = ctypes.CDLL(None, use_errno=True)
-prctl = libc.prctl
-prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
-prctl.restype = ctypes.c_int
-if prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
-    raise OSError(ctypes.get_errno(), "PR_SET_PDEATHSIG failed")
+if parent_guard_fd >= 0:
+    if not stat.S_ISFIFO(os.fstat(parent_guard_fd).st_mode):
+        raise SystemExit("invalid parent guard")
+    os.set_inheritable(parent_guard_fd, False)
+    guardian_pid = os.fork()
+    if guardian_pid == 0:
+        try:
+            while os.read(parent_guard_fd, 1):
+                pass
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(parent_guard_fd)
+            except OSError:
+                pass
+        terminate_process_group(signal.SIGTERM, None)
+        os._exit(1)
+    os.close(parent_guard_fd)
+    parent_guard_fd = -1
+elif sys.platform == "linux":
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "PR_SET_PDEATHSIG failed")
+else:
+    raise SystemExit("parent guard is required on this platform")
 if os.getppid() != expected_parent_pid:
     terminate_process_group(signal.SIGTERM, None)
 
-limit = int(sys.argv[2])
+limit = int(sys.argv[3])
 if limit < 1:
     raise SystemExit("invalid output limit")
-multi_enabled = sys.argv[3] == "1"
-if sys.argv[3] not in {"0", "1"}:
+multi_enabled = sys.argv[4] == "1"
+if sys.argv[4] not in {"0", "1"}:
     raise SystemExit("invalid multi-domain policy")
-hmmsearch_value = sys.argv[4]
-profiles_value = sys.argv[5]
-cpu_threads = int(sys.argv[6])
-scratch_value = sys.argv[7]
+hmmsearch_value = sys.argv[5]
+profiles_value = sys.argv[6]
+cpu_threads = int(sys.argv[7])
+scratch_value = sys.argv[8]
 if not 1 <= cpu_threads <= 4:
     raise SystemExit("invalid CPU thread limit")
 soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -214,7 +241,7 @@ if multi_enabled:
 
     infer_multi._run_hmmsearch = safe_run_hmmsearch
 
-del sys.argv[1:8]
+del sys.argv[1:9]
 runpy.run_module("deepkoala.cli", run_name="__main__", alter_sys=True)
 """
 
@@ -228,7 +255,7 @@ class RunnerPlan:
     job_directory: Path
     model: str
     resolved_date: str
-    device: Literal["cpu", "cuda"]
+    device: Literal["cpu", "cuda", "mps"]
     batch_size: int
     topk: int
     timeout_seconds: int
@@ -272,8 +299,8 @@ class RunnerPlan:
         )
 
     def __post_init__(self) -> None:
-        if self.device not in {"cpu", "cuda"}:
-            raise ValueError("runner device must be cpu or cuda")
+        if self.device not in {"cpu", "cuda", "mps"}:
+            raise ValueError("runner device must be cpu, cuda, or mps")
         if self.multi and (self.profiles_dir is None or self.hmmsearch_executable is None):
             raise ValueError("multi-domain runner plan requires local dependencies")
         for path in (self.profiles_dir, self.hmmsearch_executable):
@@ -300,59 +327,110 @@ class RunnerTimedOutError(TimeoutError):
     """The complete child process group exceeded its deadline."""
 
 
+@dataclass(slots=True)
+class _ParentDeathGuard:
+    """Own the one-way Darwin parent-liveness pipe around a child lifetime."""
+
+    child_read_fd: int = -1
+    parent_write_fd: int = -1
+
+    @classmethod
+    def create(cls) -> _ParentDeathGuard:
+        if not _requires_parent_guard():
+            return cls()
+        child_read_fd, parent_write_fd = os.pipe()
+        try:
+            child_read_fd = _move_above_standard_streams(child_read_fd)
+            parent_write_fd = _move_above_standard_streams(parent_write_fd)
+            os.set_inheritable(child_read_fd, False)
+            os.set_inheritable(parent_write_fd, False)
+            return cls(child_read_fd=child_read_fd, parent_write_fd=parent_write_fd)
+        except BaseException:
+            _close_fd(child_read_fd)
+            _close_fd(parent_write_fd)
+            raise
+
+    @property
+    def passed_fds(self) -> tuple[int, ...]:
+        if self.child_read_fd < 0:
+            return ()
+        return (self.child_read_fd,)
+
+    def close_child_end(self) -> None:
+        _close_fd(self.child_read_fd)
+        self.child_read_fd = -1
+
+    def close(self) -> None:
+        self.close_child_end()
+        _close_fd(self.parent_write_fd)
+        self.parent_write_fd = -1
+
+
 class DeepKoalaProcessRunner:
     """Run only the fixed local DeepKOALA command without a shell."""
 
     async def run(self, plan: RunnerPlan) -> ProcessOutcome:
         if plan.output_path.exists() or plan.output_path.is_symlink():
             raise RuntimeError("private output already exists")
-        spawn = asyncio.create_task(
-            asyncio.create_subprocess_exec(
-                *build_argv(plan),
-                cwd=str(plan.checkout),
-                env=build_child_environment(plan),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+        parent_guard = _ParentDeathGuard.create()
+        try:
+            spawn = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    *build_argv(plan, parent_guard_fd=parent_guard.child_read_fd),
+                    cwd=str(plan.checkout),
+                    env=build_child_environment(plan),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    pass_fds=parent_guard.passed_fds,
+                    start_new_session=True,
+                )
             )
-        )
-        try:
-            process = await asyncio.shield(spawn)
-        except asyncio.CancelledError:
-            process = await _finish_spawn(spawn)
-            await _finish_termination(process)
-            raise
-        except OSError as error:
-            raise RuntimeError("DeepKOALA process could not be started") from error
-
-        try:
             try:
-                async with asyncio.timeout(plan.timeout_seconds):
-                    return_code = await process.wait()
-            except TimeoutError as error:
-                cancelled = await _finish_termination(process)
-                if cancelled:
-                    raise asyncio.CancelledError from None
-                raise RunnerTimedOutError("DeepKOALA exceeded the execution timeout") from error
+                process = await asyncio.shield(spawn)
             except asyncio.CancelledError:
+                process = await _finish_spawn(spawn)
+                parent_guard.close_child_end()
                 await _finish_termination(process)
                 raise
+            except OSError as error:
+                raise RuntimeError("DeepKOALA process could not be started") from error
+            finally:
+                parent_guard.close_child_end()
+
+            try:
+                try:
+                    async with asyncio.timeout(plan.timeout_seconds):
+                        return_code = await process.wait()
+                except TimeoutError as error:
+                    cancelled = await _finish_termination(process)
+                    if cancelled:
+                        raise asyncio.CancelledError from None
+                    raise RunnerTimedOutError("DeepKOALA exceeded the execution timeout") from error
+                except asyncio.CancelledError:
+                    await _finish_termination(process)
+                    raise
+            finally:
+                if (
+                    process.returncode is None or _process_group_exists(process.pid)
+                ) and await _finish_termination(process):
+                    raise asyncio.CancelledError from None
+            return ProcessOutcome(return_code=return_code)
         finally:
-            if (
-                process.returncode is None or _process_group_exists(process.pid)
-            ) and await _finish_termination(process):
-                raise asyncio.CancelledError from None
-        return ProcessOutcome(return_code=return_code)
+            parent_guard.close()
 
 
-def build_argv(plan: RunnerPlan) -> tuple[str, ...]:
+def build_argv(plan: RunnerPlan, *, parent_guard_fd: int = -1) -> tuple[str, ...]:
     """Build the only child argument vector accepted by the companion."""
+    if parent_guard_fd < -1 or 0 <= parent_guard_fd <= 2:
+        raise ValueError("parent guard descriptor must be -1 or above standard streams")
     control = (
         str(plan.python_executable),
         "-c",
         _CHILD_LAUNCHER,
         str(os.getpid()),
+        str(parent_guard_fd),
         str(plan.max_output_bytes),
         "1" if plan.multi else "0",
         str(plan.hmmsearch_executable) if plan.hmmsearch_executable is not None else "-",
@@ -393,6 +471,26 @@ def build_child_environment(plan: RunnerPlan) -> dict[str, str]:
         environment["PATH"] = str(plan.hmmsearch_executable.resolve(strict=True).parent)
         environment["TMPDIR"] = str(plan.job_directory.resolve(strict=True))
     return environment
+
+
+def _requires_parent_guard() -> bool:
+    return sys.platform == "darwin"
+
+
+def _move_above_standard_streams(descriptor: int) -> int:
+    if descriptor > 2:
+        return descriptor
+    import fcntl
+
+    replacement = fcntl.fcntl(descriptor, fcntl.F_DUPFD, 3)
+    os.close(descriptor)
+    return replacement
+
+
+def _close_fd(descriptor: int) -> None:
+    if descriptor >= 0:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
 
 
 def build_runtime_environment(checkout: Path, cpu_threads: int) -> dict[str, str]:

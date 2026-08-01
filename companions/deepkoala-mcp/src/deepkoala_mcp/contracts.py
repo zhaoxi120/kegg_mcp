@@ -172,7 +172,7 @@ class RunDeepKoalaInput(FrozenModel):
     )
     model: ModelName = "full"
     model_date: ModelDate = DEFAULT_MODEL_DATE
-    device: Literal["cpu", "cuda"] = "cpu"
+    device: Literal["cpu", "cuda", "mps"] = "cpu"
     batch_size: int = Field(default=1, strict=True, ge=1, le=64)
     topk: int = Field(default=1, strict=True, ge=1, le=10)
     multi: bool = Field(default=False, strict=True)
@@ -224,7 +224,7 @@ class ExecutionPlan(FrozenModel):
     model: ModelName
     requested_model_date: ModelDate
     resolved_model_date: ResolvedModelDate
-    device: Literal["cpu", "cuda"] = "cpu"
+    device: Literal["cpu", "cuda", "mps"] = "cpu"
     detail: Literal[True] = True
     batch_size: int = Field(strict=True, ge=1, le=64)
     num_workers: Literal[0] = 0
@@ -391,12 +391,13 @@ class CompanionStatus(FrozenModel):
     ready: bool
     runtime_ready: bool
     cuda_available: bool
+    mps_available: bool
     deepkoala_version: str | None = Field(default=None, max_length=128)
     installed_resources: Annotated[tuple[InstalledResource, ...], Field(max_length=256)]
     allowed_models: Annotated[tuple[ModelName, ...], Field(min_length=1, max_length=2)]
     device_policy: Literal["cpu"] = "cpu"
     allowed_devices: Annotated[
-        tuple[Literal["cpu", "cuda"], ...], Field(min_length=1, max_length=2)
+        tuple[Literal["cpu", "cuda", "mps"], ...], Field(min_length=1, max_length=2)
     ]
     gpu_visibility_inherited: Literal[True] = True
     downloads_enabled: Literal[False] = False
@@ -421,7 +422,7 @@ class CompanionStatus(FrozenModel):
 
     @model_validator(mode="after")
     def validate_readiness(self) -> Self:
-        if self.allowed_devices not in {("cpu",), ("cpu", "cuda")}:
+        if self.allowed_devices not in {("cpu",), ("cpu", "cuda"), ("cpu", "mps")}:
             raise ValueError("allowed_devices must preserve the CPU default")
         if self.ready != (self.runtime_ready and bool(self.installed_resources)):
             raise ValueError("ready must match runtime and resource availability")

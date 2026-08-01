@@ -4,9 +4,10 @@ This document is the package description for the independently installable `kegg
 distribution. The repository-level [README](../README.md) describes the complete three-server
 suite and its Codex installer.
 
-`kegg-mcp` is a local, Linux-only stdio MCP server for bounded KEGG entity queries and traceable
-analysis of supplied KEGG Orthology (KO) evidence. The release-supported runtime is CPython
-3.11.x.
+`kegg-mcp` is a local stdio MCP server for bounded KEGG entity queries and traceable analysis of
+supplied KEGG Orthology (KO) evidence. The release-supported runtime is CPython 3.11.x on Linux and
+native Apple Silicon macOS 14 or later. Native Intel macOS and native Windows are unsupported;
+Windows hosts use the Linux distribution through WSL2.
 
 ## Core capabilities
 
@@ -51,9 +52,9 @@ deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
 kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
 ```
 
-Use the repository [suite installation guide](installation.md) for the supported Codex path.
-Other MCP clients may install and register the components independently by following
-[manual component deployment](manual-component-deployment.md).
+Use the repository [suite installation guide](installation.md) for the complete Linux or Apple
+Silicon macOS Codex path. Other MCP clients may install and register Core independently on either
+supported platform by following [manual component deployment](manual-component-deployment.md).
 
 ## Start and configure Core
 
@@ -67,10 +68,11 @@ Use `kegg-mcp doctor` or `kegg-mcp doctor --json` for a side-effect-free, redact
 check. Protocol messages are the only stdout content; diagnostics use stderr.
 
 The raw Core distribution supports `public_academic`, `licensed`, and network-disabled
-`offline_cache` access modes. Its `public_academic` default is appropriate only when both the user
+`offline_cache` access modes. It defaults to `offline_cache`; a cache miss never enables network
+access. `public_academic` requires explicit confirmation and is appropriate only when both the user
 and work qualify for public academic KEGG access. Non-academic deployments require an appropriately
-licensed endpoint. See the [Core MCP contract](mcp-server.md) for the complete environment,
-tool, resource, output-bundle, and retention contract.
+licensed endpoint. See the [Core MCP contract](mcp-server.md) for the complete environment, tool,
+resource, output-bundle, and retention contract.
 
 Inputs and output directories remain disabled until `KEGG_MCP_ALLOWED_ROOTS` identifies controlled
 absolute roots. KEGG cache payloads, result databases, annotation inputs, and output bundles must

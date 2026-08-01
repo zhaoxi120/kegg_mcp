@@ -8,10 +8,10 @@ KEGG MCP provides three independent local stdio servers and three focused Codex 
   analyses; and
 - `kegg-render-mcp` renders the core's typed handoff as bounded static SVG or PNG.
 
-The supported Codex path is the repository suite installer. It installs all three servers into
-separate locked runtimes and registers one generated local plugin containing all three Skills and
-MCP bindings. Generic MCP clients can instead install and configure the component servers
-manually.
+The supported complete-suite Codex path is the repository suite installer on Linux or Apple
+Silicon macOS. It installs all three servers into separate locked runtimes and registers one
+generated local plugin containing all three Skills and MCP bindings. Generic MCP clients can
+instead install and configure supported component servers manually.
 
 The [release-readiness checklist](release-readiness.md) owns current release status, exact-candidate
 installation evidence, and archive review. Tool schemas and result resources are documented in
@@ -19,13 +19,31 @@ installation evidence, and archive review. Tool schemas and result resources are
 
 ## Requirements and support
 
-| Platform | Core | DeepKOALA companion | Renderer |
-| --- | --- | --- | --- |
-| Linux with CPython 3.11.x | Supported and tested | Supported and tested | Supported and tested |
-| macOS | Not release-supported | Not release-supported | Not release-supported |
-| Windows | Not release-supported | Not release-supported | Not release-supported |
+| Platform | Core | DeepKOALA companion | Renderer | Suite installer |
+| --- | --- | --- | --- | --- |
+| Linux with CPython 3.11.x | Supported and tested | Supported and tested | Supported and tested | Supported and tested |
+| Apple Silicon, macOS 14+, native CPython 3.11.x | Supported | Supported with CPU or explicit MPS | Supported | Supported; exact-candidate smoke required |
+| Native Intel macOS | Unsupported | Unsupported | Unsupported | Unsupported |
+| Windows host with WSL2 Linux | Use the Linux route | Use the Linux route | Use the Linux route | Use the Linux route |
+| Native Windows | Unsupported | Unsupported | Unsupported | Unsupported |
 
-The suite installer requires existing absolute paths to:
+Core and Renderer require POSIX no-follow filesystem operations, ownership checks, atomic
+publication, and the deployment-wide file-locking backend. Native Windows does not provide the
+same reviewed guarantees, so there is no weakened fallback. Its diagnostic reports the unsupported
+platform instead of starting a server.
+
+WSL2 is the formal Windows-host route. Install and run the Linux suite entirely inside WSL2. Keep
+the source checkout, installation, state, cache, biological inputs, and generated outputs in the
+WSL Linux filesystem, such as beneath `/home`, rather than under `/mnt/c`. Apple Silicon macOS uses
+the complete suite with a native arm64 interpreter. Native Intel macOS is unsupported.
+
+The WSL route was reviewed on 2026-08-01 against Microsoft's official
+[WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install) and
+[filesystem guidance](https://learn.microsoft.com/en-us/windows/wsl/filesystems). Keeping this
+deployment inside the Linux filesystem is also a project security boundary for its POSIX ownership
+and descriptor-relative path checks, not only a performance recommendation.
+
+The suite installer requires Linux or Apple Silicon macOS and existing absolute paths to:
 
 - a CPython 3.11 executable;
 - `uv` 0.11.16 or later with locked-sync support;
@@ -39,6 +57,13 @@ For live KEGG access, the deployment must use either:
 
 - the public KEGG REST service only when both the user and work qualify for public academic use; or
 - an HTTPS endpoint authorized under the operator's KEGG license.
+
+A direct Core installation defaults to network-disabled `offline_cache`. A direct Renderer
+installation defaults to `unconfigured`, which permits MODULE rendering but no pathway asset
+access. Selecting `public_academic` requires the component's explicit confirmation variable:
+`KEGG_MCP_ACADEMIC_USE_CONFIRMED=true` for Core or
+`KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true` for Renderer. The suite TOML always requires an
+explicit access mode and confirmation; it never inherits component defaults.
 
 ## Architecture and distribution boundary
 
@@ -66,6 +91,9 @@ For a direct, manually configured Core server, file handoff remains disabled unt
 included in tests, packages, or releases.
 
 ## Install the complete Codex suite
+
+Run this section on Linux, including a WSL2 Linux environment, or on native Apple Silicon macOS.
+Native Intel macOS and native Windows are unsupported.
 
 ### 1. Prepare private and shared directories
 
@@ -230,8 +258,8 @@ does not create a persistent installation or change Codex registration.
 ### 5. Confirm and install DeepKOALA
 
 Each new suite installation root requires one explicit first-install confirmation. After informing
-the user that the installer will clone the official DeepKOALA repository and install its upstream
-Python requirements, run:
+the user that the installer will initialize a private checkout, fetch the pinned official
+DeepKOALA revision, and install its upstream Python requirements, run:
 
 ```bash
 /absolute/path/to/python3.11 \
@@ -245,12 +273,19 @@ Python requirements, run:
   --allow-deepkoala-install
 ```
 
+The installer initializes an empty local repository, fetches only the exact official DeepKOALA
+revision `bebbe0c43f50a26488f7092f6b355aae870a4ed9`, which introduced the reviewed explicit MPS
+device interface, and verifies it before use. The resolved revision is written to the private
+installation record; the installer neither fetches nor follows a mutable upstream branch.
+
 The suite-managed DeepKOALA checkout uses its bundled `202502` resources by default. The companion
-defaults to `device=cpu`, accepts `device=cuda` only when deployment policy allows it and the runtime
-probe reports CUDA available, and never uses `device=auto`. The companion allows only `full` and
-`frag` models configured by the deployment and defaults every request to single-domain mode.
-Successful annotation output reports the resolved model, model date, device, and whether
-multi-domain mode was used.
+defaults to `device=cpu`, accepts explicit `device=cuda` on Linux or `device=mps` on macOS only when
+deployment policy allows the backend and the matching runtime probe reports it available, and never
+uses `device=auto` or silent MPS-to-CPU fallback. A missing MPS device does not invalidate an
+otherwise CPU-ready macOS installation. The companion allows only `full` and `frag` models
+configured by the deployment and defaults every request to single-domain mode. Successful
+annotation output reports the resolved model, model date, device, and whether multi-domain mode was
+used.
 
 #### Optional multi-domain capability
 
@@ -482,6 +517,9 @@ The diagnostic validates configuration without contacting KEGG or revealing conf
 endpoint values. For plugin discovery, installer recovery, offline cache misses, allowed-root
 errors, result scope, and protocol stdout problems, use the dedicated
 [Troubleshooting guide](troubleshooting.md).
+
+On native Windows, the diagnostic returns a structured unsupported-platform result. This is a
+deployment-routing check, not a supported server runtime; use WSL2 for operation.
 
 ## Rights and interpretation notice
 

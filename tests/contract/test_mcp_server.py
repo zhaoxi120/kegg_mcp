@@ -16,6 +16,7 @@ from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 
+import kegg_mcp.mcp.server as server_module
 from kegg_mcp.kegg import (
     CachePolicy,
     GetRequest,
@@ -29,6 +30,7 @@ from kegg_mcp.kegg import (
     LinkRequest,
     LinkResult,
     OfflineCacheAccess,
+    PublicAcademicAccess,
     RateLimitPolicy,
     ResponseOrigin,
     RetrievalEndpointClass,
@@ -47,6 +49,10 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.kegg.operations import prepare_get
 from kegg_mcp.kegg.parsers import parse_flat_file_response
+from kegg_mcp.kegg.rate_limit import (
+    UNSUPPORTED_PLATFORM_DIAGNOSTIC,
+    UnsupportedRuntimePlatformError,
+)
 from kegg_mcp.kegg.transport import TransportError, TransportErrorKind, TransportResponse
 from kegg_mcp.mcp.server import (
     MAX_INLINE_RESOURCE_BYTES,
@@ -67,6 +73,25 @@ from kegg_mcp.services.result_store import (
 )
 
 _NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+
+
+def test_startup_reports_static_unsupported_platform_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def reject_startup(function: object) -> None:
+        del function
+        raise UnsupportedRuntimePlatformError("private synthetic platform detail")
+
+    monkeypatch.setattr(server_module.anyio, "run", reject_startup)
+
+    with pytest.raises(SystemExit) as raised:
+        server_module.main()
+
+    assert raised.value.code == 2
+    diagnostic = capsys.readouterr().err
+    assert UNSUPPORTED_PLATFORM_DIAGNOSTIC in diagnostic
+    assert "private synthetic platform detail" not in diagnostic
 
 
 def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
@@ -92,7 +117,7 @@ def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
 
 class _FakeReferenceClient:
     def __init__(self) -> None:
-        self._config = KeggClientConfig()
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.call_log: list[tuple[str, str]] = []
 
     @property
@@ -310,6 +335,7 @@ def _runtime(
     return McpRuntime(
         client=KeggClient(
             KeggClientConfig(
+                access=PublicAcademicAccess(academic_use_confirmed=True),
                 cache=CachePolicy(path=str(tmp_path / "kegg.sqlite3")),
                 rate_limit=RateLimitPolicy(state_root=str(tmp_path / "rate-limit")),
                 retry=RetryPolicy(max_retries=0),

@@ -1,12 +1,28 @@
 # Manual Component Deployment
 
 Use manual installation only for development or MCP clients that do not consume the generated
-Codex plugin. The repository suite installer remains the supported Codex installation path. Install
-each required component from the same reviewed source baseline into an independent environment.
+Codex plugin. The repository suite installer remains the supported complete-suite Codex path on
+Linux and Apple Silicon macOS. Install each required component from the same reviewed source
+baseline into an independent environment.
 
 The component Python wheels install server commands only; they do not install repository-scoped
 Skills or another server. Build and inspect release wheels by following the
 [release-readiness checklist](release-readiness.md).
+
+## Platform boundary
+
+Core, DeepKOALA, and Renderer support Linux and the reviewed native Apple Silicon route on macOS 14
+or later with CPython 3.11.x. The all-component suite installer supports those same two targets.
+Native Intel macOS and native Windows are unsupported because the servers require reviewed POSIX
+path, lock, ownership, and atomic-publication guarantees; use WSL2 as the Linux route on Windows
+hosts.
+
+On the DeepKOALA macOS route, both `deepkoala-mcp` and the separately configured DeepKOALA Python
+must be native arm64 CPython 3.11 on macOS 14 or later. Rosetta-translated runtimes are rejected.
+
+In WSL2, keep the checkout, virtual environments, state, cache, inputs, and outputs in the Linux
+filesystem, such as beneath `/home`, rather than under `/mnt/c`. The command examples below use the
+POSIX virtual-environment layout shared by Linux, macOS, and WSL2.
 
 ## Core development and wheel installation
 
@@ -28,9 +44,10 @@ python3.11 -m venv /absolute/private/core-venv
 
 ## Manual Core environment
 
-The raw Core server reads environment variables and does not automatically load `.env` files.
-These examples apply only to a directly installed Core server; the suite deployment TOML requires
-the operator to select the access mode explicitly.
+The raw Core server reads environment variables and does not automatically load `.env` files. It
+defaults to network-disabled `offline_cache`; the default does not fall back to live access when a
+cache entry is unavailable. These examples apply only to a directly installed Core server; the
+suite deployment TOML requires the operator to select the access mode explicitly.
 
 ```text
 # Eligible public-academic use
@@ -46,6 +63,11 @@ KEGG_MCP_LICENSED_USE_CONFIRMED=true
 KEGG_MCP_ACCESS_MODE=offline_cache
 KEGG_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
 ```
+
+`public_academic` never activates without the explicit `true` confirmation shown above. A directly
+installed Renderer defaults to `unconfigured`, which supports MODULE-only rendering without
+pathway asset access. Set both `KEGG_RENDER_MCP_ACCESS_MODE=public_academic` and
+`KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true` only for eligible public-academic use.
 
 File handoff is disabled unless `KEGG_MCP_ALLOWED_ROOTS` lists existing absolute roots separated
 by the platform path separator:

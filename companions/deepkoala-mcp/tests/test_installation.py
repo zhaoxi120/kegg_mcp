@@ -42,6 +42,160 @@ def test_runtime_probe_imports_configured_environment_without_output(checkout: P
     )
     assert result.runtime_ready is True
     assert isinstance(result.cuda_available, bool)
+    assert isinstance(result.mps_available, bool)
+
+
+def test_runtime_probe_reports_mps_from_the_configured_torch_runtime(
+    checkout: Path,
+) -> None:
+    (checkout / "torch" / "__init__.py").write_text(
+        "class _Cuda:\n"
+        "    @staticmethod\n"
+        "    def is_available():\n"
+        "        return False\n"
+        "\n"
+        "class _Mps:\n"
+        "    @staticmethod\n"
+        "    def is_available():\n"
+        "        return True\n"
+        "\n"
+        "class _Backends:\n"
+        "    mps = _Mps()\n"
+        "\n"
+        "cuda = _Cuda()\n"
+        "backends = _Backends()\n",
+        encoding="utf-8",
+    )
+
+    result = probe_runtime(
+        checkout=checkout,
+        python_executable=Path(sys.executable).resolve(),
+        cpu_threads=1,
+    )
+
+    assert result.runtime_ready is True
+    assert result.cuda_available is False
+    assert result.mps_available is True
+
+
+def test_runtime_probe_rejects_cli_without_explicit_mps_device_contract(
+    checkout: Path,
+) -> None:
+    cli_path = checkout / "deepkoala" / "cli.py"
+    source = cli_path.read_text(encoding="utf-8")
+    incompatible = source.replace(
+        '("auto", "cpu", "cuda", "mps")',
+        '("auto", "cpu", "cuda")',
+    )
+    assert incompatible != source
+    cli_path.write_text(incompatible, encoding="utf-8")
+
+    result = probe_runtime(
+        checkout=checkout,
+        python_executable=Path(sys.executable).resolve(),
+        cpu_threads=1,
+    )
+
+    assert result.runtime_ready is False
+    assert result.mps_available is False
+
+
+def test_runtime_probe_rejects_incompatible_device_resolver(checkout: Path) -> None:
+    (checkout / "deepkoala" / "utils.py").write_text(
+        "def resolve_device(value): return value\n",
+        encoding="utf-8",
+    )
+
+    result = probe_runtime(
+        checkout=checkout,
+        python_executable=Path(sys.executable).resolve(),
+        cpu_threads=1,
+    )
+
+    assert result.runtime_ready is False
+    assert result.cuda_available is False
+    assert result.mps_available is False
+
+
+def test_runtime_probe_rejects_mps_resolver_that_substitutes_cpu(checkout: Path) -> None:
+    (checkout / "torch" / "__init__.py").write_text(
+        "class _Cuda:\n"
+        "    @staticmethod\n"
+        "    def is_available():\n"
+        "        return False\n"
+        "\n"
+        "class _Mps:\n"
+        "    @staticmethod\n"
+        "    def is_available():\n"
+        "        return True\n"
+        "\n"
+        "class _Backends:\n"
+        "    mps = _Mps()\n"
+        "\n"
+        "cuda = _Cuda()\n"
+        "backends = _Backends()\n",
+        encoding="utf-8",
+    )
+    (checkout / "deepkoala" / "utils.py").write_text(
+        "class _Device:\n"
+        "    def __init__(self, value):\n"
+        "        self.type = value\n"
+        "\n"
+        "def resolve_device(value):\n"
+        "    return _Device('cpu' if value == 'mps' else value)\n",
+        encoding="utf-8",
+    )
+
+    result = probe_runtime(
+        checkout=checkout,
+        python_executable=Path(sys.executable).resolve(),
+        cpu_threads=1,
+    )
+
+    assert result.runtime_ready is False
+    assert result.mps_available is False
+
+
+@pytest.mark.parametrize(
+    ("runtime_platform", "machine", "macos_version", "python_version"),
+    [
+        ("darwin", "x86_64", "14.0", (3, 11)),
+        ("darwin", "arm64", "13.6", (3, 11)),
+        ("linux", "x86_64", "", (3, 12)),
+    ],
+)
+def test_runtime_probe_rejects_an_unsupported_configured_python(
+    checkout: Path,
+    tmp_path: Path,
+    runtime_platform: str,
+    machine: str,
+    macos_version: str,
+    python_version: tuple[int, int],
+) -> None:
+    wrapper = tmp_path / "configured-python"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import platform\n"
+        "import sys\n"
+        f"sys.platform = {runtime_platform!r}\n"
+        f"sys.version_info = {python_version!r}\n"
+        "platform.python_implementation = lambda: 'CPython'\n"
+        f"platform.machine = lambda: {machine!r}\n"
+        f"platform.mac_ver = lambda: ({macos_version!r}, ('', '', ''), '')\n"
+        "exec(compile(sys.argv[2], '<runtime-probe>', 'exec'))\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+
+    result = probe_runtime(
+        checkout=checkout,
+        python_executable=wrapper,
+        cpu_threads=1,
+    )
+
+    assert result.runtime_ready is False
+    assert result.cuda_available is False
+    assert result.mps_available is False
 
 
 def test_runtime_probe_rejects_executable_that_cannot_run_python(checkout: Path) -> None:
@@ -52,6 +206,7 @@ def test_runtime_probe_rejects_executable_that_cannot_run_python(checkout: Path)
     )
     assert result.runtime_ready is False
     assert result.cuda_available is False
+    assert result.mps_available is False
 
 
 def test_runtime_and_dependency_probes_enable_only_compatible_local_multi(

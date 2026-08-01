@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import stat
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -602,6 +603,27 @@ def test_read_only_cache_miss_does_not_create_a_database_or_parent(tmp_path: Pat
     assert not cache_path.parent.exists()
 
 
+@pytest.mark.skipif(
+    cache_module.sys.platform != "darwin",
+    reason="the native Darwin descriptor filesystem is required",
+)
+def test_darwin_read_only_descriptor_connection_primitive(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+
+    connection, descriptor = cache._connect_read_only(  # pyright: ignore[reportPrivateUsage]
+        cache_path
+    )
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM kegg_responses").fetchone() == (1,)
+    finally:
+        try:
+            connection.close()
+        finally:
+            os.close(descriptor)
+
+
 def test_read_only_cache_reuses_an_existing_database_and_rejects_mutation(
     tmp_path: Path,
 ) -> None:
@@ -709,7 +731,10 @@ def test_read_only_connection_remains_bound_to_the_validated_descriptor_during_r
     ) -> sqlite3.Connection:
         nonlocal swapped
         if not swapped and kwargs.get("uri") is True:
-            assert "/proc/self/fd/" in os.fsdecode(database)
+            expected_root = (
+                "/dev/fd/" if cache_module.sys.platform == "darwin" else "/proc/self/fd/"
+            )
+            assert expected_root in os.fsdecode(database)
             if swap_kind == "file":
                 moved_path = original_directory / "validated.sqlite3"
                 original_path.rename(moved_path)
@@ -728,6 +753,220 @@ def test_read_only_connection_remains_bound_to_the_validated_descriptor_during_r
     assert swapped is True
     assert lookup.response is not None
     assert lookup.response.body == b"validated-original"
+
+
+@pytest.mark.parametrize(
+    ("runtime_platform", "expected_root"),
+    [("linux", "/proc/self/fd"), ("darwin", "/dev/fd")],
+)
+def test_read_only_descriptor_path_uses_the_native_descriptor_filesystem(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_platform: str,
+    expected_root: str,
+) -> None:
+    monkeypatch.setattr(cache_module.sys, "platform", runtime_platform)
+
+    path = cache_module._read_only_descriptor_path(17)  # pyright: ignore[reportPrivateUsage]
+
+    assert path == Path(expected_root) / "17"
+
+
+def test_read_only_cache_opens_through_the_darwin_descriptor_path_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not Path("/dev/fd").is_dir():
+        pytest.skip("the Darwin descriptor filesystem is unavailable")
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path), body=b"darwin-descriptor")
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+
+    lookup = _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    assert lookup.response is not None
+    assert lookup.response.body == b"darwin-descriptor"
+
+
+@pytest.mark.parametrize(
+    ("runtime_platform", "expected_query"),
+    [("linux", "?mode=ro"), ("darwin", "?mode=ro&immutable=1")],
+)
+def test_read_only_cache_uses_platform_specific_descriptor_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_platform: str,
+    expected_query: str,
+) -> None:
+    monkeypatch.setattr(cache_module.sys, "platform", runtime_platform)
+
+    uri = cache_module._read_only_descriptor_uri(  # pyright: ignore[reportPrivateUsage]
+        Path("/native/fd/17")
+    )
+
+    assert uri == f"file:///native/fd/17{expected_query}"
+
+
+def test_read_only_cache_keeps_the_pinned_descriptor_until_connection_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    captured_descriptors: list[int] = []
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        cache_module,
+        "_lock_read_only_descriptor",
+        captured_descriptors.append,
+    )
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+
+    with cache._open_existing_connection() as connection:  # pyright: ignore[reportPrivateUsage]
+        assert connection is not None
+        assert len(captured_descriptors) == 1
+        os.fstat(captured_descriptors[0])
+        assert connection.execute("SELECT COUNT(*) FROM kegg_responses").fetchone() == (1,)
+
+    with pytest.raises(OSError):
+        os.fstat(captured_descriptors[0])
+
+
+def test_darwin_cache_validates_the_journal_header_after_locking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    events: list[str] = []
+    real_header_validation = cache_module._validate_rollback_journal_header  # pyright: ignore[reportPrivateUsage]
+
+    def record_lock(_descriptor: int) -> None:
+        events.append("lock")
+
+    def record_header_validation(descriptor: int) -> None:
+        events.append("header")
+        real_header_validation(descriptor)
+
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+    monkeypatch.setattr(cache_module, "_lock_read_only_descriptor", record_lock)
+    monkeypatch.setattr(
+        cache_module,
+        "_validate_rollback_journal_header",
+        record_header_validation,
+    )
+
+    lookup = _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    assert lookup.response is not None
+    assert events == ["lock", "header"]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX child lock checks are unavailable")
+def test_darwin_read_only_connection_blocks_a_cooperating_writer_until_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+
+    def child_can_take_exclusive_lock() -> bool:
+        child = os.fork()
+        if child == 0:
+            try:
+                descriptor = os.open(cache_path, os.O_RDWR)
+                try:
+                    fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    os._exit(1)
+                finally:
+                    os.close(descriptor)
+            except BaseException:
+                os._exit(2)
+            os._exit(0)
+        _pid, status = os.waitpid(child, 0)
+        return os.waitstatus_to_exitcode(status) == 0
+
+    with cache._open_existing_connection() as connection:  # pyright: ignore[reportPrivateUsage]
+        assert connection is not None
+        assert child_can_take_exclusive_lock() is False
+
+    assert child_can_take_exclusive_lock() is True
+
+
+def test_cache_connections_are_serialized_while_a_darwin_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+    worker_attempted_lock = threading.Event()
+    worker_finished = threading.Event()
+    worker_errors: list[BaseException] = []
+
+    class ObservedLock:
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+            self.attempt_count = 0
+
+        def __enter__(self) -> None:
+            self.attempt_count += 1
+            if self.attempt_count == 2:
+                worker_attempted_lock.set()
+            self.lock.acquire()
+
+        def __exit__(
+            self,
+            _exception_type: object,
+            _exception: object,
+            _traceback: object,
+        ) -> None:
+            self.lock.release()
+
+    monkeypatch.setattr(cache_module, "_CACHE_CONNECTION_LOCK", ObservedLock())
+
+    def read_in_worker() -> None:
+        try:
+            _read_response(cache)
+        except BaseException as error:
+            worker_errors.append(error)
+        finally:
+            worker_finished.set()
+
+    with cache._open_existing_connection() as connection:  # pyright: ignore[reportPrivateUsage]
+        assert connection is not None
+        worker = threading.Thread(target=read_in_worker)
+        worker.start()
+        assert worker_attempted_lock.wait(timeout=1.0) is True
+        assert worker_finished.wait(timeout=0.1) is False
+
+    worker.join(timeout=2.0)
+    assert worker.is_alive() is False
+    assert worker_finished.is_set() is True
+    assert worker_errors == []
+
+
+def test_read_only_cache_fails_closed_when_the_darwin_lock_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+
+    def reject_lock(_descriptor: int) -> None:
+        raise BlockingIOError("busy")
+
+    monkeypatch.setattr(cache_module, "_lock_read_only_descriptor", reject_lock)
+
+    with pytest.raises(KeggMcpError) as error:
+        _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    _assert_cache_failed(error, cache_path)
 
 
 def test_read_only_connection_verifies_trusted_schema_was_disabled(

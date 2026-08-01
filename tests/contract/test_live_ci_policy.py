@@ -27,7 +27,10 @@ def test_pull_request_ci_enables_public_academic_access_once() -> None:
     assert "KEGG_MCP_ACCESS_MODE: public_academic" in validate_job
     assert 'KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"' in validate_job
     assert 'KEGG_MCP_RUN_LIVE_TESTS: "true"' in validate_job
-    assert "offline_cache" not in workflow
+    assert workflow.count("KEGG_MCP_ACCESS_MODE: public_academic") == 1
+    assert workflow.count('KEGG_MCP_ACADEMIC_USE_CONFIRMED: "true"') == 1
+    assert workflow.count('KEGG_MCP_RUN_LIVE_TESTS: "true"') == 1
+    assert "offline_cache" not in validate_job
     assert "validate-kegg-live" not in workflow
 
 

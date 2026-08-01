@@ -1,8 +1,11 @@
 """Tests for KEGG access and request contracts."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
+import kegg_mcp.kegg.contracts as contracts_module
 from kegg_mcp.kegg.contracts import (
     MIN_REQUESTS_PER_SECOND,
     PUBLIC_KEGG_ENDPOINT,
@@ -29,15 +32,40 @@ from kegg_mcp.kegg.contracts import (
     PublicAcademicAccess,
     RateLimitPolicy,
     RetrievalEndpointClass,
+    default_cache_path,
+    default_rate_limit_root,
     endpoint_fingerprint,
 )
 
 
-def test_client_defaults_to_confirmed_public_academic_access() -> None:
+def test_client_defaults_to_network_disabled_offline_cache_access() -> None:
     config = KeggClientConfig()
 
-    assert isinstance(config.access, PublicAcademicAccess)
-    assert config.access.academic_use_confirmed is True
+    assert isinstance(config.access, OfflineCacheAccess)
+
+
+def test_darwin_defaults_use_the_native_user_cache_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(contracts_module.sys, "platform", "darwin")
+
+    assert default_cache_path() == str(tmp_path / "Library/Caches/kegg-mcp/kegg.sqlite3")
+    assert default_rate_limit_root() == str(tmp_path / "Library/Caches/kegg-mcp/rate-limit")
+
+
+def test_xdg_cache_home_remains_an_explicit_cross_platform_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_root = tmp_path / "xdg-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root))
+    monkeypatch.setattr(contracts_module.sys, "platform", "darwin")
+
+    assert default_cache_path() == str(cache_root / "kegg-mcp/kegg.sqlite3")
+    assert default_rate_limit_root() == str(cache_root / "kegg-mcp/rate-limit")
 
 
 def test_request_options_default_to_network_refresh() -> None:
@@ -244,6 +272,8 @@ def test_rate_limit_state_root_must_be_absolute_and_traversal_free(state_root: s
 
 
 def test_public_access_requires_literal_academic_confirmation() -> None:
+    with pytest.raises(ValidationError):
+        PublicAcademicAccess.model_validate({})
     with pytest.raises(ValidationError):
         PublicAcademicAccess.model_validate(
             {

@@ -391,6 +391,194 @@ def test_exports_complete_validated_brite_paths_without_network_access(
     assert _SECRET_ENDPOINT_LABEL not in combined
 
 
+def test_brite_source_may_exactly_match_an_explicit_entry_selection(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    result_id = _retain(store, _snapshot())
+    brite_result_id = _retain_brite(store, _brite_detail())
+    output = tmp_path / "exact-brite-selection"
+
+    result = write_kegg_reference_bundle(
+        WriteKeggReferenceBundleRequest(
+            source=ReferenceBundleSource(result_id=result_id),
+            brite_source=ReferenceBundleSource(result_id=brite_result_id),
+            entries=(_entity(KeggEntryCardKind.KO, "K00001"),),
+        ),
+        output_directory=output,
+        result_store=store,
+        scope_id="reference-scope",
+    )
+
+    assert result.requested_entry_count == 1
+    assert (output / REFERENCE_BRITE_PATHS_NAME).is_file()
+
+
+def test_brite_source_may_omit_unmatched_rows_when_the_request_excludes_them(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    result_id = _retain(store, _snapshot())
+    detail = _brite_detail()
+    detail = detail.model_copy(
+        update={
+            "request": detail.request.model_copy(
+                update={
+                    "entity_ids": (
+                        detail.request.entity_ids[0],
+                        KeggEntityRef(
+                            kind=KeggEntityKind.PATHWAY,
+                            identifier="ko99999",
+                        ),
+                    ),
+                    "include_unmatched": False,
+                }
+            )
+        }
+    )
+    brite_result_id = _retain_brite(store, detail)
+    output = tmp_path / "excluded-unmatched"
+
+    result = write_kegg_reference_bundle(
+        WriteKeggReferenceBundleRequest(
+            source=ReferenceBundleSource(result_id=result_id),
+            brite_source=ReferenceBundleSource(result_id=brite_result_id),
+        ),
+        output_directory=output,
+        result_store=store,
+        scope_id="reference-scope",
+    )
+
+    assert result.requested_entry_count == 2
+    assert (output / REFERENCE_BRITE_PATHS_NAME).is_file()
+
+
+@pytest.mark.parametrize(
+    "identifiers",
+    [
+        pytest.param(("K99999",), id="unrelated"),
+        pytest.param(("K00001", "K99999"), id="partially-outside"),
+    ],
+)
+def test_brite_source_entities_outside_the_selection_are_rejected(
+    tmp_path: Path,
+    identifiers: tuple[str, ...],
+) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    result_id = _retain(store, _snapshot())
+    entities = tuple(
+        KeggEntityRef(kind=KeggEntityKind.KO, identifier=identifier) for identifier in identifiers
+    )
+    detail = _brite_detail().model_copy(
+        update={
+            "request": MapBriteHierarchyRequest(
+                entity_ids=entities,
+                brite_ids=("ko00001",),
+            ),
+            "paths": (),
+            "classifications": (),
+            "unmatched_entities": entities,
+        }
+    )
+    brite_result_id = _retain_brite(store, detail)
+    output = tmp_path / "invalid-brite-selection"
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            WriteKeggReferenceBundleRequest(
+                source=ReferenceBundleSource(result_id=result_id),
+                brite_source=ReferenceBundleSource(result_id=brite_result_id),
+            ),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing-entity-accounting",
+        "matched-and-unmatched",
+        "duplicate-path",
+        "forged-classification-count",
+        "duplicate-classification",
+        "unresolved-path",
+        "selected-request-mismatch",
+    ],
+)
+def test_inconsistent_brite_detail_is_rejected_before_bundle_creation(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    result_id = _retain(store, _snapshot())
+    detail = _brite_detail()
+    entity = detail.request.entity_ids[0]
+    if tamper == "missing-entity-accounting":
+        detail = detail.model_copy(
+            update={
+                "request": detail.request.model_copy(
+                    update={
+                        "entity_ids": (
+                            entity,
+                            KeggEntityRef(
+                                kind=KeggEntityKind.PATHWAY,
+                                identifier="ko99999",
+                            ),
+                        )
+                    }
+                )
+            }
+        )
+    elif tamper == "matched-and-unmatched":
+        detail = detail.model_copy(update={"unmatched_entities": (entity,)})
+    elif tamper == "duplicate-path":
+        detail = detail.model_copy(update={"paths": (*detail.paths, detail.paths[0])})
+    elif tamper == "forged-classification-count":
+        forged = detail.classifications[0].model_copy(update={"unique_input_count": 100})
+        detail = detail.model_copy(
+            update={"classifications": (forged, *detail.classifications[1:])}
+        )
+    elif tamper == "duplicate-classification":
+        detail = detail.model_copy(
+            update={"classifications": (*detail.classifications, detail.classifications[0])}
+        )
+    else:
+        unrelated_id = "ko99999"
+        unrelated_path = detail.paths[0].model_copy(update={"brite_id": unrelated_id})
+        unrelated_classifications = tuple(
+            item.model_copy(update={"brite_id": unrelated_id}) for item in detail.classifications
+        )
+        update: dict[str, object] = {
+            "paths": (unrelated_path,),
+            "classifications": unrelated_classifications,
+        }
+        if tamper == "selected-request-mismatch":
+            update.update(
+                selected_brite_ids=(unrelated_id,),
+                resolved_brite_ids=(unrelated_id,),
+            )
+        detail = detail.model_copy(update=update)
+    brite_result_id = _retain_brite(store, detail)
+    output = tmp_path / f"invalid-{tamper}"
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            WriteKeggReferenceBundleRequest(
+                source=ReferenceBundleSource(result_id=result_id),
+                brite_source=ReferenceBundleSource(result_id=brite_result_id),
+            ),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    assert not output.exists()
+
+
 def test_explicit_selection_exports_only_selected_reference(tmp_path: Path) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     result_id = _retain(store, _snapshot())
@@ -462,6 +650,8 @@ def test_tampered_or_incompatible_snapshot_is_rejected_without_output(
         )
 
     assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    assert caught.value.detail.suggested_action is not None
+    assert "card or references" in caught.value.detail.suggested_action
     assert not output.exists()
 
 

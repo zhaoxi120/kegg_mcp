@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -162,6 +163,70 @@ def test_cross_distribution_deployment_constants_remain_aligned() -> None:
         RunDeepKoalaInput.model_fields["model_date"].default
         == INSTALLER_MODULE.DEFAULT_DEEPKOALA_MODEL_DATE
     )
+    assert INSTALLER_MODULE.DEEPKOALA_REVISION == ("bebbe0c43f50a26488f7092f6b355aae870a4ed9")
+
+
+@pytest.mark.parametrize(
+    ("host_platform", "machine", "macos_version", "expected_profile"),
+    [
+        ("linux", "x86_64", "", "linux"),
+        ("linux", "aarch64", "", "linux"),
+        ("darwin", "arm64", "14.0", "darwin-arm64"),
+    ],
+)
+def test_host_platform_profiles_cover_linux_and_native_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch,
+    host_platform: str,
+    machine: str,
+    macos_version: str,
+    expected_profile: str,
+) -> None:
+    monkeypatch.setattr(INSTALLER_MODULE.sys, "platform", host_platform)
+    monkeypatch.setattr(INSTALLER_MODULE.platform, "machine", lambda: machine)
+    monkeypatch.setattr(
+        INSTALLER_MODULE.platform,
+        "mac_ver",
+        lambda: (macos_version, ("", "", ""), ""),
+    )
+
+    profile = INSTALLER_MODULE._host_platform_profile()
+
+    assert profile.name == expected_profile
+
+
+@pytest.mark.parametrize(
+    ("host_platform", "machine", "macos_version"),
+    [
+        ("darwin", "x86_64", "14.0"),
+        ("darwin", "private-machine-value", "14.0"),
+        ("darwin", "arm64", "13.6"),
+        ("darwin", "arm64", "private-version-value"),
+        ("win32", "AMD64", ""),
+        ("freebsd14", "arm64", ""),
+    ],
+)
+def test_host_platform_rejects_unsupported_native_targets_with_a_static_error(
+    monkeypatch: pytest.MonkeyPatch,
+    host_platform: str,
+    machine: str,
+    macos_version: str,
+) -> None:
+    monkeypatch.setattr(INSTALLER_MODULE.sys, "platform", host_platform)
+    monkeypatch.setattr(INSTALLER_MODULE.platform, "machine", lambda: machine)
+    monkeypatch.setattr(
+        INSTALLER_MODULE.platform,
+        "mac_ver",
+        lambda: (macos_version, ("", "", ""), ""),
+    )
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._host_platform_profile()
+
+    assert raised.value.code == "platform_unsupported"
+    assert str(raised.value) == INSTALLER_MODULE.UNSUPPORTED_PLATFORM_MESSAGE
+    assert machine not in str(raised.value)
+    if macos_version:
+        assert macos_version not in str(raised.value)
 
 
 def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path) -> None:
@@ -259,6 +324,7 @@ def _materialize_suite_artifacts(
         codex=paths["python"],
         git=Path(shutil.which("git") or "/usr/bin/git").resolve(),
         python=paths["python"],
+        platform_profile=INSTALLER_MODULE._host_platform_profile(),
         allow_locked_dependency_downloads=False,
         dry_run=False,
         allow_deepkoala_install=True,
@@ -292,6 +358,7 @@ def _suite_install_inputs(tmp_path: Path) -> tuple[Any, Any, Any, dict[str, Path
         codex=paths["python"],
         git=Path(shutil.which("git") or "/usr/bin/git").resolve(),
         python=paths["python"],
+        platform_profile=INSTALLER_MODULE._host_platform_profile(),
         allow_locked_dependency_downloads=False,
         dry_run=False,
         allow_deepkoala_install=True,
@@ -402,10 +469,38 @@ def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path)
     assert config.deepkoala.allow_multi is False
     assert config.deepkoala.profiles_dir is None
     assert config.deepkoala.hmmsearch_executable is None
-    assert environment["DEEPKOALA_MCP_ALLOWED_DEVICES"] == "cpu,cuda"
+    assert environment["DEEPKOALA_MCP_ALLOWED_DEVICES"] == ",".join(
+        INSTALLER_MODULE._host_platform_profile().deepkoala_allowed_devices
+    )
     assert environment["DEEPKOALA_MCP_ALLOW_MULTI"] == "false"
     assert "DEEPKOALA_MCP_PROFILES_DIR" not in environment
     assert "DEEPKOALA_MCP_HMMSEARCH_EXECUTABLE" not in environment
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "expected_devices"),
+    [("linux", "cpu,cuda"), ("darwin-arm64", "cpu,mps")],
+)
+def test_deployment_environment_emits_platform_specific_deepkoala_devices(
+    tmp_path: Path,
+    profile_name: str,
+    expected_devices: str,
+) -> None:
+    config_path, _ = _write_config(tmp_path)
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    profiles = {
+        "linux": INSTALLER_MODULE.LINUX_PLATFORM_PROFILE,
+        "darwin-arm64": INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE,
+    }
+
+    environments = INSTALLER_MODULE._deployment_environments(
+        config,
+        tmp_path / "installed",
+        profiles[profile_name],
+    )
+
+    assert set(environments) == SERVER_NAMES
+    assert environments["deepkoala-mcp"]["DEEPKOALA_MCP_ALLOWED_DEVICES"] == expected_devices
 
 
 def test_deepkoala_multi_opt_in_emits_only_private_runtime_configuration(
@@ -675,6 +770,7 @@ def test_runtime_install_uses_three_locked_environments_and_never_downloads_pyth
         codex=original.codex,
         git=original.git,
         python=original.python,
+        platform_profile=original.platform_profile,
         allow_locked_dependency_downloads=allow_downloads,
         dry_run=False,
         allow_deepkoala_install=True,
@@ -737,6 +833,7 @@ def test_first_install_requires_explicit_deepkoala_confirmation(tmp_path: Path) 
         codex=original.codex,
         git=original.git,
         python=original.python,
+        platform_profile=original.platform_profile,
         allow_locked_dependency_downloads=False,
         dry_run=False,
         allow_deepkoala_install=False,
@@ -766,7 +863,7 @@ def test_managed_deepkoala_install_uses_official_repository_and_bundled_202502(
         del cwd, environment
         command: tuple[str, ...] = tuple(argv)
         commands.append(command)
-        if len(command) > 1 and command[1] == "clone":
+        if len(command) > 1 and command[1] == "init":
             checkout = Path(command[-1])
             resource_root = checkout / "resources" / "202502"
             resource_root.mkdir(parents=True)
@@ -774,6 +871,13 @@ def test_managed_deepkoala_install_uses_official_repository_and_bundled_202502(
             for model in config.deepkoala.allowed_models:
                 (resource_root / f"weights_{model}.pt").write_bytes(b"weights")
                 (resource_root / f"ko_config_{model}.json").write_text("{}", encoding="utf-8")
+        elif "rev-parse" in command:
+            return subprocess.CompletedProcess(
+                list(command),
+                0,
+                stdout=f"{INSTALLER_MODULE.DEEPKOALA_REVISION}\n",
+                stderr="",
+            )
         elif "venv" in command:
             subprocess.run(
                 [sys.executable, *command[1:]],
@@ -788,13 +892,24 @@ def test_managed_deepkoala_install_uses_official_repository_and_bundled_202502(
 
     INSTALLER_MODULE._install_managed_deepkoala(request, config.deepkoala)
 
-    assert commands[0][1:4] == ("clone", "--depth", "1")
-    assert commands[0][4] == INSTALLER_MODULE.DEEPKOALA_REPOSITORY
-    assert commands[1][1:4] == ("-I", "-m", "venv")
-    assert "--copies" in commands[1]
-    assert commands[2][1:5] == ("-I", "-m", "pip", "--isolated")
+    assert commands[0][1:3] == ("init", "--quiet")
+    assert commands[1][3:8] == ("fetch", "--quiet", "--depth", "1", "--no-tags")
+    assert commands[1][-2] == INSTALLER_MODULE.DEEPKOALA_REPOSITORY
+    assert commands[1][-1] == INSTALLER_MODULE.DEEPKOALA_REVISION
+    assert commands[2][3:] == (
+        "checkout",
+        "--quiet",
+        "--detach",
+        "FETCH_HEAD",
+    )
+    assert commands[3][3:] == ("rev-parse", "--verify", "HEAD")
+    assert commands[4][1:4] == ("-I", "-m", "venv")
+    assert "--copies" in commands[4]
+    assert commands[5][1:5] == ("-I", "-m", "pip", "--isolated")
     assert INSTALLER_MODULE.DEFAULT_DEEPKOALA_MODEL_DATE == "202502"
     serialized = " ".join(part for command in commands for part in command).lower()
+    assert "clone" not in serialized
+    assert " origin " not in f" {serialized} "
     assert "hmmer" not in serialized
     assert "kofam" not in serialized
     assert "multi" not in serialized
@@ -813,6 +928,35 @@ def test_managed_deepkoala_install_uses_official_repository_and_bundled_202502(
         timeout=10,
     )
     assert identity.stdout.strip() == "True"
+
+
+def test_managed_deepkoala_install_rejects_a_revision_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, _, config, _ = _suite_install_inputs(tmp_path)
+    request.install_root.mkdir(mode=0o700)
+
+    def mismatched_revision(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        command = tuple(argv)
+        if len(command) > 1 and command[1] == "init":
+            Path(command[-1]).mkdir(parents=True)
+        output = "0" * 40 if "rev-parse" in command else ""
+        return subprocess.CompletedProcess(list(command), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", mismatched_revision)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._install_managed_deepkoala(request, config.deepkoala)
+
+    assert raised.value.code == "deepkoala_install_failed"
+    assert "release pin" in str(raised.value)
 
 
 def test_runtime_verification_requires_deepkoala_local_ready(
@@ -850,6 +994,105 @@ def test_runtime_verification_requires_deepkoala_local_ready(
     assert raised.value.code == "runtime_configuration_invalid"
 
 
+@pytest.mark.parametrize("profile_name", ["linux", "darwin-arm64"])
+def test_runtime_verification_accepts_cpu_only_local_ready_for_each_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_name: str,
+) -> None:
+    original, _, config, _ = _suite_install_inputs(tmp_path)
+    profiles = {
+        "linux": INSTALLER_MODULE.LINUX_PLATFORM_PROFILE,
+        "darwin-arm64": INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE,
+    }
+    profile = profiles[profile_name]
+    request = replace(original, platform_profile=profile)
+    environments = INSTALLER_MODULE._deployment_environments(
+        config,
+        request.install_root,
+        profile,
+    )
+
+    def run_command(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        command = tuple(argv)
+        if "deepkoala-mcp" in command[0]:
+            output = json.dumps(
+                {
+                    "configuration_valid": True,
+                    "route_state": "local_ready",
+                    "allowed_devices": list(profile.deepkoala_allowed_devices),
+                    "cuda_available": False,
+                    "mps_available": False,
+                }
+            )
+        else:
+            output = json.dumps({"configuration_valid": True})
+        return subprocess.CompletedProcess(list(command), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", run_command)
+
+    INSTALLER_MODULE._verify_runtime_configuration(request, environments)
+
+
+@pytest.mark.parametrize(
+    "invalid_contract",
+    ["devices", "mps_availability_type", "cuda_availability_missing"],
+)
+def test_darwin_runtime_verification_requires_exact_mps_doctor_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_contract: str,
+) -> None:
+    original, _, config, _ = _suite_install_inputs(tmp_path)
+    profile = INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE
+    request = replace(original, platform_profile=profile)
+    environments = INSTALLER_MODULE._deployment_environments(
+        config,
+        request.install_root,
+        profile,
+    )
+
+    def run_command(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        command = tuple(argv)
+        if "deepkoala-mcp" in command[0]:
+            document: dict[str, object] = {
+                "configuration_valid": True,
+                "route_state": "local_ready",
+                "allowed_devices": ["cpu", "mps"],
+                "cuda_available": False,
+                "mps_available": False,
+            }
+            if invalid_contract == "devices":
+                document["allowed_devices"] = ["cpu", "cuda"]
+            elif invalid_contract == "mps_availability_type":
+                document["mps_available"] = "false"
+            else:
+                document.pop("cuda_available", None)
+            output = json.dumps(document)
+        else:
+            output = json.dumps({"configuration_valid": True})
+        return subprocess.CompletedProcess(list(command), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", run_command)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._verify_runtime_configuration(request, environments)
+
+    assert raised.value.code == "runtime_configuration_invalid"
+
+
 def test_subprocess_environment_removes_tool_and_python_redirects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -876,6 +1119,96 @@ def test_subprocess_environment_removes_tool_and_python_redirects(
     assert environment["UV_PROJECT_ENVIRONMENT"] == "/explicit/runtime"
     assert environment["UV_NO_SYSTEM_CONFIG"] == "1"
     assert environment["PYTHONNOUSERSITE"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "runtime_platform", "machine", "macos_version"),
+    [
+        ("linux", "linux", "x86_64", ""),
+        ("darwin-arm64", "darwin", "arm64", "14.0"),
+    ],
+)
+def test_python_preflight_requires_a_native_runtime_matching_the_host_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_name: str,
+    runtime_platform: str,
+    machine: str,
+    macos_version: str,
+) -> None:
+    profiles = {
+        "linux": INSTALLER_MODULE.LINUX_PLATFORM_PROFILE,
+        "darwin-arm64": INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE,
+    }
+
+    def runtime_metadata(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        output = json.dumps([[3, 11], "CPython", runtime_platform, machine, macos_version])
+        return subprocess.CompletedProcess(list(argv), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", runtime_metadata)
+
+    INSTALLER_MODULE._validate_python(Path("/absolute/python"), profiles[profile_name])
+
+
+def test_darwin_python_preflight_rejects_rosetta_without_echoing_machine_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_machine_value = "x86_64-private-value"
+
+    def translated_runtime(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        output = json.dumps([[3, 11], "CPython", "darwin", private_machine_value, "14.0"])
+        return subprocess.CompletedProcess(list(argv), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", translated_runtime)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._validate_python(
+            Path("/absolute/python"),
+            INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE,
+        )
+
+    assert raised.value.code == "python_runtime_unsupported"
+    assert "Rosetta" in str(raised.value)
+    assert private_machine_value not in str(raised.value)
+
+
+@pytest.mark.parametrize("private_version", ["13.6.9", "private-version-value"])
+def test_darwin_python_preflight_rejects_unsupported_or_invalid_macos_version(
+    monkeypatch: pytest.MonkeyPatch,
+    private_version: str,
+) -> None:
+    def runtime_metadata(
+        argv: tuple[str, ...] | list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment
+        output = json.dumps([[3, 11], "CPython", "darwin", "arm64", private_version])
+        return subprocess.CompletedProcess(list(argv), 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", runtime_metadata)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._validate_python(
+            Path("/absolute/python"),
+            INSTALLER_MODULE.DARWIN_ARM64_PLATFORM_PROFILE,
+        )
+
+    assert raised.value.code == "python_runtime_unsupported"
+    assert "macOS 14 or later" in str(raised.value)
+    assert private_version not in str(raised.value)
 
 
 def test_uv_preflight_requires_uv_identity_and_sync_controls(
@@ -1100,10 +1433,12 @@ def test_successful_transaction_publishes_complete_generated_suite(
     assert set(installation["servers"]) == SERVER_NAMES
     assert set(installation["skills"]) == SKILL_NAMES
     assert installation["deepkoala_repository"] == INSTALLER_MODULE.DEEPKOALA_REPOSITORY
+    assert installation["deepkoala_revision"] == INSTALLER_MODULE.DEEPKOALA_REVISION
     assert installation["deepkoala_default_model_date"] == "202502"
     assert set(installation) == {
         "deepkoala_default_model_date",
         "deepkoala_repository",
+        "deepkoala_revision",
         "distribution_versions",
         "marketplace",
         "plugin",
@@ -1128,11 +1463,13 @@ def test_install_summary_requires_a_new_task_without_requesting_reinstallation(
     assert installed["current_task_reload_supported"] is False
     assert installed["repeat_installation_required"] is False
     assert installed["next_action"] == "open_new_codex_task"
+    assert installed["deepkoala_revision"] == INSTALLER_MODULE.DEEPKOALA_REVISION
     assert validated["status"] == "validated"
     assert validated["new_task_required"] is False
     assert validated["current_task_reload_supported"] is False
     assert validated["repeat_installation_required"] is False
     assert validated["next_action"] == "run_confirmed_install"
+    assert validated["deepkoala_revision"] == INSTALLER_MODULE.DEEPKOALA_REVISION
 
 
 @pytest.mark.parametrize(

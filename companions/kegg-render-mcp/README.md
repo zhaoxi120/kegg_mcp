@@ -21,21 +21,30 @@ establish pathway presence, completeness, activity, flux, phenotype, or experime
 
 ## Installation
 
-For Codex, use the repository suite installer described in
-[Installation and operation](../../docs/installation.md). It creates an isolated Renderer runtime
-and registers this server together with the matching Skill, Core, and DeepKOALA companion while
-preserving three independent stdio processes.
+For the complete Codex suite on Linux or native Apple Silicon macOS 14 or later, use the repository
+suite installer described in [Installation and operation](../../docs/installation.md). It creates
+an isolated Renderer runtime and registers this server together with the matching Skill, Core, and
+DeepKOALA companion while preserving three independent stdio processes. DeepKOALA uses explicit
+CUDA on Linux or explicit MPS on supported macOS only when the configured runtime reports that
+backend available; CPU remains the default.
 
-For component development or manual registration by another MCP client, use Linux with Python 3.11
-and synchronize this directory independently:
+For component development or manual registration by another MCP client, use Linux or native Apple
+Silicon macOS 14 or later with CPython 3.11 and synchronize this directory independently:
 
 ```bash
 uv sync --frozen --all-groups
 ```
 
+Native Intel macOS and native Windows are unsupported because the Renderer requires reviewed POSIX
+no-follow path operations, ownership checks, atomic publication, and file locks. Windows hosts use
+WSL2 as the Linux route; keep the checkout, state, cache, input, and output paths in the WSL Linux
+filesystem rather than under `/mnt/c`.
+
 The package declares its compatible `kegg-mcp` range for the renderer contract and typed pathway
 asset client. It bundles no KEGG payload, database, model, weight, or font. Pillow performs bounded
-local PNG decoding and raster output; no browser, JavaScript, subprocess, or shell command is used.
+local PNG decoding and raster output; no browser, JavaScript, shell, or external rendering command
+is used. On macOS, the shared Core rate limiter obtains the boot timestamp through one fixed,
+bounded `/usr/sbin/sysctl` call without a shell or caller-controlled arguments.
 
 ## Configuration
 
@@ -61,12 +70,13 @@ access mode explicitly.
 
 | Mode | Configuration and behavior |
 | --- | --- |
-| `public_academic` | Default live public KEGG access for eligible academic use; `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED` defaults to `true`. |
+| `public_academic` | Live public KEGG access for eligible academic use; requires `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true`. |
 | `licensed` | Set `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true` and `KEGG_RENDER_MCP_LICENSED_ENDPOINT` for an authorized HTTPS endpoint. |
 | `offline_cache` | Set `KEGG_RENDER_MCP_CACHE_PATH` to one existing Core-compatible cache; access is network-disabled and read-only. |
-| `unconfigured` | MODULE-only rendering with no pathway asset access. |
+| `unconfigured` | Default; MODULE-only rendering with no pathway asset access. |
 
-Select a non-default mode with `KEGG_RENDER_MCP_ACCESS_MODE`.
+Select another mode with `KEGG_RENDER_MCP_ACCESS_MODE`. `public_academic` never activates from the
+mode alone; the explicit confirmation is mandatory.
 
 Offline mode makes no HTTP request, creates or mutates no cache, and returns a typed unavailable
 result for a missing or unusable entry. It selects the public-academic cache namespace by default.

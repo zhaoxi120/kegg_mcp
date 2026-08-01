@@ -25,13 +25,22 @@ from kegg_mcp.domain.errors import (
 from kegg_mcp.domain.errors import (
     SafeDetail as CoreSafeDetail,
 )
-from kegg_mcp.kegg import KeggClient, KeggClientConfig, KeggRequestOptions
+from kegg_mcp.kegg import (
+    KeggClient,
+    KeggClientConfig,
+    KeggRequestOptions,
+    PublicAcademicAccess,
+)
 from mcp import types
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 
 from conftest import SyntheticProvider
+from kegg_render_mcp._platform import (
+    UNSUPPORTED_PLATFORM_DIAGNOSTIC,
+    UnsupportedRendererPlatformError,
+)
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
     ConnectivityStatus,
@@ -49,9 +58,30 @@ from kegg_render_mcp.server import (
 )
 
 
+def test_startup_reports_static_unsupported_platform_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from kegg_render_mcp import server as server_module
+
+    def reject_startup(function: object) -> None:
+        del function
+        raise UnsupportedRendererPlatformError("private synthetic platform detail")
+
+    monkeypatch.setattr(server_module.anyio, "run", reject_startup)
+
+    with pytest.raises(SystemExit) as raised:
+        server_module.main()
+
+    assert raised.value.code == 2
+    diagnostic = capsys.readouterr().err
+    assert UNSUPPORTED_PLATFORM_DIAGNOSTIC in diagnostic
+    assert "private synthetic platform detail" not in diagnostic
+
+
 class _ProbeClient:
     def __init__(self) -> None:
-        self.config = KeggClientConfig()
+        self.config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
         self.options: list[KeggRequestOptions | None] = []
 
     def info(self, request: object, *, options: KeggRequestOptions | None = None) -> object:
@@ -61,7 +91,7 @@ class _ProbeClient:
 
 
 class _FailingProbeClient:
-    config = KeggClientConfig()
+    config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
 
     def info(self, request: object, *, options: KeggRequestOptions | None = None) -> object:
         del request, options
@@ -77,7 +107,7 @@ class _FailingProbeClient:
 
 
 class _FailingAssetClient:
-    config = KeggClientConfig()
+    config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
 
     def __init__(self, detail: CoreErrorDetail) -> None:
         self.detail = detail
