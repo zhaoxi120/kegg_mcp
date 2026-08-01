@@ -41,6 +41,8 @@ _PARSER_VERSION_PATTERN: Final = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
 _ENDPOINT_FINGERPRINT_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _HTTP_METADATA_ALLOWLIST: Final = frozenset({"content-type", "date", "etag", "last-modified"})
 _CACHE_CONNECTION_LOCK: Final = threading.Lock()
+_SQLITE_HEADER_PREFIX: Final = b"SQLite format 3\x00"
+_SQLITE_ROLLBACK_JOURNAL_VERSION: Final = 1
 
 
 def _read_only_descriptor_path(descriptor: int) -> Path:
@@ -68,6 +70,17 @@ def _lock_read_only_descriptor(descriptor: int) -> None:
         fcntl.lockf(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
     except (ImportError, OSError, ValueError) as error:
         raise OSError("cache descriptor could not be locked safely") from error
+
+
+def _validate_rollback_journal_header(descriptor: int) -> None:
+    """Reject non-SQLite and WAL-mode files before an immutable descriptor open."""
+    if not hasattr(os, "pread"):
+        raise OSError("bounded cache header reads are unavailable")
+    header = os.pread(descriptor, 20, 0)
+    if len(header) != 20 or not header.startswith(_SQLITE_HEADER_PREFIX):
+        raise _CacheIntegrityError("invalid SQLite database header")
+    if header[18:20] != bytes((_SQLITE_ROLLBACK_JOURNAL_VERSION, _SQLITE_ROLLBACK_JOURNAL_VERSION)):
+        raise _CacheIntegrityError("read-only cache requires rollback journal format")
 
 
 _CREATE_SCHEMA = """
@@ -590,6 +603,16 @@ class SQLiteKeggCache:
             ):
                 raise OSError("cache descriptor binding is unavailable")
             _lock_read_only_descriptor(descriptor)
+            locked_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(locked_stat.st_mode):
+                raise OSError("cache is not a regular file")
+            if hasattr(os, "geteuid") and locked_stat.st_uid != os.geteuid():
+                raise OSError("cache must be owned by the current user")
+            if stat.S_IMODE(locked_stat.st_mode) != 0o600:
+                raise OSError("read-only cache mode must be 0600")
+            if locked_stat.st_size > self._max_database_bytes:
+                raise OSError("cache database exceeds the configured physical-size bound")
+            _validate_rollback_journal_header(descriptor)
             connection = sqlite3.connect(
                 _read_only_descriptor_uri(descriptor_path),
                 uri=True,

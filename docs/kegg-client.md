@@ -468,7 +468,9 @@ licensed endpoint namespace in a separately authorized live deployment.
 
 The Darwin descriptor-open behavior was reviewed on 2026-08-01 against SQLite's
 [URI filename contract](https://www.sqlite.org/uri.html) and its official
-[file-descriptor-only discussion](https://sqlite.org/forum/forumpost/c15bf2e7df289a5f).
+[file-descriptor-only discussion](https://sqlite.org/forum/forumpost/c15bf2e7df289a5f). The bounded
+pre-open journal check follows SQLite's documented
+[database-header read/write version bytes](https://www.sqlite.org/fileformat2.html#the_database_header).
 
 At lookup time:
 

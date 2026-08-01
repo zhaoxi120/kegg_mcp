@@ -830,6 +830,36 @@ def test_read_only_cache_keeps_the_pinned_descriptor_until_connection_close(
         os.fstat(captured_descriptors[0])
 
 
+def test_darwin_cache_validates_the_journal_header_after_locking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    events: list[str] = []
+    real_header_validation = cache_module._validate_rollback_journal_header  # pyright: ignore[reportPrivateUsage]
+
+    def record_lock(_descriptor: int) -> None:
+        events.append("lock")
+
+    def record_header_validation(descriptor: int) -> None:
+        events.append("header")
+        real_header_validation(descriptor)
+
+    monkeypatch.setattr(cache_module.sys, "platform", "darwin")
+    monkeypatch.setattr(cache_module, "_lock_read_only_descriptor", record_lock)
+    monkeypatch.setattr(
+        cache_module,
+        "_validate_rollback_journal_header",
+        record_header_validation,
+    )
+
+    lookup = _read_response(SQLiteKeggCache(cache_path, read_only=True))
+
+    assert lookup.response is not None
+    assert events == ["lock", "header"]
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX child lock checks are unavailable")
 def test_darwin_read_only_connection_blocks_a_cooperating_writer_until_close(
     tmp_path: Path,
