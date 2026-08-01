@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 import threading
@@ -189,6 +190,54 @@ def test_two_python_processes_share_one_endpoint_schedule(tmp_path: Path) -> Non
         starts.append(float(stdout.strip()))
 
     assert abs(starts[0] - starts[1]) >= 0.30
+
+
+def test_state_file_first_create_recovers_when_another_process_wins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root = tmp_path / "rate-limit"
+    state_root.mkdir(mode=0o700)
+    root_descriptor = rate_limit_module._open_state_root(  # pyright: ignore[reportPrivateUsage]
+        state_root
+    )
+    scope = _scope("concurrent-first-create")
+    name = f"{scope}.state"
+    real_open = rate_limit_module.os.open
+    calls: list[int] = []
+
+    def competing_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        calls.append(flags)
+        if len(calls) == 1:
+            raise FileNotFoundError(path)
+        if len(calls) == 2:
+            competing_descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            rate_limit_module.os.close(competing_descriptor)
+            raise FileExistsError(path)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(rate_limit_module.os, "open", competing_open)
+    try:
+        descriptor = rate_limit_module._open_state_file(  # pyright: ignore[reportPrivateUsage]
+            root_descriptor,
+            scope,
+        )
+        rate_limit_module.os.close(descriptor)
+    finally:
+        rate_limit_module.os.close(root_descriptor)
+
+    assert len(calls) == 3
+    assert all(flags & os.O_NOFOLLOW for flags in calls)
+    assert calls[0] & os.O_CREAT == 0
+    assert calls[1] & (os.O_CREAT | os.O_EXCL) == os.O_CREAT | os.O_EXCL
+    assert calls[2] & os.O_CREAT == 0
+    assert (state_root / name).is_file()
 
 
 def test_state_root_and_files_are_owner_only(tmp_path: Path) -> None:

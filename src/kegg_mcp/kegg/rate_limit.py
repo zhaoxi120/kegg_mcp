@@ -28,6 +28,7 @@ else:  # Native Windows has no safe equivalent for the required POSIX lock contr
 
 MAX_REQUESTS_PER_SECOND = 3.0
 _STATE_BYTES: Final = 1_024
+_STATE_OPEN_ATTEMPTS: Final = 3
 _SCOPE_PATTERN: Final = re.compile(r"[a-f0-9]{64}\Z")
 _DARWIN_BOOT_TIME_PATTERN: Final = re.compile(
     rb"\{\s*sec\s*=\s*([0-9]+)\s*,\s*usec\s*=\s*([0-9]+)\s*\}"
@@ -210,8 +211,31 @@ def _open_state_root(path: Path) -> int:
 
 def _open_state_file(root_descriptor: int, scope: str) -> int:
     name = f"{scope}.state"
-    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(name, flags, 0o600, dir_fd=root_descriptor)
+    flags = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    missing_error: FileNotFoundError | None = None
+    # Make one concurrent first-start creator win explicitly while keeping
+    # every lookup anchored to the already validated state-root descriptor.
+    for _ in range(_STATE_OPEN_ATTEMPTS):
+        try:
+            descriptor = os.open(name, flags, dir_fd=root_descriptor)
+            break
+        except FileNotFoundError as error:
+            missing_error = error
+        try:
+            descriptor = os.open(
+                name,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=root_descriptor,
+            )
+            break
+        except FileExistsError:
+            continue
+        except FileNotFoundError as error:
+            missing_error = error
+    else:
+        assert missing_error is not None
+        raise missing_error
     try:
         opened = os.fstat(descriptor)
         named = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
