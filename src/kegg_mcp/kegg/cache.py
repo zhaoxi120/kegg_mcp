@@ -576,7 +576,14 @@ class SQLiteKeggCache:
             ):
                 raise OSError("cache changed while it was opened")
             descriptor_path = _read_only_descriptor_path(descriptor)
-            descriptor_path_stat = descriptor_path.stat()
+            binding_flags = os.O_RDONLY
+            if hasattr(os, "O_CLOEXEC"):
+                binding_flags |= os.O_CLOEXEC
+            binding_descriptor = os.open(descriptor_path, binding_flags)
+            try:
+                descriptor_path_stat = os.fstat(binding_descriptor)
+            finally:
+                os.close(binding_descriptor)
             if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
                 descriptor_path_stat.st_dev,
                 descriptor_path_stat.st_ino,
