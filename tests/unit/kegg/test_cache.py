@@ -603,6 +603,27 @@ def test_read_only_cache_miss_does_not_create_a_database_or_parent(tmp_path: Pat
     assert not cache_path.parent.exists()
 
 
+@pytest.mark.skipif(
+    cache_module.sys.platform != "darwin",
+    reason="the native Darwin descriptor filesystem is required",
+)
+def test_darwin_read_only_descriptor_connection_primitive(tmp_path: Path) -> None:
+    cache_path = tmp_path / "kegg.sqlite3"
+    _write_response(SQLiteKeggCache(cache_path))
+    cache = SQLiteKeggCache(cache_path, read_only=True)
+
+    connection, descriptor = cache._connect_read_only(  # pyright: ignore[reportPrivateUsage]
+        cache_path
+    )
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM kegg_responses").fetchone() == (1,)
+    finally:
+        try:
+            connection.close()
+        finally:
+            os.close(descriptor)
+
+
 def test_read_only_cache_reuses_an_existing_database_and_rejects_mutation(
     tmp_path: Path,
 ) -> None:
