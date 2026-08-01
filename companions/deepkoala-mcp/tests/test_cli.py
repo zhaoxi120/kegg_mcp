@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from io import StringIO
 from pathlib import Path
 
@@ -74,7 +75,9 @@ def test_doctor_reports_ready_without_exposing_paths(
 def test_doctor_rejects_bin_false_runtime(runtime_config: DeepKoalaRuntimeConfig) -> None:
     output = StringIO()
     environment = _environment(runtime_config)
-    environment[PYTHON_ENV] = "/bin/false"
+    false_executable = shutil.which("false")
+    assert false_executable is not None
+    environment[PYTHON_ENV] = false_executable
     exit_code = cli.main(["doctor", "--json"], environment=environment, stdout=output)
     document = json.loads(output.getvalue())
     assert exit_code == 2

@@ -452,13 +452,23 @@ kegg-mcp cache cleanup --expired --json
 When the configured database does not exist, status and expired-row cleanup return zero counts
 without creating the database or its parent directory.
 
-An `offline_cache` client opens only an existing owner-controlled database through SQLite
-`mode=ro`, enables query-only and untrusted-schema protections, and requires an owner-only `0600`
-regular file beneath a safe owner-controlled parent. It validates the schema version,
+An `offline_cache` client opens only an existing owner-controlled database through a validated
+file descriptor, enables query-only and untrusted-schema protections, and requires an owner-only
+`0600` regular file beneath a safe owner-controlled parent. Linux uses SQLite `mode=ro`; Darwin
+holds a non-blocking POSIX shared lock on the descriptor for the connection lifetime and uses
+SQLite's read-only immutable descriptor URI to avoid path-derived locking and sidecar access on
+the descriptor filesystem. Cache connections are serialized inside the process so closing another
+SQLite descriptor cannot release the process-scoped POSIX lock while an immutable reader is active.
+Operators must not bypass SQLite locking to modify that database while an offline deployment uses
+it. The client validates the schema version,
 auto-vacuum mode, journal mode, parser metadata, and configured logical and physical size bounds
 before serving a row. It does not initialize or migrate a database and cannot write, clean up, or
 fall back to HTTP. Operators must populate or refresh the selected public-academic or confirmed
 licensed endpoint namespace in a separately authorized live deployment.
+
+The Darwin descriptor-open behavior was reviewed on 2026-08-01 against SQLite's
+[URI filename contract](https://www.sqlite.org/uri.html) and its official
+[file-descriptor-only discussion](https://sqlite.org/forum/forumpost/c15bf2e7df289a5f).
 
 At lookup time:
 
