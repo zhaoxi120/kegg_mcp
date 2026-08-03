@@ -1,7 +1,7 @@
 # deepkoala-mcp
 
 `deepkoala-mcp` is the optional local stdio companion that runs a configured DeepKOALA installation.
-It accepts an allowlisted absolute protein FASTA path, starts one bounded detailed annotation job,
+It accepts an allowlisted absolute protein FASTA path, starts one controlled detailed annotation job,
 and publishes stable files in a service-allocated or caller-selected output directory. Pass the
 returned detailed CSV path and source provenance to the core `kegg-mcp` importer.
 
@@ -48,7 +48,6 @@ separator (`:` on Linux and macOS).
 | `DEEPKOALA_MCP_ALLOWED_MODELS` | no | Subset of `full,frag`; default `full,frag` |
 | `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu`, Linux `cpu,cuda`, or macOS `cpu,mps`; defaults to the matching platform pair |
 | `DEEPKOALA_MCP_CPU_THREADS` | no | 1 through 4; default 2 |
-| `DEEPKOALA_MCP_MAX_FASTA_BYTES` | no | FASTA cap up to 5,000,000 bytes |
 | `DEEPKOALA_MCP_MAX_SEQUENCES` | no | Sequence cap up to 100,000 |
 | `DEEPKOALA_MCP_MAX_OUTPUT_BYTES` | no | Detailed CSV cap up to 5,000,000 bytes |
 | `DEEPKOALA_MCP_MAX_TIMEOUT_SECONDS` | no | Job cap up to 86,400 seconds; default 3,600 |
@@ -83,6 +82,12 @@ annotation can still be ready.
 
 The five public tools are `get_deepkoala_runner_status`, `run_deepkoala_job`,
 `get_deepkoala_job`, `cancel_deepkoala_job`, and `delete_deepkoala_job`.
+
+Protein FASTA intake has no aggregate file-byte limit. The companion streams validation into its
+private canonical staging file and continues to enforce the reported sequence-count limit, a
+100,000-residue limit per sequence, a 1,024-byte header limit, and controlled-path checks. Status
+therefore reports `max_input_bytes=null`; the detailed CSV output and resource pages retain their
+independent byte limits.
 
 `run_deepkoala_job` validates policy, runtime readiness, FASTA content, private staging, the output
 directory, and process startup in one call. The only required field is:
@@ -164,7 +169,7 @@ passed to another server as result identity.
   explicit `device=cuda` or `device=mps` only through the platform deployment allowlist; it never
   requests `device=auto` or enables silent backend fallback.
 - One job runs at a time across all companion processes sharing a deployment state root, with
-  bounded CPU threads, input, output, sequences, and elapsed time.
+  bounded CPU threads, FASTA structure, output, sequences, and elapsed time.
 - Timeout, cancellation, process-group termination, descendant cleanup, Linux parent-death signals,
   and a Darwin sentinel process that outlives an exited group leader bound the external process
   lifecycle.

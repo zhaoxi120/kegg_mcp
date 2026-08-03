@@ -1,16 +1,20 @@
-"""Bounded protein FASTA intake and private staging."""
+"""Structurally bounded protein FASTA intake and private staging."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import unicodedata
 from dataclasses import dataclass
+from functools import partial
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import Final
+from typing import BinaryIO, Final
+
+from anyio.to_thread import run_sync as run_sync_in_worker_thread
 
 from deepkoala_mcp.contracts import (
-    MAX_FASTA_BYTES,
     MAX_HEADER_BYTES,
     MAX_SEQUENCE_COUNT,
     MAX_SEQUENCE_LENGTH,
@@ -26,7 +30,7 @@ class FastaValidationError(ValueError):
 
 
 class FastaLimitError(FastaValidationError):
-    """The supplied FASTA exceeds one deployment bound."""
+    """The supplied FASTA exceeds one structural bound."""
 
 
 class InputPathError(ValueError):
@@ -41,109 +45,172 @@ class StagedFasta:
     input_path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class _PinnedFasta:
+    descriptor: int
+    resolved: Path
+    root: Path
+    file_state: tuple[int, int, int, int, int]
+    ancestry: tuple[tuple[int, int], ...]
+
+
 def stage_fasta(
     *,
     fasta_path: str,
     input_roots: tuple[Path, ...],
     job_directory: Path,
-    max_bytes: int,
     max_sequences: int,
 ) -> StagedFasta:
-    """Read one allowlisted file once and retain a canonical private copy."""
-    content, resolved = _read_allowed_file(
-        Path(fasta_path),
-        input_roots,
-        max_bytes=max_bytes,
+    """Stream one allowlisted file into a validated canonical private copy."""
+    pinned = _open_allowed_file(Path(fasta_path), input_roots)
+    staged_path = job_directory / INPUT_FILENAME
+    output_descriptor: int | None = None
+    try:
+        output_descriptor = _create_private(staged_path)
+        with (
+            os.fdopen(os.dup(pinned.descriptor), "rb") as source,
+            os.fdopen(output_descriptor, "wb", closefd=False) as destination,
+        ):
+            summary = _validate_fasta_stream(
+                source,
+                destination,
+                max_sequences=max_sequences,
+            )
+            destination.flush()
+            os.fsync(destination.fileno())
+        if pinned.file_state != _file_state(os.fstat(pinned.descriptor)):
+            raise InputPathError("input file changed during intake")
+        _revalidate_pinned_path(pinned)
+        return StagedFasta(summary=summary, input_path=pinned.resolved)
+    except Exception:
+        if output_descriptor is not None:
+            _remove_owned_staging_file(staged_path, output_descriptor)
+        raise
+    finally:
+        if output_descriptor is not None:
+            os.close(output_descriptor)
+        os.close(pinned.descriptor)
+
+
+async def stage_fasta_in_worker(
+    *,
+    fasta_path: str,
+    input_roots: tuple[Path, ...],
+    job_directory: Path,
+    max_sequences: int,
+) -> StagedFasta:
+    """Run intake off the event loop and join it before propagating cancellation."""
+    worker = asyncio.create_task(
+        run_sync_in_worker_thread(
+            partial(
+                stage_fasta,
+                fasta_path=fasta_path,
+                input_roots=input_roots,
+                job_directory=job_directory,
+                max_sequences=max_sequences,
+            )
+        )
     )
-    summary, canonical = validate_fasta_bytes(
-        content,
-        max_bytes=max_bytes,
-        max_sequences=max_sequences,
-    )
-    _write_private(job_directory / INPUT_FILENAME, canonical)
-    return StagedFasta(summary=summary, input_path=resolved)
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError as cancellation:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()
+        raise cancellation
 
 
 def validate_fasta_bytes(
     content: bytes,
     *,
-    max_bytes: int = MAX_FASTA_BYTES,
     max_sequences: int = MAX_SEQUENCE_COUNT,
 ) -> tuple[FastaSummary, bytes]:
-    """Validate bounded protein FASTA bytes and return canonical ASCII bytes."""
-    if not 1 <= max_bytes <= MAX_FASTA_BYTES:
-        raise ValueError("max_bytes is outside the hard companion limit")
+    """Validate protein FASTA bytes and return canonical ASCII bytes."""
+    source = BytesIO(content)
+    canonical = BytesIO()
+    summary = _validate_fasta_stream(source, canonical, max_sequences=max_sequences)
+    return summary, canonical.getvalue()
+
+
+def _validate_fasta_stream(
+    source: BinaryIO,
+    destination: BinaryIO,
+    *,
+    max_sequences: int,
+) -> FastaSummary:
     if not 1 <= max_sequences <= MAX_SEQUENCE_COUNT:
         raise ValueError("max_sequences is outside the hard companion limit")
-    if not content:
-        raise FastaValidationError("FASTA is empty")
-    if len(content) > max_bytes:
-        raise FastaLimitError("FASTA exceeds the byte limit")
-    try:
-        text = content.decode("ascii")
-    except UnicodeDecodeError as error:
-        raise FastaValidationError("FASTA must be ASCII") from error
-
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    canonical: list[str] = []
     sequence_ids: set[str] = set()
     lengths: list[int] = []
     current_length: int | None = None
     total_residues = 0
+    input_bytes = 0
 
-    for line in lines:
-        if line.startswith(">"):
-            if current_length is not None:
-                _finish_sequence(current_length, lengths)
-            sequence_id = _validate_header(line[1:])
-            if sequence_id in sequence_ids:
-                raise FastaValidationError("FASTA sequence identifiers must be unique")
-            sequence_ids.add(sequence_id)
-            if len(sequence_ids) > max_sequences:
-                raise FastaLimitError("FASTA exceeds the sequence-count limit")
-            canonical.append(line)
-            current_length = 0
-            continue
-        if not line:
-            continue
-        if current_length is None:
-            raise FastaValidationError("FASTA residues must follow a header")
-        if any(character.isspace() or _control(character) for character in line):
-            raise FastaValidationError("FASTA residue lines contain whitespace or control text")
-        residues = line.upper()
-        if any(character not in _PROTEIN_ALPHABET for character in residues):
-            raise FastaValidationError("FASTA contains an invalid protein residue")
-        current_length += len(residues)
-        total_residues += len(residues)
-        if current_length > MAX_SEQUENCE_LENGTH:
-            raise FastaLimitError("one FASTA sequence exceeds the residue limit")
-        if total_residues > max_bytes:
-            raise FastaLimitError("FASTA exceeds the total-residue limit")
-        canonical.append(residues)
+    try:
+        with TextIOWrapper(source, encoding="ascii", newline=None) as text:
+            while True:
+                raw_line = text.readline(MAX_SEQUENCE_LENGTH + 2)
+                if not raw_line:
+                    break
+                if not raw_line.endswith("\n") and len(raw_line) > MAX_SEQUENCE_LENGTH:
+                    raise FastaLimitError("one FASTA line exceeds the structural limit")
+                line = raw_line.removesuffix("\n")
+                if line.startswith(">"):
+                    if current_length is not None:
+                        _finish_sequence(current_length, lengths)
+                    sequence_id = _validate_header(line[1:])
+                    if sequence_id in sequence_ids:
+                        raise FastaValidationError("FASTA sequence identifiers must be unique")
+                    sequence_ids.add(sequence_id)
+                    if len(sequence_ids) > max_sequences:
+                        raise FastaLimitError("FASTA exceeds the sequence-count limit")
+                    encoded = f"{line}\n".encode("ascii")
+                    destination.write(encoded)
+                    input_bytes += len(encoded)
+                    current_length = 0
+                    continue
+                if not line:
+                    continue
+                if current_length is None:
+                    raise FastaValidationError("FASTA residues must follow a header")
+                if any(character.isspace() or _control(character) for character in line):
+                    raise FastaValidationError(
+                        "FASTA residue lines contain whitespace or control text"
+                    )
+                residues = line.upper()
+                if any(character not in _PROTEIN_ALPHABET for character in residues):
+                    raise FastaValidationError("FASTA contains an invalid protein residue")
+                current_length += len(residues)
+                total_residues += len(residues)
+                if current_length > MAX_SEQUENCE_LENGTH:
+                    raise FastaLimitError("one FASTA sequence exceeds the residue limit")
+                encoded = f"{residues}\n".encode("ascii")
+                destination.write(encoded)
+                input_bytes += len(encoded)
+    except UnicodeDecodeError as error:
+        raise FastaValidationError("FASTA must be ASCII") from error
 
     if current_length is None:
         raise FastaValidationError("FASTA contains no records")
     _finish_sequence(current_length, lengths)
-    canonical_bytes = ("\n".join(canonical) + "\n").encode("ascii")
-    if len(canonical_bytes) > max_bytes:
-        raise FastaLimitError("canonical FASTA exceeds the byte limit")
-    return (
-        FastaSummary(
-            sequence_count=len(lengths),
-            total_residues=total_residues,
-            max_sequence_length=max(lengths),
-            input_bytes=len(canonical_bytes),
-        ),
-        canonical_bytes,
+    return FastaSummary(
+        sequence_count=len(lengths),
+        total_residues=total_residues,
+        max_sequence_length=max(lengths),
+        input_bytes=input_bytes,
     )
 
 
-def _read_allowed_file(
+def _open_allowed_file(
     path: Path,
     allowed_roots: tuple[Path, ...],
-    *,
-    max_bytes: int,
-) -> tuple[bytes, Path]:
+) -> _PinnedFasta:
     if not path.is_absolute() or ".." in path.parts or not allowed_roots:
         raise InputPathError("input path is not allowed")
     try:
@@ -158,34 +225,46 @@ def _read_allowed_file(
         raise InputPathError("input path escapes the configured roots")
 
     try:
-        descriptor = _open_beneath(resolved, root)
+        descriptor, ancestry = _open_beneath(resolved, root)
     except OSError as error:
         raise InputPathError("input path cannot be opened safely") from error
     try:
         before = os.fstat(descriptor)
         if _file_state(named) != _file_state(before) or not stat.S_ISREG(before.st_mode):
             raise InputPathError("input path changed before intake")
-        if before.st_size > max_bytes:
-            raise FastaLimitError("FASTA exceeds the byte limit")
-        content = bytearray()
-        while len(content) <= max_bytes:
-            chunk = os.read(descriptor, min(65_536, max_bytes + 1 - len(content)))
-            if not chunk:
-                break
-            content.extend(chunk)
-        after = os.fstat(descriptor)
-        if len(content) > max_bytes:
-            raise FastaLimitError("FASTA exceeds the byte limit")
-        if _file_state(before) != _file_state(after):
-            raise InputPathError("input file changed during intake")
         if len(str(resolved)) > 4_096:
             raise InputPathError("resolved input path exceeds the provenance limit")
-        return bytes(content), resolved
-    finally:
+        return _PinnedFasta(
+            descriptor=descriptor,
+            resolved=resolved,
+            root=root,
+            file_state=_file_state(before),
+            ancestry=ancestry,
+        )
+    except Exception:
         os.close(descriptor)
+        raise
 
 
-def _open_beneath(path: Path, root: Path) -> int:
+def _revalidate_pinned_path(pinned: _PinnedFasta) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor, ancestry = _open_beneath(pinned.resolved, pinned.root)
+        current = os.fstat(descriptor)
+    except OSError as error:
+        raise InputPathError("input path changed during intake") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if (
+        ancestry != pinned.ancestry
+        or _file_state(current) != pinned.file_state
+        or not stat.S_ISREG(current.st_mode)
+    ):
+        raise InputPathError("input path changed during intake")
+
+
+def _open_beneath(path: Path, root: Path) -> tuple[int, tuple[tuple[int, int], ...]]:
     """Open a resolved file by walking from an allowed root without symlinks."""
     parts = path.relative_to(root).parts
     if not parts:
@@ -194,32 +273,40 @@ def _open_beneath(path: Path, root: Path) -> int:
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
     file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     directories: list[int] = []
+    ancestry: list[tuple[int, int]] = []
     try:
         current = os.open(root, directory_flags)
         directories.append(current)
+        ancestry.append(_path_identity(os.fstat(current)))
         for component in parts[:-1]:
             current = os.open(component, directory_flags, dir_fd=current)
             directories.append(current)
-        return os.open(parts[-1], file_flags, dir_fd=current)
+            ancestry.append(_path_identity(os.fstat(current)))
+        return os.open(parts[-1], file_flags, dir_fd=current), tuple(ancestry)
     finally:
         for descriptor in reversed(directories):
             os.close(descriptor)
 
 
-def _write_private(path: Path, content: bytes) -> None:
+def _create_private(path: Path) -> int:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags, 0o600)
+    return os.open(path, flags, 0o600)
+
+
+def _remove_owned_staging_file(path: Path, descriptor: int) -> None:
+    """Remove only the still-linked staging inode created by this intake."""
     try:
-        with os.fdopen(descriptor, "wb", closefd=False) as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
-    finally:
-        os.close(descriptor)
+        current = path.lstat()
+        created = os.fstat(descriptor)
+    except OSError:
+        return
+    if _path_identity(current) != _path_identity(created):
+        return
+    try:
+        path.unlink()
+    except OSError:
+        return
 
 
 def _validate_header(header: str) -> str:
@@ -251,6 +338,10 @@ def _file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
+
+
+def _path_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
 
 
 __all__ = [

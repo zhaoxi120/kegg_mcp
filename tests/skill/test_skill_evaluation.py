@@ -244,6 +244,39 @@ def test_preceding_annotation_handoff_is_consumed_without_user_repetition() -> N
         assert fragment in CORPUS
 
 
+def test_analysis_input_branches_never_duplicate_context_or_payload() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "provide exactly one of top-level `ko_text` or nested `annotations`",
+        "`ko_text` branch owns top-level `analysis_unit` and `sample_id`",
+        "`annotations` branch owns those fields inside `annotations`",
+        "even when their values would match or equal a default",
+        "provide exactly one payload selector",
+        "Never send both",
+        "source object contains only `result_id`",
+        "omit `ko_text`, `analysis_unit`, and `sample_id`",
+        "retained dataset already owns its analysis context",
+    ):
+        assert fragment in normalized
+
+
+def test_deepkoala_allowed_root_failure_returns_to_controlled_resource_route() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "`ANALYSIS_CONFIGURATION_INVALID`",
+        "`A local handoff path is outside the configured allowed roots.`",
+        '`field="file_path"`',
+        '`field="output_directory"`',
+        "return control to the installed `deepkoala-annotation` Skill",
+        "bounded `annotations_resource_uri` fallback",
+        "This Skill does not call the companion MCP",
+        "nested `annotations.text`",
+        "omit `annotations.file_path`",
+        "Do not rerun annotation or rewrite the CSV",
+    ):
+        assert fragment in normalized
+
+
 def test_core_output_defaults_to_a_fresh_configured_root_child() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (

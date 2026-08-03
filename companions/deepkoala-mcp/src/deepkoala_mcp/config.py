@@ -13,7 +13,6 @@ from typing import Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from deepkoala_mcp.contracts import (
-    MAX_FASTA_BYTES,
     MAX_OUTPUT_BYTES,
     MAX_SEQUENCE_COUNT,
     ErrorCode,
@@ -31,7 +30,6 @@ OUTPUT_ROOTS_ENV = f"{ENV_PREFIX}OUTPUT_ROOTS"
 ALLOWED_MODELS_ENV = f"{ENV_PREFIX}ALLOWED_MODELS"
 ALLOWED_DEVICES_ENV = f"{ENV_PREFIX}ALLOWED_DEVICES"
 CPU_THREADS_ENV = f"{ENV_PREFIX}CPU_THREADS"
-MAX_FASTA_BYTES_ENV = f"{ENV_PREFIX}MAX_FASTA_BYTES"
 MAX_SEQUENCES_ENV = f"{ENV_PREFIX}MAX_SEQUENCES"
 MAX_OUTPUT_BYTES_ENV = f"{ENV_PREFIX}MAX_OUTPUT_BYTES"
 MAX_TIMEOUT_SECONDS_ENV = f"{ENV_PREFIX}MAX_TIMEOUT_SECONDS"
@@ -70,7 +68,6 @@ class DeepKoalaRuntimeConfig(BaseModel):
         default_factory=_default_devices
     )
     cpu_threads: int = Field(default=DEFAULT_CPU_THREADS, strict=True, ge=1, le=4)
-    max_fasta_bytes: int = Field(default=MAX_FASTA_BYTES, strict=True, ge=1, le=MAX_FASTA_BYTES)
     max_sequences: int = Field(
         default=MAX_SEQUENCE_COUNT,
         strict=True,
@@ -201,13 +198,6 @@ def load_runtime_config(
         allowed_models=_models(values.get(ALLOWED_MODELS_ENV, "full,frag")),
         allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, ",".join(_default_devices()))),
         cpu_threads=_integer(values, CPU_THREADS_ENV, DEFAULT_CPU_THREADS, 1, 4),
-        max_fasta_bytes=_integer(
-            values,
-            MAX_FASTA_BYTES_ENV,
-            MAX_FASTA_BYTES,
-            1,
-            MAX_FASTA_BYTES,
-        ),
         max_sequences=_integer(
             values,
             MAX_SEQUENCES_ENV,
@@ -392,7 +382,6 @@ __all__ = [
     "CPU_THREADS_ENV",
     "HMMSEARCH_EXECUTABLE_ENV",
     "INPUT_ROOTS_ENV",
-    "MAX_FASTA_BYTES_ENV",
     "MAX_OUTPUT_BYTES_ENV",
     "MAX_SEQUENCES_ENV",
     "MAX_TIMEOUT_SECONDS_ENV",

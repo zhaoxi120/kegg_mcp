@@ -127,6 +127,7 @@ async def test_discovery_declares_five_compact_policy_bounded_tools(
         assert device["enum"] == ["cpu", "cuda", "mps"]
         assert device["default"] == "cpu"
         assert "fasta_text" not in properties
+        assert "max_bytes" not in properties
         assert "acknowledged" not in properties
         assert run.annotations is not None
         assert run.annotations.idempotentHint is False
@@ -148,6 +149,7 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         assert _data(status)["allowed_devices"] == ["cpu"]
         assert _data(status)["cuda_available"] is False
         assert _data(status)["mps_available"] is False
+        assert _data(status)["max_input_bytes"] is None
 
         arguments = _input(runtime_config)
         invalid = await session.call_tool(

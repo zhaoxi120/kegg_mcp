@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
+import deepkoala_mcp.fasta as fasta_module
 import deepkoala_mcp.jobs as jobs_module
 from conftest import DETAILED_CSV, ready_probe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
@@ -20,7 +22,9 @@ from deepkoala_mcp.contracts import (
     ErrorCode,
     JobState,
     RunDeepKoalaInput,
+    RunDeepKoalaResult,
 )
+from deepkoala_mcp.fasta import StagedFasta
 from deepkoala_mcp.installation import RuntimeProbeResult
 from deepkoala_mcp.job_storage import OutputValidationError
 from deepkoala_mcp.jobs import DeepKoalaJobManager
@@ -187,6 +191,94 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert metadata["cuda_available_at_preflight"] is False
         assert metadata["mps_available_at_preflight"] is False
         assert "sha" not in handoff.model_dump_json().lower()
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_valid_fasta_larger_than_the_removed_byte_cap(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    fasta = "".join(f">protein-{index}\n{'M' * 100_000}\n" for index in range(51))
+    runner = SuccessfulRunner()
+    request = _request(runtime_config, name="large-fasta", fasta=fasta)
+
+    async with _manager(runtime_config, runner) as manager:
+        started = await manager.run(request)
+        assert started.fasta.input_bytes > 5_000_000
+        assert started.fasta.total_residues == 5_100_000
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_intake_joins_worker_before_cleanup_and_next_run(
+    runtime_config: DeepKoalaRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intake_started = threading.Event()
+    release_intake = threading.Event()
+    call_lock = threading.Lock()
+    call_count = 0
+    real_stage = fasta_module.stage_fasta
+
+    def blocking_stage(
+        *,
+        fasta_path: str,
+        input_roots: tuple[Path, ...],
+        job_directory: Path,
+        max_sequences: int,
+    ) -> StagedFasta:
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        intake_started.set()
+        if not release_intake.wait(timeout=5):
+            raise RuntimeError("test intake release timed out")
+        return real_stage(
+            fasta_path=fasta_path,
+            input_roots=input_roots,
+            job_directory=job_directory,
+            max_sequences=max_sequences,
+        )
+
+    monkeypatch.setattr(fasta_module, "stage_fasta", blocking_stage)
+    runner = SuccessfulRunner()
+    first_request = _request(runtime_config, name="cancelled-intake")
+    second_request = _request(runtime_config, name="after-cancelled-intake")
+
+    async with _manager(runtime_config, runner) as manager:
+        first_task = asyncio.create_task(manager.run(first_request))
+        second_task: asyncio.Task[RunDeepKoalaResult] | None = None
+        try:
+            assert await asyncio.to_thread(intake_started.wait, 2)
+            first_task.cancel()
+            await asyncio.sleep(0.05)
+            assert not first_task.done()
+            first_task.cancel()
+            second_task = asyncio.create_task(manager.run(second_request))
+            await asyncio.sleep(0.05)
+            with call_lock:
+                assert call_count == 1
+
+            release_intake.set()
+            with pytest.raises(asyncio.CancelledError):
+                await first_task
+            second = await asyncio.wait_for(second_task, timeout=5)
+            assert await _wait_terminal(manager, second.job.job_id) is JobState.SUCCEEDED
+            assert not _explicit_output_path(first_request).exists()
+            with call_lock:
+                assert call_count == 2
+        finally:
+            release_intake.set()
+            pending = tuple(
+                task for task in (first_task, second_task) if task is not None and not task.done()
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+    assert len(runner.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -632,6 +724,8 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.multi_ready is False
         assert status.route_state == "local_ready"
         assert status.issue is None
+        assert status.max_input_bytes is None
+        assert status.max_sequences == runtime_config.max_sequences
         serialized = status.model_dump_json()
         assert str(runtime_config.checkout) not in serialized
         assert str(runtime_config.state_root) not in serialized

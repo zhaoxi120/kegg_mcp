@@ -72,11 +72,23 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   source provenance, then stop.
 - If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
   reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
-  annotation job succeeds. Pass the returned `annotations_path`,
-  `input_format="deepkoala_detailed"`, and `source` object unchanged. Do not ask the user to copy
-  the path, send another prompt, restate the analysis goal, or confirm continuation. Do not read,
-  parse, or rewrite the CSV during the transition. Unless the user specified that stage's output
-  directory, let Core allocate its fresh project output directory.
+  annotation job succeeds. Prefer the returned `annotations_path` and pass
+  `input_format="deepkoala_detailed"` and the `source` object unchanged.
+  Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
+  continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
+  Unless the user specified that stage's output directory, let Core allocate its fresh project
+  output directory.
+- If Core rejects that successful path handoff with `ANALYSIS_CONFIGURATION_INVALID`, the typed
+  message `A local handoff path is outside the configured allowed roots.`, and a `safe_details`
+  entry of `field="file_path"`, do not rerun DeepKOALA,
+  copy the CSV, weaken either server's allowed roots, or retry the same path. While the job remains
+  retained, read the returned `annotations_resource_uri` through the controlled resource fallback
+  defined in the handoff guide, reconstruct the byte-identical strict UTF-8 payload, and resume
+  `kegg-ko-analysis` with nested `annotations.text` rather than `annotations.file_path`. Pass the
+  original `input_format` and `source` unchanged, never send both payload selectors, and keep
+  annotation context only inside the nested `annotations` object.
+  The same message with `field="output_directory"` is an output-location error and must not trigger
+  this annotation-resource fallback.
 - If the original request also asks for graphics, preserve its requested formats and target scope
   as a downstream goal. The KO-analysis stage can then continue to the installed
   `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must
