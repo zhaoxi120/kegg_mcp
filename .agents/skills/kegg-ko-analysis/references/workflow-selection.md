@@ -5,6 +5,21 @@ runs an annotator or renderer. Let the server validate identifiers, perform endp
 deduplicate relationships, and retain complete bounded detail. Do not replace those deterministic
 steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 
+## Construct exactly one input branch
+
+- For `analyze_ko_annotations`, provide exactly one of top-level `ko_text` or nested
+  `annotations`. The `ko_text` branch owns top-level `analysis_unit` and `sample_id`. The
+  `annotations` branch owns those fields inside `annotations`; omit both top-level context fields
+  even when their values would match or equal a default. Never copy context into both locations.
+- Inside `annotations`, provide exactly one payload selector: `file_path` for a readable controlled
+  file or `text` for an unchanged bounded inline payload. Never send both. Keep `input_format`,
+  `source`, `analysis_unit`, and `sample_id` in the same nested object.
+- For `audit_annotation_mapping`, `analyze_modules`, `analyze_pathways`, or `compare_ko_sets`,
+  each dataset `source` provides exactly one of `ko_text` or `result_id`. When reusing a
+  `result_id`, the source object contains only `result_id`: omit `ko_text`, `analysis_unit`, and
+  `sample_id` because the retained dataset already owns its analysis context. Inline `ko_text`
+  sources may carry `analysis_unit` and `sample_id`.
+
 ## Search terms and chemical candidates
 
 - Use `search_kegg_entries` when the user supplies a name, keyword, formula, exact mass, or
@@ -161,14 +176,27 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 4. Run strict analysis with accepted K numbers. Add only policy-defined uncertain records to a
    requested lenient view.
 5. Use stable bundle files for later MCP stages; do not pass a process-private result identifier.
+6. For an immediately preceding successful DeepKOALA handoff, first use its stable
+   `annotations_path`. If and only if Core rejects that path with
+   `ANALYSIS_CONFIGURATION_INVALID`, the typed message
+   `A local handoff path is outside the configured allowed roots.`, and a `safe_details` entry of
+   `field="file_path"`, return control to the installed
+   `deepkoala-annotation` Skill for its bounded `annotations_resource_uri` fallback. This Skill
+   does not call the companion MCP, change either server's allowed roots, copy the CSV, or retry the
+   same unreadable path. After the preceding Skill returns the byte-identical UTF-8 payload, call
+   Core with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
+   `annotations.file_path` and keep any analysis context only inside `annotations`. The same message
+   with `field="output_directory"` is an output-location error and must not enter this fallback.
 
 ## Automatic cross-Skill continuation
 
 - When the immediately preceding `deepkoala-annotation` stage produced the evidence,
-  consume its stable CSV handoff directly. Use the returned `annotations_path`, `input_format`, and
-  `source` object unchanged; do not ask the user to restate the path, copy it, repeat the request,
-  or confirm a KEGG-analysis stage already present in the original request.
-  Do not rerun annotation or rewrite the CSV.
+  consume its stable CSV handoff directly when Core can read it. Use the returned
+  `annotations_path`, `input_format`, and `source` object unchanged;
+  do not ask the user to restate the path, copy it, repeat the request, or confirm a KEGG-analysis
+  stage already present in the original request. If the typed allowed-root error described above
+  occurs, use only the canonical resource fallback and then the mutually exclusive
+  `annotations.text` branch. Do not rerun annotation or rewrite the CSV.
 - When the original request also asks to render, visualize, draw, or export graphics, first require
   a successfully written, compatible `render_input.json`, then automatically continue with the installed
   `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path while

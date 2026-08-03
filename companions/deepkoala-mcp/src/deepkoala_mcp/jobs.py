@@ -34,7 +34,7 @@ from deepkoala_mcp.fasta import (
     FastaLimitError,
     FastaValidationError,
     InputPathError,
-    stage_fasta,
+    stage_fasta_in_worker,
 )
 from deepkoala_mcp.installation import (
     Installation,
@@ -203,11 +203,10 @@ class DeepKoalaJobManager:
                 os.mkdir(directory, mode=0o700)
                 os.chmod(directory, 0o700)
                 directory_created = True
-                staged = stage_fasta(
+                staged = await stage_fasta_in_worker(
                     fasta_path=request.fasta_path,
                     input_roots=self.config.input_roots,
                     job_directory=directory,
-                    max_bytes=self.config.max_fasta_bytes,
                     max_sequences=self.config.max_sequences,
                 )
                 requested_output = (
@@ -267,15 +266,13 @@ class DeepKoalaJobManager:
             except FastaLimitError:
                 fail(
                     ErrorCode.INPUT_LIMIT_EXCEEDED,
-                    "The FASTA exceeds a configured input limit.",
-                    suggested_action=(
-                        "Split the input or ask the operator to review deployment bounds."
-                    ),
+                    "The FASTA exceeds a supported structural input limit.",
+                    suggested_action="Reduce sequence count or correct an oversized record.",
                 )
             except FastaValidationError:
                 fail(
                     ErrorCode.INVALID_FASTA,
-                    "The input is not a valid bounded protein FASTA.",
+                    "The input is not a valid protein FASTA.",
                     suggested_action="Correct the protein FASTA and retry with the same path.",
                 )
             finally:
@@ -410,7 +407,6 @@ class DeepKoalaJobManager:
             cpu_threads=self.config.cpu_threads,
             running_jobs=running,
             terminal_jobs=terminal,
-            max_input_bytes=self.config.max_fasta_bytes,
             max_sequences=self.config.max_sequences,
             max_output_bytes=self.config.max_output_bytes,
             max_timeout_seconds=self.config.max_timeout_seconds,

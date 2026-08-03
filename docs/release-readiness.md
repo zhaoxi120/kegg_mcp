@@ -207,7 +207,9 @@ advice.
 - [ ] All servers remain local stdio processes and never use `shell=True`.
 - [ ] Native Windows startup fails closed rather than substituting weaker path, ownership, locking,
       or atomic-publication behavior.
-- [ ] Inputs, identifiers, resources, retained bytes, outputs, and summaries remain bounded.
+- [ ] DeepKOALA FASTA intake remains streamed and structurally bounded without an aggregate byte
+      cap; other inputs, identifiers, resources, retained bytes, outputs, and summaries remain
+      bounded.
 - [ ] Allowed-root paths reject traversal, unsafe ancestry, replacement races, and symlink escape.
 - [ ] Outputs never replace existing entries and publish their manifest last.
 - [ ] Result IDs remain opaque, scoped, expiring, and safely indistinguishable when unavailable.

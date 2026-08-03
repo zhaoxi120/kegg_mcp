@@ -6,7 +6,7 @@ import asyncio
 import base64
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -29,11 +29,25 @@ from kegg_mcp.kegg import (
     GetRequest,
     GetResult,
     KeggClientConfig,
+    KeggGetDatabase,
     KeggRequestOptions,
     LinkRequest,
     LinkResult,
     OfflineCacheAccess,
+    PublicAcademicAccess,
+    ResponseOrigin,
+    RetrievalEndpointClass,
 )
+from kegg_mcp.kegg.contracts import (
+    PARSER_VERSION,
+    PUBLIC_KEGG_ENDPOINT_LABEL,
+    AccessMode,
+    CacheLookupState,
+    KeggBatchProvenance,
+    KeggOperation,
+    KeggPairRow,
+)
+from kegg_mcp.kegg.parsers import parse_flat_file_response
 from kegg_mcp.mcp.contracts import NormalizeKoAnnotationsInput
 from kegg_mcp.mcp.input_validation import validate_tool_input
 from kegg_mcp.mcp.runtime import McpRuntime
@@ -54,6 +68,7 @@ _MULTI_DOMAIN_DETAILED_CSV = (
 _UNCLASSIFIED_MULTI_DOMAIN_CSV = (
     b"name,predict_label,probability,threshold,annotate,start,end\nprotein-1,,,,,,\n"
 )
+_MODULE_NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
 
 class _FakeRunner:
@@ -100,6 +115,107 @@ class _OfflineOnlyKeggClient:
     ) -> LinkResult:
         del request, options
         raise AssertionError("normalization must not call KEGG LINK")
+
+
+class _ModuleReferenceClient(_OfflineOnlyKeggClient):
+    """Return one synthetic MODULE definition without network access."""
+
+    def __init__(self) -> None:
+        self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
+
+    def get(
+        self,
+        request: GetRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> GetResult:
+        del options
+        first = request.entries[0]
+        if first.database is KeggGetDatabase.MODULE:
+            body = b"".join(
+                (
+                    f"ENTRY       {entry.identifier}            Module\n"
+                    "NAME        Synthetic module\n"
+                    "DEFINITION  K00001 K00003\n"
+                    "///\n"
+                ).encode("ascii")
+                for entry in request.entries
+            )
+        elif first.database is KeggGetDatabase.PATHWAY:
+            body = b"".join(
+                (
+                    f"ENTRY       {entry.identifier}                    Pathway\n"
+                    "NAME        Synthetic pathway\n"
+                    "CLASS       Metabolism; Carbohydrate metabolism\n"
+                    "///\n"
+                ).encode("ascii")
+                for entry in request.entries
+            )
+        else:
+            raise AssertionError("the focused handoff test retrieves only MODULEs and pathways")
+        return GetResult(
+            request=request,
+            documents=(parse_flat_file_response(body),),
+            missing_entries=(),
+            batches=(
+                KeggBatchProvenance(
+                    operation=KeggOperation.GET,
+                    request_key="synthetic:deepkoala-resource-module",
+                    access_mode=AccessMode.PUBLIC_ACADEMIC,
+                    retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
+                    endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
+                    origin=ResponseOrigin.NETWORK,
+                    cache_lookup_state=CacheLookupState.MISS,
+                    retrieved_at=_MODULE_NOW,
+                    served_at=_MODULE_NOW,
+                    expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+                    response_bytes=len(body),
+                    parser_name="flat_file",
+                    parser_version=PARSER_VERSION,
+                    database_release="synthetic-integration-release",
+                    attempt_count=1,
+                    is_stale=False,
+                ),
+            ),
+        )
+
+    def link(
+        self,
+        request: LinkRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> LinkResult:
+        del options
+        if request.relationship.value != "pathway_to_ko":
+            raise AssertionError("the focused handoff test links only pathways to K numbers")
+        source = request.source_identifiers[0]
+        return LinkResult(
+            request=request,
+            rows=(
+                KeggPairRow(line_number=1, source_id=f"path:{source}", target_id="ko:K00001"),
+                KeggPairRow(line_number=2, source_id=f"path:{source}", target_id="ko:K00003"),
+            ),
+            batches=(
+                KeggBatchProvenance(
+                    operation=KeggOperation.LINK,
+                    request_key="synthetic:deepkoala-resource-pathway-link",
+                    access_mode=AccessMode.PUBLIC_ACADEMIC,
+                    retrieval_endpoint_class=RetrievalEndpointClass.PUBLIC_ACADEMIC,
+                    endpoint_label=PUBLIC_KEGG_ENDPOINT_LABEL,
+                    origin=ResponseOrigin.NETWORK,
+                    cache_lookup_state=CacheLookupState.MISS,
+                    retrieved_at=_MODULE_NOW,
+                    served_at=_MODULE_NOW,
+                    expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+                    response_bytes=64,
+                    parser_name="pair_table",
+                    parser_version=PARSER_VERSION,
+                    database_release="synthetic-integration-release",
+                    attempt_count=1,
+                    is_stale=False,
+                ),
+            ),
+        )
 
 
 def _build_runtime_config(root: Path) -> DeepKoalaRuntimeConfig:
@@ -150,6 +266,16 @@ def _core_runtime(root: Path) -> McpRuntime:
         client=cast(KeggMcpClient, _OfflineOnlyKeggClient()),
         result_store=SQLiteResultStore(root / "core-results.sqlite3"),
         scope_id="deepkoala-cross-server-contract",
+        allowed_roots=(str(root.resolve()),),
+    )
+
+
+def _module_core_runtime(root: Path) -> McpRuntime:
+    root.mkdir(mode=0o700)
+    return McpRuntime(
+        client=cast(KeggMcpClient, _ModuleReferenceClient()),
+        result_store=SQLiteResultStore(root / "core-results.sqlite3"),
+        scope_id="deepkoala-disjoint-resource-contract",
         allowed_roots=(str(root.resolve()),),
     )
 
@@ -416,6 +542,133 @@ async def test_resource_fallback_reconstructs_inline_core_input_with_offset_time
             cast(list[object], provenance["source_preview"])[0],
         )
         assert cast(str, first_source["annotation_date"]).endswith("+09:00")
+
+
+@pytest.mark.asyncio
+async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_reuse(
+    tmp_path: Path,
+) -> None:
+    companion_root = tmp_path / "companion"
+    core_root = tmp_path / "core"
+    config = _build_runtime_config(companion_root)
+    manager = DeepKoalaJobManager(
+        config,
+        runner=_FakeRunner(_SMALL_DETAILED_CSV),
+        runtime_probe=_ready_probe,
+    )
+    companion_server = create_deepkoala_server(manager)
+    core_server = create_core_server(_module_core_runtime(core_root))
+
+    async with create_connected_server_and_client_session(companion_server) as companion_session:
+        job_id = await _start_job(companion_session, config, "disjoint-roots")
+        handoff = _parse_handoff(await _poll_terminal(companion_session, job_id))
+        assert Path(handoff.annotations_path).is_relative_to(companion_root)
+        assert not Path(handoff.annotations_path).is_relative_to(core_root)
+
+        nested_context: dict[str, object] = {
+            "input_format": handoff.input_format,
+            "source": handoff.source.model_dump(mode="json"),
+            "analysis_unit": "isolate_proteome",
+            "sample_id": "resource-handoff-sample",
+        }
+        path_arguments: dict[str, object] = {
+            "annotations": {**nested_context, "file_path": handoff.annotations_path},
+            "module_ids": ["M00001"],
+            "pathways": [{"pathway_id": "ko00010"}],
+        }
+        assert "analysis_unit" not in path_arguments
+        assert "sample_id" not in path_arguments
+
+        async with create_connected_server_and_client_session(core_server) as core_session:
+            output_rejected = await core_session.call_tool(
+                "analyze_ko_annotations",
+                {
+                    "annotations": {**nested_context, "text": _SMALL_DETAILED_CSV.decode("ascii")},
+                    "module_ids": ["M00001"],
+                    "pathways": [{"pathway_id": "ko00010"}],
+                    "output_directory": str(companion_root / "not-a-core-output"),
+                },
+            )
+            assert output_rejected.isError is True
+            output_rejection = cast(dict[str, object], _wire_payload(output_rejected)["error"])
+            assert output_rejection["message"] == (
+                "A local handoff path is outside the configured allowed roots."
+            )
+            output_details = {
+                cast(str, item["name"]): item["value"]
+                for item in cast(list[dict[str, object]], output_rejection["safe_details"])
+            }
+            assert output_details["field"] == "output_directory"
+
+            rejected = await core_session.call_tool("analyze_ko_annotations", path_arguments)
+            assert rejected.isError is True
+            rejection = cast(dict[str, object], _wire_payload(rejected)["error"])
+            assert rejection["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+            assert rejection["message"] == (
+                "A local handoff path is outside the configured allowed roots."
+            )
+            details = {
+                cast(str, item["name"]): item["value"]
+                for item in cast(list[dict[str, object]], rejection["safe_details"])
+            }
+            assert details["field"] == "file_path"
+
+            annotation_text = await _read_annotation_resource(
+                companion_session,
+                handoff.annotations_resource_uri,
+            )
+            assert annotation_text.encode("utf-8") == _SMALL_DETAILED_CSV
+            inline_arguments: dict[str, object] = {
+                "annotations": {**nested_context, "text": annotation_text},
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010"}],
+            }
+            analyzed = await core_session.call_tool(
+                "analyze_ko_annotations",
+                inline_arguments,
+            )
+            assert analyzed.isError is False
+            analyzed_data = _wire_data(analyzed)
+            analyzed_summary = cast(dict[str, object], analyzed_data["summary"])
+            assert analyzed_summary["input_records"] == 2
+
+            normalized = await core_session.call_tool(
+                "normalize_ko_annotations",
+                {**nested_context, "text": annotation_text},
+            )
+            assert normalized.isError is False
+            normalized_result = cast(dict[str, object], _wire_data(normalized)["result"])
+            retained_source = {"result_id": cast(str, normalized_result["result_id"])}
+            assert tuple(retained_source) == ("result_id",)
+
+            conflicting_reuse = await core_session.call_tool(
+                "analyze_modules",
+                {
+                    "source": {
+                        **retained_source,
+                        "analysis_unit": "isolate_proteome",
+                        "sample_id": "resource-handoff-sample",
+                    },
+                    "module_ids": ["M00001"],
+                },
+            )
+            assert conflicting_reuse.isError is True
+            conflicting_error = cast(
+                dict[str, object],
+                _wire_payload(conflicting_reuse)["error"],
+            )
+            assert conflicting_error["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+
+            reused = await core_session.call_tool(
+                "analyze_modules",
+                {"source": retained_source, "module_ids": ["M00001"]},
+            )
+            assert reused.isError is False
+            module = cast(
+                list[dict[str, object]],
+                _wire_data(reused)["module_previews"],
+            )[0]
+            assert module["strict_is_complete"] is True
 
 
 @pytest.mark.asyncio

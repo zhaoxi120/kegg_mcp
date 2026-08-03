@@ -110,6 +110,29 @@ def test_original_fasta_to_analysis_request_continues_without_reprompting() -> N
         assert fragment in CORPUS
 
 
+def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "`ANALYSIS_CONFIGURATION_INVALID`",
+        "`A local handoff path is outside the configured allowed roots.`",
+        '`field="file_path"`',
+        '`field="output_directory"`',
+        "`annotations_resource_uri`",
+        '`schema_version="1"`',
+        "require contiguous offsets and stable `total_bytes`",
+        "verify each `returned_bytes` value",
+        "byte-identical strict UTF-8 payload",
+        "nested `annotations.text` rather than `annotations.file_path`",
+        "never send both payload selectors",
+        "do not rerun DeepKOALA",
+        "copy or rewrite the CSV",
+        "before deleting the job record",
+    ):
+        assert fragment in normalized
+    assert "or when the client already knows" not in normalized
+    assert "If a client has no shared filesystem" not in normalized
+
+
 def test_multi_domain_mode_requires_explicit_ready_opt_in() -> None:
     for fragment in (
         "Omit `multi` by default",

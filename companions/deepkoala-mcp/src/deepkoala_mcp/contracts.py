@@ -9,7 +9,6 @@ from typing import Annotated, Generic, Literal, NoReturn, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MAX_FASTA_BYTES = 5_000_000
 MAX_OUTPUT_BYTES = 5_000_000
 MAX_SEQUENCE_COUNT = 100_000
 MAX_SEQUENCE_LENGTH = 100_000
@@ -21,6 +20,8 @@ ANNOTATIONS_FILENAME = "deepkoala_annotations.csv"
 RUN_REPORT_FILENAME = "deepkoala_run_report.md"
 DEFAULT_MODEL_DATE = "202502"
 JOB_ID_PATTERN = r"job_[a-f0-9]{32}"
+_MAX_TOTAL_RESIDUES = MAX_SEQUENCE_COUNT * MAX_SEQUENCE_LENGTH
+_MAX_CANONICAL_FASTA_BYTES = 2 * _MAX_TOTAL_RESIDUES + MAX_SEQUENCE_COUNT * (MAX_HEADER_BYTES + 2)
 
 JobId = Annotated[str, Field(pattern=rf"^{JOB_ID_PATTERN}$", max_length=36)]
 ModelName = Literal["full", "frag"]
@@ -213,9 +214,9 @@ class FastaSummary(FrozenModel):
     """Aggregate FASTA facts that contain no headers or sequences."""
 
     sequence_count: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
-    total_residues: int = Field(strict=True, ge=1, le=MAX_FASTA_BYTES)
+    total_residues: int = Field(strict=True, ge=1, le=_MAX_TOTAL_RESIDUES)
     max_sequence_length: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_LENGTH)
-    input_bytes: int = Field(strict=True, ge=1, le=MAX_FASTA_BYTES)
+    input_bytes: int = Field(strict=True, ge=1, le=_MAX_CANONICAL_FASTA_BYTES)
 
 
 class ExecutionPlan(FrozenModel):
@@ -411,7 +412,10 @@ class CompanionStatus(FrozenModel):
     max_concurrent_jobs: Literal[1] = 1
     running_jobs: int = Field(strict=True, ge=0, le=1)
     terminal_jobs: int = Field(strict=True, ge=0, le=MAX_RETAINED_JOBS)
-    max_input_bytes: int = Field(strict=True, ge=1, le=MAX_FASTA_BYTES)
+    max_input_bytes: Literal[None] = Field(
+        default=None,
+        description="No aggregate FASTA byte limit; structural input bounds remain enforced.",
+    )
     max_sequences: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
     max_output_bytes: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
     max_timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
@@ -447,7 +451,6 @@ class CompanionStatus(FrozenModel):
 __all__ = [
     "ANNOTATIONS_FILENAME",
     "HANDOFF_SCHEMA_VERSION",
-    "MAX_FASTA_BYTES",
     "MAX_HEADER_BYTES",
     "MAX_OUTPUT_BYTES",
     "MAX_RESOURCE_PAGE_BYTES",

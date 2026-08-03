@@ -7,10 +7,12 @@ import stat
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 from pydantic import ValidationError
 
+import deepkoala_mcp.fasta as fasta_module
 from deepkoala_mcp.config import (
     ALLOW_MULTI_ENV,
     ALLOWED_DEVICES_ENV,
@@ -29,6 +31,9 @@ from deepkoala_mcp.config import (
 )
 from deepkoala_mcp.contracts import (
     DEFAULT_MODEL_DATE,
+    MAX_HEADER_BYTES,
+    MAX_SEQUENCE_LENGTH,
+    FastaSummary,
     ImportHandoff,
     RunDeepKoalaInput,
     SourceProvenance,
@@ -303,10 +308,9 @@ def test_utc_timestamp_serializes_with_z() -> None:
     assert '"annotation_date":"2026-07-16T00:00:00Z"' in source.model_dump_json()
 
 
-def test_validate_fasta_normalizes_and_honors_deployment_limits() -> None:
+def test_validate_fasta_normalizes_and_honors_structural_limits() -> None:
     summary, canonical = validate_fasta_bytes(
         b">p1 note\r\nmpep\r\n>p2\rW\r",
-        max_bytes=100,
         max_sequences=2,
     )
     assert canonical == b">p1 note\nMPEP\n>p2\nW\n"
@@ -314,7 +318,9 @@ def test_validate_fasta_normalizes_and_honors_deployment_limits() -> None:
     with pytest.raises(FastaLimitError):
         validate_fasta_bytes(b">p1\nM\n>p2\nW\n", max_sequences=1)
     with pytest.raises(FastaLimitError):
-        validate_fasta_bytes(b">p\n" + b"M" * 20 + b"\n", max_bytes=10)
+        validate_fasta_bytes(b">p\n" + b"M" * (MAX_SEQUENCE_LENGTH + 1) + b"\n")
+    with pytest.raises(FastaLimitError):
+        validate_fasta_bytes(b">" + b"p" * (MAX_HEADER_BYTES + 1) + b"\nM\n")
 
 
 @pytest.mark.parametrize(
@@ -337,12 +343,136 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
         fasta_path=str(source),
         input_roots=(allowed.resolve(),),
         job_directory=job,
-        max_bytes=1_000,
         max_sequences=10,
     )
     staged = job / "input.fasta"
     assert staged_result.input_path == source.resolve()
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+
+
+def test_stage_accepts_valid_fasta_larger_than_the_removed_byte_cap(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    job = tmp_path / "job"
+    allowed.mkdir()
+    job.mkdir(mode=0o700)
+    source = allowed / "large-proteins.faa"
+    residues = b"M" * 100_000
+    with source.open("wb") as stream:
+        for index in range(51):
+            stream.write(f">protein-{index}\n".encode("ascii"))
+            stream.write(residues)
+            stream.write(b"\n")
+
+    staged_result = stage_fasta(
+        fasta_path=str(source),
+        input_roots=(allowed.resolve(),),
+        job_directory=job,
+        max_sequences=51,
+    )
+
+    staged = job / "input.fasta"
+    assert source.stat().st_size > 5_000_000
+    assert staged.stat().st_size > 5_000_000
+    assert staged_result.summary.total_residues == 5_100_000
+    assert staged_result.summary.input_bytes == staged.stat().st_size
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+
+
+def test_stage_preserves_an_existing_private_staging_name(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    job = tmp_path / "job"
+    allowed.mkdir()
+    job.mkdir(mode=0o700)
+    source = allowed / "proteins.faa"
+    source.write_text(">protein\nMPEPTIDE\n", encoding="ascii")
+    staged = job / "input.fasta"
+    staged.write_text("pre-existing private content", encoding="ascii")
+
+    with pytest.raises(FileExistsError):
+        stage_fasta(
+            fasta_path=str(source),
+            input_roots=(allowed.resolve(),),
+            job_directory=job,
+            max_sequences=10,
+        )
+
+    assert staged.read_text(encoding="ascii") == "pre-existing private content"
+
+
+def test_failed_stage_preserves_a_replacement_staging_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "allowed"
+    job = tmp_path / "job"
+    allowed.mkdir()
+    job.mkdir(mode=0o700)
+    source = allowed / "proteins.faa"
+    source.write_text(">protein\nMPEPTIDE\n", encoding="ascii")
+    staged = job / "input.fasta"
+
+    def replace_then_fail(
+        source_stream: BinaryIO,
+        destination: BinaryIO,
+        *,
+        max_sequences: int,
+    ) -> FastaSummary:
+        del source_stream, destination, max_sequences
+        staged.unlink()
+        staged.write_text("replacement content", encoding="ascii")
+        raise FastaValidationError("synthetic failure")
+
+    monkeypatch.setattr(fasta_module, "_validate_fasta_stream", replace_then_fail)
+
+    with pytest.raises(FastaValidationError, match="synthetic failure"):
+        stage_fasta(
+            fasta_path=str(source),
+            input_roots=(allowed.resolve(),),
+            job_directory=job,
+            max_sequences=10,
+        )
+
+    assert staged.read_text(encoding="ascii") == "replacement content"
+
+
+def test_stage_rejects_ancestor_replacement_during_intake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "allowed"
+    moved = tmp_path / "moved"
+    job = tmp_path / "job"
+    allowed.mkdir()
+    job.mkdir(mode=0o700)
+    source_path = allowed / "proteins.faa"
+    source_path.write_text(">original\nMPEPTIDE\n", encoding="ascii")
+    validate_stream = fasta_module._validate_fasta_stream  # pyright: ignore[reportPrivateUsage]
+
+    def replacing_ancestor(
+        source: BinaryIO,
+        destination: BinaryIO,
+        *,
+        max_sequences: int,
+    ) -> FastaSummary:
+        summary = validate_stream(source, destination, max_sequences=max_sequences)
+        allowed.rename(moved)
+        allowed.mkdir()
+        source_path.write_text(">replacement\nW\n", encoding="ascii")
+        return summary
+
+    monkeypatch.setattr(fasta_module, "_validate_fasta_stream", replacing_ancestor)
+
+    with pytest.raises(InputPathError, match="changed during intake"):
+        stage_fasta(
+            fasta_path=str(source_path),
+            input_roots=(allowed.resolve(),),
+            job_directory=job,
+            max_sequences=10,
+        )
+
+    assert source_path.read_text(encoding="ascii") == ">replacement\nW\n"
+    assert (moved / "proteins.faa").read_text(encoding="ascii") == ">original\nMPEPTIDE\n"
+    assert not (job / "input.fasta").exists()
 
 
 def test_stage_path_rejects_escape_and_symlink(tmp_path: Path) -> None:
@@ -362,6 +492,5 @@ def test_stage_path_rejects_escape_and_symlink(tmp_path: Path) -> None:
                 fasta_path=str(path),
                 input_roots=(allowed.resolve(),),
                 job_directory=job,
-                max_bytes=1_000,
                 max_sequences=10,
             )

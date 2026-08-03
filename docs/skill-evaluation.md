@@ -29,8 +29,15 @@ The `tests/skill/` suite verifies that:
   evidence audit, including row/response-limit incomplete states;
 - KEGG-returned text remains untrusted database data and is never followed as an instruction;
 - no Skill implements inference, normalization, MODULE evaluation, KGML parsing, or rendering;
-- cross-stage continuation uses stable files rather than private process identifiers, while a
-  card result ID is used only in-session to create an explicit durable selected-reference bundle;
+- cross-stage continuation defaults to stable files rather than private process identifiers; the
+  sole same-task exception lets the upstream Skill read its own bounded controlled resource after
+  a typed downstream `file_path` allowed-root rejection and pass byte-identical bounded inline
+  content, never the resource or job identifier, to the downstream server;
+- a card result ID is used only in-session to create an explicit durable selected-reference bundle;
+- high-level annotation calls keep context in exactly one input branch, retained dataset calls use
+  a result-ID-only source, and inline resource recovery never also supplies a file path;
+- a successful DeepKOALA handoff rejected by Core's typed allowed-root policy uses the companion's
+  bounded resource fallback without rerunning annotation, copying the CSV, or weakening path policy;
 - Mapper/Syntax handoff never claims upload or execution;
 - absent explicit output paths, each server allocates a fresh directory beneath its configured
   project output root, while explicit user paths win;
@@ -74,6 +81,9 @@ candidate:
 | Fragmented or metagenomic protein calls | Select `frag` before the first annotation call and briefly report why; an explicit user model choice wins. |
 | Complete/reference proteins or ambiguous provenance | Select `full`; do not infer completeness from a sequence-length threshold. |
 | No requested output directory | Omit `output_directory` so each server allocates beneath its configured project output root; never guess a writable root from an input path. |
+| High-level annotation table with biological context | Use nested `annotations` and put `analysis_unit` and `sample_id` only inside that object. Do not repeat either field at the top level, even with the same or default value; top-level context belongs only to the `ko_text` branch. |
+| Reusing a retained normalized dataset | For `audit_annotation_mapping`, `analyze_modules`, `analyze_pathways`, or `compare_ko_sets`, pass a `source` containing only `result_id`. Do not repeat `ko_text`, `analysis_unit`, or `sample_id` because the retained dataset owns its context. |
+| DeepKOALA path rejected by Core allowed-root policy | On `ANALYSIS_CONFIGURATION_INVALID` with `A local handoff path is outside the configured allowed roots.` and `safe_details` containing `field="file_path"`, keep the successful job and read its bounded `annotations_resource_uri`. Validate the versioned direct or paged envelope, reconstruct byte-identical strict UTF-8, and pass exactly `annotations.text` with unchanged format and source. The same message with `field="output_directory"` must not trigger this route. Do not also pass `file_path`, rerun annotation, copy the CSV, or alter allowed roots. |
 | Explicit GPU annotation request | Use `device=cuda` or `device=mps` only when status both allows that explicit backend and reports it available; otherwise stop instead of silently substituting CPU or automatic device selection. |
 | DeepKOALA detailed CSV | Use `kegg-ko-analysis` and preserve source evidence and model provenance. |
 | Plain K-number column | Normalize once, then run requested MODULE/pathway analysis through the core server. |

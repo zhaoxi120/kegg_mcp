@@ -61,21 +61,47 @@ The execution parameters include the actual boolean `multi` value. A fully empty
 score, annotation marker, and coordinate tuple is an unclassified row rather than a KO assignment;
 partially empty or malformed evidence is invalid.
 
-Pass the CSV path and provenance to the independent KO-analysis stage only when both servers allow
-the shared output root. If a client has no shared filesystem, read the companion's bounded resource
-pages and pass the reconstructed content through a core-supported bounded inline transport. The
-Skill must not parse, transform, or validate CSV rows itself.
+Pass the CSV path and provenance to the independent KO-analysis stage first; do not infer Core's
+allowed-root policy from deployment topology. Only the exact typed `file_path` rejection below may
+route the same successful job through the companion's bounded resource. The Skill must not parse,
+transform, or validate CSV rows itself.
 
 Treat private job identifiers and resource URIs as process-scoped. Stable output-directory files,
 not a private identifier, are the cross-MCP handoff.
+
+### Controlled resource fallback
+
+Prefer `annotations_path`. Use the fallback only after a successful handoff when Core returns
+`ANALYSIS_CONFIGURATION_INVALID` with the typed message
+`A local handoff path is outside the configured allowed roots.` and a `safe_details` entry of
+`field="file_path"` for that path. The same message with `field="output_directory"` is not a
+handoff failure and must not trigger this fallback. Do not use it to hide malformed
+CSV, an expired or deleted job, an unsupported handoff version, or another Core validation error.
+Do not rerun DeepKOALA, copy or rewrite the CSV, alter allowed-root configuration, or retry the same
+unreadable path.
+
+Read the handoff's `annotations_resource_uri` while the process-scoped job remains retained. A
+direct `text/csv` response is the complete payload. For a paged `application/json` response, require
+`schema_version="1"`, `artifact="annotations"`, and `encoding="base64"`; follow only the returned
+`next_uri` chain, reject repeated URIs, require contiguous offsets and stable `total_bytes`, verify
+each `returned_bytes` value, and require the final byte count to equal `total_bytes`. Decode the
+completed payload as strict UTF-8 without parsing or transforming CSV rows.
+
+Resume the independent Core Skill with exactly one nested annotation payload selector:
+`annotations.text` contains the reconstructed content and `annotations.file_path` is omitted.
+Preserve the handoff's `input_format` and `source` unchanged. Put `analysis_unit` and `sample_id`
+only inside `annotations` when they are supplied; never repeat them at the top level. Complete this
+transfer before deleting the job record because deletion invalidates the process-scoped resource.
 
 ## Automatic cross-Skill continuation
 
 When the original user request includes downstream KEGG analysis, a successful annotation stage
 continues with the installed `kegg-ko-analysis` Skill using the returned `annotations_path`,
-`input_format`, and `source` values unchanged. The transition uses the stable CSV rather than the
-job identifier and does not require the user to copy a path, repeat the request, or approve an
-already requested analysis stage.
+`input_format`, and `source` values unchanged when the path is shared. The transition uses the
+stable CSV rather than the job identifier and does not require the user to copy a path, repeat the
+request, or approve an already requested analysis stage. On the exact typed `file_path`
+allowed-root failure above, complete the controlled resource fallback and pass the unchanged inline
+content instead.
 
 When the original request also includes graphics, retain that goal for the later
 `kegg-pathway-rendering` stage. Do not interpret that goal here, and do not call a core or renderer

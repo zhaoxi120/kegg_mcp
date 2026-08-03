@@ -121,8 +121,12 @@ The three repository Skills have one MCP dependency each:
 Skills contain instructions, not deterministic implementation code. They do not launch
 subprocesses, manage weights, normalize records, call KEGG directly, parse KGML, calculate analysis,
 construct SVG, manipulate pixels, or invent resource URIs. Stable versioned files in user-selected
-allowed output directories connect stages. Process-scoped job and result identifiers are local
-optimizations, not cross-process authorization or durable handoff tokens.
+allowed output directories are the durable, default stage handoff. The sole same-task exception is
+an upstream Skill reading its own MCP's bounded controlled resource after a typed downstream
+`file_path` allowed-root rejection, then passing the byte-identical content through the downstream
+server's bounded inline input. Each Skill still calls exactly one MCP, and no job or resource
+identifier crosses into Core. Process-scoped job and result identifiers are local optimizations,
+not cross-process authorization or durable handoff tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
@@ -368,9 +372,11 @@ bundle transactions, and SQLite internals.
 
 Errors use stable machine-readable codes, a bounded safe message, recoverability, a suggested
 action, and redacted details. Inputs, fields, identifiers, target counts, decompressed bytes,
-outputs, and retained artifacts are bounded. Filesystem access requires direct absolute paths below
-configured roots and rejects traversal, unsafe ancestry, replacement races, and symlink escape.
-No component uses `shell=True`.
+outputs, and retained artifacts are bounded by schema or structure. DeepKOALA FASTA intake is the
+one aggregate-byte exception: it is streamed without a total file-size cap while sequence count,
+per-sequence length, header length, path, and replacement-race bounds remain enforced. Filesystem
+access requires direct absolute paths below configured roots and rejects traversal, unsafe ancestry,
+replacement races, and symlink escape. No component uses `shell=True`.
 
 ## DeepKOALA companion contract
 
