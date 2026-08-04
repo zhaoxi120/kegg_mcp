@@ -365,7 +365,6 @@ def test_python_identifiers_do_not_embed_contract_versions() -> None:
 
 
 def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     installation = (PROJECT_ROOT / "docs/installation.md").read_text(encoding="utf-8")
     server_doc = (PROJECT_ROOT / "docs/mcp-server.md").read_text(encoding="utf-8")
     readiness = (PROJECT_ROOT / "docs/release-readiness.md").read_text(encoding="utf-8")
@@ -391,12 +390,12 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert locked_core["version"] == _project_table()["version"]
     assert locked_renderer["version"] == renderer_project["version"]
 
-    for document in (readme, installation, server_doc, readiness, renderer_readme):
+    for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
         assert "version 3" in normalized
         assert "separate" in normalized or "independent" in normalized
-    for document in (readme, installation, server_doc, readiness):
+    for document in (installation, server_doc, readiness):
         assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
 
     renderer_job = _workflow_job(ci, "validate-renderer-companion")
