@@ -78,9 +78,11 @@ Each process has its own runtime, state, input validation, and MCP entry point. 
 starts an annotator or renderer. The renderer does not normalize evidence or recompute MODULE
 completion or pathway coverage.
 
-The core Python wheel contains only `kegg-mcp`. A component wheel does not install
-repository-scoped Skills or another server. The generated plugin is a local deployment artifact,
-not a fourth distribution or a tracked copy of the Skills.
+The Core and DeepKOALA Python wheels do not depend on another server distribution. The Renderer
+Python wheel installs the compatible Core distribution because it reuses Core's typed contracts
+and KEGG asset client, but it neither registers nor starts the Core stdio server. No component
+wheel installs repository-scoped Skills. The generated plugin is a local deployment artifact, not
+a fourth distribution or a tracked copy of the Skills.
 
 For a direct, manually configured Core server, file handoff remains disabled until
 `KEGG_MCP_ALLOWED_ROOTS` is configured; the complete manual environment belongs in
@@ -426,9 +428,10 @@ This is a bounded discovery check, not a bulk compatibility campaign.
 
 ## Manual deployment for other MCP clients
 
-The component Python wheel installs the server command only; it does not install
-repository-scoped Skills or another server. Development environments and clients that do not
-consume the generated Codex plugin should follow
+The Core and DeepKOALA Python wheels install only their own server distributions. The Renderer
+Python wheel also installs the compatible Core distribution as a dependency, without registering
+or starting the Core stdio server. No component wheel installs repository-scoped Skills. Development
+environments and clients that do not consume the generated Codex plugin should follow
 [Manual component deployment](manual-component-deployment.md). Keep manual registrations isolated
 from a suite-managed Codex deployment.
 

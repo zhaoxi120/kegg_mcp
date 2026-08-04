@@ -146,9 +146,11 @@ kegg-render://results/{render_id}/{artifact}
 
 A successful call returns an opaque process-scoped `render_id`, the resolved output directory,
 bounded metadata, warnings, server-generated resource URIs, and stable artifact output paths. Image
-metadata includes MIME type, byte size, and dimensions. The published `render_manifest.json`
-records renderer, analysis, target, retrieval/cache, and artifact provenance without exposing
-private configuration.
+response metadata includes MIME type, byte size, and dimensions. The published schema-version-2
+`render_manifest.json` records renderer, analysis, target, retrieval/cache, and artifact provenance
+without exposing private configuration. Each image entry records a controlled relative `path`, MIME
+type, byte size, width, and height. Process-scoped render IDs, expiry timestamps, and
+resource URIs remain only in the MCP result metadata and are not written into the durable manifest.
 
 When `output_directory` is omitted, the renderer allocates a fresh directory beneath the default
 output root. An explicit output directory must be new or empty. Artifacts are published without

@@ -265,6 +265,7 @@ name = "kegg-render-mcp"
 version = "0.3.2"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "kegg-mcp" },
     { name = "mcp" },
     { name = "pillow" },
@@ -284,6 +285,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.10,<5" },
     { name = "kegg-mcp", editable = "../../" },
     { name = "mcp", specifier = ">=1.27,<2" },
     { name = "pillow", specifier = ">=11,<13" },

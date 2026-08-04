@@ -142,10 +142,12 @@ MCP servers are activated in Codex. A standard chat without local file and termi
 explain the installation. For manual setup and operational details, see
 [Installation and operation](docs/installation.md).
 
-Use the **suite installer** for the complete Codex setup. A Python wheel contains one component and
-does not install either companion or any repository-scoped Skill. **Installing a wheel alone does
-not make repository-scoped Skills available.** For component-by-component setup, see
-[manual deployment](docs/manual-component-deployment.md).
+Use the **suite installer** for the complete Codex setup. The Core and DeepKOALA Python wheels do
+not pull in another server distribution. The Renderer Python wheel installs the compatible Core
+distribution as a dependency for shared typed contracts and KEGG asset access, but it does not
+register or start the Core stdio server. No wheel installs repository-scoped Skills. **Installing a
+wheel alone does not make repository-scoped Skills available.** For component-by-component setup,
+see [manual deployment](docs/manual-component-deployment.md).
 
 ## Interpret the results responsibly
 

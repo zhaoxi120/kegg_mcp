@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import json
 import multiprocessing
 import os
 from datetime import UTC, datetime, timedelta
 from multiprocessing.connection import Connection
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Self, cast
 
 import pytest
 
@@ -40,7 +41,7 @@ def _hold_renderer_state_scope(
 
 
 @pytest.mark.asyncio
-async def test_service_renders_both_targets_formats_and_manifest(
+async def test_service_renders_both_targets_formats_and_durable_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
@@ -48,8 +49,10 @@ async def test_service_renders_both_targets_formats_and_manifest(
 ) -> None:
     service = RendererService(runtime_config, synthetic_provider)
     service.open()
+    durable_files: dict[str, bytes] | None = None
+    render_id: str | None = None
+    output = allowed_root / "images"
     try:
-        output = allowed_root / "images"
         result = await service.render(
             render_input_path=str(render_input_file),
             target_ids=("ko00010", "M00001"),
@@ -67,13 +70,52 @@ async def test_service_renders_both_targets_formats_and_manifest(
         for metadata in result.artifacts:
             assert (output / metadata.name).is_file()
             assert (output / metadata.name).stat().st_mode & 0o777 == 0o600
-        manifest = service.store.read(result.render_id, "render_manifest.json")
-        assert b'"calculation_method"' in manifest.content
-        assert b'"parser_version"' in manifest.content
-        assert b'"analysis_unit":"unknown"' in manifest.content
-        assert str(runtime_config.state_root).encode() not in manifest.content
+            assert metadata.resource_uri == (
+                f"kegg-render://results/{result.render_id}/{metadata.name}"
+            )
+        assert result.result_uri == f"kegg-render://results/{result.render_id}"
+
+        manifest_blob = service.store.read(result.render_id, "render_manifest.json")
+        assert manifest_blob.content == (output / "render_manifest.json").read_bytes()
+        manifest = cast(dict[str, object], json.loads(manifest_blob.content))
+        assert manifest["schema_version"] == "2"
+        assert "render_id" not in manifest
+        assert "expires_at" not in manifest
+        assert "resource_uri" not in manifest
+        assert result.render_id.encode() not in manifest_blob.content
+        assert b"kegg-render://" not in manifest_blob.content
+        assert b'"calculation_method"' in manifest_blob.content
+        assert b'"parser_version"' in manifest_blob.content
+        assert b'"analysis_unit":"unknown"' in manifest_blob.content
+        assert str(runtime_config.state_root).encode() not in manifest_blob.content
+
+        artifact_records = cast(list[dict[str, object]], manifest["artifacts"])
+        assert len(artifact_records) == 4
+        for record in artifact_records:
+            assert set(record) == {
+                "path",
+                "mime_type",
+                "byte_size",
+                "width",
+                "height",
+            }
+            relative_path = record["path"]
+            assert isinstance(relative_path, str)
+            assert Path(relative_path).name == relative_path
+            content = (output / relative_path).read_bytes()
+            assert record["byte_size"] == len(content)
+
+        render_id = result.render_id
+        durable_files = {path.name: path.read_bytes() for path in output.iterdir()}
     finally:
         service.close()
+
+    assert render_id is not None
+    assert durable_files is not None
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == durable_files
+    with pytest.raises(RenderMcpError) as closed:
+        service.store.get(render_id)
+    assert closed.value.detail.code is ErrorCode.RESULT_NOT_FOUND
 
 
 @pytest.mark.asyncio

@@ -2190,6 +2190,60 @@ async def test_large_resource_requires_ranges_and_reconstructs_exact_bytes(tmp_p
         assert bytes(reconstructed) == payload
 
 
+@pytest.mark.parametrize(
+    ("limits", "artifact_count"),
+    [
+        (ResultStoreLimits(), 64),
+        (
+            ResultStoreLimits(
+                default_page_size=2,
+                max_page_size=3,
+                max_artifacts_per_result=5,
+            ),
+            5,
+        ),
+    ],
+    ids=["default-64-artifacts", "max-page-smaller-than-artifact-count"],
+)
+@pytest.mark.asyncio
+async def test_result_index_lists_all_artifacts_across_store_pages(
+    tmp_path: Path,
+    limits: ResultStoreLimits,
+    artifact_count: int,
+) -> None:
+    runtime = McpRuntime(
+        client=cast(KeggMcpClient, _FakeReferenceClient()),
+        result_store=SQLiteResultStore(tmp_path / "paginated-results.sqlite3", limits=limits),
+        scope_id="paginated-result-index",
+    )
+    expected_sections = tuple(f"section-{index:03d}" for index in range(artifact_count))
+    metadata = runtime.result_store.create(
+        runtime.scope_id,
+        tuple(
+            ResultArtifactInput(
+                section=section,
+                mime_type="text/plain",
+                content=section.encode("ascii"),
+            )
+            for section in expected_sections
+        ),
+    )
+    server = create_server(runtime)
+
+    async with create_connected_server_and_client_session(server) as session:
+        result_uri = f"ko-analysis://results/{metadata.result_id}"
+        response = await session.read_resource(AnyUrl(result_uri))
+
+    content = response.contents[0]
+    assert isinstance(content, types.TextResourceContents)
+    index = json.loads(content.text)
+    assert index["result"]["artifact_count"] == artifact_count
+    assert tuple(item["section"] for item in index["artifacts"]) == expected_sections
+    assert tuple(index["section_uris"]) == tuple(
+        f"{result_uri}/{section}" for section in expected_sections
+    )
+
+
 @pytest.mark.asyncio
 async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result_quota(
     tmp_path: Path,

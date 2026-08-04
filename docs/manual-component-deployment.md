@@ -5,9 +5,11 @@ Codex plugin. The repository suite installer remains the supported complete-suit
 Linux and Apple Silicon macOS. Install each required component from the same reviewed source
 baseline into an independent environment.
 
-The component Python wheels install server commands only; they do not install repository-scoped
-Skills or another server. Build and inspect release wheels by following the
-[release-readiness checklist](release-readiness.md).
+The Core and DeepKOALA wheels do not depend on another server distribution. The Renderer wheel
+installs the compatible Core distribution because it reuses Core's typed contracts and KEGG asset
+client, but it neither registers nor starts the Core stdio server. No component wheel installs
+repository-scoped Skills. Build and inspect release wheels by following the [release-readiness
+checklist](release-readiness.md).
 
 ## Platform boundary
 

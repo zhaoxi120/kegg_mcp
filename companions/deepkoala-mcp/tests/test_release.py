@@ -62,6 +62,7 @@ def test_distribution_has_no_inference_or_download_dependency() -> None:
     project = document["project"]
     assert project["name"] == "deepkoala-mcp"
     assert project["version"] == deepkoala_mcp.__version__
+    assert "anyio>=4.10,<5" in project["dependencies"]
     dependencies = " ".join(project["dependencies"]).lower()
     for forbidden in ("torch", "deepkoala", "requests", "httpx", "aiohttp"):
         assert forbidden not in dependencies
