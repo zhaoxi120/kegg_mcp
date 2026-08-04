@@ -103,7 +103,7 @@ jobs:
           --wheel "${RUNNER_TEMP}"/deepkoala-mcp-dist/deepkoala_mcp-*.whl
           --distribution deepkoala-mcp
           --module deepkoala_mcp
-          --expected-version 0.4.0
+          --expected-version 0.5.0
           --console deepkoala-mcp
 
   validate-renderer-companion:
@@ -250,7 +250,7 @@ jobs:
           --wheel "${RUNNER_TEMP}"/deepkoala-mcp-macos-dist/deepkoala_mcp-*.whl
           --distribution deepkoala-mcp
           --module deepkoala_mcp
-          --expected-version 0.4.0
+          --expected-version 0.5.0
           --console deepkoala-mcp
 
   validate-macos-renderer:

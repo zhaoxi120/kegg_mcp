@@ -12,7 +12,7 @@ discovery before creating the next tag. Record the final evidence in the release
 | Distribution | Source version | Supported platform | Contract |
 | --- | --- | --- | --- |
 | `kegg-mcp` | `0.8.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
-| `deepkoala-mcp` | `0.4.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
+| `deepkoala-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
 | `kegg-render-mcp` | `0.3.2` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
