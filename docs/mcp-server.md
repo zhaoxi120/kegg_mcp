@@ -94,7 +94,7 @@ can display nested object fields and enum values without resolving `$defs`.
 
 ## Tools
 
-The server exposes eighteen tools:
+The server exposes eighteen Core tools:
 
 - `analyze_ko_annotations`: one-call normalization and MODULE/pathway analysis. Supply either
   `ko_text` or a nested `annotations` request. If no MODULE or pathway target and no explicit
