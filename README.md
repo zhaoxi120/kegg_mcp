@@ -27,7 +27,7 @@ this suite. KEGG MCP is not a website or hosted analysis service.
 <p align="center">
   <img
     src="docs/assets/fasta-to-pathway-example.webp"
-    alt="One Codex request moving from a protein FASTA through local KO annotation and KEGG interpretation to traceable reports and optional pathway graphics"
+    alt="One Codex request moving from a protein FASTA through local KO annotation and KEGG analysis to traceable reports and optional pathway graphics"
     width="840"
   >
 </p>
@@ -105,21 +105,42 @@ community when that context is known.
 
 ## Get started
 
-The complete Codex setup requires:
+### Install with Codex or ChatGPT
+
+The easiest path is to give this repository to an assistant that can access your local files and
+terminal.
+
+1. Copy the repository URL:
+
+   ```text
+   https://github.com/zhaoxi120/kegg_mcp
+   ```
+
+2. Paste it into Codex, or into a ChatGPT workspace with local terminal access, together with this
+   request:
+
+   > Install KEGG MCP from this repository. Follow `docs/installation.md` exactly. Find a reviewed
+   > release checkout and stop if none is available. Check that my platform and prerequisites are
+   > supported. Before making changes, ask me to confirm the required private directories, my KEGG
+   > eligibility and access mode, and any DeepKOALA download. Run the non-mutating preflight first
+   > and continue only if it succeeds. After installation, do not reinstall from the current task;
+   > tell me how to verify the three repository Skills and their local MCP servers from a new Codex
+   > task outside the source checkout.
+
+3. Answer the assistant's questions about local paths, downloads, and KEGG access. When installation
+   finishes, open a new Codex task outside the source checkout and try one of the prompts above.
+
+The complete setup currently requires:
 
 - Linux, or native Apple Silicon macOS 14 or later; Windows hosts use WSL2.
 - Python 3.11.x, `uv` 0.11.16 or later, Git, and a Codex CLI with local plugin support.
 - A reviewed release checkout, private state and project directories, and one explicit KEGG access
   mode.
 
-Then:
-
-1. Follow [Installation and operation](docs/installation.md) to prepare the deployment file and
-   private directories.
-2. Run the documented non-mutating preflight, then install the complete suite only after the
-   preflight succeeds.
-3. Open a new Codex task, verify the three repository Skills and their local MCP servers are
-   available, and try one of the prompts above.
+A ChatGPT workspace with terminal access can help perform the setup, but the installed Skills and
+MCP servers are activated in Codex. A standard chat without local file and terminal access can only
+explain the installation. For manual setup and operational details, see
+[Installation and operation](docs/installation.md).
 
 Use the **suite installer** for the complete Codex setup. A Python wheel contains one component and
 does not install either companion or any repository-scoped Skill. **Installing a wheel alone does
