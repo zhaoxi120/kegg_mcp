@@ -180,7 +180,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert "- Device policy: `cpu`" in report_text
         assert stat.S_IMODE(annotations.stat().st_mode) == 0o600
         assert handoff.schema_version == "1"
-        assert handoff.tool_version == "0.4.0"
+        assert handoff.tool_version == "0.5.0"
         assert handoff.input_path == request.fasta_path
         assert handoff.source.input_path == request.fasta_path
         assert handoff.source.model_name == "frag"
