@@ -25,7 +25,11 @@ from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.mcp.tool_registry import TOOL_NAMES
 from kegg_mcp.services.kegg_entries import read_cached_kegg_entry
 from kegg_mcp.services.operational import get_server_status_service
-from kegg_mcp.services.result_store import RESULT_ID_FRAGMENT, ResultStoreError
+from kegg_mcp.services.result_store import (
+    RESULT_ID_FRAGMENT,
+    ResultArtifactMetadata,
+    ResultStoreError,
+)
 
 MAX_INLINE_RESOURCE_BYTES = 64 * 1024
 
@@ -170,15 +174,18 @@ def _read_resource(value: str, runtime: McpRuntime) -> list[ReadResourceContents
     if match := _RESULT_RE.fullmatch(value):
         result_id = match.group(1)
         metadata = runtime.result_store.get_result(runtime.scope_id, result_id)
-        artifacts = runtime.result_store.list_artifacts(runtime.scope_id, result_id)
+        artifacts = _list_all_artifacts(
+            runtime,
+            result_id,
+            expected_count=metadata.artifact_count,
+        )
         return [
             _json_resource(
                 ResultResourceIndex(
                     result=metadata,
-                    artifacts=artifacts.items,
+                    artifacts=artifacts,
                     section_uris=tuple(
-                        f"ko-analysis://results/{result_id}/{item.section}"
-                        for item in artifacts.items
+                        f"ko-analysis://results/{result_id}/{item.section}" for item in artifacts
                     ),
                 )
             )
@@ -260,6 +267,35 @@ def _read_resource(value: str, runtime: McpRuntime) -> list[ReadResourceContents
         result = read_cached_kegg_entry(GetRequest(entries=(entry,)), client=runtime.client)
         return [_json_resource(result)]
     raise InvalidResourceUri
+
+
+def _list_all_artifacts(
+    runtime: McpRuntime,
+    result_id: str,
+    *,
+    expected_count: int,
+) -> tuple[ResultArtifactMetadata, ...]:
+    """Collect every bounded artifact metadata page for one immutable result."""
+    artifacts: list[ResultArtifactMetadata] = []
+    offset = 0
+    while len(artifacts) < expected_count:
+        page = runtime.result_store.list_artifacts(
+            runtime.scope_id,
+            result_id,
+            offset=offset,
+            limit=runtime.result_store.limits.max_page_size,
+        )
+        if page.offset != offset or page.total_items != expected_count or not page.items:
+            raise ResultStoreError("integrity_check")
+        artifacts.extend(page.items)
+        if page.next_offset is None:
+            break
+        if page.next_offset != offset + len(page.items) or len(artifacts) >= expected_count:
+            raise ResultStoreError("integrity_check")
+        offset = page.next_offset
+    if len(artifacts) != expected_count:
+        raise ResultStoreError("integrity_check")
+    return tuple(artifacts)
 
 
 def _status(runtime: McpRuntime):  # type annotation is inferred from the service contract
