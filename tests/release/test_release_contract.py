@@ -625,7 +625,11 @@ def test_distribution_boundary_is_explicit() -> None:
     assert "Installing a wheel alone does not make repository-scoped Skills available" in (
         normalized_readme
     )
-    assert "does not install repository-scoped Skills" in normalized_installation
+    assert "No component wheel installs repository-scoped Skills" in normalized_installation
+    assert "Renderer Python wheel installs the compatible Core distribution" in (
+        normalized_installation
+    )
+    assert "neither registers nor starts the Core stdio server" in normalized_installation
     assert "does not install either companion or any repository-scoped Skill" in (
         normalized_readiness
     )
