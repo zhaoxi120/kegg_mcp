@@ -135,10 +135,13 @@ live access mode and zero requests in `offline_cache` or `unconfigured` mode. MO
 closed-world when its handoff is complete. Pathway rendering is open-world when it retrieves KEGG
 assets. Tool annotations reflect these effects.
 
-Successful operations produce bounded static artifacts and a `render_manifest.json` in a new or
-empty durable output directory. Opaque retained-result identities remain process-scoped and are not
-cross-stage authorization. The [Renderer README](../companions/kegg-render-mcp/README.md) owns the
-exact tools, resource URIs, status fields, retention limits, configuration, and output lifecycle.
+Successful operations produce bounded static artifacts and a schema-version-2
+`render_manifest.json` in a new or empty durable output directory. Its image records contain only a
+controlled relative path, MIME type, byte size, width, and height. Opaque render IDs,
+expiry timestamps, and resource URIs remain process-scoped result metadata; they are excluded from
+the durable manifest and are not cross-stage authorization. The
+[Renderer README](../companions/kegg-render-mcp/README.md) owns the exact tools, resource URIs,
+status fields, retention limits, configuration, and output lifecycle.
 
 ## Rendering semantics
 

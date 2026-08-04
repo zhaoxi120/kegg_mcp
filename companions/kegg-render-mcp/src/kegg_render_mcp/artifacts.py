@@ -165,21 +165,18 @@ class RenderArtifactStore:
         expires_at = created_at + timedelta(seconds=self._config.retention_seconds)
         manifest_name = "render_manifest.json"
         manifest = {
-            "schema_version": "1",
+            "schema_version": "2",
             "renderer": {"name": "kegg-render-mcp", "version": __version__},
-            "render_id": render_id,
             "created_at": created_at.isoformat(),
-            "expires_at": expires_at.isoformat(),
             "target_ids": target_ids,
             "warnings": warnings,
             "artifacts": [
                 {
-                    "name": item.name,
+                    "path": item.name,
                     "mime_type": item.mime_type,
                     "byte_size": len(item.content),
                     "width": item.width,
                     "height": item.height,
-                    "resource_uri": f"kegg-render://results/{render_id}/{item.name}",
                 }
                 for item in artifacts
             ],
