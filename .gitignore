@@ -58,6 +58,7 @@ results/
 
 # Local non-normative reference documents
 *.zh-CN.md
+!/README.zh-CN.md
 
 # Editor and operating-system files
 .DS_Store

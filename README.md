@@ -1,5 +1,7 @@
 # KEGG MCP
 
+**English** | [Simplified Chinese](README.zh-CN.md) | [Japanese](README.ja.md)
+
 **Ask Codex to turn protein FASTA or KO evidence into traceable KEGG reports and optional
 graphics—locally.**
 
