@@ -77,6 +77,7 @@ FORBIDDEN_ARCHIVE_PARTS = {
     "results",
 }
 CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+ROOT_README_NAVIGATION = "**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)"
 PYTHON_REQUIRES = ">=3.11,<3.12"
 VERSION_SUFFIXED_IDENTIFIER = re.compile(r"(?:V[0-9]+|_v[0-9]+)\Z")
 
@@ -246,6 +247,8 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
 
     for path in OWNED_RELEASE_FILES:
         content = path.read_text(encoding="utf-8")
+        if path == PROJECT_ROOT / "README.md":
+            content = content.replace(ROOT_README_NAVIGATION, "", 1)
         assert not CJK_CHARACTER.search(content), path
         assert path.stat().st_size <= 128 * 1024, path
         assert "SQLite format 3" not in content
@@ -260,9 +263,7 @@ def test_published_localized_readmes_are_bounded_and_linked() -> None:
         assert "SQLite format 3" not in content
 
     navigation = {
-        PROJECT_ROOT / "README.md": (
-            "**English** | [Simplified Chinese](README.zh-CN.md) | [Japanese](README.ja.md)"
-        ),
+        PROJECT_ROOT / "README.md": ROOT_README_NAVIGATION,
         PROJECT_ROOT / "README.zh-CN.md": (
             "[English](README.md) | **简体中文** | [日本語](README.ja.md)"
         ),
