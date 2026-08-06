@@ -245,8 +245,8 @@ its `RowEvidence`. Mixed text, empty components, commas, namespaced components, 
 K-number components are not partially recovered: they remain one invalid record. No LLM or
 heuristic extraction participates in this rule.
 
-This deterministic expansion is part of importer version `2`; version `1` treated the complete
-composite label as one invalid identifier.
+Deterministic expansion of every canonical component is required by the current importer contract;
+the complete composite source string remains immutable row evidence.
 
 `ImportReport.input_rows` continues to count source rows, while `emitted_records` counts expanded
 records. Therefore one valid composite row can make `emitted_records` greater than `input_rows`.

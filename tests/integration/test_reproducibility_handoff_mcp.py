@@ -1,4 +1,4 @@
-"""End-to-end MCP contracts for v0.8 durable references and local handoffs."""
+"""End-to-end MCP contracts for durable references and local handoffs."""
 
 from __future__ import annotations
 
@@ -54,13 +54,13 @@ def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
         response_bytes=256,
         parser_name="flat_file",
         parser_version=PARSER_VERSION,
-        database_release="synthetic-v08-release",
+        database_release="synthetic-release",
         attempt_count=1,
         is_stale=False,
     )
 
 
-class _V08Client:
+class _SyntheticClient:
     """Minimal typed fake that makes local versus KEGG-backed behavior observable."""
 
     def __init__(self) -> None:
@@ -101,10 +101,10 @@ class _V08Client:
 
 def _runtime(
     tmp_path: Path,
-    client: _V08Client,
+    client: _SyntheticClient,
     store: SQLiteResultStore,
     *,
-    scope_id: str = "v08-scope",
+    scope_id: str = "reproducibility-scope",
 ) -> McpRuntime:
     return McpRuntime(
         client=cast(KeggMcpClient, client),
@@ -176,7 +176,7 @@ def test_handoff_schema_has_seven_closed_target_branches() -> None:
 @pytest.mark.asyncio
 async def test_reference_and_handoff_workflows_round_trip_through_mcp(tmp_path: Path) -> None:
     tools = _tools()
-    client = _V08Client()
+    client = _SyntheticClient()
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     runtime = _runtime(tmp_path, client, store)
 
@@ -284,7 +284,7 @@ async def test_reference_and_handoff_workflows_round_trip_through_mcp(tmp_path: 
 async def test_handoff_rejects_occupied_output_without_any_kegg_request(
     tmp_path: Path,
 ) -> None:
-    client = _V08Client()
+    client = _SyntheticClient()
     store = SQLiteResultStore(tmp_path / "results-preflight.sqlite3")
     runtime = _runtime(tmp_path, client, store)
     output = tmp_path / "occupied-handoff"
@@ -312,10 +312,10 @@ async def test_handoff_rejects_occupied_output_without_any_kegg_request(
 
 
 @pytest.mark.asyncio
-async def test_v08_mcp_rejects_cross_scope_removed_enrichment_and_output_paths(
+async def test_mcp_rejects_cross_scope_unsupported_enrichment_and_output_paths(
     tmp_path: Path,
 ) -> None:
-    client = _V08Client()
+    client = _SyntheticClient()
     store = SQLiteResultStore(tmp_path / "results-invalid.sqlite3")
     runtime = _runtime(tmp_path, client, store, scope_id="source-scope")
     card_result = await dispatch_tool(
@@ -341,11 +341,11 @@ async def test_v08_mcp_rejects_cross_scope_removed_enrichment_and_output_paths(
     assert cross_scope.isError is True
     assert not cross_scope_output.exists()
 
-    removed_enrichment_output = tmp_path / "removed-enrichment"
-    removed_enrichment = await dispatch_tool(
+    unsupported_enrichment_output = tmp_path / "unsupported-enrichment"
+    unsupported_enrichment = await dispatch_tool(
         "prepare_kegg_handoff",
         {
-            "output_directory": str(removed_enrichment_output),
+            "output_directory": str(unsupported_enrichment_output),
             "handoff": {
                 "target": "enrichment",
                 "foreground": {"namespace": "ko", "identifiers": ["K00001"]},
@@ -354,12 +354,12 @@ async def test_v08_mcp_rejects_cross_scope_removed_enrichment_and_output_paths(
         },
         runtime,
     )
-    assert removed_enrichment.isError is True
+    assert unsupported_enrichment.isError is True
     assert (
-        _structured(removed_enrichment)["error"]["code"]
+        _structured(unsupported_enrichment)["error"]["code"]
         == ErrorCode.ANALYSIS_CONFIGURATION_INVALID.value
     )
-    assert not removed_enrichment_output.exists()
+    assert not unsupported_enrichment_output.exists()
 
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     disallowed = await dispatch_tool(

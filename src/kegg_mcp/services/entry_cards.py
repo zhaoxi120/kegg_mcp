@@ -116,8 +116,8 @@ class KeggModuleDefinitionCard(FrozenModel):
     """Conservative structural projection of one MODULE DEFINITION field."""
 
     raw_definition: CardText
-    parser_name: Literal["kegg_module_definition"] = MODULE_PARSER_NAME
-    parser_version: Literal["1"] = MODULE_PARSER_VERSION
+    parser_name: Literal["kegg_module_definition"]
+    parser_version: Literal["1"]
     is_valid: bool
     required_blocks: Annotated[tuple[CardText, ...], Field(max_length=MAX_ENTRY_CARD_ITEMS)]
     optional_components: Annotated[tuple[CardText, ...], Field(max_length=MAX_ENTRY_CARD_ITEMS)]
@@ -267,11 +267,10 @@ class KeggEntryCardSnapshot(FrozenModel):
         },
     )
 
-    schema_version: Literal["1"] = ENTRY_CARD_SCHEMA_VERSION
-    parser_name: Literal["kegg_flat_file_entry_card"] = ENTRY_CARD_PARSER_NAME
-    parser_version: Literal["1"] = ENTRY_CARD_PARSER_VERSION
+    schema_version: Literal["1"]
+    parser_name: Literal["kegg_flat_file_entry_card"]
+    parser_version: Literal["1"]
     response_parser_version: str = Field(
-        default=KEGG_RESPONSE_PARSER_VERSION,
         pattern=r"^[0-9]+(?:\.[0-9]+)*$",
         max_length=32,
     )
@@ -547,6 +546,10 @@ def build_entry_cards(result: GetResult) -> KeggEntryCardSnapshot:
             suggested_action="Refresh the exact database-qualified entries and retry.",
         )
     return KeggEntryCardSnapshot(
+        schema_version=ENTRY_CARD_SCHEMA_VERSION,
+        parser_name=ENTRY_CARD_PARSER_NAME,
+        parser_version=ENTRY_CARD_PARSER_VERSION,
+        response_parser_version=KEGG_RESPONSE_PARSER_VERSION,
         requested_entries=tuple(
             KeggEntryCardEntity(database=kind, identifier=requested.identifier)
             for kind, requested in supported_requests
@@ -763,6 +766,8 @@ def _module_definition_card(definition: str) -> KeggModuleDefinitionCard:
         optional_components = _module_optional_components(definition, parsed.ast.required_blocks)
     return KeggModuleDefinitionCard(
         raw_definition=definition,
+        parser_name=MODULE_PARSER_NAME,
+        parser_version=MODULE_PARSER_VERSION,
         is_valid=parsed.is_valid,
         required_blocks=required_blocks,
         optional_components=optional_components,

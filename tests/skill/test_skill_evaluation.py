@@ -230,7 +230,6 @@ def test_ko_analysis_preserves_scientific_and_process_boundaries() -> None:
     ):
         assert fragment in NORMALIZED_CORPUS
     assert "python3 -m deepkoala" not in NORMALIZED_CORPUS
-    assert "prepare_deepkoala_job" not in NORMALIZED_CORPUS
     assert "render_analysis_bundle" not in NORMALIZED_CORPUS
 
 

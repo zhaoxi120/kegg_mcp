@@ -672,7 +672,7 @@ async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_r
 
 
 @pytest.mark.asyncio
-async def test_handoff_and_resource_versions_fail_closed(tmp_path: Path) -> None:
+async def test_handoff_and_resource_schemas_fail_closed(tmp_path: Path) -> None:
     config = _build_runtime_config(tmp_path)
     runner = _FakeRunner(
         b"name,predict_label,probability,threshold,annotate\n"
@@ -683,10 +683,10 @@ async def test_handoff_and_resource_versions_fail_closed(tmp_path: Path) -> None
     manager = DeepKoalaJobManager(config, runner=runner, runtime_probe=_ready_probe)
     server = create_deepkoala_server(manager)
     async with create_connected_server_and_client_session(server) as session:
-        job_id = await _start_job(session, config, "version-errors")
+        job_id = await _start_job(session, config, "schema-errors")
         completed = await _poll_terminal(session, job_id)
         raw_handoff = cast(dict[str, object], _wire_data(completed)["handoff"])
-        for value in (None, "2"):
+        for value in (None, "unsupported"):
             malformed = dict(raw_handoff)
             if value is None:
                 malformed.pop("schema_version")
@@ -702,7 +702,7 @@ async def test_handoff_and_resource_versions_fail_closed(tmp_path: Path) -> None
             json.loads(cast(types.TextResourceContents, resource.contents[0]).text),
         )
         _require_resource_schema(notice)
-        for value in (None, "2"):
+        for value in (None, "unsupported"):
             malformed_notice = dict(notice)
             if value is None:
                 malformed_notice.pop("schema_version")

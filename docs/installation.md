@@ -71,7 +71,7 @@ The complete FASTA-to-image workflow remains three separate processes:
 
 ```text
 deepkoala-mcp -> deepkoala_annotations.csv -> kegg-mcp
-kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 4 -> kegg-render-mcp
 ```
 
 Each process has its own runtime, state, input validation, and MCP entry point. The core never
@@ -88,7 +88,7 @@ For a direct, manually configured Core server, file handoff remains disabled unt
 `KEGG_MCP_ALLOWED_ROOTS` is configured; the complete manual environment belongs in
 [Manual component deployment](manual-component-deployment.md).
 
-`render_input.json` uses the renderer-specific version 3 contract and carries
+`render_input.json` uses the renderer-specific version 4 contract and carries
 `AnalysisExecutionProvenance` version 3. Source KEGG PNG and KGML assets remain local and are not
 included in tests, packages, or releases.
 
@@ -381,8 +381,8 @@ still references its marketplace or plugin.
 
 Manual `codex mcp add` registration is not a supported substitute for the suite plugin and must not
 be layered on top of it. It omits the repository Skills and can shadow the version-bound plugin
-bindings. Maintainers who intentionally test legacy direct registration must isolate it from the
-supported suite deployment.
+bindings. Maintainers who intentionally test unsupported direct registration must isolate it from
+the supported suite deployment.
 
 ## Minimal post-install verification
 

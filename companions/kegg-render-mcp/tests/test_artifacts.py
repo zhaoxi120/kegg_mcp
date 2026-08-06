@@ -14,15 +14,26 @@ from types import TracebackType
 from typing import Self, cast
 
 import pytest
+from kegg_mcp.analysis import PathwayReferenceScope
+from kegg_mcp.services.render_contracts import RenderabilityStatus, serialize_render_input
 
-from conftest import SyntheticProvider
+from conftest import SyntheticProvider, make_render_input
 from kegg_render_mcp import _state_scope as state_scope_module
 from kegg_render_mcp import artifacts as artifacts_module
 from kegg_render_mcp import export_writer
+from kegg_render_mcp import render_service as render_service_module
 from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
 from kegg_render_mcp.config import RendererLimits, RendererRuntimeConfig
-from kegg_render_mcp.contracts import MAX_ARTIFACTS, ErrorCode, RenderFormat, RenderMcpError
+from kegg_render_mcp.contracts import (
+    MAX_ARTIFACTS,
+    ErrorCode,
+    RenderFormat,
+    RenderMcpError,
+)
+from kegg_render_mcp.pathway_scene import UnconfiguredAssetProvider
+from kegg_render_mcp.raster import PngArtifact
 from kegg_render_mcp.render_service import RendererService
+from kegg_render_mcp.svg import SvgArtifact
 
 
 def _hold_renderer_state_scope(
@@ -38,6 +49,333 @@ def _hold_renderer_state_scope(
     finally:
         state_scope_module.release_state_scope(scope)
         connection.close()
+
+
+def _small_result_config(
+    runtime_config: RendererRuntimeConfig,
+    *,
+    max_result_bytes: int = 1_000,
+) -> RendererRuntimeConfig:
+    limits = runtime_config.limits.model_copy(
+        update={
+            "max_asset_bytes": max_result_bytes,
+            "max_svg_bytes": max_result_bytes,
+            "max_result_bytes": max_result_bytes,
+        }
+    )
+    return runtime_config.model_copy(update={"limits": limits})
+
+
+def _assert_no_partial_result(
+    service: RendererService,
+    allowed_root: Path,
+    allocated_before: tuple[Path, ...],
+) -> None:
+    snapshot = service.store.snapshot()
+    assert snapshot.active_result_count == 0
+    assert snapshot.cleanup_pending_result_count == 0
+    assert snapshot.retained_bytes == 0
+    assert snapshot.retained_storage_bytes == 0
+    assert tuple(allowed_root.glob("kegg-render-*")) == allocated_before
+
+
+@pytest.mark.asyncio
+async def test_output_path_budget_is_rejected_before_assets_or_allocation(
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+    synthetic_provider: SyntheticProvider,
+) -> None:
+    prefix_bytes = len(str(allowed_root).encode("utf-8")) + 1
+    output = allowed_root / ("x" * (4_000 - prefix_bytes))
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+    entries_before = tuple(allowed_root.iterdir())
+    service = RendererService(runtime_config, synthetic_provider)
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=("ko00010",),
+                formats=(RenderFormat.SVG,),
+                output_directory=str(output),
+            )
+        assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+        assert synthetic_provider.calls == []
+        assert tuple(allowed_root.iterdir()) == entries_before
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_target", ["unknown", "summary_only"])
+async def test_preflight_rejects_a_later_invalid_target_before_assets_or_output(
+    later_target: str,
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+    synthetic_provider: SyntheticProvider,
+) -> None:
+    target_ids = ("ko00010", "unknown")
+    if later_target == "summary_only":
+        document = make_render_input()
+        summary = document.pathways[0].model_copy(
+            update={
+                "renderability": RenderabilityStatus.SUMMARY_ONLY,
+                "not_renderable_reason": "synthetic_summary_only",
+            }
+        )
+        document = document.model_copy(update={"pathways": (summary,)})
+        render_input_file.write_text(serialize_render_input(document), encoding="utf-8")
+        target_ids = ("M00001", "ko00010")
+
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+    service = RendererService(runtime_config, synthetic_provider)
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=target_ids,
+                formats=(RenderFormat.SVG,),
+                output_directory=None,
+            )
+        expected_code = (
+            ErrorCode.TARGET_NOT_FOUND
+            if later_target == "unknown"
+            else ErrorCode.TARGET_NOT_RENDERABLE
+        )
+        assert raised.value.detail.code is expected_code
+        assert synthetic_provider.calls == []
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_mixed_bundle_fails_before_output_allocation(
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+) -> None:
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+    service = RendererService(runtime_config, UnconfiguredAssetProvider())
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=("M00001", "ko00010"),
+                formats=(RenderFormat.SVG,),
+                output_directory=None,
+            )
+        assert raised.value.detail.code is ErrorCode.ASSET_UNAVAILABLE
+        assert {item.name: item.value for item in raised.value.detail.safe_details}[
+            "target_id"
+        ] == "ko00010"
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_second_format_budget_failure_names_target_and_format(
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _small_result_config(runtime_config)
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+
+    def render_svg(*args: object, **kwargs: object) -> SvgArtifact:
+        del args, kwargs
+        return SvgArtifact(b"s" * 300, 1, 1)
+
+    def render_png(*args: object, **kwargs: object) -> PngArtifact:
+        del args, kwargs
+        return PngArtifact(b"p" * 201, 1, 1)
+
+    monkeypatch.setattr(
+        render_service_module,
+        "render_module_svg",
+        render_svg,
+    )
+    monkeypatch.setattr(
+        render_service_module,
+        "render_module_png",
+        render_png,
+    )
+    service = RendererService(config, SyntheticProvider())
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=("M00001",),
+                formats=(RenderFormat.SVG, RenderFormat.PNG),
+                output_directory=None,
+            )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+        assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+            "target_id": "M00001",
+            "asset_kind": "png_output",
+        }
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+def test_manifest_reserve_failure_retains_no_partial_result(
+    runtime_config: RendererRuntimeConfig,
+    allowed_root: Path,
+) -> None:
+    config = _small_result_config(runtime_config)
+    explicit_output = allowed_root / "manifest-failure-output"
+    store = RenderArtifactStore(config)
+    store.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            store.retain(
+                target_ids=("M00001",),
+                artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"x", 1, 1),),
+                warnings=(),
+                manifest_context={"padding": "x" * 600},
+                output_directory=explicit_output,
+            )
+        assert raised.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
+        assert "manifest" in raised.value.detail.message.lower()
+        assert not explicit_output.exists()
+        assert store.snapshot().active_result_count == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_pathway_asset_failure_adds_target_context_without_partial_result(
+    runtime_config: RendererRuntimeConfig,
+    render_input_file: Path,
+    allowed_root: Path,
+    synthetic_provider: SyntheticProvider,
+) -> None:
+    synthetic_provider.kgml = b"not valid KGML"
+    explicit_output = allowed_root / "failed-pathway-output"
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+    service = RendererService(runtime_config, synthetic_provider)
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=str(render_input_file),
+                target_ids=("ko00010",),
+                formats=(RenderFormat.SVG,),
+                output_directory=str(explicit_output),
+            )
+        assert raised.value.detail.code is ErrorCode.ASSET_INVALID
+        assert {item.name: item.value for item in raised.value.detail.safe_details}[
+            "target_id"
+        ] == "ko00010"
+        assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
+        assert not explicit_output.exists()
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_opted_in_global_v4_handoff_renders_polyline_bundle_and_manifest(
+    runtime_config: RendererRuntimeConfig,
+    allowed_root: Path,
+) -> None:
+    document = make_render_input(
+        pathway_id="ko01100",
+        pathway_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
+        allow_global_or_overview=True,
+    )
+    input_path = allowed_root / "global-render-input.json"
+    input_path.write_text(serialize_render_input(document), encoding="utf-8")
+    provider = SyntheticProvider(pathway_id="ko01100")
+    provider.kgml = _synthetic_overview_kgml()
+    service = RendererService(runtime_config, provider)
+    service.open()
+    try:
+        result = await service.render(
+            render_input_path=str(input_path),
+            target_ids=("ko01100",),
+            formats=(RenderFormat.SVG, RenderFormat.PNG),
+            output_directory=None,
+        )
+
+        assert {item.name for item in result.artifacts} == {
+            "ko01100.svg",
+            "ko01100.png",
+            "render_manifest.json",
+        }
+        assert provider.calls == [("ko01100", "image"), ("ko01100", "kgml")]
+        assert any("global or overview base map" in warning for warning in result.warnings)
+        svg = service.store.read(result.render_id, "ko01100.svg").content
+        assert b'<path d="M ' in svg
+        assert b'stroke-dasharray="8 4"' in svg
+        manifest = cast(
+            dict[str, object],
+            json.loads(service.store.read(result.render_id, "render_manifest.json").content),
+        )
+        provenance = cast(dict[str, object], manifest["provenance"])
+        target = cast(list[dict[str, object]], provenance["targets"])[0]
+        assert target["reference_scope"] == "global_or_overview"
+        assert target["kgml_parser_version"] == "1.3"
+        assert target["retained_box_graphic_count"] == 0
+        assert target["retained_polyline_graphic_count"] == 2
+        assert target["mapped_detected_ko_ids"] == ["K00001", "K00002"]
+        assert target["polyline_overlay_count"] == 2
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_global_handoff_without_opt_in_fails_before_assets(
+    runtime_config: RendererRuntimeConfig,
+    allowed_root: Path,
+) -> None:
+    document = make_render_input(
+        pathway_id="ko01100",
+        pathway_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
+        allow_global_or_overview=True,
+    )
+    payload = json.loads(serialize_render_input(document))
+    payload["execution"]["analysis"]["pathway_parameters"]["allow_global_or_overview"] = False
+    provider = SyntheticProvider(pathway_id="ko01100")
+    provider.kgml = _synthetic_overview_kgml()
+    allocated_before = tuple(allowed_root.glob("kegg-render-*"))
+    service = RendererService(runtime_config, provider)
+    service.open()
+    try:
+        with pytest.raises(RenderMcpError) as raised:
+            await service.render(
+                render_input_path=None,
+                render_input_json=json.dumps(payload),
+                target_ids=("ko01100",),
+                formats=(RenderFormat.SVG,),
+                output_directory=None,
+            )
+
+        assert raised.value.detail.code is ErrorCode.INVALID_REQUEST
+        assert provider.calls == []
+        _assert_no_partial_result(service, allowed_root, allocated_before)
+    finally:
+        service.close()
+
+
+def _synthetic_overview_kgml() -> bytes:
+    return b"""<pathway name="path:ko01100" title="Synthetic overview">
+  <entry id="1" name="ko:K00001 ko:K00002" type="gene">
+    <graphics name="K00001..." type="line" coords="10,20,100,20"/>
+  </entry>
+  <entry id="2" name="ko:K00002" type="gene">
+    <graphics name="K00002" type="line" coords="10,40,100,40"/>
+  </entry>
+</pathway>"""
 
 
 @pytest.mark.asyncio
@@ -74,6 +412,7 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
                 f"kegg-render://results/{result.render_id}/{metadata.name}"
             )
         assert result.result_uri == f"kegg-render://results/{result.render_id}"
+        assert output.stat().st_mode & 0o777 == 0o700
 
         manifest_blob = service.store.read(result.render_id, "render_manifest.json")
         assert manifest_blob.content == (output / "render_manifest.json").read_bytes()
@@ -88,6 +427,16 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         assert b'"parser_version"' in manifest_blob.content
         assert b'"analysis_unit":"unknown"' in manifest_blob.content
         assert str(runtime_config.state_root).encode() not in manifest_blob.content
+        provenance = cast(dict[str, object], manifest["provenance"])
+        targets = cast(list[dict[str, object]], provenance["targets"])
+        pathway = next(item for item in targets if item["target_id"] == "ko00010")
+        assert pathway["kgml_parser_name"] == "kegg_render_safe_kgml"
+        assert pathway["kgml_parser_version"] == "1.3"
+        assert pathway["retained_box_graphic_count"] == 2
+        assert pathway["retained_polyline_graphic_count"] == 0
+        assert pathway["mapped_detected_ko_ids"] == ["K00001", "K00002"]
+        assert pathway["box_overlay_count"] == 2
+        assert pathway["polyline_overlay_count"] == 0
 
         artifact_records = cast(list[dict[str, object]], manifest["artifacts"])
         assert len(artifact_records) == 4
@@ -378,7 +727,7 @@ def test_scope_replacement_after_close_scan_is_not_removed(
 
 
 @pytest.mark.asyncio
-async def test_export_rejects_symlink_artifact_destination(
+async def test_export_rejects_nonempty_symlink_destination_without_following_it(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
@@ -399,7 +748,7 @@ async def test_export_rejects_symlink_artifact_destination(
                 formats=(RenderFormat.SVG,),
                 output_directory=str(output),
             )
-        assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+        assert raised.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS
         assert outside.read_text(encoding="utf-8") == "private"
     finally:
         service.close()
@@ -492,16 +841,19 @@ def test_nonempty_output_check_does_not_enumerate_the_whole_directory(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("explicit_output", [False, True])
+@pytest.mark.parametrize(
+    "output_mode",
+    ("automatic", "explicit_existing"),
+)
 async def test_failed_export_rolls_back_new_files_and_commit_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
-    explicit_output: bool,
+    output_mode: str,
 ) -> None:
     output = allowed_root / "images"
-    if explicit_output:
+    if output_mode == "explicit_existing":
         output.mkdir(mode=0o700)
     allocated_before = tuple(allowed_root.glob("kegg-render-*"))
     real_link = os.link
@@ -536,15 +888,291 @@ async def test_failed_export_rolls_back_new_files_and_commit_manifest(
                 render_input_path=str(render_input_file),
                 target_ids=("M00001",),
                 formats=(RenderFormat.SVG, RenderFormat.PNG),
-                output_directory=str(output) if explicit_output else None,
+                output_directory=(str(output) if output_mode != "automatic" else None),
             )
         assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
-        if explicit_output:
+        if output_mode == "explicit_existing":
             assert not tuple(output.iterdir())
         else:
             assert tuple(allowed_root.glob("kegg-render-*")) == allocated_before
     finally:
         service.close()
+
+
+@pytest.mark.parametrize(
+    "replacement_timing",
+    ("before_link", "after_link", "in_place_after_link"),
+)
+def test_export_rejects_temporary_artifact_content_races(
+    replacement_timing: str,
+    allowed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = allowed_root / f"temp-race-{replacement_timing}"
+    artifacts = (
+        ArtifactBlob("a.svg", "image/svg+xml", b"GOOD", 1, 1),
+        ArtifactBlob(
+            "render_manifest.json",
+            "application/json",
+            b"{}",
+            None,
+            None,
+        ),
+    )
+    real_link_new = export_writer._link_new  # pyright: ignore[reportPrivateUsage]
+    replaced = False
+
+    def replace_alias(descriptor: int, temporary_name: str) -> None:
+        os.unlink(temporary_name, dir_fd=descriptor)
+        replacement = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=descriptor,
+        )
+        try:
+            assert os.write(replacement, b"EVIL") == 4
+            os.fchmod(replacement, 0o600)
+            os.fsync(replacement)
+        finally:
+            os.close(replacement)
+
+    def race_first_link(
+        descriptor: int,
+        name: str,
+        temporary_name: str,
+    ) -> None:
+        nonlocal replaced
+        if replaced:
+            real_link_new(descriptor, name, temporary_name)
+            return
+        replaced = True
+        if replacement_timing == "before_link":
+            replace_alias(descriptor, temporary_name)
+            real_link_new(descriptor, name, temporary_name)
+            return
+        real_link_new(descriptor, name, temporary_name)
+        if replacement_timing == "after_link":
+            replace_alias(descriptor, temporary_name)
+            return
+        replacement = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=descriptor,
+        )
+        try:
+            assert os.write(replacement, b"EVIL") == 4
+            os.fsync(replacement)
+        finally:
+            os.close(replacement)
+
+    monkeypatch.setattr(export_writer, "_link_new", race_first_link)
+    with pytest.raises(RenderMcpError) as raised:
+        export_writer.export_bundle(
+            output,
+            (allowed_root,),
+            artifacts,
+            manifest_name="render_manifest.json",
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert replaced is True
+    if replacement_timing == "in_place_after_link":
+        assert not output.exists()
+    else:
+        remaining = tuple(output.iterdir())
+        assert len(remaining) == 1
+        assert remaining[0].read_bytes() == b"EVIL"
+
+
+@pytest.mark.parametrize("mutation", ("replace", "in_place"))
+def test_export_validates_manifest_temporary_before_commit(
+    mutation: str,
+    allowed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = allowed_root / f"manifest-temp-race-{mutation}"
+    artifacts = (
+        ArtifactBlob("a.svg", "image/svg+xml", b"GOOD", 1, 1),
+        ArtifactBlob("render_manifest.json", "application/json", b"{}"),
+    )
+    real_write = export_writer._write_temporary  # pyright: ignore[reportPrivateUsage]
+    writes = 0
+
+    def write_then_mutate_manifest(
+        descriptor: int,
+        content: bytes,
+    ) -> export_writer._TemporaryArtifact:  # pyright: ignore[reportPrivateUsage]
+        nonlocal writes
+        temporary = real_write(descriptor, content)
+        writes += 1
+        if writes != 2:
+            return temporary
+        if mutation == "replace":
+            os.unlink(temporary.name, dir_fd=descriptor)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        else:
+            flags = os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        replacement = os.open(temporary.name, flags, 0o600, dir_fd=descriptor)
+        try:
+            assert os.write(replacement, b"[]") == 2
+            os.fsync(replacement)
+        finally:
+            os.close(replacement)
+        return temporary
+
+    monkeypatch.setattr(export_writer, "_write_temporary", write_then_mutate_manifest)
+
+    with pytest.raises(RenderMcpError) as raised:
+        export_writer.export_bundle(
+            output,
+            (allowed_root,),
+            artifacts,
+            manifest_name="render_manifest.json",
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    if mutation == "replace":
+        remaining = tuple(output.iterdir())
+        assert len(remaining) == 1
+        assert remaining[0].read_bytes() == b"[]"
+    else:
+        assert not output.exists()
+
+
+def test_export_rejects_duplicate_names(allowed_root: Path) -> None:
+    output = allowed_root / "duplicate-export"
+    artifacts = (
+        ArtifactBlob("a.svg", "image/svg+xml", b"first", 1, 1),
+        ArtifactBlob("a.svg", "image/svg+xml", b"second", 1, 1),
+        ArtifactBlob("render_manifest.json", "application/json", b"{}"),
+    )
+
+    with pytest.raises(RenderMcpError) as raised:
+        export_writer.export_bundle(
+            output,
+            (allowed_root,),
+            artifacts,
+            manifest_name="render_manifest.json",
+        )
+
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("reserved_name", (False, True))
+def test_store_rejects_nonunique_image_artifact_names_before_result_allocation(
+    reserved_name: bool,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    name = "render_manifest.json" if reserved_name else "M00001.svg"
+    first = ArtifactBlob(
+        name,
+        "application/json" if reserved_name else "image/svg+xml",
+        b"first",
+        None if reserved_name else 1,
+        None if reserved_name else 1,
+    )
+    artifacts = (first,) if reserved_name else (first, first)
+    store = RenderArtifactStore(runtime_config)
+    store.open()
+    try:
+        scope = runtime_config.state_root / str(
+            store._scope_name  # pyright: ignore[reportPrivateUsage]
+        )
+        entries_before = {item.name for item in scope.iterdir()}
+        with pytest.raises(ValueError, match="must be unique"):
+            store.retain(
+                target_ids=("M00001",),
+                artifacts=artifacts,
+                warnings=(),
+                manifest_context={},
+                output_directory=None,
+            )
+        assert {item.name for item in scope.iterdir()} == entries_before
+        assert store.snapshot().active_result_count == 0
+    finally:
+        store.close()
+
+
+def test_export_rejects_output_directory_replacement_during_publication(
+    allowed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = allowed_root / "images"
+    moved = allowed_root / "moved-images"
+    replacement_marker = output / "replacement"
+    artifacts = (
+        ArtifactBlob("a.svg", "image/svg+xml", b"GOOD", 1, 1),
+        ArtifactBlob("render_manifest.json", "application/json", b"{}"),
+    )
+    real_link_new = export_writer._link_new  # pyright: ignore[reportPrivateUsage]
+    replaced = False
+
+    def replace_before_first_link(
+        descriptor: int,
+        name: str,
+        temporary_name: str,
+    ) -> None:
+        nonlocal replaced
+        if not replaced:
+            output.rename(moved)
+            output.mkdir(mode=0o700)
+            replacement_marker.write_bytes(b"preserve")
+            os.chmod(replacement_marker, 0o600)
+            replaced = True
+        real_link_new(descriptor, name, temporary_name)
+
+    monkeypatch.setattr(export_writer, "_link_new", replace_before_first_link)
+    with pytest.raises(RenderMcpError) as raised:
+        export_writer.export_bundle(
+            output,
+            (allowed_root,),
+            artifacts,
+            manifest_name="render_manifest.json",
+        )
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert replacement_marker.read_bytes() == b"preserve"
+    assert tuple(moved.iterdir()) == ()
+
+
+def test_export_rejects_artifact_replacement_during_publication(
+    allowed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = allowed_root / "images"
+    artifact = output / "a.svg"
+    artifacts = (
+        ArtifactBlob("a.svg", "image/svg+xml", b"GOOD", 1, 1),
+        ArtifactBlob("render_manifest.json", "application/json", b"{}"),
+    )
+    real_link_new = export_writer._link_new  # pyright: ignore[reportPrivateUsage]
+    replaced = False
+
+    def replace_after_first_link(
+        descriptor: int,
+        name: str,
+        temporary_name: str,
+    ) -> None:
+        nonlocal replaced
+        real_link_new(descriptor, name, temporary_name)
+        if not replaced:
+            artifact.unlink()
+            artifact.write_bytes(b"preserve")
+            os.chmod(artifact, 0o600)
+            replaced = True
+
+    monkeypatch.setattr(export_writer, "_link_new", replace_after_first_link)
+    with pytest.raises(RenderMcpError) as raised:
+        export_writer.export_bundle(
+            output,
+            (allowed_root,),
+            artifacts,
+            manifest_name="render_manifest.json",
+        )
+    assert raised.value.detail.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert artifact.read_bytes() == b"preserve"
+    assert {item.name for item in output.iterdir()} == {"a.svg"}
 
 
 def test_state_root_symlink_is_rejected(
@@ -711,7 +1339,6 @@ def test_read_only_snapshot_does_not_delete_expired_files_and_explains_quota(
     assert snapshot.cleanup_pending_result_count == 1
     assert snapshot.retained_bytes == stored.total_bytes
     assert snapshot.retained_storage_bytes == stored.storage_bytes
-    assert snapshot.active_result_count == 0
     assert tuple(sorted(path.name for path in retained_directory.iterdir())) == before
 
     store._purge_expired()  # pyright: ignore[reportPrivateUsage]

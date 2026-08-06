@@ -13,7 +13,7 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
     ("prompt", "required"),
     [
         (
-            "Render this existing render_input.json version 3 bundle.",
+            "Render this existing render_input.json version 4 bundle.",
             ("Require readiness", "Let the renderer validate the handoff"),
         ),
         (
@@ -25,12 +25,20 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
             ),
         ),
         (
-            "Render this old version 1 handoff.",
-            ("Version 1 cannot be upgraded losslessly", "Request a new bundle"),
+            "Render this schema-mismatched handoff.",
+            ("Accept only schema version 4", "Do not patch, repair, or reinterpret"),
         ),
         (
             "Show accepted and uncertain evidence.",
             ("Use only the versioned legend", "policy-defined uncertain evidence"),
+        ),
+        (
+            "One target failed; return the other images from this bundle.",
+            (
+                "one all-or-nothing bundle",
+                "returns no partial `RenderResult`",
+                "smaller bounded `target_ids` set",
+            ),
         ),
         (
             "Mark rejected predictions as absent genes.",
@@ -49,7 +57,7 @@ def test_rendering_guidance_covers_real_routes(prompt: str, required: tuple[str,
 
 def test_rendering_never_reimplements_analysis_or_active_output() -> None:
     for fragment in (
-        "Never parse, repair, upgrade, or recompute",
+        "Never parse, repair, reinterpret, or recompute",
         "Never recompute pathway coverage from KGML",
         "Do not choose colors",
         "static SVG or PNG",

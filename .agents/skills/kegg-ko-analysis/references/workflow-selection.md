@@ -154,10 +154,11 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   KO reference pathways by unique selected-KO overlap.
 - Use server-side Top-N selection instead of reading and ranking complete relationship rows.
 - Automatic selection leaves current KEGG Global, Overview, and higher-level Overview maps in the
-  retained ranking but excludes them from the renderable Top-N targets. If the user explicitly
-  requests `ko01100`, do not send it through the regular-pathway Core/Renderer pipeline. Preserve
-  that target for a separate model-native drawing step outside this Skill, and label the result as
-  a model-generated conceptual diagram rather than a KEGG-derived coverage overlay.
+  retained ranking but excludes them before Top-N target truncation. If the user explicitly
+  requests a canonical KO total map such as `ko01100`, pass that explicit pathway target with
+  `allow_global_or_overview=True`. Continue to rendering only after Core emits a complete,
+  renderable version 4 handoff. Do not substitute a `map` or organism reference, promote a
+  summary-only result, or request a model-native conceptual fallback.
 - Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
   exact completion and required-block coverage separately from the selected MODULE definitions.
 - Do not recommend annotation software when usable KO evidence already exists.

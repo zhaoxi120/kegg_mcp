@@ -278,6 +278,15 @@ def test_strict_ko_reference_uses_dataset_evidence_and_preserves_provenance() ->
     assert PathwayCoverageResult.model_validate_json(result.model_dump_json()) == result
 
 
+@pytest.mark.parametrize("missing_field", ("calculation_method", "calculation_version"))
+def test_result_requires_current_calculation_identity(missing_field: str) -> None:
+    payload = evaluate_pathway_coverage(_reference(), _dataset()).model_dump(mode="json")
+    del payload[missing_field]
+
+    with pytest.raises(ValidationError):
+        PathwayCoverageResult.model_validate(payload)
+
+
 def test_result_json_schema_excludes_biological_and_statistical_claim_fields() -> None:
     property_names = _json_schema_property_names(PathwayCoverageResult.model_json_schema())
 

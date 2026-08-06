@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
 import anyio
-from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION
 from mcp import types
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -31,6 +30,7 @@ from kegg_render_mcp.contracts import (
     ARTIFACT_NAME_PATTERN,
     MAX_TARGETS,
     RENDER_ID_PATTERN,
+    REQUIRED_RENDER_INPUT_SCHEMA_VERSION,
     ConnectivityResult,
     ConnectivityStatus,
     DeleteRenderResult,
@@ -39,7 +39,6 @@ from kegg_render_mcp.contracts import (
     ErrorCode,
     ErrorDetail,
     RenderAnalysisBundleInput,
-    RendererBounds,
     RendererStatus,
     RenderMcpError,
     RenderModuleInput,
@@ -140,7 +139,7 @@ async def _handle_pathway(runtime: RendererRuntime, request: BaseModel) -> _Tool
         formats=request.formats,
         output_directory=request.output_directory,
     )
-    return _ToolExecution(result, "Rendered one regular pathway evidence overlay.")
+    return _ToolExecution(result, "Rendered one pathway evidence overlay.")
 
 
 async def _handle_module(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
@@ -227,9 +226,10 @@ _TOOL_SPECS = (
     ),
     _ToolSpec(
         name="render_pathway",
-        title="Render one regular pathway",
+        title="Render one pathway",
         description=(
-            "Render one regular pathway evidence overlay from matching PNG and KGML assets."
+            "Render one supported KO-reference pathway evidence overlay from matching PNG and "
+            "KGML assets."
         ),
         input_model=RenderPathwayInput,
         output_model=RenderResult,
@@ -338,8 +338,9 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Render compatible kegg-mcp render_input.json version "
-            f"{RENDER_INPUT_SCHEMA_VERSION} handoffs as bounded static SVG and PNG artifacts. "
+            "Render current kegg-mcp render_input.json version "
+            f"{REQUIRED_RENDER_INPUT_SCHEMA_VERSION} handoffs as bounded static SVG and PNG "
+            "artifacts. "
             "Pathway graphics visualize accepted and policy-defined uncertain annotations; "
             "MODULE diagrams preserve the authoritative core AST and completion results. "
             "Graphics do not prove biological activity or phenotype."
@@ -612,6 +613,7 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
     return RendererStatus(
         server_version=__version__,
         ready=True,
+        render_input_schema_version=REQUIRED_RENDER_INPUT_SCHEMA_VERSION,
         pathway_access_configured=runtime.service.provider.configured,
         access_mode=runtime.config.access_mode,
         allowed_root_count=len(runtime.config.allowed_roots),
@@ -620,16 +622,8 @@ def _status(runtime: RendererRuntime) -> RendererStatus:
         cleanup_pending_result_count=snapshot.cleanup_pending_result_count,
         retained_bytes=snapshot.retained_bytes,
         retained_storage_bytes=snapshot.retained_storage_bytes,
-        bounds=RendererBounds(
-            max_input_bytes=limits.max_input_bytes,
-            max_targets=MAX_TARGETS,
-            max_results=limits.max_results,
-            max_asset_bytes=limits.max_asset_bytes,
-            max_pixels=limits.max_pixels,
-            max_svg_bytes=limits.max_svg_bytes,
-            max_result_bytes=limits.max_result_bytes,
-            max_disk_bytes=limits.max_disk_bytes,
-        ),
+        max_targets=MAX_TARGETS,
+        bounds=limits,
     )
 
 

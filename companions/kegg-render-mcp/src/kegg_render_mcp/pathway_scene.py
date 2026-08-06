@@ -1,9 +1,9 @@
-"""Typed pathway-asset adapter and deterministic regular-map scene construction."""
+"""Typed pathway-asset adapter and deterministic pathway scene construction."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol, cast
 
 from anyio import to_thread
 from kegg_mcp.domain import ErrorCode as CoreErrorCode
@@ -28,7 +28,7 @@ from kegg_render_mcp.contracts import (
     RenderMcpError,
     SafeDetail,
 )
-from kegg_render_mcp.kgml import KgmlDocument, parse_kgml, validate_graphic_bounds
+from kegg_render_mcp.kgml import KgmlDocument, KgmlGraphic, parse_kgml, validate_graphic_bounds
 from kegg_render_mcp.provenance import safe_batch_provenance
 from kegg_render_mcp.render_input import ValidatedRenderInput
 
@@ -36,7 +36,6 @@ from kegg_render_mcp.render_input import ValidatedRenderInput
 @dataclass(frozen=True, slots=True)
 class RetrievedAsset:
     pathway_id: str
-    kind: str
     content: bytes
     mime_type: str
     width: int | None
@@ -63,16 +62,6 @@ class CorePathwayAssetProvider:
     @property
     def configured(self) -> bool:
         return True
-
-    @property
-    def maximum_retries(self) -> int:
-        """Expose only the safe numeric retry bound for contract tests and status review."""
-        return self._client.config.retry.max_retries
-
-    @property
-    def maximum_response_bytes(self) -> int:
-        """Expose the effective wire-response bound for capability tests."""
-        return self._client.config.limits.max_response_bytes
 
     @property
     def network_enabled(self) -> bool:
@@ -105,7 +94,6 @@ class CorePathwayAssetProvider:
         provenance = safe_batch_provenance(result.provenance)
         return RetrievedAsset(
             pathway_id=request.pathway_id,
-            kind=str(request.kind.value),
             content=result.content,
             mime_type=result.mime_type,
             width=result.width,
@@ -153,32 +141,37 @@ class UnconfiguredAssetProvider:
 
 @dataclass(frozen=True, slots=True)
 class Overlay:
-    entry_id: int
-    ko_ids: tuple[str, ...]
-    state: str
-    x: float
-    y: float
-    width: float
-    height: float
+    state: Literal["accepted", "uncertain"]
+    geometry: KgmlGraphic
 
 
 @dataclass(frozen=True, slots=True)
 class PathwayScene:
     target_id: str
     title: str
-    analysis_unit: str
     width: int
     height: int
     source_png: bytes
     overlays: tuple[Overlay, ...]
     caption: str
-    coverage_numerator: int
-    coverage_denominator: int
-    coverage_ratio: float
-    reference_namespace: str
-    evidence_mode: str
+    retained_box_graphic_count: int
+    retained_polyline_graphic_count: int
+    mapped_detected_ko_ids: tuple[str, ...]
+    box_overlay_count: int
+    polyline_overlay_count: int
     asset_provenance: tuple[dict[str, object], ...]
     warnings: tuple[str, ...]
+
+    @property
+    def retained_geometry_kinds(self) -> frozenset[str]:
+        return frozenset(
+            kind
+            for kind, count in (
+                ("box", self.retained_box_graphic_count),
+                ("polyline", self.retained_polyline_graphic_count),
+            )
+            if count
+        )
 
 
 async def construct_pathway_scene(
@@ -186,12 +179,9 @@ async def construct_pathway_scene(
     target: PathwayRenderTarget,
     provider: PathwayAssetProvider,
     *,
-    max_asset_bytes: int,
-    max_pixels: int,
     limits: RendererLimits,
 ) -> PathwayScene:
     target_id = target.pathway_id
-    _require_regular_renderable(target)
     image, kgml_asset = await _retrieve_pair(provider, target_id)
     if image.pathway_id != target_id or kgml_asset.pathway_id != target_id:
         raise _asset_invalid("Retrieved pathway asset identities do not match the target.")
@@ -202,26 +192,27 @@ async def construct_pathway_scene(
         or image.height is None
     ):
         raise _asset_invalid("Retrieved pathway assets have incompatible media metadata.")
-    if len(image.content) > max_asset_bytes or len(kgml_asset.content) > max_asset_bytes:
-        raise _asset_invalid("Retrieved pathway assets exceed the configured byte limit.")
-    if image.width * image.height > max_pixels:
-        raise _asset_invalid("The pathway PNG exceeds the configured pixel limit.")
     kgml = parse_kgml(kgml_asset.content, target_id, limits)  # type: ignore[arg-type]
     validate_graphic_bounds(kgml, image.width, image.height)
     evidence_mode = target.evidence_mode.value
     detected = frozenset(target.detected_ko_ids)
+    retained_ko_ids = frozenset(ko_id for graphic in kgml.graphics for ko_id in graphic.ko_ids)
+    mapped_detected_ko_ids = tuple(sorted(detected.intersection(retained_ko_ids)))
+    numerator = target.coverage_numerator
+    denominator = target.coverage_denominator
+    if numerator > 0 and not mapped_detected_ko_ids:
+        raise _asset_invalid(
+            "Core-detected pathway evidence has no safely retained box or polyline geometry in "
+            "the matching KGML asset."
+        )
     accepted = render_input.accepted_ko_ids.intersection(detected)
     eligible_uncertain: frozenset[str] = (
         render_input.uncertain_ko_ids.intersection(detected)
         if evidence_mode == "lenient"
         else frozenset()
     )
-    overlays = _overlay_states(kgml, frozenset(accepted), eligible_uncertain)
-    numerator = target.coverage_numerator
-    denominator = target.coverage_denominator
-    if target.coverage_ratio is None:
-        raise _asset_invalid("A renderable pathway target omitted its core coverage ratio.")
-    ratio = target.coverage_ratio
+    overlays = _overlay_states(kgml, accepted, eligible_uncertain)
+    ratio = cast(float, target.coverage_ratio)
     name = target.pathway_name
     namespace = target.reference_namespace.value
     analysis_unit = render_input.document.dataset.analysis_unit.value
@@ -231,6 +222,21 @@ async def construct_pathway_scene(
             "One or more KEGG pathway assets were served from stale offline cache entries."
         )
     warnings.extend(item.message[:1000] for item in target.warnings)
+    unmapped_detected_count = len(detected) - len(mapped_detected_ko_ids)
+    if unmapped_detected_count:
+        warnings.append(
+            f"{unmapped_detected_count} of {len(detected)} core-detected K numbers had no "
+            "retained box or polyline geometry in the matching KGML asset; core coverage was "
+            "preserved and not recomputed."
+        )
+    broad_map = target.reference_scope.value == "global_or_overview"
+    if broad_map:
+        warnings.append(
+            "This global or overview base map retains KEGG contextual colors and arrowheads; "
+            "only the renderer's solid accepted and dashed uncertain overlays encode input "
+            "annotation evidence. Base-map direction must not be interpreted as evidence of "
+            "directionality or activity."
+        )
     community_limit = (
         " Community-level evidence represents pooled encoded potential, not a complete pathway "
         "in one organism."
@@ -243,21 +249,30 @@ async def construct_pathway_scene(
         f"analysis unit: {analysis_unit}.{community_limit} "
         "This visualization represents annotation evidence, not pathway presence, activity, "
         "flux, phenotype, or experimental validation."
+        + (
+            " Existing base-map colors and arrowheads are KEGG context; only solid and dashed "
+            "overlays encode the supplied evidence, without inferring direction or activity."
+            if broad_map
+            else ""
+        )
     )
+    retained_box_graphic_count = sum(graphic.kind == "box" for graphic in kgml.graphics)
+    retained_polyline_graphic_count = len(kgml.graphics) - retained_box_graphic_count
+    box_overlay_count = sum(overlay.geometry.kind == "box" for overlay in overlays)
+    polyline_overlay_count = len(overlays) - box_overlay_count
     return PathwayScene(
         target_id=target_id,
         title=name,
-        analysis_unit=analysis_unit,
         width=image.width,
         height=image.height,
         source_png=image.content,
         overlays=overlays,
         caption=caption,
-        coverage_numerator=numerator,
-        coverage_denominator=denominator,
-        coverage_ratio=ratio,
-        reference_namespace=namespace,
-        evidence_mode=evidence_mode,
+        retained_box_graphic_count=retained_box_graphic_count,
+        retained_polyline_graphic_count=retained_polyline_graphic_count,
+        mapped_detected_ko_ids=mapped_detected_ko_ids,
+        box_overlay_count=box_overlay_count,
+        polyline_overlay_count=polyline_overlay_count,
         asset_provenance=(image.provenance, kgml_asset.provenance),
         warnings=tuple(dict.fromkeys(warnings)),
     )
@@ -277,37 +292,14 @@ def _overlay_states(
 ) -> tuple[Overlay, ...]:
     result: list[Overlay] = []
     for graphic in kgml.graphics:
-        state: str | None = None
+        state: Literal["accepted", "uncertain"] | None = None
         if accepted.intersection(graphic.ko_ids):
             state = "accepted"
         elif uncertain.intersection(graphic.ko_ids):
             state = "uncertain"
         if state is not None:
-            result.append(
-                Overlay(
-                    entry_id=graphic.entry_id,
-                    ko_ids=graphic.ko_ids,
-                    state=state,
-                    x=graphic.x,
-                    y=graphic.y,
-                    width=graphic.width,
-                    height=graphic.height,
-                )
-            )
-    return tuple(result)
-
-
-def _require_regular_renderable(target: PathwayRenderTarget) -> None:
-    if target.renderability.value != "renderable":
-        safe_reason = str(target.not_renderable_reason or "pathway_is_not_renderable")[:160]
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.TARGET_NOT_RENDERABLE,
-                message="This pathway target is unsupported for regular box overlays.",
-                suggested_action="Use the core summary or select a regular reference pathway.",
-                safe_details=(SafeDetail(name="reason", value=safe_reason),),
-            )
-        )
+            result.append(Overlay(state=state, geometry=graphic))
+    return tuple(sorted(result, key=lambda item: item.state == "accepted"))
 
 
 def _classify_probe_error(error: CoreKeggMcpError) -> ConnectivityStatus:

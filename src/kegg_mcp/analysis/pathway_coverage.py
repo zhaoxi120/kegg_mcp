@@ -283,7 +283,7 @@ class PathwayKoReference(FrozenModel):
             raise ValueError("pathway KO denominators require only LINK provenance")
         if any(item.operation is not KeggOperation.GET for item in self.metadata_provenance):
             raise ValueError("pathway metadata requires only GET provenance")
-        if _scope_from_class(self.pathway_class) is not self.reference_scope:
+        if pathway_reference_scope_from_class(self.pathway_class) is not self.reference_scope:
             raise ValueError("reference_scope conflicts with retained PATHWAY CLASS evidence")
         return self
 
@@ -345,10 +345,8 @@ class PathwayCoverageResult(FrozenModel):
     duplicate_relationship_count: NonNegativeCount
     reference_link_provenance: ReferenceProvenance
     reference_metadata_provenance: ReferenceProvenance
-    calculation_method: Literal["unique_detected_kos_over_unique_reference_kos"] = (
-        PATHWAY_COVERAGE_METHOD
-    )
-    calculation_version: Literal["2"] = PATHWAY_COVERAGE_VERSION
+    calculation_method: Literal["unique_detected_kos_over_unique_reference_kos"]
+    calculation_version: Literal["2"]
     parameters: PathwayCoverageParameters
     limits: PathwayCoverageLimits
     warnings: Annotated[tuple[PathwayCoverageWarning, ...], Field(max_length=12)]
@@ -374,7 +372,7 @@ class PathwayCoverageResult(FrozenModel):
             self.pathway_id,
             self.reference_kegg_organism_code,
         )
-        if _scope_from_class(self.pathway_class) is not self.reference_scope:
+        if pathway_reference_scope_from_class(self.pathway_class) is not self.reference_scope:
             raise ValueError("reference_scope conflicts with retained PATHWAY CLASS evidence")
         if (
             self.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
@@ -651,7 +649,7 @@ def build_pathway_reference(
         )
     return PathwayKoReference(
         reference_namespace=namespace,
-        reference_scope=_scope_from_class(pathway_class),
+        reference_scope=pathway_reference_scope_from_class(pathway_class),
         pathway_id=pathway_id,
         pathway_name=pathway_name,
         pathway_class=pathway_class,
@@ -737,6 +735,8 @@ def evaluate_pathway_coverage(
         duplicate_relationship_count=reference.duplicate_relationship_count,
         reference_link_provenance=reference.link_provenance,
         reference_metadata_provenance=reference.metadata_provenance,
+        calculation_method=PATHWAY_COVERAGE_METHOD,
+        calculation_version=PATHWAY_COVERAGE_VERSION,
         parameters=request,
         limits=bounds,
         warnings=tuple(
@@ -1014,7 +1014,10 @@ def _namespace_from_pathway_id(
     )
 
 
-def _scope_from_class(pathway_class: tuple[str, ...]) -> PathwayReferenceScope:
+def pathway_reference_scope_from_class(
+    pathway_class: tuple[str, ...],
+) -> PathwayReferenceScope:
+    """Derive the reference scope from retained KEGG PATHWAY CLASS evidence."""
     if any(_BROAD_PATHWAY_CLASS in line for line in pathway_class):
         return PathwayReferenceScope.GLOBAL_OR_OVERVIEW
     return PathwayReferenceScope.STANDARD
@@ -1113,4 +1116,5 @@ __all__ = [
     "PathwayReferenceScope",
     "build_pathway_reference",
     "evaluate_pathway_coverage",
+    "pathway_reference_scope_from_class",
 ]

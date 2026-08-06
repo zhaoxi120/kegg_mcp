@@ -237,7 +237,7 @@ def _rotated_requests(
     requests: tuple[_RequestT, ...],
     count: int,
 ) -> tuple[_RequestT, ...]:
-    """Return a bounded unique prefix; the legacy name keeps the static CI contract stable."""
+    """Return a bounded unique request prefix."""
     return requests[:count]
 
 

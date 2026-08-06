@@ -49,7 +49,7 @@ remain independent stdio processes connected by stable versioned files:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 4 -> kegg-render-mcp
 ```
 
 Use the repository [suite installation guide](installation.md) for the complete Linux or Apple

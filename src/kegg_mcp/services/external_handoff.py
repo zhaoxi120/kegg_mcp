@@ -76,6 +76,7 @@ def prepare_external_handoff(
         max_total_bytes=_MAX_EXTERNAL_HANDOFF_TOTAL_BYTES,
     )
     return ExternalHandoffBundle(
+        schema_version=EXTERNAL_HANDOFF_SCHEMA_VERSION,
         target=request.target,
         output_directory=str(output_directory),
         data_file=str(output_directory / data_artifact.name),

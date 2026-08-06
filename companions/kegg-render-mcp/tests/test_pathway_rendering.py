@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 import pytest
 from kegg_mcp.analysis import PathwayReferenceScope
 from kegg_mcp.domain import AnalysisUnit, EvidenceMode
-from kegg_mcp.services.render_contracts import RenderabilityStatus
+from kegg_mcp.services.render_contracts import PathwayRenderTarget, RenderabilityStatus
 from PIL import Image
 
 from conftest import SyntheticProvider
@@ -33,14 +33,17 @@ async def test_accepted_precedes_uncertain_on_multi_ko_graphic(
         loaded,
         loaded.pathway("ko00010"),
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
-    assert tuple(item.state for item in scene.overlays) == ("accepted", "uncertain")
+    assert tuple(item.state for item in scene.overlays) == ("uncertain", "accepted")
     assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
     assert "not pathway presence" in scene.caption
     assert "ko00010 - Synthetic pathway" in scene.caption
+    assert scene.retained_box_graphic_count == 2
+    assert scene.retained_polyline_graphic_count == 0
+    assert scene.mapped_detected_ko_ids == ("K00001", "K00002")
+    assert scene.box_overlay_count == 2
+    assert scene.polyline_overlay_count == 0
 
 
 @pytest.mark.asyncio
@@ -57,8 +60,6 @@ async def test_strict_pathway_does_not_color_uncertain_evidence(
         loaded,
         strict_target,
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
     assert tuple(item.state for item in scene.overlays) == ("accepted",)
@@ -82,12 +83,59 @@ async def test_pathway_colors_only_authoritative_detected_evidence(
         loaded,
         target,
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
 
     assert tuple(item.state for item in scene.overlays) == ("accepted",)
+
+
+@pytest.mark.asyncio
+async def test_pathway_warns_without_recomputing_partially_unmapped_coverage(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    loaded = load_render_input(str(render_input_file), runtime_config)
+    provider = SyntheticProvider()
+    provider.kgml = b"""<pathway name="path:ko00010" title="Partial geometry">
+  <entry id="1" name="ko:K00001" type="gene">
+    <graphics name="K00001" type="rectangle" x="60" y="50" width="60" height="24"/>
+  </entry>
+</pathway>"""
+
+    target = loaded.pathway("ko00010")
+    scene = await construct_pathway_scene(
+        loaded,
+        target,
+        provider,
+        limits=runtime_config.limits,
+    )
+
+    assert scene.mapped_detected_ko_ids == ("K00001",)
+    assert any("1 of 2" in warning and "not recomputed" in warning for warning in scene.warnings)
+
+
+@pytest.mark.asyncio
+async def test_pathway_fails_closed_when_detected_evidence_has_no_retained_geometry(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    loaded = load_render_input(str(render_input_file), runtime_config)
+    provider = SyntheticProvider()
+    provider.kgml = b"""<pathway name="path:ko00010" title="Unsupported geometry">
+  <entry id="1" name="ko:K00001 ko:K00002" type="gene">
+    <graphics name="K00001..." type="circle" x="60" y="50" width="20" height="20"/>
+  </entry>
+</pathway>"""
+
+    with pytest.raises(RenderMcpError, match="no safely retained") as raised:
+        await construct_pathway_scene(
+            loaded,
+            loaded.pathway("ko00010"),
+            provider,
+            limits=runtime_config.limits,
+        )
+
+    assert raised.value.detail.code is ErrorCode.ASSET_INVALID
 
 
 @pytest.mark.asyncio
@@ -101,8 +149,6 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
         loaded,
         loaded.pathway("ko00010"),
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
     svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
@@ -158,12 +204,10 @@ async def test_pathway_caption_preserves_community_analysis_unit(
         community_input,
         community_input.pathway("ko00010"),
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
 
-    assert scene.analysis_unit == "metagenomic_community"
+    assert "analysis unit: metagenomic_community" in scene.caption
     assert "pooled encoded potential" in scene.caption
 
 
@@ -178,19 +222,17 @@ async def test_pathway_png_contains_bounded_raster_derivative(
         loaded,
         loaded.pathway("ko00010"),
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
-    png = render_pathway_png(
-        scene, max_asset_bytes=2_000_000, max_pixels=2_000_000, max_output_bytes=4_000_000
-    )
+    png = render_pathway_png(scene, max_pixels=2_000_000, max_output_bytes=4_000_000)
     assert png.content.startswith(PNG_SIGNATURE)
     assert (png.width, png.height) == (760, 360)
     assert validate_png(png.content, max_bytes=4_000_000, max_pixels=2_000_000) == (760, 360)
     with Image.open(io.BytesIO(png.content)) as rendered:
         rgb = rendered.convert("RGB")
         assert rgb.getpixel((30, 50)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((130, 78)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
+        assert rgb.getpixel((137, 78)) != tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
         accepted_box = rgb.crop((34, 41, 86, 59))
         accepted_bytes = accepted_box.tobytes()
         assert any(
@@ -199,7 +241,6 @@ async def test_pathway_png_contains_bounded_raster_derivative(
         )
     warned = render_pathway_png(
         replace(scene, warnings=("Synthetic stale-reference warning.",)),
-        max_asset_bytes=2_000_000,
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
@@ -207,7 +248,6 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     assert warned.content != png.content
     without_warning = render_pathway_png(
         replace(scene, warnings=()),
-        max_asset_bytes=2_000_000,
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
@@ -215,7 +255,6 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     assert without_warning.content != png.content
     long_warning = render_pathway_png(
         replace(scene, warnings=(("Synthetic bounded warning text. " * 80).strip(),)),
-        max_asset_bytes=2_000_000,
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
@@ -240,8 +279,6 @@ async def test_svg_allows_url_like_text_and_replaces_invalid_xml_characters(
         loaded,
         loaded.pathway("ko00010"),
         synthetic_provider,
-        max_asset_bytes=runtime_config.limits.max_asset_bytes,
-        max_pixels=runtime_config.limits.max_pixels,
         limits=runtime_config.limits,
     )
     artifact = render_pathway_svg(
@@ -261,33 +298,82 @@ async def test_svg_allows_url_like_text_and_replaces_invalid_xml_characters(
 
 
 @pytest.mark.asyncio
-async def test_global_or_overview_target_is_rejected_before_asset_retrieval(
+async def test_renderable_global_target_uses_tagged_polyline_overlays(
     render_input_file: Path,
     runtime_config: RendererRuntimeConfig,
-    synthetic_provider: SyntheticProvider,
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
     base = loaded.pathway("ko00010")
-    target = base.model_copy(
-        update={
+    target = PathwayRenderTarget.model_validate(
+        {
+            **base.model_dump(mode="python"),
             "pathway_id": "ko01100",
+            "pathway_name": "Synthetic overview",
             "pathway_class": ("Metabolism; Global and overview maps",),
             "reference_scope": PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
-            "renderability": RenderabilityStatus.SUMMARY_ONLY,
-            "not_renderable_reason": "global_or_overview_pathway_unsupported",
-        }
+            "renderability": RenderabilityStatus.RENDERABLE,
+            "not_renderable_reason": None,
+        },
     )
-    with pytest.raises(RenderMcpError) as raised:
-        await construct_pathway_scene(
-            loaded,
-            target,
-            synthetic_provider,
-            max_asset_bytes=2_000_000,
-            max_pixels=2_000_000,
-            limits=runtime_config.limits,
-        )
-    assert raised.value.detail.code is ErrorCode.TARGET_NOT_RENDERABLE
-    assert synthetic_provider.calls == []
+    provider = SyntheticProvider(pathway_id="ko01100")
+    provider.kgml = _synthetic_overview_kgml()
+
+    scene = await construct_pathway_scene(
+        loaded,
+        target,
+        provider,
+        limits=runtime_config.limits,
+    )
+
+    assert provider.calls == [("ko01100", "image"), ("ko01100", "kgml")]
+    assert tuple(overlay.geometry.kind for overlay in scene.overlays) == (
+        "polyline",
+        "polyline",
+        "polyline",
+        "polyline",
+        "polyline",
+    )
+    assert tuple(overlay.state for overlay in scene.overlays) == (
+        "uncertain",
+        "uncertain",
+        "uncertain",
+        "accepted",
+        "accepted",
+    )
+    assert scene.retained_box_graphic_count == 0
+    assert scene.retained_polyline_graphic_count == 5
+    assert scene.mapped_detected_ko_ids == ("K00001", "K00002")
+    assert scene.box_overlay_count == 0
+    assert scene.polyline_overlay_count == 5
+    assert any("KEGG contextual colors and arrowheads" in warning for warning in scene.warnings)
+    assert "without inferring direction or activity" in scene.caption
+
+    svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
+    root = ElementTree.fromstring(svg.content)
+    paths = [element for element in root.iter() if element.tag.rpartition("}")[2] == "path"]
+    overlay_paths = [path for path in paths if path.attrib.get("stroke-width") == "7"]
+    legend_paths = [path for path in paths if path.attrib.get("stroke-width") == "4"]
+    rectangles = [element for element in root.iter() if element.tag.rpartition("}")[2] == "rect"]
+    assert len(overlay_paths) == 5
+    assert len(legend_paths) == 2
+    assert len(rectangles) == 1
+    assert all(path.attrib["d"].startswith("M ") for path in overlay_paths)
+    assert sum("stroke-dasharray" in path.attrib for path in overlay_paths) == 3
+    assert sum("stroke-dasharray" in path.attrib for path in legend_paths) == 1
+    assert overlay_paths[-1].attrib["stroke"] == ACCEPTED_COLOR
+
+    png = render_pathway_png(
+        scene,
+        max_pixels=2_000_000,
+        max_output_bytes=4_000_000,
+    )
+    with Image.open(io.BytesIO(png.content)) as rendered:
+        rgb = rendered.convert("RGB")
+        assert rgb.getpixel((50, 10)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((12, 130)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
+        assert rgb.getpixel((21, 130)) == (255, 255, 255)
+        assert rgb.getpixel((12, 30)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
+        assert rgb.getpixel((60, 30)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
 
 
 @pytest.mark.asyncio
@@ -301,7 +387,25 @@ async def test_mismatched_asset_identity_is_rejected(
             loaded,
             loaded.pathway("ko00010"),
             provider,
-            max_asset_bytes=2_000_000,
-            max_pixels=2_000_000,
             limits=runtime_config.limits,
         )
+
+
+def _synthetic_overview_kgml() -> bytes:
+    return b"""<pathway name="path:ko01100" title="Synthetic overview">
+  <entry id="1" name="ko:K00001 ko:K00002" type="gene">
+    <graphics name="K00001..." type="line" coords="10,10,110,10"/>
+  </entry>
+  <entry id="2" name="ko:K00002" type="gene">
+    <graphics name="K00002" type="line" coords="10,130,110,130"/>
+  </entry>
+  <entry id="3" name="ko:K00002" type="gene">
+    <graphics name="K00002" type="line" coords="10,10,110,10"/>
+  </entry>
+  <entry id="4" name="ko:K00002" type="gene">
+    <graphics name="K00002" type="line" coords="10,30,110,30"/>
+  </entry>
+  <entry id="5" name="ko:K00001" type="gene">
+    <graphics name="K00001" type="line" coords="50,30,100,30"/>
+  </entry>
+</pathway>"""

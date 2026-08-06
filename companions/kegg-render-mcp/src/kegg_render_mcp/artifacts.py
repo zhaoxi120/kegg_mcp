@@ -52,6 +52,12 @@ _MIME_TYPES: Final = {
 _ALLOCATION_UNIT_BYTES: Final = 4_096
 _ARTIFACT_METADATA_RESERVE_BYTES: Final = 1_024
 _RESULT_METADATA_RESERVE_BYTES: Final = 4_096
+_MAX_MANIFEST_BYTES: Final = 2 * 1024 * 1024
+
+
+def manifest_byte_reserve(max_result_bytes: int) -> int:
+    """Reserve a bounded share of each result for its required manifest."""
+    return max(1, min(_MAX_MANIFEST_BYTES, max_result_bytes // 2))
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,20 +156,24 @@ class RenderArtifactStore:
         warnings: tuple[str, ...],
         manifest_context: dict[str, object],
         output_directory: Path | None,
-        remove_created_output_directory_on_failure: bool = False,
     ) -> RenderResult:
         self._require_open()
-        self._purge_expired()
         if not artifacts:
             raise ValueError("a render result requires at least one image artifact")
-        if len(self._results) >= self._config.limits.max_results:
-            raise _output_limit("The process-scoped renderer result-count quota is exhausted.")
         for item in artifacts:
             _validate_blob(item)
-        render_id = self._new_id()
+        manifest_name = "render_manifest.json"
+        artifact_names = tuple(item.name for item in artifacts)
+        if len(artifact_names) != len(set(artifact_names)) or manifest_name in artifact_names:
+            raise ValueError(
+                "image artifact names must be unique and must not use the manifest name"
+            )
+        self._purge_expired()
+        if len(self._results) >= self._config.limits.max_results:
+            raise _output_limit("The process-scoped renderer result-count quota is exhausted.")
+        render_id = f"render_{secrets.token_urlsafe(24)}"
         created_at = datetime.now(UTC)
         expires_at = created_at + timedelta(seconds=self._config.retention_seconds)
-        manifest_name = "render_manifest.json"
         manifest = {
             "schema_version": "2",
             "renderer": {"name": "kegg-render-mcp", "version": __version__},
@@ -189,14 +199,13 @@ class RenderArtifactStore:
         manifest_bytes = json.dumps(
             manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
-        all_artifacts = (
-            *artifacts,
-            ArtifactBlob(manifest_name, "application/json", manifest_bytes),
-        )
+        manifest_limit = manifest_byte_reserve(self._config.limits.max_result_bytes)
+        if len(manifest_bytes) > manifest_limit:
+            raise _output_limit("The retained result manifest exceeds its reserved byte limit.")
+        manifest_artifact = ArtifactBlob(manifest_name, "application/json", manifest_bytes)
+        all_artifacts = (*artifacts, manifest_artifact)
         if len(all_artifacts) > MAX_ARTIFACTS:
             raise _output_limit("The retained result exceeds the artifact-count limit.")
-        for item in all_artifacts:
-            _validate_blob(item)
         total_bytes = sum(len(item.content) for item in all_artifacts)
         storage_bytes = _estimated_storage_bytes(all_artifacts)
         if total_bytes > self._config.limits.max_result_bytes:
@@ -204,6 +213,31 @@ class RenderArtifactStore:
         current_storage = sum(item.storage_bytes for item in self._results.values())
         if current_storage + storage_bytes > self._config.limits.max_disk_bytes:
             raise _output_limit("The process-scoped renderer quota is exhausted.")
+        metadata = tuple(
+            ArtifactMetadata(
+                name=item.name,
+                kind=(ArtifactKind.MANIFEST if item.name == manifest_name else ArtifactKind.IMAGE),
+                mime_type=item.mime_type,  # type: ignore[arg-type]
+                byte_size=len(item.content),
+                width=item.width,
+                height=item.height,
+                resource_uri=f"kegg-render://results/{render_id}/{item.name}",
+                output_path=(
+                    str(output_directory / item.name) if output_directory is not None else None
+                ),
+            )
+            for item in all_artifacts
+        )
+        result = RenderResult(
+            render_id=render_id,
+            created_at=created_at,
+            expires_at=expires_at,
+            target_ids=target_ids,
+            artifacts=metadata,
+            warnings=warnings,
+            result_uri=f"kegg-render://results/{render_id}",
+            output_directory=(str(output_directory) if output_directory is not None else None),
+        )
         assert self._scope_fd is not None
         os.mkdir(render_id, mode=0o700, dir_fd=self._scope_fd)
         result_fd = os.open(
@@ -214,44 +248,15 @@ class RenderArtifactStore:
         _validate_owner_only_directory(result_fd)
         try:
             for item in all_artifacts:
-                _atomic_write_fd(result_fd, item.name, item.content)
+                _write_new_artifact(result_fd, item.name, item.content)
+            os.fsync(result_fd)
             if output_directory is not None:
                 export_bundle(
                     output_directory,
                     self._config.allowed_roots,
                     all_artifacts,
                     manifest_name=manifest_name,
-                    remove_created_directory_on_failure=(
-                        remove_created_output_directory_on_failure
-                    ),
                 )
-            metadata = tuple(
-                ArtifactMetadata(
-                    name=item.name,
-                    kind=(
-                        ArtifactKind.MANIFEST if item.name == manifest_name else ArtifactKind.IMAGE
-                    ),
-                    mime_type=item.mime_type,  # type: ignore[arg-type]
-                    byte_size=len(item.content),
-                    width=item.width,
-                    height=item.height,
-                    resource_uri=f"kegg-render://results/{render_id}/{item.name}",
-                    output_path=(
-                        str(output_directory / item.name) if output_directory is not None else None
-                    ),
-                )
-                for item in all_artifacts
-            )
-            result = RenderResult(
-                render_id=render_id,
-                created_at=created_at,
-                expires_at=expires_at,
-                target_ids=target_ids,
-                artifacts=metadata,
-                warnings=warnings,
-                result_uri=f"kegg-render://results/{render_id}",
-                output_directory=(str(output_directory) if output_directory is not None else None),
-            )
             self._results[render_id] = _StoredResult(result, total_bytes, storage_bytes)
             return result
         except Exception:
@@ -340,13 +345,6 @@ class RenderArtifactStore:
                 continue
             self._results.pop(render_id)
 
-    def _new_id(self) -> str:
-        for _ in range(8):
-            render_id = f"render_{secrets.token_urlsafe(24)}"
-            if render_id not in self._results:
-                return render_id
-        raise OSError("could not allocate render ID")
-
     def _require_open(self) -> None:
         if self._scope_fd is None:
             raise RuntimeError("renderer artifact store is not open")
@@ -398,25 +396,10 @@ def _estimated_storage_bytes(artifacts: tuple[ArtifactBlob, ...]) -> int:
     return total
 
 
-def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> None:
-    if _ARTIFACT_NAME.fullmatch(name) is None or Path(name).name != name:
-        raise ValueError("invalid derived artifact name")
-    try:
-        existing = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
-    except FileNotFoundError:
-        existing = None
-    if existing is not None and not stat.S_ISREG(existing.st_mode):
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.INPUT_PATH_REJECTED,
-                message="An output artifact path is not a direct regular file.",
-                suggested_action="Use an empty controlled output directory.",
-            )
-        )
-    temporary_name = f".tmp-{secrets.token_urlsafe(16)}"
+def _write_new_artifact(directory_descriptor: int, name: str, content: bytes) -> None:
     descriptor = os.open(
-        temporary_name,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
         0o600,
         dir_fd=directory_descriptor,
     )
@@ -426,30 +409,13 @@ def _atomic_write_fd(directory_descriptor: int, name: str, content: bytes) -> No
             offset += os.write(descriptor, content[offset:])
         os.fchmod(descriptor, 0o600)
         os.fsync(descriptor)
+    finally:
         os.close(descriptor)
-        descriptor = -1
-        os.replace(
-            temporary_name,
-            name,
-            src_dir_fd=directory_descriptor,
-            dst_dir_fd=directory_descriptor,
-        )
-        os.fsync(directory_descriptor)
-    except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary_name, dir_fd=directory_descriptor)
-        raise
 
 
 def _validate_blob(item: ArtifactBlob) -> None:
-    if _ARTIFACT_NAME.fullmatch(item.name) is None or Path(item.name).suffix not in _MIME_TYPES:
-        raise ValueError("invalid derived artifact name")
-    if _MIME_TYPES[Path(item.name).suffix] != item.mime_type or not item.content:
+    if _MIME_TYPES.get(Path(item.name).suffix) != item.mime_type:
         raise ValueError("artifact media metadata is inconsistent")
-    if (item.width is None) != (item.height is None):
-        raise ValueError("artifact dimensions are incomplete")
 
 
 def _not_found() -> RenderMcpError:

@@ -8,10 +8,6 @@ from pydantic import ConfigDict, Field, model_validator
 from kegg_mcp.analysis.contracts import ModuleAnalysisLimits
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageLimits
 from kegg_mcp.analysis.pathway_ranking import (
-    MODULE_RANKING_METHOD,
-    MODULE_RANKING_VERSION,
-    PATHWAY_RANKING_METHOD,
-    PATHWAY_RANKING_VERSION,
     ModuleSelection,
     PathwaySelection,
 )
@@ -55,8 +51,8 @@ class StageMetric(FrozenModel):
 class PathwayRankingExecution(FrozenModel):
     """Compact, reproducible provenance for one automatic pathway selection."""
 
-    method: Literal["selected_unique_ko_count"] = PATHWAY_RANKING_METHOD
-    method_version: Literal["1"] = PATHWAY_RANKING_VERSION
+    method: Literal["selected_unique_ko_count"]
+    method_version: Literal["1"]
     selection: PathwaySelection
     evidence_mode: EvidenceMode
     decision_policy: DecisionPolicyReference
@@ -85,8 +81,8 @@ class PathwayRankingExecution(FrozenModel):
 class ModuleRankingExecution(FrozenModel):
     """Compact, reproducible provenance for one automatic MODULE selection."""
 
-    method: Literal["selected_unique_ko_count"] = MODULE_RANKING_METHOD
-    method_version: Literal["1"] = MODULE_RANKING_VERSION
+    method: Literal["selected_unique_ko_count"]
+    method_version: Literal["1"]
     selection: ModuleSelection
     evidence_mode: EvidenceMode
     decision_policy: DecisionPolicyReference
@@ -193,8 +189,8 @@ class AnalysisExecutionProvenance(FrozenModel):
         }
     )
 
-    service_name: Literal["kegg_mcp_annotation_analysis"] = ANALYSIS_SERVICE_NAME
-    service_version: Literal["3"] = ANALYSIS_SERVICE_VERSION
+    service_name: Literal["kegg_mcp_annotation_analysis"]
+    service_version: Literal["3"]
     import_limits: ImportLimits
     kegg_request_options: KeggRequestOptions
     reference_loading_limits: ReferenceLoadingLimits

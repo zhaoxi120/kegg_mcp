@@ -122,8 +122,8 @@ class PathwayRankingResult(FrozenModel):
         }
     )
 
-    method: Literal["selected_unique_ko_count"] = PATHWAY_RANKING_METHOD
-    method_version: Literal["1"] = PATHWAY_RANKING_VERSION
+    method: Literal["selected_unique_ko_count"]
+    method_version: Literal["1"]
     evidence_mode: EvidenceMode
     selected_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=100_000)]
     relationships: Annotated[tuple[KoPathwayRelationship, ...], Field(max_length=1_000_000)]
@@ -195,8 +195,8 @@ class ModuleRankingResult(FrozenModel):
         }
     )
 
-    method: Literal["selected_unique_ko_count"] = MODULE_RANKING_METHOD
-    method_version: Literal["1"] = MODULE_RANKING_VERSION
+    method: Literal["selected_unique_ko_count"]
+    method_version: Literal["1"]
     evidence_mode: EvidenceMode
     selected_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=100_000)]
     relationships: Annotated[tuple[KoModuleRelationship, ...], Field(max_length=1_000_000)]
@@ -361,6 +361,8 @@ def rank_pathways(
         for item in ranked_targets
     )
     return PathwayRankingResult(
+        method=PATHWAY_RANKING_METHOD,
+        method_version=PATHWAY_RANKING_VERSION,
         evidence_mode=evidence_mode,
         selected_ko_ids=selected_ko_ids,
         relationships=relationships,
@@ -402,6 +404,8 @@ def rank_modules(
         for item in ranked_targets
     )
     return ModuleRankingResult(
+        method=MODULE_RANKING_METHOD,
+        method_version=MODULE_RANKING_VERSION,
         evidence_mode=evidence_mode,
         selected_ko_ids=selected_ko_ids,
         relationships=relationships,

@@ -27,7 +27,7 @@ from kegg_render_mcp.pathway_scene import PathwayScene
 
 TEXT_COLOR = "#1F2937"
 BACKGROUND_COLOR = "#FFFFFF"
-SVG_RENDERER_VERSION = "1.0"
+_UNCERTAIN_DASH_PATTERN = "8 4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,26 +57,43 @@ def render_pathway_svg(scene: PathwayScene, *, max_bytes: int, max_nodes: int) -
         ),
     ]
     for overlay in scene.overlays:
-        left = overlay.x - overlay.width / 2
-        top = overlay.y - overlay.height / 2
+        geometry = overlay.geometry
         color = ACCEPTED_COLOR if overlay.state == "accepted" else UNCERTAIN_COLOR
-        dash = "" if overlay.state == "accepted" else ' stroke-dasharray="8 4"'
-        lines.append(
-            f'<rect x="{left:.2f}" y="{top:.2f}" width="{overlay.width:.2f}" '
-            f'height="{overlay.height:.2f}" rx="3" fill="{color}" fill-opacity="0.28" '
-            f'stroke="{color}" stroke-width="4"{dash}/>'
+        dash = (
+            "" if overlay.state == "accepted" else f' stroke-dasharray="{_UNCERTAIN_DASH_PATTERN}"'
         )
+        if geometry.kind == "box":
+            left = geometry.x - geometry.width / 2
+            top = geometry.y - geometry.height / 2
+            lines.append(
+                f'<rect x="{left:.2f}" y="{top:.2f}" width="{geometry.width:.2f}" '
+                f'height="{geometry.height:.2f}" rx="3" fill="{color}" fill-opacity="0.28" '
+                f'stroke="{color}" stroke-width="4"{dash}/>'
+            )
+        else:
+            lines.append(
+                f'<path d="{_polyline_path(geometry.points)}" fill="none" stroke="{color}" '
+                f'stroke-width="7" stroke-linecap="round" stroke-linejoin="round"{dash}/>'
+            )
     footer_y = scene.height + 28
     lines.extend(
         [
             _text(24, footer_y, f"{scene.target_id}: {scene.title}", 19, bold=True),
-            _legend(24, footer_y + 34, ACCEPTED_COLOR, "Accepted annotation", dashed=False),
+            _legend(
+                24,
+                footer_y + 34,
+                ACCEPTED_COLOR,
+                "Accepted annotation",
+                dashed=False,
+                geometry_kinds=scene.retained_geometry_kinds,
+            ),
             _legend(
                 280,
                 footer_y + 34,
                 UNCERTAIN_COLOR,
                 "Policy-defined uncertain annotation",
                 dashed=True,
+                geometry_kinds=scene.retained_geometry_kinds,
             ),
         ]
     )
@@ -249,13 +266,36 @@ def _text(x: float, y: float, value: str, size: int, *, bold: bool = False) -> s
     )
 
 
-def _legend(x: int, y: int, color: str, label: str, *, dashed: bool) -> str:
-    dash = ' stroke-dasharray="7 4"' if dashed else ""
-    return (
-        f'<rect x="{x}" y="{y - 16}" width="26" height="18" fill="{color}" '
-        f'fill-opacity="0.28" stroke="{color}" stroke-width="3"{dash}/>'
-        + _text(x + 36, y, label, 13)
-    )
+def _legend(
+    x: int,
+    y: int,
+    color: str,
+    label: str,
+    *,
+    dashed: bool,
+    geometry_kinds: frozenset[str],
+) -> str:
+    dash = f' stroke-dasharray="{_UNCERTAIN_DASH_PATTERN}"' if dashed else ""
+    parts: list[str] = []
+    if "box" in geometry_kinds or not geometry_kinds:
+        parts.append(
+            f'<rect x="{x}" y="{y - 16}" width="26" height="18" fill="{color}" '
+            f'fill-opacity="0.28" stroke="{color}" stroke-width="3"{dash}/>'
+        )
+    if "polyline" in geometry_kinds:
+        parts.append(
+            f'<path d="M {x} {y - 7} L {x + 26} {y - 7}" fill="none" stroke="{color}" '
+            f'stroke-width="4" stroke-linecap="round"{dash}/>'
+        )
+    parts.append(_text(x + 36, y, label, 13))
+    return "".join(parts)
+
+
+def _polyline_path(points: tuple[tuple[float, float], ...]) -> str:
+    first_x, first_y = points[0]
+    segments = [f"M {first_x:.2f} {first_y:.2f}"]
+    segments.extend(f"L {x:.2f} {y:.2f}" for x, y in points[1:])
+    return " ".join(segments)
 
 
 def _wrapped_text(value: str, *, x: int, y: int, width_chars: int, size: int) -> list[str]:
@@ -306,10 +346,6 @@ def _validate_static_svg(content: bytes, *, max_bytes: int, max_nodes: int) -> N
             if name.startswith("on") or name in {"src", "style"}:
                 raise _invariant_error()
             if name == "href" and not lowered.startswith("data:image/png;base64,"):
-                raise _invariant_error()
-            if name in {"href", "src", "style"} and (
-                "javascript:" in lowered or "http://" in lowered or "https://" in lowered
-            ):
                 raise _invariant_error()
 
 

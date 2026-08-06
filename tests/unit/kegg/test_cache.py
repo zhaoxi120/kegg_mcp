@@ -325,7 +325,7 @@ def test_parser_version_mismatch_is_cache_failure_not_miss(tmp_path: Path) -> No
     _write_response(cache)
 
     with pytest.raises(KeggMcpError) as error:
-        _read_response(cache, parser_version="2")
+        _read_response(cache, parser_version="999")
 
     _assert_cache_failed(error, cache_path)
 
@@ -475,6 +475,30 @@ def test_unsupported_schema_version_is_an_explicit_cache_failure(tmp_path: Path)
     _assert_cache_failed(error, cache_path)
 
 
+@pytest.mark.parametrize(
+    "declared_version",
+    (0, cache_module._SCHEMA_VERSION),  # pyright: ignore[reportPrivateUsage]
+)
+def test_writable_cache_never_adopts_or_repairs_a_preexisting_database(
+    tmp_path: Path,
+    declared_version: int,
+) -> None:
+    cache_path = tmp_path / "preexisting.sqlite3"
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+        connection.execute(f"PRAGMA user_version = {declared_version}")
+
+    with pytest.raises(KeggMcpError) as error:
+        _write_response(SQLiteKeggCache(cache_path))
+
+    _assert_cache_failed(error, cache_path)
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (declared_version,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
+        ).fetchall() == [("sentinel",)]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits are unavailable")
 def test_new_cache_directory_and_database_use_restrictive_permissions(tmp_path: Path) -> None:
     cache_directory = tmp_path / "new-private-cache"
@@ -582,10 +606,11 @@ def test_cache_rejects_parent_not_owned_by_current_user(
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits are unavailable")
 def test_existing_cache_file_permissions_are_tightened(tmp_path: Path) -> None:
     configured = tmp_path / "cache.sqlite3"
-    configured.touch(mode=0o666)
+    cache = SQLiteKeggCache(configured)
+    _write_response(cache)
     configured.chmod(0o666)
 
-    _write_response(SQLiteKeggCache(configured))
+    _write_response(cache)
 
     assert stat.S_IMODE(configured.stat().st_mode) == 0o600
 

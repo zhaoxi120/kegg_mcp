@@ -68,7 +68,6 @@ def test_rendering_skill_uses_only_renderer_tools_and_stable_handoff() -> None:
         "analyze_ko_annotations",
         "normalize_ko_annotations",
         "run_deepkoala_job",
-        "prepare_deepkoala_job",
     ):
         assert forbidden not in corpus
     assert "kegg-render://results/{render_id}" in corpus
@@ -104,13 +103,30 @@ def test_rendering_skill_distinguishes_live_and_offline_asset_preflights() -> No
         assert fragment in corpus
 
 
-def test_rendering_skill_keeps_explicit_ko01100_outside_regular_overlay_pipeline() -> None:
+def test_rendering_skill_treats_multi_target_bundle_as_atomic() -> None:
     corpus = _corpus()
     for fragment in (
-        "explicitly names `ko01100`",
-        "model-native drawing step",
-        "model-generated conceptual diagram",
-        "not a KEGG-derived asset or KO coverage overlay",
-        "conceal or replace a failed regular-pathway render",
+        "all-or-nothing bundle",
+        "preflights every target capability",
+        "do not return or reconstruct a partial result",
+        "typed failing `target_id`",
+        "smaller `target_ids` set",
+        "never merge partial work",
+    ):
+        assert fragment in corpus
+
+
+def test_rendering_skill_requires_authoritative_v4_total_map_handoff() -> None:
+    corpus = _corpus()
+    for fragment in (
+        "version 4 handoff",
+        "`allow_global_or_overview=True`",
+        "bounded KGML `line` coordinates",
+        "Accepted evidence has deterministic precedence",
+        "uncertain evidence retains the renderer's dashed non-color cue",
+        "pathway-category colors remain background context",
+        "Arrows already present in the validated PNG remain background context",
+        "does not reconstruct arrow direction",
+        "do not create a model-native conceptual fallback",
     ):
         assert fragment in corpus

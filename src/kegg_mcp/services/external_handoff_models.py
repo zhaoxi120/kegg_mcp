@@ -404,7 +404,7 @@ ExternalHandoffRequest = Annotated[
 class ExternalHandoffBundle(FrozenModel):
     """Stable paths and bounded summary for one local external-tool input bundle."""
 
-    schema_version: Literal["1"] = EXTERNAL_HANDOFF_SCHEMA_VERSION
+    schema_version: Literal["1"]
     target: ExternalHandoffTarget
     output_directory: str = Field(min_length=1, max_length=4_096)
     data_file: str = Field(min_length=1, max_length=4_096)

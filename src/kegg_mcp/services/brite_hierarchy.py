@@ -68,6 +68,7 @@ MAX_BRITE_ARTIFACT_BYTES = 16_000_000
 
 BRITE_DETAIL_SECTION = "brite_hierarchy.json"
 BRITE_TABLE_SECTION = "brite_hierarchy.tsv"
+BRITE_DETAIL_SCHEMA_VERSION = "1"
 BRITE_DETAIL_MIME_TYPE = "application/json"
 BRITE_TABLE_MIME_TYPE = "text/tab-separated-values; charset=utf-8"
 
@@ -276,7 +277,7 @@ class BriteClassificationCountPreview(FrozenModel):
 class BriteHierarchyDetail(FrozenModel):
     """Complete retained BRITE mapping detail and retrieval provenance."""
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["1"]
     request: MapBriteHierarchyRequest
     selected_brite_ids: Annotated[tuple[str, ...], Field(max_length=MAX_BRITE_IDS)]
     resolved_brite_ids: Annotated[tuple[str, ...], Field(max_length=MAX_BRITE_IDS)]
@@ -555,6 +556,7 @@ def load_brite_hierarchy_detail(
     )
     retained_unmatched = unmatched if request.include_unmatched else ()
     detail = BriteHierarchyDetail(
+        schema_version=BRITE_DETAIL_SCHEMA_VERSION,
         request=request,
         selected_brite_ids=selected_brite_ids,
         resolved_brite_ids=resolved_brite_ids,
@@ -1043,6 +1045,7 @@ def _limit_exceeded(name: str, observed: int, limit: int) -> None:
 
 __all__ = [
     "BRITE_DETAIL_MIME_TYPE",
+    "BRITE_DETAIL_SCHEMA_VERSION",
     "BRITE_DETAIL_SECTION",
     "BRITE_TABLE_MIME_TYPE",
     "BRITE_TABLE_SECTION",

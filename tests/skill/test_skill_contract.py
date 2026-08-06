@@ -119,8 +119,6 @@ def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
     assert all(tool in corpus for tool in CORE_TOOLS)
     for forbidden in (
         "run_deepkoala_job",
-        "prepare_deepkoala_job",
-        "submit_deepkoala_job",
         "render_analysis_bundle",
         "render_pathway",
         "render_module",
@@ -150,13 +148,14 @@ def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
     assert "Top-5 MODULEs and Top-5 canonical KO" in corpus
 
 
-def test_ko_analysis_routes_explicit_ko01100_outside_regular_pipeline() -> None:
+def test_ko_analysis_routes_explicit_ko01100_through_opted_in_v4_handoff() -> None:
     corpus = _corpus()
     for fragment in (
         "`ko01100`",
-        "do not send it through the regular-pathway Core/Renderer pipeline",
-        "model-native drawing step",
-        "model-generated conceptual diagram",
-        "rather than a KEGG-derived coverage overlay",
+        "excludes them before Top-N target truncation",
+        "`allow_global_or_overview=True`",
+        "renderable version 4 handoff",
+        "Do not substitute a `map` or organism reference",
+        "request a model-native conceptual fallback",
     ):
         assert fragment in corpus

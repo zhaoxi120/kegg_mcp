@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.services.entry_cards import (
+    ENTRY_CARD_SCHEMA_VERSION,
     ENTRY_CARD_SNAPSHOT_SECTION,
     KeggEntryCardSnapshot,
 )
@@ -61,7 +62,12 @@ def read_entry_card_snapshot(
                 "Use result identifiers returned by get_kegg_entries with projection set to "
                 "card or references."
             ),
-            safe_details=(SafeDetail(name="required_snapshot_schema_version", value="1"),),
+            safe_details=(
+                SafeDetail(
+                    name="required_snapshot_schema_version",
+                    value=ENTRY_CARD_SCHEMA_VERSION,
+                ),
+            ),
         )
 
 

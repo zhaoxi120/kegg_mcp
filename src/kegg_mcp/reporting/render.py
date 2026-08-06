@@ -21,6 +21,8 @@ from kegg_mcp.analysis.pathway_ranking import PATHWAY_RANKING_METHOD
 from kegg_mcp.domain.annotations import AnalysisUnit, AnnotationRecord, NormalizedStatus
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.reporting.contracts import (
+    REPORT_FORMAT_NAME,
+    REPORT_FORMAT_VERSION,
     REPORT_RENDERER_NAME,
     REPORT_RENDERER_VERSION,
     RenderedReport,
@@ -169,7 +171,14 @@ def _preflight(report: ReportInput, limits: ReportLimits) -> None:
 
 
 def _render_canonical_json(report: ReportInput, limits: ReportLimits) -> str:
-    payload = StructuredReport(limits=limits, report=report).model_dump(mode="json")
+    payload = StructuredReport(
+        format_name=REPORT_FORMAT_NAME,
+        format_version=REPORT_FORMAT_VERSION,
+        renderer_name=REPORT_RENDERER_NAME,
+        renderer_version=REPORT_RENDERER_VERSION,
+        limits=limits,
+        report=report,
+    ).model_dump(mode="json")
     encoder = json.JSONEncoder(
         allow_nan=False,
         ensure_ascii=False,

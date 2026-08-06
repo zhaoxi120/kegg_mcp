@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import io
+import math
 import threading
 import warnings
 from dataclasses import dataclass
+from itertools import pairwise
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
@@ -32,6 +34,8 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PIL_PIXEL_LIMIT_LOCK = threading.Lock()
 _TEXT_ROW_HEIGHT = 16
 _MAX_FOOTER_TEXT_ROWS = 4
+_UNCERTAIN_DASH_LENGTH = 8.0
+_UNCERTAIN_DASH_PERIOD = 12.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +46,7 @@ class PngArtifact:
 
 
 def validate_png(payload: bytes, *, max_bytes: int, max_pixels: int) -> tuple[int, int]:
-    if not payload.startswith(PNG_SIGNATURE) or not payload or len(payload) > max_bytes:
+    if not payload.startswith(PNG_SIGNATURE) or len(payload) > max_bytes:
         raise _asset_error("The pathway image is not a bounded PNG.")
     with _PIL_PIXEL_LIMIT_LOCK:
         previous = Image.MAX_IMAGE_PIXELS
@@ -56,8 +60,6 @@ def validate_png(payload: bytes, *, max_bytes: int, max_pixels: int) -> tuple[in
                     width, height = image.size
                     if width <= 0 or height <= 0 or width * height > max_pixels:
                         raise _asset_error("The pathway image exceeds the configured pixel limit.")
-                    image.verify()
-                with Image.open(io.BytesIO(payload)) as image:
                     image.load()
         except RenderMcpError:
             raise
@@ -75,11 +77,9 @@ def validate_png(payload: bytes, *, max_bytes: int, max_pixels: int) -> tuple[in
 
 
 def render_pathway_png(
-    scene: PathwayScene, *, max_asset_bytes: int, max_pixels: int, max_output_bytes: int
+    scene: PathwayScene, *, max_pixels: int, max_output_bytes: int
 ) -> PngArtifact:
-    width, height = validate_png(scene.source_png, max_bytes=max_asset_bytes, max_pixels=max_pixels)
-    if (width, height) != (scene.width, scene.height):
-        raise _asset_error("Decoded PNG dimensions disagree with validated asset metadata.")
+    width, height = scene.width, scene.height
     warning_text = "Warnings: " + " | ".join(scene.warnings)[:1000] if scene.warnings else ""
     warning_rows = wrap_text_rows(
         warning_text,
@@ -105,28 +105,48 @@ def render_pathway_png(
         canvas = background.convert("RGB")
     draw = ImageDraw.Draw(canvas, "RGBA")
     for overlay in scene.overlays:
-        left = round(overlay.x - overlay.width / 2)
-        top = round(overlay.y - overlay.height / 2)
-        right = round(overlay.x + overlay.width / 2)
-        bottom = round(overlay.y + overlay.height / 2)
+        geometry = overlay.geometry
         color = ACCEPTED_COLOR if overlay.state == "accepted" else UNCERTAIN_COLOR
         fill = _rgba(color, 72)
         outline = _rgba(color, 255)
-        draw.rectangle((left, top, right, bottom), fill=fill, outline=outline, width=4)
-        if overlay.state == "uncertain":
-            _dashed_rectangle(draw, (left, top, right, bottom), outline)
+        if geometry.kind == "box":
+            left = round(geometry.x - geometry.width / 2)
+            top = round(geometry.y - geometry.height / 2)
+            right = round(geometry.x + geometry.width / 2)
+            bottom = round(geometry.y + geometry.height / 2)
+            if overlay.state == "uncertain":
+                draw.rectangle((left, top, right, bottom), fill=fill)
+                _dashed_rectangle(draw, (left, top, right, bottom), outline)
+            else:
+                draw.rectangle((left, top, right, bottom), fill=fill, outline=outline, width=4)
+        elif overlay.state == "accepted":
+            draw.line(geometry.points, fill=outline, width=7, joint="curve")
+        else:
+            _dashed_polyline(
+                draw,
+                geometry.points,
+                outline,
+                dash_length=_UNCERTAIN_DASH_LENGTH,
+                period=_UNCERTAIN_DASH_PERIOD,
+                width=7,
+            )
     font = ImageFont.load_default()
     y = height + 20
     draw.text((20, y), f"{scene.target_id}: {scene.title}", fill="#1F2937", font=font)
-    draw.rectangle(
-        (20, y + 24, 42, y + 38), fill=_rgba(ACCEPTED_COLOR, 72), outline=ACCEPTED_COLOR, width=2
+    _draw_evidence_swatch(
+        draw,
+        (20, y + 24, 42, y + 38),
+        ACCEPTED_COLOR,
+        uncertain=False,
+        geometry_kinds=scene.retained_geometry_kinds,
     )
     draw.text((50, y + 24), "Accepted annotation", fill="#1F2937", font=font)
-    draw.rectangle(
+    _draw_evidence_swatch(
+        draw,
         (210, y + 24, 232, y + 38),
-        fill=_rgba(UNCERTAIN_COLOR, 72),
-        outline=UNCERTAIN_COLOR,
-        width=2,
+        UNCERTAIN_COLOR,
+        uncertain=True,
+        geometry_kinds=scene.retained_geometry_kinds,
     )
     draw.text((240, y + 24), "Policy-defined uncertain annotation", fill="#1F2937", font=font)
     content_y = y + 54
@@ -258,6 +278,66 @@ def _dashed_rectangle(
     for start in range(top, bottom, 10):
         draw.line((left, start, left, min(start + 5, bottom)), fill=color, width=3)
         draw.line((right, start, right, min(start + 5, bottom)), fill=color, width=3)
+
+
+def _dashed_polyline(
+    draw: ImageDraw.ImageDraw,
+    points: tuple[tuple[float, float], ...],
+    color: tuple[int, int, int, int],
+    *,
+    dash_length: float,
+    period: float,
+    width: int,
+) -> None:
+    for (start_x, start_y), (end_x, end_y) in pairwise(points):
+        distance = math.hypot(end_x - start_x, end_y - start_y)
+        offset = 0.0
+        while offset < distance:
+            stop = min(offset + dash_length, distance)
+            start_fraction = offset / distance
+            stop_fraction = stop / distance
+            draw.line(
+                (
+                    start_x + (end_x - start_x) * start_fraction,
+                    start_y + (end_y - start_y) * start_fraction,
+                    start_x + (end_x - start_x) * stop_fraction,
+                    start_y + (end_y - start_y) * stop_fraction,
+                ),
+                fill=color,
+                width=width,
+            )
+            offset += period
+
+
+def _draw_evidence_swatch(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    color: str,
+    *,
+    uncertain: bool,
+    geometry_kinds: frozenset[str],
+) -> None:
+    rgba = _rgba(color, 255)
+    if "box" in geometry_kinds or not geometry_kinds:
+        draw.rectangle(box, fill=_rgba(color, 72))
+        if uncertain:
+            _dashed_rectangle(draw, box, rgba)
+        else:
+            draw.rectangle(box, outline=rgba, width=2)
+    if "polyline" in geometry_kinds:
+        left, top, right, bottom = box
+        points = ((float(left), (top + bottom) / 2), (float(right), (top + bottom) / 2))
+        if uncertain:
+            _dashed_polyline(
+                draw,
+                points,
+                rgba,
+                dash_length=_UNCERTAIN_DASH_LENGTH,
+                period=_UNCERTAIN_DASH_PERIOD,
+                width=4,
+            )
+        else:
+            draw.line(points, fill=rgba, width=4)
 
 
 def _rgba(hex_color: str, alpha: int) -> tuple[int, int, int, int]:

@@ -10,8 +10,9 @@ import stat
 from collections.abc import Generator
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
-from typing import Final, NoReturn, Self, cast
+from typing import Final, NoReturn, Self
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -59,7 +60,7 @@ _MIME_TYPE_PATTERN: Final = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/"
     r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}(?:; charset=utf-8)?\Z"
 )
-_RESULT_ID_ATTEMPTS: Final = 8
+_MAX_SCHEMA_OBJECTS: Final = 4
 
 _CREATE_RESULTS = """
 CREATE TABLE IF NOT EXISTS stored_results (
@@ -95,6 +96,11 @@ _CREATE_SCOPE_INDEX = """
 CREATE INDEX IF NOT EXISTS stored_results_scope_created
 ON stored_results (scope_id, created_at DESC, result_id)
 """
+
+_SCHEMA_OBJECTS_QUERY: Final = (
+    "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+)
 
 _INSERT_RESULT = """
 INSERT INTO stored_results (
@@ -349,12 +355,10 @@ class DeletedResult(_StoreModel):
 
 
 class CleanupSummary(_StoreModel):
-    """Counts from deterministic expiry cleanup and quota eviction."""
+    """Counts from deterministic expiry cleanup."""
 
     expired_results: int = Field(strict=True, ge=0)
     expired_bytes: int = Field(strict=True, ge=0)
-    evicted_results: int = Field(strict=True, ge=0)
-    evicted_bytes: int = Field(strict=True, ge=0)
     remaining_results: int = Field(strict=True, ge=0)
     remaining_bytes: int = Field(strict=True, ge=0)
 
@@ -430,7 +434,7 @@ class SQLiteResultStore:
                         incoming_bytes=total_bytes,
                         incoming_results=1,
                     )
-                    result_id = self._allocate_result_id(connection)
+                    result_id = f"res_{secrets.token_urlsafe(24)}"
                     connection.execute(
                         _INSERT_RESULT,
                         (
@@ -826,8 +830,6 @@ class SQLiteResultStore:
                 return CleanupSummary(
                     expired_results=0,
                     expired_bytes=0,
-                    evicted_results=0,
-                    evicted_bytes=0,
                     remaining_results=0,
                     remaining_bytes=0,
                 )
@@ -854,74 +856,24 @@ class SQLiteResultStore:
         return CleanupSummary(
             expired_results=expired_results,
             expired_bytes=expired_bytes,
-            evicted_results=0,
-            evicted_bytes=0,
-            remaining_results=remaining_results,
-            remaining_bytes=remaining_bytes,
-        )
-
-    def cleanup(self, *, now: datetime | None = None) -> CleanupSummary:
-        """Delete expired results, then evict oldest active results over quota."""
-        checked_now = _normalize_now(now)
-        try:
-            with closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    expired_results, expired_bytes = self._delete_expired(
-                        connection,
-                        checked_now,
-                    )
-                    evicted_results, evicted_bytes = self._evict_to_fit(
-                        connection,
-                        incoming_bytes=0,
-                        incoming_results=0,
-                    )
-                    remaining_row = connection.execute(
-                        "SELECT COUNT(*), COALESCE(SUM(total_bytes), 0) FROM stored_results"
-                    ).fetchone()
-                    connection.commit()
-                except BaseException:
-                    connection.rollback()
-                    raise
-        except (OSError, sqlite3.Error, _ResultStoreIntegrityError):
-            raise ResultStoreError("cleanup") from None
-        try:
-            remaining_results, remaining_bytes = _decode_count_and_bytes(remaining_row)
-        except (TypeError, ValueError, _ResultStoreIntegrityError):
-            raise ResultStoreError("integrity_check") from None
-        return CleanupSummary(
-            expired_results=expired_results,
-            expired_bytes=expired_bytes,
-            evicted_results=evicted_results,
-            evicted_bytes=evicted_bytes,
             remaining_results=remaining_results,
             remaining_bytes=remaining_bytes,
         )
 
     def _validate_artifacts(
         self,
-        artifacts: object,
+        artifacts: tuple[ResultArtifactInput, ...],
     ) -> tuple[tuple[ResultArtifactInput, ...], int]:
-        if not isinstance(artifacts, tuple):
-            raise TypeError("artifacts must be a tuple")
-        typed_artifacts = cast(tuple[object, ...], artifacts)
-        if not typed_artifacts:
+        if not artifacts:
             raise ValueError("at least one result artifact is required")
-        if len(typed_artifacts) > self._limits.max_artifacts_per_result:
+        if len(artifacts) > self._limits.max_artifacts_per_result:
             _raise_input_limit(
                 "artifact_count",
-                len(typed_artifacts),
+                len(artifacts),
                 self._limits.max_artifacts_per_result,
             )
-        checked: list[ResultArtifactInput] = []
-        sections: set[str] = set()
         total_bytes = 0
-        for artifact in typed_artifacts:
-            if not isinstance(artifact, ResultArtifactInput):
-                raise TypeError("every artifact must be a ResultArtifactInput")
-            if artifact.section in sections:
-                raise ValueError("artifact section names must be unique within a result")
-            sections.add(artifact.section)
+        for artifact in artifacts:
             artifact_bytes = len(artifact.content)
             if artifact_bytes > self._limits.max_artifact_bytes:
                 _raise_input_limit(
@@ -930,14 +882,13 @@ class SQLiteResultStore:
                     self._limits.max_artifact_bytes,
                 )
             total_bytes += artifact_bytes
-            checked.append(artifact)
         effective_result_limit = min(
             self._limits.max_result_bytes,
             self._limits.quota_bytes,
         )
         if total_bytes > effective_result_limit:
             _raise_input_limit("result_bytes", total_bytes, effective_result_limit)
-        return tuple(checked), total_bytes
+        return artifacts, total_bytes
 
     def _validate_page(self, offset: object, limit: object) -> tuple[int, int]:
         checked_limit = self._limits.default_page_size if limit is None else limit
@@ -965,19 +916,6 @@ class SQLiteResultStore:
         )
         return checked_offset, validated_limit
 
-    def _allocate_result_id(self, connection: sqlite3.Connection) -> str:
-        for _ in range(_RESULT_ID_ATTEMPTS):
-            candidate = f"res_{secrets.token_urlsafe(24)}"
-            if not _RESULT_ID_PATTERN.fullmatch(candidate):
-                raise _ResultStoreIntegrityError("invalid generated result identifier")
-            row = connection.execute(
-                "SELECT 1 FROM stored_results WHERE result_id = ?",
-                (candidate,),
-            ).fetchone()
-            if row is None:
-                return candidate
-        raise _ResultStoreIntegrityError("could not allocate a unique result identifier")
-
     def _delete_expired(
         self,
         connection: sqlite3.Connection,
@@ -999,53 +937,6 @@ class SQLiteResultStore:
                 (result_id,),
             )
         return len(decoded), sum(byte_size for _, byte_size in decoded)
-
-    def _evict_to_fit(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        incoming_bytes: int,
-        incoming_results: int,
-    ) -> tuple[int, int]:
-        total_row = connection.execute(
-            "SELECT COUNT(*), COALESCE(SUM(total_bytes), 0) FROM stored_results"
-        ).fetchone()
-        current_results, current_bytes = _decode_count_and_bytes(total_row)
-        if (
-            current_bytes + incoming_bytes <= self._limits.quota_bytes
-            and current_results + incoming_results <= self._limits.max_results
-        ):
-            return 0, 0
-        rows = connection.execute(
-            """
-            SELECT result_id, total_bytes
-            FROM stored_results
-            ORDER BY created_at, result_id
-            """
-        ).fetchall()
-        decoded = _decode_result_id_and_bytes_rows(rows)
-        evicted_results = 0
-        evicted_bytes = 0
-        for result_id, byte_size in decoded:
-            if (
-                current_bytes + incoming_bytes <= self._limits.quota_bytes
-                and current_results + incoming_results <= self._limits.max_results
-            ):
-                break
-            connection.execute(
-                "DELETE FROM stored_results WHERE result_id = ?",
-                (result_id,),
-            )
-            current_bytes -= byte_size
-            current_results -= 1
-            evicted_results += 1
-            evicted_bytes += byte_size
-        if (
-            current_bytes + incoming_bytes > self._limits.quota_bytes
-            or current_results + incoming_results > self._limits.max_results
-        ):
-            raise _ResultStoreIntegrityError("quota could not be satisfied atomically")
-        return evicted_results, evicted_bytes
 
     def _require_capacity(
         self,
@@ -1073,10 +964,18 @@ class SQLiteResultStore:
 
     def _connect(self) -> sqlite3.Connection:
         path = self._prepare_location()
-        flags = os.O_RDWR | os.O_CREAT
+        flags = os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags, 0o600)
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        created = False
+        try:
+            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            descriptor = os.open(path, flags, 0o600)
+        else:
+            created = True
         try:
             descriptor_stat = os.fstat(descriptor)
             if not stat.S_ISREG(descriptor_stat.st_mode):
@@ -1085,6 +984,10 @@ class SQLiteResultStore:
                 raise OSError("result store must be owned by the current user")
             if hasattr(os, "fchmod"):
                 os.fchmod(descriptor, 0o600)
+            if not created and descriptor_stat.st_size == 0:
+                raise _ResultStoreIntegrityError(
+                    "existing result store is missing its schema version"
+                )
             connection = sqlite3.connect(path, timeout=5.0)
             path_stat = path.stat(follow_symlinks=False)
             if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
@@ -1096,10 +999,18 @@ class SQLiteResultStore:
         finally:
             os.close(descriptor)
         try:
-            connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA trusted_schema = OFF")
             connection.execute("PRAGMA secure_delete = ON")
+            version_row = connection.execute("PRAGMA user_version").fetchone()
+            if version_row is None or len(version_row) != 1:
+                raise _ResultStoreIntegrityError("missing SQLite schema version")
+            schema_version = version_row[0]
+            if not isinstance(schema_version, int) or (
+                (created and schema_version != 0)
+                or (not created and schema_version != _SCHEMA_VERSION)
+            ):
+                raise _ResultStoreIntegrityError("unsupported SQLite schema version")
             connection.execute("PRAGMA journal_mode = DELETE")
             page_size = _decode_single_positive_integer(
                 connection.execute("PRAGMA page_size").fetchone()
@@ -1110,31 +1021,23 @@ class SQLiteResultStore:
             )
             if configured_maximum_pages > maximum_pages:
                 raise _ResultStoreIntegrityError("database already exceeds its physical limit")
-            version_row = connection.execute("PRAGMA user_version").fetchone()
-            if version_row is None or len(version_row) != 1:
-                raise _ResultStoreIntegrityError("missing SQLite schema version")
-            schema_version = version_row[0]
-            if not isinstance(schema_version, int) or schema_version not in {
-                0,
-                _SCHEMA_VERSION,
-            }:
-                raise _ResultStoreIntegrityError("unsupported SQLite schema version")
             auto_vacuum_row = connection.execute("PRAGMA auto_vacuum").fetchone()
             auto_vacuum_mode = _decode_single_nonnegative_integer(auto_vacuum_row)
-            if auto_vacuum_mode != 1:
+            if created and auto_vacuum_mode != 1:
                 connection.execute("PRAGMA auto_vacuum = FULL")
-                if schema_version != 0:
-                    connection.execute("VACUUM")
                 auto_vacuum_row = connection.execute("PRAGMA auto_vacuum").fetchone()
                 if _decode_single_nonnegative_integer(auto_vacuum_row) != 1:
                     raise _ResultStoreIntegrityError("full auto-vacuum could not be enabled")
+            elif not created and auto_vacuum_mode != 1:
+                raise _ResultStoreIntegrityError("result store must use full auto-vacuum")
             with connection:
-                connection.execute(_CREATE_RESULTS)
-                connection.execute(_CREATE_ARTIFACTS)
-                connection.execute(_CREATE_EXPIRY_INDEX)
-                connection.execute(_CREATE_SCOPE_INDEX)
-                if schema_version == 0:
+                if created:
+                    connection.execute(_CREATE_RESULTS)
+                    connection.execute(_CREATE_ARTIFACTS)
+                    connection.execute(_CREATE_EXPIRY_INDEX)
+                    connection.execute(_CREATE_SCOPE_INDEX)
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            _validate_result_store_schema(connection)
         except BaseException:
             connection.close()
             raise
@@ -1167,8 +1070,6 @@ class SQLiteResultStore:
         finally:
             os.close(descriptor)
         try:
-            connection.execute("PRAGMA busy_timeout = 5000")
-            connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA trusted_schema = OFF")
             connection.execute("PRAGMA query_only = ON")
             schema_version = _decode_single_nonnegative_integer(
@@ -1184,15 +1085,7 @@ class SQLiteResultStore:
             )
             if page_count * page_size > self._limits.max_database_bytes:
                 raise _ResultStoreIntegrityError("database exceeds its physical limit")
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_schema "
-                    "WHERE type = 'table' AND name IN ('stored_results', 'result_artifacts')"
-                ).fetchall()
-            }
-            if tables != {"stored_results", "result_artifacts"}:
-                raise _ResultStoreIntegrityError("result store schema is incomplete")
+            _validate_result_store_schema(connection)
         except BaseException:
             connection.close()
             raise
@@ -1216,6 +1109,42 @@ class SQLiteResultStore:
         path = self._resolved_configured_path()
         prepare_private_parent(path.parent)
         return path
+
+
+def _validate_result_store_schema(connection: sqlite3.Connection) -> None:
+    if _schema_objects(connection) != _expected_schema_objects():
+        raise _ResultStoreIntegrityError("result store schema is incomplete or incompatible")
+
+
+@lru_cache(maxsize=1)
+def _expected_schema_objects() -> tuple[tuple[object, ...], ...]:
+    with closing(sqlite3.connect(":memory:")) as connection:
+        for statement in (
+            _CREATE_RESULTS,
+            _CREATE_ARTIFACTS,
+            _CREATE_EXPIRY_INDEX,
+            _CREATE_SCOPE_INDEX,
+        ):
+            connection.execute(statement)
+        return _schema_objects(connection)
+
+
+def _schema_objects(connection: sqlite3.Connection) -> tuple[tuple[object, ...], ...]:
+    return _fetch_bounded_schema_rows(
+        connection.execute(_SCHEMA_OBJECTS_QUERY),
+        maximum=_MAX_SCHEMA_OBJECTS,
+    )
+
+
+def _fetch_bounded_schema_rows(
+    cursor: sqlite3.Cursor,
+    *,
+    maximum: int,
+) -> tuple[tuple[object, ...], ...]:
+    rows = tuple(cursor.fetchmany(maximum + 1))
+    if len(rows) > maximum:
+        raise _ResultStoreIntegrityError("result store schema metadata exceeds its bound")
+    return rows
 
 
 def _compensate_created_result(

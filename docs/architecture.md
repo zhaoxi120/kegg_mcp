@@ -9,7 +9,7 @@ repository Skills. The complete three-server suite supports Linux and native App
 14 or later with CPython 3.11.x. Windows hosts use the Linux route through WSL2; native Intel macOS
 and native Windows server execution are unsupported.
 
-Last architecture and document-ownership review: 2026-08-01.
+Last architecture and document-ownership review: 2026-08-06.
 
 ## Product boundary
 
@@ -40,7 +40,7 @@ protein FASTA
   -> deepkoala-mcp
   -> deepkoala_annotations.csv plus source provenance
   -> kegg-mcp
-  -> output bundle plus render_input.json version 3
+  -> output bundle plus render_input.json version 4
   -> kegg-render-mcp
   -> bounded static SVG or PNG artifacts
 ```
@@ -71,9 +71,8 @@ The current product does not provide:
 Bounded organism-scoped gene-symbol lookup is candidate discovery and preserves every match; it is
 not genome annotation or automatic identity selection. Local input preparation does not turn Core
 into a KEGG Mapper or KEGG Syntax execution engine. Abundance-aware methods, statistical
-enrichment, global or overview pathway line overlays, Streamable HTTP, non-KEGG backends, native
-Windows execution, and additional component or Python-version support require separately assigned
-work.
+enrichment, Streamable HTTP, non-KEGG backends, native Windows execution, and additional component
+or Python-version support require separately assigned work.
 
 ## Process, package, and Skill architecture
 
@@ -83,7 +82,7 @@ The repository keeps three process boundaries:
 | --- | --- | --- |
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
-| `kegg-render-mcp` | Validate a version 3 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
+| `kegg-render-mcp` | Validate a version 4 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 ### Platform boundary
 
@@ -321,8 +320,9 @@ support an organism-specific pathway claim.
 
 `PathwaySpec` validates the namespace, canonicalizes an omitted `map` view to `ko`, and
 de-duplicates paired views by pathway number. Global and overview references require explicit core
-analysis opt-in and a warning; the current renderer rejects them because it implements regular-box
-overlays only.
+analysis opt-in and a warning. A canonical KO target with an evaluated denominator and complete
+detected evidence is renderable through the version 4 handoff; `map` and organism references remain
+summary-only renderer targets.
 
 Pathway output does not contain `pathway_present`. Coverage must not be described as pathway
 presence, completeness, expression, activity, flux, phenotype, or experimental validation.
@@ -401,10 +401,12 @@ configuration, tool, lifecycle, and detailed handoff behavior.
 
 ## Renderer contract
 
-The renderer consumes the Core's immutable `render_input.json` schema version 3 and
+The renderer consumes the Core's immutable `render_input.json` schema version 4 and
 `AnalysisExecutionProvenance` version 3. It never normalizes annotations, chooses a second KO
 policy, or recomputes MODULE completion, block coverage, pathway denominators, or coverage ratios.
-It produces bounded static regular-pathway overlays and project-owned MODULE logic diagrams.
+It produces bounded static regular-pathway box overlays, explicitly opted-in canonical KO
+global/overview line overlays, and project-owned MODULE logic diagrams. Broad maps remain excluded
+from automatic Top-N selection and carry conservative descriptive warnings when explicitly used.
 
 BRITE hierarchy results and annotation mapping audits are not renderer inputs. The renderer does
 not query or visualize those artifacts, traverse their relationships, or recompute their counts.

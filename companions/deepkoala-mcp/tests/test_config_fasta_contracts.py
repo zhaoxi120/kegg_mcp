@@ -261,6 +261,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     job_id = "job_" + "a" * 32
     offset = timezone(timedelta(hours=5, minutes=30))
     source = SourceProvenance(
+        source_name="deepkoala",
         source_version="0.1-test",
         model_name="full",
         model_version="202502",
@@ -269,7 +270,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     )
     handoff = ImportHandoff(
         schema_version="1",
-        tool_version="0.4.0",
+        tool_version="0.5.0",
         input_path="/allowed/original.faa",
         annotations_path="/outputs/run/deepkoala_annotations.csv",
         report_path="/outputs/run/deepkoala_run_report.md",
@@ -284,12 +285,21 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     with pytest.raises(ValidationError, match="schema_version"):
         ImportHandoff.model_validate(payload, strict=True)
     payload = handoff.model_dump(mode="python")
-    payload["schema_version"] = "2"
+    payload["schema_version"] = "unsupported"
     with pytest.raises(ValidationError, match="schema_version"):
         ImportHandoff.model_validate(payload, strict=True)
     payload = handoff.model_dump(mode="python")
     del payload["input_format"]
     with pytest.raises(ValidationError, match="input_format"):
+        ImportHandoff.model_validate(payload, strict=True)
+    for field in ("source_name", "source_version"):
+        payload = handoff.model_dump(mode="python")
+        del payload["source"][field]
+        with pytest.raises(ValidationError, match=field):
+            ImportHandoff.model_validate(payload, strict=True)
+    payload = handoff.model_dump(mode="python")
+    payload["source"]["source_version"] = None
+    with pytest.raises(ValidationError, match="source_version"):
         ImportHandoff.model_validate(payload, strict=True)
     payload = handoff.model_dump(mode="python")
     payload["input_path"] = "/allowed/different.faa"
@@ -299,6 +309,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
 
 def test_utc_timestamp_serializes_with_z() -> None:
     source = SourceProvenance(
+        source_name="deepkoala",
         source_version="0.1-test",
         model_name="frag",
         model_version="202401",
@@ -350,7 +361,7 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
-def test_stage_accepts_valid_fasta_larger_than_the_removed_byte_cap(tmp_path: Path) -> None:
+def test_stage_accepts_large_valid_fasta_within_sequence_limits(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     job = tmp_path / "job"
     allowed.mkdir()

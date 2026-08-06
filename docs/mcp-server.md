@@ -6,7 +6,7 @@ capabilities are separate local stdio processes and independently reviewed distr
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 3 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 4 -> kegg-render-mcp
 ```
 
 See the [DeepKOALA companion README](../companions/deepkoala-mcp/README.md) and
@@ -436,11 +436,13 @@ and then canonical pathway ID. Automatic selection directly excludes the current
 Overview, and higher-level Overview KO map identifiers before Top-N truncation and fills up to the
 requested count from subsequent regular references; the complete overlap ranking remains retained.
 The fixed identifier set was checked against the official KEGG PATHWAY identifier classes and map
-list on 2026-07-22. An explicitly requested `ko01100` graphic remains outside these three MCP
-servers; a client may create a separately labelled model-generated conceptual diagram, but must not
-present it as a KEGG-derived coverage overlay. The server loads pathway LINK/GET references only for
-the selected targets. Duplicate annotation records and duplicate LINK rows cannot increase the
-detected node count.
+list on 2026-07-22. An explicitly requested canonical KO total map such as `ko01100` requires
+`allow_global_or_overview=true`; when its denominator is evaluated and detected evidence is
+complete, Core emits a renderable version 4 target. Its renderer overlay follows bounded KGML line
+coordinates and does not infer arrow direction, pathway activity, completeness, or flux. `map` and
+organism references remain summary-only. The server loads pathway LINK/GET references only for the
+selected targets. Duplicate annotation records and duplicate LINK rows cannot increase the detected
+node count.
 
 Generic tables with unambiguous common headers are mapped automatically and the decision is
 reported; ambiguous or non-standard tables require an explicit mapping. When `annotations` is used
@@ -467,11 +469,15 @@ A successful normalization bundle contains
 Automatic MODULE selection also adds `module_ranking.tsv` and `ko_module_relationships.tsv`;
 server-ranked pathway selection adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
 The report records the original absolute input path when source provenance supplies it.
-`render_input.json` is an immutable renderer-specific version 3 contract: it distinguishes
+`render_input.json` is an immutable renderer-specific version 4 contract: it distinguishes
 accepted from policy-defined uncertain KOs, carries complete-within-limit pathway evidence and
-authoritative MODULE states, and records producer and calculation provenance. Version 1 previews
-cannot be upgraded losslessly. Bundle schema version 3 installs its manifest last as a commit
-marker and represents source paths with redacted labels by default. The explicit
+authoritative MODULE states, and records producer and calculation provenance. An explicitly
+requested canonical KO global or overview target is renderable when
+`allow_global_or_overview=true`, its denominator was evaluated, and its detected evidence is
+complete; the Renderer maps that evidence onto bounded KGML line-coordinate polylines while
+preserving the base image. Automatic Top-N selection continues to exclude broad maps, while `map`
+and organism references remain summary-only. Bundle schema version 3 installs its manifest last as
+a commit marker and represents source paths with redacted labels by default. The explicit
 `manifest_path_mode="absolute"` option includes absolute paths in the manifest when required. The
 bundle manifest records the renderer schema and MIME type.
 `AnalysisExecutionProvenance` version 3 also records the applicable MODULE analysis limits,
@@ -494,26 +500,6 @@ MIME type, exact byte size, and controlled path. A K number is an annotation, MO
 completion is distinct from
 the project block-coverage metric, and pathway coverage does not establish pathway presence,
 activity, flux, phenotype, or statistical significance.
-
-### Additions in v0.8.0
-
-Version 0.8.0 adds one deterministic KEGG-listed PMID projection and two file-producing tools.
-Existing preview/card, query, analysis, renderer-handoff, and current-scope comparison contracts
-remain unchanged. A process-scoped card or BRITE result can now be selected into a durable
-reference bundle before expiry, while `prepare_kegg_handoff` creates validated external-workflow
-inputs without uploading or executing them.
-
-### Migration from v0.5.0
-
-Version 0.6.0 was implemented but not released, so v0.7.0 upgrades from the last public v0.5.0
-contract. The former `map_ko_ids` tool is not part of the v0.7.0 surface:
-
-- use `trace_kegg_relations` for a bounded one- or two-hop relationship graph; and
-- use `audit_annotation_mapping` with one explicit `mapping_targets` value for a large
-  deterministic single-relation KO mapping.
-
-The server, rather than the LLM, performs batching, deduplication, provenance indexing, and
-retention for both routes.
 
 ## Resources and retention
 
@@ -582,7 +568,7 @@ transport and service API.
 
 ## Independent renderer MCP
 
-`kegg-render-mcp` is a separate distribution and process. It accepts the core's version 3 handoff,
+`kegg-render-mcp` is a separate distribution and process. It accepts the core's version 4 handoff,
 renders bounded static SVG or PNG, and never normalizes evidence or recomputes analysis. Its tools,
 resources, access modes, result lifecycle, and security contract are documented in the
 [renderer README](../companions/kegg-render-mcp/README.md) and

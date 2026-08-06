@@ -172,7 +172,7 @@ def test_find_preparation_accounts_for_the_endpoint_in_the_url_bound() -> None:
     assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
 
 
-def test_find_request_key_can_exceed_the_old_provenance_limit_within_the_url_bound() -> None:
+def test_find_request_key_respects_the_current_url_bound() -> None:
     request = FindRequest(database=KeggFindDatabase.KO, query="a" * 4_096)
     limits = KeggClientLimits(max_url_bytes=8_192)
 

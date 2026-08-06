@@ -265,15 +265,17 @@ The store provides bounded operations to:
 - list current-scope result and artifact metadata;
 - read an artifact by validated byte range;
 - delete one authorized result or the current scope;
-- remove TTL-expired orphan rows; and
-- perform separate operator-requested over-quota maintenance.
+- remove TTL-expired orphan rows.
 
 Capacity failure never evicts an unexpired result silently. Normal stdio shutdown deletes the
 current scope. Output bundles remain independently operator-owned durable files.
 
 The configured database is operator-owned rather than client-selected. Path validation rejects
 traversal, unsafe writable ancestry, symlinks, non-regular targets, and replacement races, and uses
-restrictive permissions where supported.
+restrictive permissions where supported. Only a database file atomically created by the current
+open may initialize the current result-store schema. A preexisting `user_version=0` database or a
+database that does not exactly match the current tables, columns, constraints, foreign keys, and
+indexes is rejected without schema repair.
 
 ## Interpretation and testing
 

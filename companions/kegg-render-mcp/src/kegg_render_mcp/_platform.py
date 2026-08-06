@@ -35,7 +35,7 @@ _REQUIRED_FOLLOW_SYMLINK_FUNCTIONS: Final = ("link", "stat")
 _REQUIRED_LOCK_ATTRIBUTES: Final = ("LOCK_EX", "LOCK_NB", "LOCK_UN", "flock")
 
 
-class UnsupportedRendererPlatformError(ValueError):
+class UnsupportedRendererPlatformError(RuntimeError):
     """The host cannot preserve the renderer's local filesystem guarantees."""
 
 

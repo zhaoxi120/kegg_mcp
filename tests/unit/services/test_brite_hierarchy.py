@@ -30,6 +30,7 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.services import brite_hierarchy, query_support
 from kegg_mcp.services.brite_hierarchy import (
+    BRITE_DETAIL_SCHEMA_VERSION,
     BRITE_DETAIL_SECTION,
     BRITE_TABLE_SECTION,
     MapBriteHierarchyRequest,
@@ -157,6 +158,7 @@ def test_explicit_hierarchy_preserves_multi_parent_paths_and_source_ids(
     assert result.artifacts[1].section == BRITE_TABLE_SECTION
 
     detail = json.loads(_artifact_bytes(store, result.result.result_id, BRITE_DETAIL_SECTION))
+    assert detail["schema_version"] == BRITE_DETAIL_SCHEMA_VERSION
     k1_paths = [path for path in detail["paths"] if path["input_entity"]["identifier"] == "K00001"]
     assert len(k1_paths) == 2
     assert k1_paths[0]["nodes"][0] == {

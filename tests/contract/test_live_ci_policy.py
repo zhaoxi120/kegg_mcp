@@ -6,7 +6,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 _LIVE_CONTROLS = _REPOSITORY_ROOT / "tests" / "live" / "conftest.py"
 _LIVE_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_kegg_api_live.py"
-_SCIENTIST_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_v08_scientist_workflows_live.py"
+_SCIENTIST_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_scientist_workflows_live.py"
 _STDIO_SUITE = _REPOSITORY_ROOT / "tests" / "live" / "test_stdio_scientist_live.py"
 
 

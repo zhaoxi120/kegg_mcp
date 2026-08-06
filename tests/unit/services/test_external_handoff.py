@@ -17,6 +17,7 @@ from kegg_mcp.services.external_handoff import (
     serialize_external_handoff,
 )
 from kegg_mcp.services.external_handoff_models import (
+    ExternalHandoffBundle,
     ExternalHandoffRequest,
     ExternalHandoffTarget,
     MapperColorRequest,
@@ -474,6 +475,22 @@ def test_prepare_external_handoff_writes_committed_bundle_and_manifest(tmp_path:
     )
     assert stat.S_IMODE(Path(result.data_file).stat().st_mode) == 0o600
     assert stat.S_IMODE(Path(result.manifest).stat().st_mode) == 0o600
+
+
+def test_external_handoff_bundle_requires_current_schema_version(tmp_path: Path) -> None:
+    result = prepare_external_handoff(
+        MapperSearchRequest(
+            target=ExternalHandoffTarget.MAPPER_SEARCH,
+            scope=MapperSearchScope.REFERENCE,
+            identifiers=("K00001",),
+        ),
+        output_directory=tmp_path / "current-schema",
+    )
+    payload = result.model_dump(mode="json")
+    del payload["schema_version"]
+
+    with pytest.raises(ValidationError):
+        ExternalHandoffBundle.model_validate(payload)
 
 
 def test_prepare_external_handoff_rejects_nonempty_output_without_modification(

@@ -8,11 +8,16 @@ import pytest
 from pydantic import ValidationError
 
 from kegg_mcp.analysis import (
+    MODULE_RANKING_METHOD,
+    MODULE_RANKING_VERSION,
+    PATHWAY_RANKING_METHOD,
+    PATHWAY_RANKING_VERSION,
     ModuleAnalysisLimits,
     ModuleBlockState,
     ModuleDefinition,
     ModuleDefinitionCollection,
     ModuleEvaluationLimits,
+    ModuleSelection,
     PairedModuleEvaluation,
     PathwayCoverageLimits,
     PathwayCoverageParameters,
@@ -20,6 +25,7 @@ from kegg_mcp.analysis import (
     PathwayKoReference,
     PathwayReferenceNamespace,
     PathwayReferenceScope,
+    PathwaySelection,
     ResolvedModuleGraph,
     evaluate_module_pair,
     evaluate_pathway_coverage,
@@ -33,9 +39,13 @@ from kegg_mcp.domain import (
 )
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.execution import (
+    ANALYSIS_SERVICE_NAME,
+    ANALYSIS_SERVICE_VERSION,
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
+    ModuleRankingExecution,
     PathwayExecutionParameters,
+    PathwayRankingExecution,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -57,13 +67,14 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.services.output_bundle import write_analysis_bundle
 from kegg_mcp.services.reference_loading import ReferenceLoadingLimits
 from kegg_mcp.services.render_contracts import (
+    RENDER_INPUT_BUILDER_VERSION,
     RENDER_INPUT_MIME_TYPE,
+    RENDER_INPUT_SCHEMA_VERSION,
     ModuleRenderTarget,
     RenderabilityStatus,
     RenderInput,
     RenderInputLimits,
     build_render_input,
-    parse_render_input_json,
     serialize_render_input,
 )
 
@@ -160,60 +171,283 @@ def _pathway_values(
     return reference, result
 
 
-def _execution() -> AnalysisExecutionProvenance:
+def _execution(
+    *,
+    allow_global_or_overview: bool = False,
+    ranking_dataset: AnnotationDataset | None = None,
+) -> AnalysisExecutionProvenance:
+    module_ranking: ModuleRankingExecution | None = None
+    pathway_ranking: PathwayRankingExecution | None = None
+    if ranking_dataset is not None:
+        decision_policy = ranking_dataset.import_report.decision_policy
+        module_ranking = ModuleRankingExecution(
+            method=MODULE_RANKING_METHOD,
+            method_version=MODULE_RANKING_VERSION,
+            selection=ModuleSelection(top_n=1),
+            evidence_mode=EvidenceMode.LENIENT,
+            decision_policy=decision_policy,
+            selected_unique_ko_count=2,
+            candidate_module_count=1,
+            selected_module_ids=("M00001",),
+            mapping_request_count=1,
+            mapping_network_request_count=0,
+            mapping_cache_hit_count=1,
+            mapping_response_bytes=123,
+        )
+        pathway_ranking = PathwayRankingExecution(
+            method=PATHWAY_RANKING_METHOD,
+            method_version=PATHWAY_RANKING_VERSION,
+            selection=PathwaySelection(top_n=1),
+            evidence_mode=EvidenceMode.LENIENT,
+            decision_policy=decision_policy,
+            selected_unique_ko_count=2,
+            candidate_pathway_count=1,
+            selected_pathway_ids=("ko00010",),
+            mapping_request_count=1,
+            mapping_network_request_count=0,
+            mapping_cache_hit_count=1,
+            mapping_response_bytes=123,
+        )
     return AnalysisExecutionProvenance(
+        service_name=ANALYSIS_SERVICE_NAME,
+        service_version=ANALYSIS_SERVICE_VERSION,
         import_limits=_IMPORT_LIMITS,
         kegg_request_options=KeggRequestOptions(),
         reference_loading_limits=ReferenceLoadingLimits(),
         module_analysis_limits=_MODULE_LIMITS,
-        pathway_parameters=PathwayExecutionParameters(evidence_mode=EvidenceMode.LENIENT),
+        module_ranking=module_ranking,
+        pathway_parameters=PathwayExecutionParameters(
+            evidence_mode=EvidenceMode.LENIENT,
+            allow_global_or_overview=allow_global_or_overview,
+            ranking=pathway_ranking,
+        ),
         pathway_coverage_limits=_PATHWAY_LIMITS,
         direct_result_limits=AnalysisServiceLimits(),
     )
 
 
-def test_execution_provenance_rejects_the_removed_plain_ko_service_name() -> None:
+def test_execution_provenance_requires_the_current_service_identity() -> None:
     execution = _execution()
     payload = execution.model_dump(mode="json")
-    payload["service_name"] = "kegg_mcp_plain_ko_analysis"
+    payload["service_name"] = "unsupported_analysis_service"
 
     assert execution.service_name == "kegg_mcp_annotation_analysis"
     with pytest.raises(ValidationError):
         AnalysisExecutionProvenance.model_validate(payload)
 
 
-def _render_input(*, limits: RenderInputLimits | None = None) -> RenderInput:
+def _render_input(
+    *,
+    limits: RenderInputLimits | None = None,
+    include_rankings: bool = False,
+) -> RenderInput:
     dataset = _dataset()
-    graph, pair = _module_values(dataset)
-    reference, coverage = _pathway_values(dataset)
+    graph, _ = _module_values(dataset)
+    reference, _ = _pathway_values(dataset)
     return build_render_input(
         dataset,
         (graph,),
-        (pair,),
         (reference,),
-        (coverage,),
-        _execution(),
+        _execution(ranking_dataset=dataset if include_rankings else None),
         limits=limits,
     )
 
 
-def test_version_3_schema_and_canonical_json_round_trip() -> None:
+def test_version_4_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
     schema = RenderInput.model_json_schema()
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:3"
+    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:4"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["$defs"]["PathwayRenderTarget"]["$id"] == (
+        "urn:kegg-mcp:schema:pathway-render-target:3"
+    )
     assert "workflow_digest" not in json.dumps(schema)
-    assert value.schema_version == "3"
-    assert parse_render_input_json(serialized) == value
-    assert serialize_render_input(parse_render_input_json(serialized)) == serialized
-    assert RENDER_INPUT_MIME_TYPE.endswith("version=3")
+    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "4"
+    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "2"
+    assert RenderInput.model_validate_json(serialized, strict=True) == value
+    assert (
+        serialize_render_input(RenderInput.model_validate_json(serialized, strict=True))
+        == serialized
+    )
+    assert RENDER_INPUT_MIME_TYPE.endswith("version=4")
 
-    payload = json.loads(serialized)
-    payload["schema_version"] = "2"
+    assert "schema_version" in schema["required"]
+    assert "name" in schema["$defs"]["RenderProducer"]["required"]
+    execution_schema = schema["$defs"]["RenderExecutionProvenance"]
+    assert {"handoff_builder_name", "handoff_builder_version"}.issubset(
+        execution_schema["required"]
+    )
+
+
+def test_current_render_input_rejects_unsupported_or_missing_wire_versions() -> None:
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["schema_version"] = "unsupported"
     with pytest.raises(ValidationError):
-        RenderInput.model_validate(payload)
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    del payload["schema_version"]
+    with pytest.raises(ValidationError):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_current_render_input_requires_builder_identity_fields() -> None:
+    payload = json.loads(serialize_render_input(_render_input()))
+    del payload["producer"]["name"]
+    with pytest.raises(ValidationError):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    del payload["execution"]["handoff_builder_name"]
+    with pytest.raises(ValidationError):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    del payload["execution"]["handoff_builder_version"]
+    with pytest.raises(ValidationError):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["execution"]["handoff_builder_version"] = "unsupported"
+    with pytest.raises(ValidationError):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_current_render_targets_reject_fabricated_analysis_identity() -> None:
+    mutations = (
+        ("pathways", 0, "calculation_method", "fabricated_method"),
+        ("pathways", 0, "calculation_version", "999"),
+        ("modules", 0, "parser_name", "fabricated_parser"),
+        ("modules", 0, "parser_version", "999"),
+        ("modules", 0, "resolver_version", "999"),
+    )
+    for collection, index, field, replacement in mutations:
+        payload = json.loads(serialize_render_input(_render_input()))
+        payload[collection][index][field] = replacement
+        with pytest.raises(ValidationError):
+            RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["pathways"][0]["reference_link_provenance"][0]["operation"] = "get"
+    payload["pathways"][0]["reference_metadata_provenance"][0]["operation"] = "link"
+    with pytest.raises(ValidationError, match="only LINK provenance"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["modules"][0]["definitions"][0]["parse_result"]["parser_name"] = "fabricated_parser"
+    with pytest.raises(ValidationError, match="definition parser identity"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["modules"][0]["strict"]["calculation_method"]["name"] = "fabricated_method"
+    with pytest.raises(ValidationError, match="calculation identity"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload = json.loads(serialize_render_input(_render_input()))
+    payload["modules"][0]["reference_retrieval_provenance"] = [
+        _provenance(KeggOperation.LINK).model_dump(mode="json")
+    ]
+    with pytest.raises(ValidationError, match="only GET retrieval provenance"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_current_render_input_requires_analysis_and_ranking_identity_fields() -> None:
+    value = _render_input(include_rankings=True)
+    schema = RenderInput.model_json_schema()
+    definitions = schema["$defs"]
+    assert {"service_name", "service_version"}.issubset(
+        definitions["AnalysisExecutionProvenance"]["required"]
+    )
+    for definition_name in ("ModuleRankingExecution", "PathwayRankingExecution"):
+        assert {"method", "method_version"}.issubset(definitions[definition_name]["required"])
+
+    missing_paths = (
+        ("execution", "analysis", "service_name"),
+        ("execution", "analysis", "service_version"),
+        ("execution", "analysis", "module_ranking", "method"),
+        ("execution", "analysis", "module_ranking", "method_version"),
+        ("execution", "analysis", "pathway_parameters", "ranking", "method"),
+        (
+            "execution",
+            "analysis",
+            "pathway_parameters",
+            "ranking",
+            "method_version",
+        ),
+    )
+    for path in missing_paths:
+        payload = json.loads(serialize_render_input(value))
+        parent = payload
+        for component in path[:-1]:
+            parent = parent[component]
+        del parent[path[-1]]
+        with pytest.raises(ValidationError):
+            RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
+    dataset = _dataset()
+    reference = PathwayKoReference(
+        reference_namespace=PathwayReferenceNamespace.KO,
+        reference_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
+        pathway_id="ko01100",
+        pathway_name="Synthetic metabolic pathways",
+        pathway_class=("Metabolism; Global and overview maps",),
+        reference_kos=("K00001", "K00002", "K00003"),
+        relationship_row_count=3,
+        link_provenance=(_provenance(KeggOperation.LINK),),
+        metadata_provenance=(_provenance(KeggOperation.GET),),
+    )
+    value = build_render_input(
+        dataset,
+        (),
+        (reference,),
+        _execution(allow_global_or_overview=True),
+    )
+
+    target = value.pathways[0]
+    assert target.reference_namespace is PathwayReferenceNamespace.KO
+    assert target.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+    assert target.renderability is RenderabilityStatus.RENDERABLE
+    assert target.not_renderable_reason is None
+    assert target.detected_ko_ids_complete is True
+    assert target.detected_ko_ids == ("K00001", "K00002")
+
+    payload = value.model_dump(mode="json")
+    payload["execution"]["analysis"]["pathway_parameters"]["allow_global_or_overview"] = False
+    with pytest.raises(ValidationError, match="explicit execution opt-in"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+    payload["pathways"][0]["reference_scope"] = PathwayReferenceScope.STANDARD
+    with pytest.raises(ValidationError, match="conflicts with retained PATHWAY CLASS"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_unevaluable_global_or_overview_ko_pathway_remains_summary_only() -> None:
+    dataset = _dataset()
+    reference = PathwayKoReference(
+        reference_namespace=PathwayReferenceNamespace.KO,
+        reference_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
+        pathway_id="ko01100",
+        pathway_name="Synthetic metabolic pathways",
+        pathway_class=("Metabolism; Global and overview maps",),
+        reference_kos=(),
+        relationship_row_count=0,
+        link_provenance=(_provenance(KeggOperation.LINK),),
+        metadata_provenance=(_provenance(KeggOperation.GET),),
+    )
+    value = build_render_input(
+        dataset,
+        (),
+        (reference,),
+        _execution(allow_global_or_overview=True),
+    )
+
+    target = value.pathways[0]
+    assert target.renderability is RenderabilityStatus.SUMMARY_ONLY
+    assert target.not_renderable_reason == "pathway_not_evaluable"
 
 
 def test_evidence_classes_and_complete_renderer_targets_exclude_other_statuses() -> None:
@@ -292,12 +526,9 @@ def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -
         ),
         _MODULE_LIMITS,
     )
-    pair = evaluate_module_pair(graph, dataset, _MODULE_LIMITS)
     value = build_render_input(
         dataset,
         (graph,),
-        (pair,),
-        (),
         (),
         _execution(),
     )
@@ -314,23 +545,7 @@ def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -
         ModuleRenderTarget.model_validate_json(json.dumps(payload), strict=True)
 
 
-def test_identity_mismatch_and_serialized_byte_limit_fail_with_dedicated_errors() -> None:
-    dataset = _dataset()
-    graph, pair = _module_values(dataset)
-    reference, coverage = _pathway_values(dataset)
-    mismatched = reference.model_copy(update={"pathway_name": "Different pathway"})
-
-    with pytest.raises(KeggMcpError) as identity_error:
-        build_render_input(
-            dataset,
-            (graph,),
-            (pair,),
-            (mismatched,),
-            (coverage,),
-            _execution(),
-        )
-    assert identity_error.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
-
+def test_serialized_byte_limit_fails_with_dedicated_error() -> None:
     with pytest.raises(KeggMcpError) as limit_error:
         _render_input(limits=RenderInputLimits(max_serialized_bytes=1_000))
     assert limit_error.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
@@ -342,25 +557,20 @@ def test_identity_mismatch_and_serialized_byte_limit_fail_with_dedicated_errors(
     }
 
 
-def test_execution_provenance_must_match_analysis_limits_and_parameters() -> None:
+def test_execution_provenance_must_match_module_graph_limits() -> None:
     dataset = _dataset()
-    graph, pair = _module_values(dataset)
-    reference, coverage = _pathway_values(dataset)
-
-    mismatched_execution = _execution().model_copy(
+    graph, _ = _module_values(dataset)
+    mismatched_graph = graph.model_copy(
         update={
-            "module_analysis_limits": ModuleAnalysisLimits(),
-            "pathway_parameters": PathwayExecutionParameters(evidence_mode=EvidenceMode.STRICT),
+            "limits": graph.limits.model_copy(update={"max_modules": graph.limits.max_modules + 1})
         }
     )
     with pytest.raises(KeggMcpError) as raised:
         build_render_input(
             dataset,
-            (graph,),
-            (pair,),
-            (reference,),
-            (coverage,),
-            mismatched_execution,
+            (mismatched_graph,),
+            (),
+            _execution(),
         )
 
     assert raised.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
@@ -369,8 +579,6 @@ def test_execution_provenance_must_match_analysis_limits_and_parameters() -> Non
 def test_visualization_evidence_classes_must_be_disjoint() -> None:
     payload = _render_input().model_dump(mode="json")
     payload["evidence"]["uncertain_ko_ids"] = ["K00001", "K00002"]
-    payload["evidence"]["uncertain_count"] += 1
-
     with pytest.raises(ValidationError, match="must be disjoint"):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -384,70 +592,15 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
             "pathway_id": "map00010",
         }
     )
-    coverage = evaluate_pathway_coverage(
-        map_reference,
-        dataset,
-        PathwayCoverageParameters(
-            reference_namespace=PathwayReferenceNamespace.MAP,
-            evidence_mode=EvidenceMode.LENIENT,
-        ),
-        _PATHWAY_LIMITS,
-    )
     value = build_render_input(
         dataset,
         (),
-        (),
         (map_reference,),
-        (coverage,),
         _execution(),
     )
 
     assert value.pathways[0].renderability is RenderabilityStatus.SUMMARY_ONLY
     assert value.pathways[0].not_renderable_reason == ("pathway_reference_namespace_unsupported")
-
-
-def test_same_count_different_module_and_pathway_content_fails_identity_alignment() -> None:
-    dataset = _dataset()
-    graph, pair = _module_values(dataset)
-    reference, coverage = _pathway_values(dataset)
-    mismatched_graph = resolve_module_definitions(
-        ModuleDefinitionCollection(
-            root_module_id="M00001",
-            definitions=(
-                ModuleDefinition.from_text(
-                    module_id="M00001",
-                    module_name="Synthetic module",
-                    definition="K00001-K00004 K00002 K00004",
-                ),
-            ),
-        ),
-        pair.strict.limits,
-    )
-    mismatched_reference = reference.model_copy(
-        update={"reference_kos": ("K00001", "K00002", "K00004")}
-    )
-
-    with pytest.raises(KeggMcpError) as module_error:
-        build_render_input(
-            dataset,
-            (mismatched_graph,),
-            (pair,),
-            (reference,),
-            (coverage,),
-            _execution(),
-        )
-    assert module_error.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
-
-    with pytest.raises(KeggMcpError) as pathway_error:
-        build_render_input(
-            dataset,
-            (graph,),
-            (pair,),
-            (mismatched_reference,),
-            (coverage,),
-            _execution(),
-        )
-    assert pathway_error.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
 
 
 def test_analysis_bundle_limit_failure_writes_no_partial_directory(tmp_path: Path) -> None:

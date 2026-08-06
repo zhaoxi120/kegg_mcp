@@ -436,7 +436,9 @@ nested flat-file field indentation, accepts documented BRITE root forms only wit
 htext metadata envelope, and applies the current identifier reconciliation rules before cache use.
 Cache rows produced under an incompatible parser version fail closed instead of being silently
 reinterpreted. A cache created for a different schema is incompatible and should be replaced rather
-than migrated implicitly.
+than read by the current service. Only a database file atomically created by the current open may
+initialize from SQLite `user_version=0`; a preexisting unversioned or structurally incomplete cache
+is rejected without schema creation or version repair.
 
 `CachePolicy` defaults to a seven-day TTL, 10,000 rows, 512 MiB of response payloads, and a
 640 MiB SQLite main-database limit. Before each write, expired rows are removed. Fresh rows are
@@ -462,9 +464,9 @@ SQLite descriptor cannot release the process-scoped POSIX lock while an immutabl
 Operators must not bypass SQLite locking to modify that database while an offline deployment uses
 it. The client validates the schema version,
 auto-vacuum mode, journal mode, parser metadata, and configured logical and physical size bounds
-before serving a row. It does not initialize or migrate a database and cannot write, clean up, or
-fall back to HTTP. Operators must populate or refresh the selected public-academic or confirmed
-licensed endpoint namespace in a separately authorized live deployment.
+before serving a row. It opens only a preexisting current-schema database and cannot write, clean
+up, or fall back to HTTP. Operators must populate or refresh the selected public-academic or
+confirmed licensed endpoint namespace in a separately authorized live deployment.
 
 The Darwin descriptor-open behavior was reviewed on 2026-08-01 against SQLite's
 [URI filename contract](https://www.sqlite.org/uri.html) and its official

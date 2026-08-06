@@ -248,6 +248,30 @@ def test_canonical_artifacts_round_trip_with_exact_sizes_and_provenance() -> Non
     assert RenderedReport.model_validate_json(first.model_dump_json()) == first
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    ("format_name", "format_version", "renderer_name", "renderer_version"),
+)
+def test_structured_report_requires_current_format_and_renderer_identity(
+    missing_field: str,
+) -> None:
+    rendered = render_report(_complete_report_input())
+    payload = json.loads(_artifact(rendered, ReportSection.STRUCTURED).content)
+    del payload[missing_field]
+
+    with pytest.raises(ValidationError):
+        StructuredReport.model_validate(payload)
+
+
+@pytest.mark.parametrize("missing_field", ("renderer_name", "renderer_version"))
+def test_rendered_report_requires_current_renderer_identity(missing_field: str) -> None:
+    payload = render_report(_complete_report_input()).model_dump(mode="json")
+    del payload[missing_field]
+
+    with pytest.raises(ValidationError):
+        RenderedReport.model_validate(payload)
+
+
 def test_pathway_ranking_falls_back_to_requested_top_n_without_execution_provenance() -> None:
     report = ReportInput(
         dataset=_dataset(),

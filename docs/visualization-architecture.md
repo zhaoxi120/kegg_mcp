@@ -6,7 +6,8 @@ semantics, graphics security, and visualization-specific rights rules. The cross
 [release readiness](release-readiness.md) owns version and release status.
 
 External interface review dates: KEGG visualization and rights sources 2026-07-16; inert KGML
-declaration observation 2026-07-21; Codex plugin source 2026-07-23.
+declaration observation 2026-07-21; Codex plugin source 2026-07-23; canonical KO total-map PNG,
+KGML, and line-coordinate behavior 2026-08-06.
 
 ## Purpose
 
@@ -25,7 +26,7 @@ Protein FASTA
     -> deepkoala-mcp
     -> deepkoala_annotations.csv plus source provenance
     -> kegg-mcp
-    -> render_input.json schema version 3
+    -> render_input.json schema version 4
     -> kegg-render-mcp
     -> static SVG, optional PNG, and render_manifest.json
 ```
@@ -34,14 +35,16 @@ Existing K numbers or annotation tables enter at `kegg-mcp`. An existing compati
 `render_input.json` enters directly at `kegg-render-mcp`. Earlier stages are not repeated when a
 valid stable handoff already exists.
 
-The supported scope covers regular canonical `koNNNNN` reference-pathway overlays from one matching
-KEGG PNG/KGML pair and project-owned MODULE logic diagrams from the core AST and evaluation states.
-Accepted and policy-defined uncertain evidence remain separate. SVG is canonical, PNG is a bounded
-derivative, and artifacts are available through local output directories and scoped MCP resources.
+The supported scope covers regular canonical `koNNNNN` reference-pathway box overlays, explicitly
+opted-in canonical KO global/overview total-map line overlays from one matching KEGG PNG/KGML pair,
+and project-owned MODULE logic diagrams from the core AST and evaluation states. Accepted and
+policy-defined uncertain evidence remain separate. SVG is canonical, PNG is a bounded derivative,
+and artifacts are available through local output directories and scoped MCP resources.
 
 The following remain unsupported:
 
-- global and overview pathway overlays that require line- and arrow-specific mapping policy;
+- reconstruction or inference of arrow direction from total-map line overlays;
+- `map` or organism-specific total-map overlays from KO-only evidence;
 - organism-specific pathway claims derived from KO-only input;
 - interactive HTML, JavaScript, browser automation, screenshots, or a web UI;
 - pathway activity, flux, phenotype, enrichment, or metabolic-model inference;
@@ -77,12 +80,14 @@ boundary, applies the named decision policy, selects explicit targets or up to f
 to five pathways by default, loads typed references, evaluates the targets, and writes a non-overwriting
 bundle containing `render_input.json`.
 
-Automatic ranking uses unique selected-KO overlap only to choose targets. MODULE ranking is not
-MODULE completion or enrichment. Exact MODULE completion and project block coverage are calculated
-separately after reference loading.
+Automatic ranking uses unique selected-KO overlap only to choose targets. It retains broad maps in
+the complete ranking but excludes Global, Overview, and higher-level Overview identifiers before
+automatic Top-N truncation. Explicit broad-map analysis requires
+`allow_global_or_overview=True`. MODULE ranking is not MODULE completion or enrichment. Exact
+MODULE completion and project block coverage are calculated separately after reference loading.
 
 The core exposes transport-independent Pydantic models in `kegg_mcp.services.render_contracts`.
-`RenderInput` schema version 3 contains producer and dataset identity, analysis unit, taxonomic and
+`RenderInput` schema version 4 contains producer and dataset identity, analysis unit, taxonomic and
 source provenance, decision-policy identity, disjoint accepted and uncertain KO sets, bounded MODULE
 and pathway targets, and serializable parameters, limits, ranking provenance, and calculation
 versions.
@@ -94,8 +99,9 @@ No workflow or artifact digest is required.
 A pathway render target carries the canonical identifier, namespace, scope, name, class, evidence
 mode, evaluation status, supplied coverage numerator and denominator, detected KOs when complete
 within the render limit, retrieval/cache provenance, calculation version, warnings, and
-renderability state. Non-`ko` references and unsupported broad maps are explicit summary-only or
-not-renderable targets.
+renderability state. An explicitly opted-in global/overview target is renderable only when it is a
+canonical KO reference with an evaluated denominator and complete detected evidence. Non-`ko`
+references and unevaluable or incomplete targets remain summary-only or not-renderable.
 
 A MODULE render target carries the root and reachable definitions, authoritative AST, reference
 edges and issues, strict and lenient completion, project block coverage, complete bounded block and
@@ -103,16 +109,19 @@ optional-component states, uncertain support, unsupported content, and parser/ev
 Oversized content is marked `not_renderable`; a truncated preview is never relabeled as complete
 renderer evidence.
 
-The output-bundle manifest records renderer schema version 3 and its MIME type independently from
+The output-bundle manifest records renderer schema version 4 and its MIME type independently from
 the output-bundle schema. Graph, reference, result, target-count, and byte-limit validation completes
-before publication. The bundle manifest is published last. Incompatible older renderer handoffs are
-rejected with an action to rerun core analysis; they are not upgraded from previews.
+before publication. The bundle manifest is published last. Only schema version 4 is accepted. A
+schema-mismatched handoff is rejected with an action to rerun core analysis; it is not repaired or
+reinterpreted.
 
 ### Typed KEGG pathway assets
 
 The public core library provides `PathwayAssetRequest`, `PathwayAssetResult`, and the fixed asset
 kinds `image`, `image2x`, and `kgml`. This interface accepts one canonical pathway identifier and no
-arbitrary URL.
+arbitrary URL. Public paired rendering assets use the canonical `koNNNNN` identity. A `mapNNNNN`
+value used by KEGG's internal KGML+ representation is not substituted as a public KGML asset
+identity and remains a summary-only renderer target.
 
 Asset retrieval reuses the core access gate, HTTPS transport, endpoint-scoped cache,
 deployment-wide no-burst rate limiter, retry policy, response-size bounds, and retrieval provenance.
@@ -127,7 +136,7 @@ core MCP tool, and the renderer does not implement a second network client.
 ### `kegg-render-mcp`
 
 The renderer is an independently packaged local stdio MCP server requiring a compatible core
-library. It validates exactly one version-3 handoff supplied as an allowed absolute path or bounded
+library. It validates exactly one version-4 handoff supplied as an allowed absolute path or bounded
 inline JSON document.
 
 Status is redacted and closed-world. A connectivity probe performs one explicit `INFO` request in a
@@ -143,11 +152,18 @@ the durable manifest and are not cross-stage authorization. The
 [Renderer README](../companions/kegg-render-mcp/README.md) owns the exact tools, resource URIs,
 status fields, retention limits, configuration, and output lifecycle.
 
+`render_analysis_bundle` is one all-or-nothing operation. It validates every selected target's
+capability before pathway retrieval and encodes all requested target artifacts before retaining or
+publishing a result. A target, asset, encoding, output-bound, or publication failure returns no
+partial `RenderResult`; the typed error identifies the failing target when target-specific work has
+started. A caller may use that context to retry a smaller `target_ids` set, but must not assemble
+partial results as if the original bundle succeeded.
+
 ## Rendering semantics
 
-### Regular pathway overlays
+### Pathway overlays
 
-For a regular reference pathway, the renderer:
+For a renderable canonical KO pathway, the renderer:
 
 1. obtains the matching PNG and KGML under the configured access policy;
 2. validates pathway identity, bytes, dimensions, and compatibility;
@@ -157,18 +173,29 @@ For a regular reference pathway, the renderer:
 6. adds a versioned legend, warnings, provenance, and conservative caption; and
 7. emits static SVG and any requested bounded PNG derivative.
 
+Regular maps use bounded KGML rectangle geometry. Explicit canonical KO global/overview maps use
+bounded `graphics type="line"` `coords` polylines, while retaining bounded boxes when KGML declares
+them. Every geometry coordinate must be a short ASCII non-negative integer within the matching PNG.
+Polylines additionally enforce per-line points, total points, total Euclidean length, and bounded
+graphic-to-KO associations. Degenerate or malformed coordinate lists are rejected.
+
 Accepted evidence uses a solid vivid-red (`#FF0000`) overlay and has precedence when one graphic
 maps to both accepted and uncertain KOs. Policy-defined uncertain evidence uses orange (`#E69F00`)
-and a dashed non-color cue. Unmatched graphics remain unchanged and are described as not detected
-in the supplied annotations, never biologically absent.
+and a dashed non-color cue for both boxes and polylines. Graphics that are not selected as
+visualization evidence remain unchanged and are never described as biologically absent. Original
+pathway-category colors and arrows in the validated PNG remain background context rather than
+evidence states.
 
 The displayed coverage numerator, denominator, ratio, namespace, and evidence mode come from the
 core target. KGML graphics do not replace or recompute the core denominator. Coverage is
 descriptive and does not establish pathway presence, completeness, expression, activity, flux,
 phenotype, or statistical significance.
 
-Global and overview pathways remain explicit unsupported or summary-only targets. The renderer does
-not approximate their line-oriented semantics with regular box overlays.
+The total-map overlay follows KGML coordinates while preserving any arrows already present in the
+source PNG; it does not reconstruct arrows, direction, reaction semantics, or causality. Its broad
+descriptive KO coverage does not establish pathway presence, completeness, expression, activity,
+flux, phenotype, or statistical significance. A summary-only broad target is never promoted or
+replaced with a model-native conceptual drawing.
 
 ### MODULE logic diagrams
 
@@ -198,8 +225,9 @@ Renderer input and output enforce:
 
 - absolute allowed-root paths with lexical traversal, unsafe ancestry, and symlink-escape rejection;
 - strict UTF-8 and schema-version validation;
-- bounds on source bytes, targets, identifiers, XML structure, coordinates, dimensions, pixels,
-  SVG nodes, artifact bytes, retained results, disk use, and cleanup;
+- bounds on source bytes, targets, identifiers, XML structure, coordinate characters and tokens,
+  polyline points and total length, graphic-to-KO associations, dimensions, pixels, SVG nodes,
+  cumulative artifact and manifest bytes, retained results, disk use, and cleanup;
 - canonical identifiers and fixed suffixes for artifact names;
 - restrictive permissions and non-overwriting atomic publication; and
 - rollback limited to files created by the failed operation.
@@ -265,7 +293,7 @@ configuration and lifecycle; generic clients use
 
 The visualization implementation is covered by:
 
-- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 3
+- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 4
   and typed pathway assets;
 - renderer schema, pathway, MODULE, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
   and distribution tests using only synthetic assets;
@@ -282,15 +310,23 @@ synthetic distinction, new-task discovery smoke, evidence record, and publicatio
 
 ## Primary external sources
 
-The visualization contract was reviewed on 2026-07-16 against:
+The visualization contract was reviewed on 2026-07-16, with total-map behavior reviewed again on
+2026-08-06, against:
 
 - [KEGG API Manual](https://www.kegg.jp/kegg/rest/keggapi.html), including pathway `image`,
   `image2x`, and `kgml` retrieval;
 - [KEGG Copyright and Disclaimer](https://www.kegg.jp/kegg/legal.html), including public academic
   use and licensing boundaries;
 - [KEGG Mapper](https://www.kegg.jp/kegg/mapper/), including pathway mapping behavior;
+- [KEGG Mapper Color](https://www.kegg.jp/kegg/mapper/color.html), including line and circle color
+  handling;
+- [KEGG KGML manual](https://www.kegg.jp/kegg/xml/docs/), including `graphics` line coordinates;
+- [KEGG XML/KGML resources](https://www.kegg.jp/kegg/xml/), including the internal KGML+
+  `map` representation distinguished from the canonical public rendering-asset identity;
 - [KEGG Pathway Map Viewer Help](https://www.kegg.jp/kegg/document/help_pathway.html), including
-  regular and global/overview presentation differences; and
+  regular pathway presentation;
+- [KEGG Global Map Viewer Help](https://www.kegg.jp/kegg/document/help_global.html), including
+  global/overview presentation differences; and
 - [Model Context Protocol resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources),
   including binary content and MIME metadata.
 
