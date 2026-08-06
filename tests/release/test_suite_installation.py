@@ -1418,6 +1418,18 @@ def test_codex_plugin_cache_requires_the_exact_generated_skill_bundle(tmp_path: 
         is True
     )
 
+    cached_manifest = cached_root / ".codex-plugin" / "plugin.json"
+    cached_manifest.write_text("{}\n", encoding="utf-8")
+    assert (
+        INSTALLER_MODULE._codex_plugin_cache_matches(
+            plugin_root,
+            snapshot.versions["kegg-mcp"],
+            entries,
+        )
+        is False
+    )
+    shutil.copy2(plugin_root / ".codex-plugin" / "plugin.json", cached_manifest)
+
     cached_skill = cached_root / "skills" / "kegg-ko-analysis" / "SKILL.md"
     cached_skill.write_text(cached_skill.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert (
