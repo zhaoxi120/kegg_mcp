@@ -14,6 +14,10 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PUBLISHED_LOCALIZED_READMES = (
+    PROJECT_ROOT / "README.zh-CN.md",
+    PROJECT_ROOT / "README.ja.md",
+)
 OWNED_RELEASE_DOCUMENTS = tuple(
     sorted(
         {
@@ -247,6 +251,29 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
         assert "SQLite format 3" not in content
 
 
+def test_published_localized_readmes_are_bounded_and_linked() -> None:
+    assert all(path.is_file() for path in PUBLISHED_LOCALIZED_READMES)
+
+    for path in PUBLISHED_LOCALIZED_READMES:
+        content = path.read_text(encoding="utf-8")
+        assert path.stat().st_size <= 128 * 1024, path
+        assert "SQLite format 3" not in content
+
+    navigation = {
+        PROJECT_ROOT / "README.md": (
+            "**English** | [Simplified Chinese](README.zh-CN.md) | [Japanese](README.ja.md)"
+        ),
+        PROJECT_ROOT / "README.zh-CN.md": (
+            "[English](README.md) | **简体中文** | [日本語](README.ja.md)"
+        ),
+        PROJECT_ROOT / "README.ja.md": (
+            "[English](README.md) | [简体中文](README.zh-CN.md) | **日本語**"
+        ),
+    }
+    for path, expected in navigation.items():
+        assert expected in path.read_text(encoding="utf-8")
+
+
 def test_access_examples_record_rights_and_use_no_secrets() -> None:
     academic = (PROJECT_ROOT / "examples/config/public-academic.env.example").read_text(
         encoding="utf-8"
@@ -301,7 +328,11 @@ def test_release_tree_contains_no_tracked_release_blocking_binary() -> None:
     assert "*.png" in ignore
     assert "render_input.json" in ignore
     assert "render_manifest.json" in ignore
-    assert all(not path.name.endswith(".zh-CN.md") for path in release_files)
+    assert "!/README.zh-CN.md" in ignore
+    release_zh_cn_files = {
+        path.relative_to(PROJECT_ROOT) for path in release_files if path.name.endswith(".zh-CN.md")
+    }
+    assert release_zh_cn_files == {Path("README.zh-CN.md")}
 
 
 def test_orchestration_hotspots_remain_bounded() -> None:
