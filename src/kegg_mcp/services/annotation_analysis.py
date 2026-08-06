@@ -6,6 +6,10 @@ import time
 from pathlib import Path
 
 from kegg_mcp.analysis import (
+    MODULE_RANKING_METHOD,
+    MODULE_RANKING_VERSION,
+    PATHWAY_RANKING_METHOD,
+    PATHWAY_RANKING_VERSION,
     ModuleAnalysisLimits,
     ModuleRankingResult,
     ModuleSelection,
@@ -28,6 +32,7 @@ from kegg_mcp.domain.annotations import (
 from kegg_mcp.domain.errors import ErrorCode, fail
 from kegg_mcp.execution import (
     ANALYSIS_SERVICE_NAME,
+    ANALYSIS_SERVICE_VERSION,
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
     ExecutionStage,
@@ -267,6 +272,7 @@ def analyze_annotation_targets(
     )
     execution = AnalysisExecutionProvenance(
         service_name=ANALYSIS_SERVICE_NAME,
+        service_version=ANALYSIS_SERVICE_VERSION,
         import_limits=request.import_limits,
         kegg_request_options=effective_options,
         reference_loading_limits=effective_reference_limits,
@@ -513,6 +519,8 @@ def _pathway_ranking_execution(
     mapping_provenance: tuple[KeggBatchProvenance, ...],
 ) -> PathwayRankingExecution:
     return PathwayRankingExecution(
+        method=PATHWAY_RANKING_METHOD,
+        method_version=PATHWAY_RANKING_VERSION,
         selection=selection,
         evidence_mode=ranking.evidence_mode,
         decision_policy=dataset.import_report.decision_policy,
@@ -541,6 +549,8 @@ def _module_ranking_execution(
 ) -> ModuleRankingExecution:
     selected_rows = ranking.rows[: selection.top_n]
     return ModuleRankingExecution(
+        method=MODULE_RANKING_METHOD,
+        method_version=MODULE_RANKING_VERSION,
         selection=selection,
         evidence_mode=ranking.evidence_mode,
         decision_policy=dataset.import_report.decision_policy,

@@ -1,23 +1,27 @@
 # kegg-render-mcp
 
 `kegg-render-mcp` is the independently packaged local stdio renderer for KEGG annotation-evidence
-graphics. It consumes the complete `render_input.json` schema version 3 handoff produced by a
+graphics. It consumes the complete `render_input.json` schema version 4 handoff produced by a
 compatible `kegg-mcp` analysis. It never imports annotation tables, assigns K numbers, evaluates
 MODULE completion, or recomputes pathway coverage.
 
-It supports regular canonical `koNNNNN` overlays from one matching KEGG PNG/KGML pair and
-project-owned MODULE logic diagrams from the authoritative core AST. SVG is canonical, PNG is an
-optional bounded derivative, and artifacts are available through local directories and scoped MCP
-resources.
+It supports regular canonical `koNNNNN` box overlays, explicitly opted-in canonical KO
+global/overview total-map line overlays from one matching KEGG PNG/KGML pair, and project-owned
+MODULE logic diagrams from the authoritative core AST. SVG is canonical, PNG is an optional bounded
+derivative, and artifacts are available through local directories and scoped MCP resources.
 
 Accepted evidence uses a solid vivid-red (`#FF0000`) overlay. Policy-defined uncertain evidence
-uses orange (`#E69F00`) plus a dashed border, and accepted evidence retains precedence on shared
-graphics.
+uses orange (`#E69F00`) plus a dashed outline or polyline, and accepted evidence retains precedence
+on shared graphics. Unmatched graphics remain unchanged. Original pathway-category colors in the
+source PNG are background context, not evidence of biological presence or absence.
 
-Global and overview pathway overlays are unsupported because they require a separately reviewed
-line-overlay policy. `map` and organism-specific targets remain explicit summary-only core results;
-only regular KO reference pathways are renderable. Graphics describe annotation evidence and do not
-establish pathway presence, completeness, activity, flux, phenotype, or experimental validation.
+Core continues to exclude Global, Overview, and higher-level Overview maps from automatic Top-N
+selection. An explicit broad target is renderable only when Core evaluated a canonical KO reference
+with `allow_global_or_overview=true` and emitted complete evidence in the version 4 handoff. The
+renderer follows bounded KGML line coordinates while preserving arrows already present in the
+source PNG; it does not reconstruct arrow direction or infer pathway direction, activity,
+completeness, flux, phenotype, or experimental validation. `map` and organism-specific targets
+remain summary-only.
 
 ## Installation
 
@@ -120,6 +124,12 @@ KEGG `INFO` request; `offline_cache` and `unconfigured` probes make zero request
 is closed-world. A pathway render may retrieve one image and one KGML document through the typed
 Core client.
 
+The multi-target operation is all-or-nothing. It preflights every selected target's capability,
+encodes all requested artifacts, and only then retains and publishes one result. Failure of any
+target, pathway asset, encoding bound, output bound, or publication returns no partial
+`RenderResult`; a target-specific error identifies the failing `target_id`. Retry with a smaller
+`target_ids` set when appropriate rather than merging partial work into the failed bundle.
+
 Example high-level input:
 
 ```json
@@ -132,8 +142,8 @@ Example high-level input:
 ```
 
 Every render tool accepts exactly one handoff source: an allowed `render_input_path` or bounded
-`render_input_json`. Older or malformed schema versions return an actionable incompatible-input
-error; the renderer never repairs or upgrades a handoff.
+`render_input_json`. Only schema version 4 is accepted. A schema mismatch returns an actionable
+incompatible-input error; the renderer never repairs or reinterprets the handoff.
 
 The fixed status resource is `kegg-render://status`. Result templates are:
 
@@ -155,7 +165,8 @@ resource URIs remain only in the MCP result metadata and are not written into th
 When `output_directory` is omitted, the renderer allocates a fresh directory beneath the default
 output root. An explicit output directory must be new or empty. Artifacts are published without
 replacement and the manifest is installed last. Failed publication removes only files created by
-that operation. SVG resources use `image/svg+xml`; PNG resources return binary `image/png`.
+that operation, and no partial render result is retained. SVG resources use `image/svg+xml`; PNG
+resources return binary `image/png`.
 
 Retained results have bounded count, lifetime, and disk use and belong to one active renderer
 process even when several processes share the deployment state root. Unknown, expired, deleted,
@@ -165,8 +176,13 @@ operator-owned.
 
 ## Security boundary
 
-Input JSON, targets, XML, coordinates, dimensions, pixels, SVG nodes, artifact bytes, retained
-results, storage, and cleanup are bounded. The renderer accepts the single inert KEGG KGML v0.7.2
+Input JSON, targets, XML, coordinates, per-polyline and total points, total polyline length,
+graphic-to-KO associations, dimensions, pixels, SVG nodes, artifact bytes, retained results,
+storage, and cleanup are bounded. Geometry coordinates must be short ASCII non-negative integers;
+line-coordinate lists must also be non-degenerate and inside the matching PNG. The renderer
+reserves manifest capacity before generating a multi-target artifact set and fails the whole bundle
+before retention or export when the cumulative result budget is exceeded. The renderer accepts the single
+inert KEGG KGML v0.7.2
 HTTPS `SYSTEM` declaration observed on 2026-07-21, but never resolves or fetches its DTD. Other DTD
 declarations, entity declarations, external entity resolution, excessive depth, and mismatched
 identities are rejected. PNG structure, dimensions, decompression, and total pixels are validated

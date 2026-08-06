@@ -1580,7 +1580,7 @@ def test_organism_scoped_gene_find_rejects_a_cross_organism_response_before_cach
     assert _read_public_cache(cache_path, prepared, now=_NOW).state is CacheReadState.MISS
 
 
-def test_find_provenance_accepts_a_legal_request_key_above_the_old_limit(
+def test_find_provenance_accepts_a_legal_request_key_within_the_url_bound(
     tmp_path: Path,
 ) -> None:
     request = FindRequest(

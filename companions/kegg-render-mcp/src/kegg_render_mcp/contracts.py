@@ -6,17 +6,19 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeVar
 
-from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from kegg_render_mcp.config import RendererLimits
 
 MAX_TARGETS = 32
 MAX_FORMATS = 2
 MAX_WARNINGS = 32
-MAX_ARTIFACTS = 97
+MAX_ARTIFACTS = MAX_TARGETS * MAX_FORMATS + 1
 MAX_SAFE_DETAILS = 8
 MAX_INLINE_INPUT_CHARACTERS = 50_000_000
 RENDER_ID_PATTERN = r"render_[A-Za-z0-9_-]{32}"
 ARTIFACT_NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+REQUIRED_RENDER_INPUT_SCHEMA_VERSION: Literal["4"] = "4"
 
 _RenderTargetId = Annotated[str, Field(pattern=r"^(?:ko[0-9]{5}|M[0-9]{5})$")]
 _RenderId = Annotated[str, Field(pattern=rf"^{RENDER_ID_PATTERN}$")]
@@ -62,7 +64,6 @@ class ErrorCode(StrEnum):
     INVALID_REQUEST = "INVALID_REQUEST"
     INPUT_PATH_REJECTED = "INPUT_PATH_REJECTED"
     INPUT_LIMIT_EXCEEDED = "INPUT_LIMIT_EXCEEDED"
-    INCOMPATIBLE_SCHEMA = "INCOMPATIBLE_SCHEMA"
     TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
     TARGET_NOT_RENDERABLE = "TARGET_NOT_RENDERABLE"
     ASSET_UNAVAILABLE = "ASSET_UNAVAILABLE"
@@ -114,7 +115,7 @@ class _RenderInputSource(_Model):
         min_length=1,
         max_length=4096,
         description=(
-            "Allowed local path to a compatible render_input.json handoff. Provide exactly one "
+            "Allowed local path to a current render_input.json handoff. Provide exactly one "
             "of render_input_path or render_input_json."
         ),
     )
@@ -124,7 +125,7 @@ class _RenderInputSource(_Model):
         max_length=MAX_INLINE_INPUT_CHARACTERS,
         repr=False,
         description=(
-            "Bounded inline contents of a compatible render_input.json handoff. Provide exactly "
+            "Bounded inline contents of a current render_input.json handoff. Provide exactly "
             "one of render_input_path or render_input_json."
         ),
     )
@@ -136,7 +137,7 @@ class _RenderInputSource(_Model):
         return self
 
 
-class RenderAnalysisBundleInput(_RenderInputSource):
+class _RenderOutputInput(_RenderInputSource):
     output_directory: str | None = Field(
         default=None,
         min_length=1,
@@ -153,6 +154,16 @@ class RenderAnalysisBundleInput(_RenderInputSource):
         description="One or two unique static output formats; defaults to SVG.",
         json_schema_extra={"uniqueItems": True},
     )
+
+    @field_validator("formats")
+    @classmethod
+    def unique_formats(cls, value: tuple[RenderFormat, ...]) -> tuple[RenderFormat, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("formats must be unique")
+        return value
+
+
+class RenderAnalysisBundleInput(_RenderOutputInput):
     target_ids: tuple[_RenderTargetId, ...] | None = Field(
         default=None,
         min_length=1,
@@ -164,13 +175,6 @@ class RenderAnalysisBundleInput(_RenderInputSource):
         json_schema_extra={"uniqueItems": True},
     )
 
-    @field_validator("formats")
-    @classmethod
-    def unique_formats(cls, value: tuple[RenderFormat, ...]) -> tuple[RenderFormat, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("formats must be unique")
-        return value
-
     @field_validator("target_ids")
     @classmethod
     def validate_targets(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
@@ -178,41 +182,15 @@ class RenderAnalysisBundleInput(_RenderInputSource):
             return None
         if len(value) != len(set(value)):
             raise ValueError("target_ids must be unique")
-        for identifier in value:
-            if not _is_target_id(identifier):
-                raise ValueError("target_ids must contain canonical ko pathway or MODULE IDs")
         return value
 
 
-class RenderOneInput(_RenderInputSource):
+class RenderOneInput(_RenderOutputInput):
     target_id: str = Field(
         min_length=6,
         max_length=7,
         description="One canonical ko pathway or MODULE identifier, as constrained by the tool.",
     )
-    output_directory: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=4096,
-        description=(
-            "Allowed local directory for published render artifacts. Omit to allocate a fresh "
-            "directory beneath the deployment's default output root."
-        ),
-    )
-    formats: tuple[RenderFormat, ...] = Field(
-        default=(RenderFormat.SVG,),
-        min_length=1,
-        max_length=MAX_FORMATS,
-        description="One or two unique static output formats; defaults to SVG.",
-        json_schema_extra={"uniqueItems": True},
-    )
-
-    @field_validator("formats")
-    @classmethod
-    def unique_formats(cls, value: tuple[RenderFormat, ...]) -> tuple[RenderFormat, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("formats must be unique")
-        return value
 
 
 class RenderPathwayInput(RenderOneInput):
@@ -227,22 +205,11 @@ class DeleteRenderResultInput(_Model):
     render_id: _RenderId
 
 
-class RendererBounds(_Model):
-    max_input_bytes: int = Field(ge=1)
-    max_targets: int = Field(ge=1)
-    max_results: int = Field(ge=1)
-    max_asset_bytes: int = Field(ge=1)
-    max_pixels: int = Field(ge=1)
-    max_svg_bytes: int = Field(ge=1)
-    max_result_bytes: int = Field(ge=1)
-    max_disk_bytes: int = Field(ge=1)
-
-
 class RendererStatus(_Model):
     server_name: Literal["kegg-render-mcp"] = "kegg-render-mcp"
     server_version: str = Field(min_length=1, max_length=32)
     ready: bool
-    compatible_schema_versions: tuple[Literal["3"], ...] = (RENDER_INPUT_SCHEMA_VERSION,)
+    render_input_schema_version: Literal["4"]
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
     access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
@@ -252,7 +219,8 @@ class RendererStatus(_Model):
     cleanup_pending_result_count: int = Field(ge=0)
     retained_bytes: int = Field(ge=0)
     retained_storage_bytes: int = Field(ge=0)
-    bounds: RendererBounds
+    max_targets: int = Field(ge=1)
+    bounds: RendererLimits
 
 
 class ConnectivityResult(_Model):
@@ -336,9 +304,3 @@ class ToolEnvelope(_Model, Generic[T]):
         if self.ok != (self.result is not None and self.error is None):
             raise ValueError("envelope must contain exactly one matching branch")
         return self
-
-
-def _is_target_id(value: str) -> bool:
-    return (len(value) == 7 and value.startswith("ko") and value[2:].isdigit()) or (
-        len(value) == 6 and value.startswith("M") and value[1:].isdigit()
-    )

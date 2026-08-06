@@ -42,7 +42,6 @@ DEFAULT_MAX_SVG_BYTES = 16 * 1024 * 1024
 DEFAULT_MAX_RESULT_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_DISK_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_RESULTS = 128
-
 RendererAccessMode = Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
 
 
@@ -62,9 +61,49 @@ class RendererLimits(BaseModel):
     max_result_bytes: int = Field(default=DEFAULT_MAX_RESULT_BYTES, ge=1, le=256 * 1024 * 1024)
     max_disk_bytes: int = Field(default=DEFAULT_MAX_DISK_BYTES, ge=1, le=2 * 1024 * 1024 * 1024)
     max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=4_096)
-    max_xml_elements: int = Field(default=20_000, ge=1, le=100_000)
-    max_xml_attributes: int = Field(default=100_000, ge=1, le=500_000)
+    max_xml_elements: int = Field(default=50_000, ge=1, le=100_000)
+    max_xml_attributes: int = Field(default=250_000, ge=1, le=500_000)
     max_xml_depth: int = Field(default=32, ge=1, le=128)
+    max_polyline_points: int = Field(
+        default=512,
+        ge=2,
+        le=4_096,
+    )
+    max_total_polyline_points: int = Field(
+        default=100_000,
+        ge=2,
+        le=500_000,
+    )
+    max_polyline_coordinate_characters: int = Field(
+        default=16_384,
+        ge=4,
+        le=131_072,
+    )
+    max_coordinate_token_characters: int = Field(
+        default=16,
+        ge=1,
+        le=64,
+    )
+    max_total_polyline_length: int = Field(
+        default=5_000_000,
+        ge=1,
+        le=50_000_000,
+    )
+    max_ko_entry_name_characters: int = Field(
+        default=4_096,
+        ge=1,
+        le=32_768,
+    )
+    max_ko_ids_per_entry: int = Field(
+        default=256,
+        ge=1,
+        le=1_024,
+    )
+    max_graphic_ko_associations: int = Field(
+        default=250_000,
+        ge=1,
+        le=2_000_000,
+    )
     max_svg_nodes: int = Field(
         default=50_000,
         ge=MODULE_RENDER_MAX_SVG_NODES,
@@ -79,6 +118,12 @@ class RendererLimits(BaseModel):
             raise ValueError("max_svg_bytes must not exceed max_result_bytes")
         if self.max_result_bytes > self.max_disk_bytes:
             raise ValueError("max_result_bytes must not exceed max_disk_bytes")
+        if self.max_polyline_points > self.max_total_polyline_points:
+            raise ValueError("max_polyline_points must not exceed max_total_polyline_points")
+        if self.max_coordinate_token_characters > self.max_polyline_coordinate_characters:
+            raise ValueError(
+                "max_coordinate_token_characters must not exceed max_polyline_coordinate_characters"
+            )
         return self
 
 
@@ -113,7 +158,10 @@ class RendererRuntimeConfig(BaseModel):
             checked = _safe_absolute(root, "allowed_root")
             if checked == Path(checked.anchor):
                 raise ValueError("allowed_roots must contain existing non-root directories")
-            _validate_allowed_root(checked)
+            try:
+                _validate_allowed_root(checked)
+            except OSError as error:
+                raise ValueError("allowed_roots contains an unavailable root") from error
             if _overlap(state, checked):
                 raise ValueError("allowed_roots must not overlap state_root")
         if self.access_mode == "licensed" and self.licensed_endpoint is None:
@@ -140,11 +188,10 @@ class RendererRuntimeConfig(BaseModel):
 
 
 def load_runtime_config(environment: Mapping[str, str] | None = None) -> RendererRuntimeConfig:
-    validate_renderer_platform()
     values = os.environ if environment is None else environment
     state_raw = _required(values, STATE_ROOT_ENV)
     roots_raw = _required(values, ALLOWED_ROOTS_ENV)
-    roots = tuple(_existing_root(part) for part in roots_raw.split(os.pathsep) if part)
+    roots = tuple(Path(part) for part in roots_raw.split(os.pathsep) if part)
     if len(roots) != len(roots_raw.split(os.pathsep)):
         raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an empty root")
     raw_mode = values.get(ACCESS_MODE_ENV, "unconfigured")
@@ -163,11 +210,11 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         licensed_endpoint = _required(values, LICENSED_ENDPOINT_ENV)
     cache_path: Path | None = None
     if mode == "offline_cache":
-        cache_path = _safe_absolute(Path(_required(values, CACHE_PATH_ENV)), CACHE_PATH_ENV)
+        cache_path = Path(_required(values, CACHE_PATH_ENV))
     elif raw_cache_path := values.get(CACHE_PATH_ENV):
-        cache_path = _safe_absolute(Path(raw_cache_path), CACHE_PATH_ENV)
+        cache_path = Path(raw_cache_path)
     elif mode in {"public_academic", "licensed"}:
-        cache_path = _safe_absolute(Path(default_cache_path(values)), CACHE_PATH_ENV)
+        cache_path = Path(default_cache_path(values))
     limits = RendererLimits(
         max_disk_bytes=_integer(
             values, MAX_DISK_BYTES_ENV, DEFAULT_MAX_DISK_BYTES, 1, 2 * 1024 * 1024 * 1024
@@ -175,7 +222,7 @@ def load_runtime_config(environment: Mapping[str, str] | None = None) -> Rendere
         max_results=_integer(values, MAX_RESULTS_ENV, DEFAULT_MAX_RESULTS, 1, 4_096),
     )
     return RendererRuntimeConfig(
-        state_root=_safe_absolute(Path(state_raw), STATE_ROOT_ENV),
+        state_root=Path(state_raw),
         allowed_roots=roots,
         access_mode=mode,
         licensed_endpoint=licensed_endpoint,
@@ -202,15 +249,6 @@ def _safe_absolute(path: Path, name: str) -> Path:
         raise ValueError(f"{name} exceeds the path-length limit")
     if "\x00" in value or not path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{name} must be absolute and traversal-free")
-    return path
-
-
-def _existing_root(value: str) -> Path:
-    path = _safe_absolute(Path(value), ALLOWED_ROOTS_ENV)
-    try:
-        _validate_allowed_root(path)
-    except OSError as error:
-        raise ValueError(f"{ALLOWED_ROOTS_ENV} contains an unavailable root") from error
     return path
 
 

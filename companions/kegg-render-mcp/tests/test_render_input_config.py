@@ -68,14 +68,25 @@ def test_default_access_is_unconfigured_and_public_requires_confirmation(tmp_pat
     assert load_runtime_config(environment).access_mode == "public_academic"
 
 
-def test_platform_gate_runs_before_required_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_config_enforces_platform_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+
     def reject_platform() -> None:
         raise UnsupportedRendererPlatformError("synthetic unsupported platform")
 
     monkeypatch.setattr(config_module, "validate_renderer_platform", reject_platform)
 
     with pytest.raises(UnsupportedRendererPlatformError, match="unsupported platform"):
-        load_runtime_config({})
+        load_runtime_config(
+            {
+                STATE_ROOT_ENV: str(tmp_path / "state"),
+                ALLOWED_ROOTS_ENV: str(allowed),
+            }
+        )
 
 
 def test_darwin_uses_the_shared_core_cache_and_rate_limit_roots(
@@ -113,7 +124,6 @@ def test_omitted_output_selects_fresh_candidate_beneath_last_configured_root(
 
     output = resolve_output_directory(None, (input_root, output_root))
 
-    assert output is not None
     assert output.parent == output_root
     assert output.name.startswith("kegg-render-")
     assert not output.exists()
@@ -264,7 +274,7 @@ def test_render_input_strictly_validates_schema(
     render_input_file: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
-    assert loaded.document.schema_version == "3"
+    assert loaded.document.schema_version == "4"
     assert loaded.accepted_ko_ids == {"K00001"}
     assert loaded.uncertain_ko_ids == {"K00002"}
     assert loaded.target_ids == ("ko00010", "M00001")
@@ -277,7 +287,7 @@ def test_inline_render_input_uses_the_same_bounded_strict_parser(
     payload = render_input_file.read_text(encoding="utf-8")
     loaded = load_render_input(None, runtime_config, render_input_json=payload)
 
-    assert loaded.document.schema_version == "3"
+    assert loaded.document.schema_version == "4"
     assert loaded.target_ids == ("ko00010", "M00001")
     with pytest.raises(RenderMcpError) as ambiguous:
         load_render_input(
@@ -306,14 +316,40 @@ def test_handoff_schema_error_reports_only_bounded_field_path_and_stage(
     }
 
 
-def test_version_two_requests_new_core_analysis(
-    allowed_root: Path, runtime_config: RendererRuntimeConfig
+def test_handoff_requires_current_schema_literal(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
 ) -> None:
-    path = allowed_root / "render_input.json"
-    path.write_text(json.dumps({"schema_version": "2"}), encoding="utf-8")
+    original = json.loads(render_input_file.read_text(encoding="utf-8"))
+    for version in ("unsupported", None):
+        payload = dict(original)
+        if version is None:
+            payload.pop("schema_version")
+        else:
+            payload["schema_version"] = version
+        with pytest.raises(RenderMcpError) as raised:
+            load_render_input(None, runtime_config, render_input_json=json.dumps(payload))
+        assert raised.value.detail.code is ErrorCode.INVALID_REQUEST
+        details = {item.name: item.value for item in raised.value.detail.safe_details}
+        assert details["field_path"] == "schema_version"
+
+
+@pytest.mark.parametrize("field", ("handoff_builder_name", "handoff_builder_version"))
+def test_missing_builder_identity_is_rejected(
+    field: str,
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    payload = json.loads(render_input_file.read_text(encoding="utf-8"))
+    del payload["execution"][field]
+
     with pytest.raises(RenderMcpError) as raised:
-        load_render_input(str(path), runtime_config)
-    assert raised.value.detail.code is ErrorCode.INCOMPATIBLE_SCHEMA
+        load_render_input(None, runtime_config, render_input_json=json.dumps(payload))
+
+    assert raised.value.detail.code is ErrorCode.INVALID_REQUEST
+    details = {item.name: item.value for item in raised.value.detail.safe_details}
+    assert details["field_path"] == f"execution.{field}"
+    assert details["stage"] == "render_input_schema"
 
 
 def test_path_traversal_relative_and_symlink_escape_are_rejected(
@@ -379,10 +415,51 @@ def test_intermediate_symlink_swap_is_rejected(
     assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
 
 
-def test_output_directory_is_created_owner_only(
+def test_output_directory_creation_is_deferred_to_export(
     allowed_root: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     output = allowed_root / "images"
     resolved = resolve_output_directory(str(output), runtime_config.allowed_roots)
     assert resolved == output.resolve()
+    assert not output.exists()
+
+
+def test_output_directory_reserves_path_space_for_artifact_names(
+    allowed_root: Path, runtime_config: RendererRuntimeConfig
+) -> None:
+    prefix_bytes = len(str(allowed_root).encode("utf-8")) + 1
+    output = allowed_root / ("x" * (4_000 - prefix_bytes))
+    assert len(str(output).encode("utf-8")) == 4_000
+    entries_before = tuple(allowed_root.iterdir())
+
+    with pytest.raises(RenderMcpError, match="insufficient path space") as raised:
+        resolve_output_directory(str(output), runtime_config.allowed_roots)
+
+    assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+    assert tuple(allowed_root.iterdir()) == entries_before
+
+
+def test_output_directory_creation_fsyncs_its_parent(
+    allowed_root: Path,
+    runtime_config: RendererRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kegg_render_mcp import render_input as module
+
+    output = allowed_root / "images"
+    parent_identity = (allowed_root.stat().st_dev, allowed_root.stat().st_ino)
+    synced: list[tuple[int, int]] = []
+    real_fsync = module.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append((metadata.st_dev, metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", record_fsync)
+    descriptor, created = open_allowed_directory(output, runtime_config.allowed_roots)
+    os.close(descriptor)
+
+    assert created is True
+    assert parent_identity in synced
     assert output.stat().st_mode & 0o777 == 0o700

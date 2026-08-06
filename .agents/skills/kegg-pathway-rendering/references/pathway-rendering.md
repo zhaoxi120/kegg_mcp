@@ -1,7 +1,7 @@
 # Pathway rendering
 
-Render a regular reference pathway only from its compatible version 3 handoff. Use
-`render_pathway` for one canonical `koNNNNN` target and `render_analysis_bundle` for a bounded
+Render a pathway only from the current version 4 handoff whose canonical `koNNNNN` target is
+marked `renderable`. Use `render_pathway` for one target and `render_analysis_bundle` for a bounded
 selection. The renderer owns KEGG PNG/KGML retrieval, validation, mapping, scene creation, SVG,
 and optional bounded PNG rasterization.
 
@@ -10,12 +10,16 @@ denominator, ratio, evidence mode, retrieval time, cache state, calculation vers
 Coverage is descriptive KO coverage, not pathway presence, completeness, activity, flux, or
 phenotype.
 
-Global and overview pathway overlays are unsupported by the current renderer. Do not approximate
-them with a regular box overlay or infer organism-specific claims from KO-only evidence. Never
-fetch arbitrary URLs, expose endpoint configuration, return raw KEGG assets, or copy cache
-payloads.
+Regular maps use bounded KGML box geometry. An explicitly requested canonical KO global or
+overview map, such as `ko01100`, is eligible only when Core evaluated it with
+`allow_global_or_overview=True` and emitted a complete renderable version 4 target. Its evidence
+overlay follows bounded KGML `line` coordinates. Accepted evidence has deterministic precedence;
+uncertain evidence retains the renderer's dashed non-color cue. The overlay highlights KO
+annotation evidence only. Arrows already present in the validated PNG remain background context;
+the overlay does not reconstruct arrow direction or establish pathway direction, activity,
+completeness, or flux.
 
-An original request that explicitly names `ko01100` is handled outside this Skill by a separate
-model-native drawing step after supported renderer targets finish. That drawing must be labelled as
-a model-generated conceptual diagram, not a KEGG-derived asset or KO coverage overlay. Never use
-this exception to conceal or replace a failed regular-pathway render.
+Do not convert a summary-only broad target, schema-mismatched handoff, `map` target, or
+organism-specific target into a total-map overlay,
+and do not create a model-native conceptual fallback. Never fetch arbitrary URLs, expose endpoint
+configuration, return raw KEGG assets, or copy cache payloads.

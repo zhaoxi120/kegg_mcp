@@ -1,7 +1,18 @@
 """Tests for deterministic server-side pathway and MODULE ranking."""
 
+import json
+
+import pytest
+from pydantic import ValidationError
+
 from kegg_mcp.analysis import (
+    MODULE_RANKING_METHOD,
+    MODULE_RANKING_VERSION,
+    PATHWAY_RANKING_METHOD,
+    PATHWAY_RANKING_VERSION,
+    ModuleRankingResult,
     ModuleSelection,
+    PathwayRankingResult,
     PathwaySelection,
     rank_modules,
     rank_pathways,
@@ -46,6 +57,29 @@ def _module_row(
         source_id=f"ko:{source}",
         target_id=f"{namespace}:{target}",
     )
+
+
+def _assert_current_ranking_identity(
+    ranked: PathwayRankingResult | ModuleRankingResult,
+    *,
+    method: str,
+    method_version: str,
+) -> None:
+    model = type(ranked)
+    schema = model.model_json_schema()
+    assert {"method", "method_version"}.issubset(schema["required"])
+    assert ranked.method == method
+    assert ranked.method_version == method_version
+    for field in ("method", "method_version"):
+        payload = ranked.model_dump(mode="json")
+        del payload[field]
+        with pytest.raises(ValidationError):
+            model.model_validate_json(json.dumps(payload))
+
+        payload = ranked.model_dump(mode="json")
+        payload[field] = "unsupported"
+        with pytest.raises(ValidationError):
+            model.model_validate_json(json.dumps(payload))
 
 
 def test_duplicate_annotation_records_do_not_inflate_detected_nodes() -> None:
@@ -121,6 +155,11 @@ def test_ties_use_canonical_pathway_id_and_contracts_round_trip() -> None:
     assert [item.pathway_id for item in ranked.rows] == ["ko00010", "ko00020"]
     assert [item.rank for item in ranked.rows] == [1, 2]
     assert type(ranked).model_validate_json(ranked.model_dump_json()) == ranked
+    _assert_current_ranking_identity(
+        ranked,
+        method=PATHWAY_RANKING_METHOD,
+        method_version=PATHWAY_RANKING_VERSION,
+    )
     selection = PathwaySelection(top_n=1)
     assert PathwaySelection.model_validate_json(selection.model_dump_json()) == selection
 
@@ -174,5 +213,10 @@ def test_module_ranking_excludes_rejected_and_respects_lenient_evidence() -> Non
     assert [item.module_id for item in lenient.rows] == ["M00020", "M00030"]
     assert all(item.module_id != "M00010" for item in (*strict.rows, *lenient.rows))
     assert type(lenient).model_validate_json(lenient.model_dump_json()) == lenient
+    _assert_current_ranking_identity(
+        lenient,
+        method=MODULE_RANKING_METHOD,
+        method_version=MODULE_RANKING_VERSION,
+    )
     selection = ModuleSelection(top_n=5)
     assert ModuleSelection.model_validate_json(selection.model_dump_json()) == selection

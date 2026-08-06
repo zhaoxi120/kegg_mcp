@@ -26,7 +26,8 @@ and the real high-level services:
 - glycan and drug search plus the currently empty public reaction-class FIND response;
 - ChEBI, PubChem SID-to-compound/glycan/drug, and direct compound/glycan/drug resolution;
 - exact through phylum taxonomy resolution plus an organism pathway directory;
-- every v0.7 organism-scoped, MODULE, glycan, and drug relationship, including one depth-two trace;
+- every supported organism-scoped, MODULE, glycan, and drug relationship, including one depth-two
+  trace;
 - automatic BRITE mapping and complete JSON/TSV resource reads;
 - completed, evidence-only, and request-limit-skipped annotation audits;
 - all seven local-only KEGG Mapper/Syntax handoffs (Reconstruct, Search, Color, Join, MWsearch,
@@ -42,7 +43,7 @@ The client is limited to one request per second without burst and zero retries. 
 enforces the configured wire budget and opens its circuit after any transport or non-200 response.
 Low-level compatibility calls explicitly bypass cache; high-level workflows use normal fresh-cache
 semantics and verify cache reuse. The workflow stops after the first transport or non-200 failure.
-The cache, result store, deployment-wide rate-limit state, and v0.8 output bundles share one
+The cache, result store, deployment-wide rate-limit state, and durable output bundles share one
 owner-only temporary allowed root. The tests verify private file modes, reconstruct every retained
 artifact in-session, verify reference and handoff manifests, clear the result scope, confirm that
 explicit durable output bundles survive scope cleanup, and delete the complete temporary

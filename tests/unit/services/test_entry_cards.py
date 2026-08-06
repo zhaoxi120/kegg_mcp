@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -9,6 +10,7 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
+from kegg_mcp.analysis import MODULE_PARSER_NAME, MODULE_PARSER_VERSION
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg import KeggClientConfig, KeggRequestOptions, PublicAcademicAccess
 from kegg_mcp.kegg.contracts import (
@@ -28,6 +30,7 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.kegg.parsers import parse_flat_file_response
 from kegg_mcp.services.entry_cards import (
     ENTRY_CARD_DATABASES,
+    ENTRY_CARD_PARSER_NAME,
     ENTRY_CARD_PARSER_VERSION,
     ENTRY_CARD_SCHEMA_VERSION,
     CompoundEntryCard,
@@ -220,6 +223,7 @@ def test_ko_card_parses_common_fields_and_keeps_unknown_fields_visible() -> None
     )
 
     assert snapshot.schema_version == ENTRY_CARD_SCHEMA_VERSION
+    assert snapshot.parser_name == ENTRY_CARD_PARSER_NAME
     assert snapshot.parser_version == ENTRY_CARD_PARSER_VERSION
     assert snapshot.response_parser_version == PARSER_VERSION
     assert len(snapshot.provenance) == 1
@@ -236,6 +240,48 @@ def test_ko_card_parses_common_fields_and_keeps_unknown_fields_visible() -> None
     assert card.pubmed_ids == ("123456",)
     assert card.unparsed_field_names == ("AASEQ",)
     assert "AAA" not in card.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "schema_version",
+        "parser_name",
+        "parser_version",
+        "response_parser_version",
+    ),
+)
+def test_snapshot_wire_requires_every_schema_and_parser_identity(missing_field: str) -> None:
+    snapshot = build_entry_cards(
+        _result(
+            KeggGetDatabase.KO,
+            "K00001",
+            b"ENTRY       K00001                      KO\n///\n",
+        )
+    )
+    payload = snapshot.model_dump(mode="json")
+    del payload[missing_field]
+
+    with pytest.raises(ValidationError, match=missing_field):
+        KeggEntryCardSnapshot.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("missing_field", ("parser_name", "parser_version"))
+def test_snapshot_wire_requires_nested_module_parser_identity(missing_field: str) -> None:
+    snapshot = build_entry_cards(
+        _result(
+            KeggGetDatabase.MODULE,
+            "M00001",
+            (b"ENTRY       M00001            Module\nDEFINITION  K00001\n///\n"),
+        )
+    )
+    payload = snapshot.model_dump(mode="json")
+    module_definition = payload["entries"][0]["module_definition"]
+    assert isinstance(module_definition, dict)
+    del module_definition[missing_field]
+
+    with pytest.raises(ValidationError, match=missing_field):
+        KeggEntryCardSnapshot.model_validate_json(json.dumps(payload))
 
 
 def test_module_and_pathway_cards_preserve_logic_and_ko_denominator() -> None:
@@ -273,6 +319,8 @@ def test_module_and_pathway_cards_preserve_logic_and_ko_denominator() -> None:
 
     assert isinstance(module, ModuleEntryCard)
     assert module.module_definition is not None
+    assert module.module_definition.parser_name == MODULE_PARSER_NAME
+    assert module.module_definition.parser_version == MODULE_PARSER_VERSION
     assert module.module_definition.is_valid is True
     assert module.module_definition.raw_definition == "K00001+K00002-K00003 M00002"
     assert module.module_definition.required_blocks == (
@@ -515,6 +563,10 @@ def test_snapshot_contract_rejects_mismatched_or_duplicate_accounting() -> None:
     )
     with pytest.raises(ValidationError, match="kind must match"):
         KeggEntryCardSnapshot(
+            schema_version=ENTRY_CARD_SCHEMA_VERSION,
+            parser_name=ENTRY_CARD_PARSER_NAME,
+            parser_version=ENTRY_CARD_PARSER_VERSION,
+            response_parser_version=PARSER_VERSION,
             requested_entries=(bad_card.entity,),
             entries=(bad_card,),
             provenance=(_provenance(),),
@@ -526,6 +578,10 @@ def test_snapshot_contract_rejects_mismatched_or_duplicate_accounting() -> None:
     )
     with pytest.raises(ValidationError, match="must be unique"):
         KeggEntryCardSnapshot(
+            schema_version=ENTRY_CARD_SCHEMA_VERSION,
+            parser_name=ENTRY_CARD_PARSER_NAME,
+            parser_version=ENTRY_CARD_PARSER_VERSION,
+            response_parser_version=PARSER_VERSION,
             requested_entries=(missing,),
             entries=(),
             missing_entries=(missing, missing),
@@ -533,6 +589,10 @@ def test_snapshot_contract_rejects_mismatched_or_duplicate_accounting() -> None:
         )
     with pytest.raises(ValidationError, match="preserve requested database counts"):
         KeggEntryCardSnapshot(
+            schema_version=ENTRY_CARD_SCHEMA_VERSION,
+            parser_name=ENTRY_CARD_PARSER_NAME,
+            parser_version=ENTRY_CARD_PARSER_VERSION,
+            response_parser_version=PARSER_VERSION,
             requested_entries=(missing,),
             entries=(
                 GenomeEntryCard(

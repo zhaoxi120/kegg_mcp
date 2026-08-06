@@ -36,7 +36,7 @@ _INFO_LINKED_DATABASE = r"(?:[a-z][a-z0-9_-]{0,31}|<org>)"
 _INFO_LINKED_START = re.compile(rf"^linked db\s+(?P<database>{_INFO_LINKED_DATABASE})\s*$")
 _INFO_LINKED_CONTINUATION = re.compile(rf"^\s+(?P<database>{_INFO_LINKED_DATABASE})\s*$")
 _HTEXT_METADATA_HEADER = re.compile(r"^\+[A-Z]\t")
-_HTEXT_LEGACY_ROOT = re.compile(r"^A(?:\s|[0-9<])")
+_HTEXT_CLASSIC_ROOT = re.compile(r"^A(?:\s|[0-9<])")
 _HTEXT_COMPACT_ROOT = re.compile(r"^A\S")
 _FIELD_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _ENTRY_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,99}$")
@@ -421,7 +421,7 @@ def parse_brite_htext_response(body: bytes, identifier: str) -> KeggBriteHtextDo
     lines = () if not text.strip() else tuple(text.splitlines())
     if lines:
         nonempty_lines = tuple(line for line in lines if line.strip())
-        has_legacy_root = any(_HTEXT_LEGACY_ROOT.match(line) for line in nonempty_lines)
+        has_classic_root = any(_HTEXT_CLASSIC_ROOT.match(line) for line in nonempty_lines)
         metadata_index = next(
             (
                 index
@@ -441,7 +441,7 @@ def parse_brite_htext_response(body: bytes, identifier: str) -> KeggBriteHtextDo
         has_compact_root = delimiter_index is not None and any(
             _HTEXT_COMPACT_ROOT.match(line) for line in nonempty_lines[delimiter_index + 1 :]
         )
-        has_root_data_line = has_legacy_root or has_compact_root
+        has_root_data_line = has_classic_root or has_compact_root
         if not has_root_data_line:
             _parse_error("brite_htext", "invalid_htext_structure")
     return KeggBriteHtextDocument(identifier=identifier, lines=lines)

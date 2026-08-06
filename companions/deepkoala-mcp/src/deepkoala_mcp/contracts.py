@@ -297,8 +297,8 @@ class SourceMetadataField(FrozenModel):
 class SourceProvenance(FrozenModel):
     """Readable DeepKOALA source facts without digest or private job identifiers."""
 
-    source_name: Literal["deepkoala"] = "deepkoala"
-    source_version: str | None = Field(default=None, max_length=256)
+    source_name: Literal["deepkoala"]
+    source_version: str = Field(min_length=1, max_length=256)
     model_name: ModelName
     model_version: ResolvedModelDate
     annotation_date: datetime

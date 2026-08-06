@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg.contracts import (
@@ -23,6 +24,7 @@ from kegg_mcp.kegg.contracts import (
 from kegg_mcp.services import reference_bundles
 from kegg_mcp.services.brite_hierarchy import (
     BRITE_DETAIL_MIME_TYPE,
+    BRITE_DETAIL_SCHEMA_VERSION,
     BRITE_DETAIL_SECTION,
     BriteClassificationCount,
     BriteHierarchyDetail,
@@ -31,6 +33,9 @@ from kegg_mcp.services.brite_hierarchy import (
     MapBriteHierarchyRequest,
 )
 from kegg_mcp.services.entry_cards import (
+    ENTRY_CARD_PARSER_NAME,
+    ENTRY_CARD_PARSER_VERSION,
+    ENTRY_CARD_SCHEMA_VERSION,
     ENTRY_CARD_SNAPSHOT_SECTION,
     KeggEntryCardDbLink,
     KeggEntryCardEntity,
@@ -42,9 +47,12 @@ from kegg_mcp.services.entry_cards import (
 from kegg_mcp.services.query_models import KeggEntityKind, KeggEntityRef
 from kegg_mcp.services.reference_bundles import (
     REFERENCE_BRITE_PATHS_NAME,
+    REFERENCE_BUNDLE_SCHEMA_VERSION,
     REFERENCE_MANIFEST_NAME,
     REFERENCE_RELATIONSHIPS_NAME,
     REFERENCE_SNAPSHOT_NAME,
+    KeggReferenceBundle,
+    ReferenceBundleManifest,
     ReferenceBundleSource,
     WriteKeggReferenceBundleRequest,
     write_kegg_reference_bundle,
@@ -108,6 +116,10 @@ def _snapshot() -> KeggEntryCardSnapshot:
     )
     pathway = _entity(KeggEntryCardKind.PATHWAY, "ko99999")
     return KeggEntryCardSnapshot(
+        schema_version=ENTRY_CARD_SCHEMA_VERSION,
+        parser_name=ENTRY_CARD_PARSER_NAME,
+        parser_version=ENTRY_CARD_PARSER_VERSION,
+        response_parser_version=PARSER_VERSION,
         requested_entries=(ko.entity, pathway),
         entries=(ko,),
         missing_entries=(pathway,),
@@ -162,6 +174,7 @@ def _brite_detail() -> BriteHierarchyDetail:
         is_input_entity=True,
     )
     return BriteHierarchyDetail(
+        schema_version=BRITE_DETAIL_SCHEMA_VERSION,
         request=MapBriteHierarchyRequest(
             entity_ids=(entity,),
             brite_ids=("ko00001",),
@@ -245,6 +258,7 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
     assert result.relationship_count == 4
     assert result.total_bytes == sum(path.stat().st_size for path in output.iterdir())
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
+    assert result.schema_version == REFERENCE_BUNDLE_SCHEMA_VERSION
 
     manifest = json.loads((output / REFERENCE_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "1"
@@ -340,6 +354,38 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
     assert _SECRET_ENDPOINT_LABEL not in combined
     assert result_id not in combined
     assert str(output) not in combined
+
+
+def test_reference_bundle_outputs_require_current_wire_identity(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "required-schema.sqlite3")
+    result_id = _retain(store, _snapshot())
+    output = tmp_path / "required-schema"
+    result = write_kegg_reference_bundle(
+        _request(result_id),
+        output_directory=output,
+        result_store=store,
+        scope_id="reference-scope",
+    )
+
+    bundle_payload = result.model_dump(mode="json")
+    del bundle_payload["schema_version"]
+    with pytest.raises(ValidationError):
+        KeggReferenceBundle.model_validate(bundle_payload)
+
+    for path in (
+        ("schema_version",),
+        ("bundle_type",),
+        ("producer", "name"),
+    ):
+        manifest_payload = json.loads(
+            (output / REFERENCE_MANIFEST_NAME).read_text(encoding="utf-8")
+        )
+        parent = manifest_payload
+        for component in path[:-1]:
+            parent = parent[component]
+        del parent[path[-1]]
+        with pytest.raises(ValidationError):
+            ReferenceBundleManifest.model_validate(manifest_payload)
 
 
 def test_exports_complete_validated_brite_paths_without_network_access(
@@ -655,6 +701,39 @@ def test_tampered_or_incompatible_snapshot_is_rejected_without_output(
     assert not output.exists()
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "schema_version",
+        "parser_name",
+        "parser_version",
+        "response_parser_version",
+    ),
+)
+def test_snapshot_missing_identity_is_rejected_before_reference_bundle_write(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    snapshot = _snapshot().model_dump(mode="json")
+    del snapshot[missing_field]
+    store = SQLiteResultStore(tmp_path / f"missing-{missing_field}.sqlite3")
+    result_id = _retain(store, json.dumps(snapshot).encode("utf-8"))
+    output = tmp_path / f"missing-{missing_field}"
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            _request(result_id),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details["required_snapshot_schema_version"] == ENTRY_CARD_SCHEMA_VERSION
+    assert not output.exists()
+
+
 def test_snapshot_from_another_scope_is_not_exported(tmp_path: Path) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     result_id = _retain(store, _snapshot(), scope_id="owner-scope")
@@ -735,6 +814,33 @@ def test_tampered_brite_detail_is_rejected_without_output(tmp_path: Path) -> Non
         )
 
     assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    assert not output.exists()
+
+
+def test_brite_detail_missing_schema_is_rejected_before_reference_bundle_write(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "missing-brite-schema.sqlite3")
+    result_id = _retain(store, _snapshot())
+    detail = _brite_detail().model_dump(mode="json")
+    del detail["schema_version"]
+    brite_result_id = _retain_brite(store, json.dumps(detail).encode("utf-8"))
+    output = tmp_path / "missing-brite-schema"
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            WriteKeggReferenceBundleRequest(
+                source=ReferenceBundleSource(result_id=result_id),
+                brite_source=ReferenceBundleSource(result_id=brite_result_id),
+            ),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details["required_brite_detail_schema_version"] == BRITE_DETAIL_SCHEMA_VERSION
     assert not output.exists()
 
 

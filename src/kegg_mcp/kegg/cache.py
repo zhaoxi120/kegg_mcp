@@ -666,12 +666,21 @@ class SQLiteKeggCache:
         return connection, descriptor
 
     def _connect_path(self, path: Path, *, create: bool) -> sqlite3.Connection:
-        flags = os.O_RDWR | (os.O_CREAT if create else 0)
+        flags = os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
-        descriptor = os.open(path, flags, 0o600)
+        created = False
+        if create:
+            try:
+                descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                descriptor = os.open(path, flags, 0o600)
+            else:
+                created = True
+        else:
+            descriptor = os.open(path, flags, 0o600)
         try:
             descriptor_stat = os.fstat(descriptor)
             if not stat.S_ISREG(descriptor_stat.st_mode):
@@ -680,6 +689,8 @@ class SQLiteKeggCache:
                 raise OSError("cache must be owned by the current user")
             if hasattr(os, "fchmod"):
                 os.fchmod(descriptor, 0o600)
+            if not created and descriptor_stat.st_size == 0:
+                raise _CacheIntegrityError("existing cache is missing its schema version")
             connection = sqlite3.connect(path, timeout=5.0)
             try:
                 path_stat = path.lstat()
@@ -696,6 +707,16 @@ class SQLiteKeggCache:
         try:
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA trusted_schema = OFF")
+            schema_version_row = connection.execute("PRAGMA user_version").fetchone()
+            if schema_version_row is None or len(schema_version_row) != 1:
+                raise _CacheIntegrityError("missing SQLite schema version")
+            schema_version = schema_version_row[0]
+            if not isinstance(schema_version, int):
+                raise _CacheIntegrityError("invalid SQLite schema version")
+            if (created and schema_version != 0) or (
+                not created and schema_version != _SCHEMA_VERSION
+            ):
+                raise _CacheIntegrityError("unsupported SQLite schema version")
             connection.execute("PRAGMA journal_mode = DELETE")
             page_size_row = connection.execute("PRAGMA page_size").fetchone()
             (page_size,) = _decode_integer_row(page_size_row, length=1, positive=True)
@@ -707,19 +728,10 @@ class SQLiteKeggCache:
             )
             if configured_page_count > max_page_count:
                 raise _CacheIntegrityError("SQLite database limit was not applied")
-            schema_version_row = connection.execute("PRAGMA user_version").fetchone()
-            if schema_version_row is None or len(schema_version_row) != 1:
-                raise _CacheIntegrityError("missing SQLite schema version")
-            schema_version = schema_version_row[0]
-            if not isinstance(schema_version, int):
-                raise _CacheIntegrityError("invalid SQLite schema version")
-            if schema_version not in {0, _SCHEMA_VERSION}:
-                raise _CacheIntegrityError("unsupported SQLite schema version")
             with connection:
-                if schema_version == 0:
+                if created:
                     connection.execute("PRAGMA auto_vacuum = FULL")
-                connection.execute(_CREATE_SCHEMA)
-                if schema_version == 0:
+                    connection.execute(_CREATE_SCHEMA)
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
             (auto_vacuum,) = _decode_integer_row(
                 connection.execute("PRAGMA auto_vacuum").fetchone(),

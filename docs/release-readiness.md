@@ -11,9 +11,9 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Supported platform | Contract |
 | --- | --- | --- | --- |
-| `kegg-mcp` | `0.8.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
+| `kegg-mcp` | `0.9.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
-| `kegg-render-mcp` | `0.3.2` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.5,<0.9` |
+| `kegg-render-mcp` | `0.4.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.9,<0.10` |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
 processes. The suite installer provisions all three together on Linux or Apple Silicon macOS and
@@ -24,7 +24,7 @@ The core Python wheel does not install either companion or any repository-scoped
 installer is the supported complete-suite Codex installation path on Linux and Apple Silicon
 macOS. Other MCP clients register independently installed stdio servers manually.
 
-The core produces `render_input.json` version 3 and preserves
+The core produces `render_input.json` version 4 and preserves
 `AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. The renderer consumes
 that authoritative handoff without normalizing evidence or recomputing analysis.
 
@@ -80,7 +80,10 @@ uv run --frozen pytest
 uv build --no-sources
 ```
 
-Renderer tests use generated synthetic assets and make no live KEGG requests.
+Renderer tests use generated synthetic assets and make no live KEGG requests. They must exercise
+both regular box overlays and explicitly opted-in global/overview polyline overlays, including
+malformed-coordinate, point, total-length, association, cumulative-result, and atomic-failure
+bounds without committing a KEGG payload.
 
 ### Platform evidence
 

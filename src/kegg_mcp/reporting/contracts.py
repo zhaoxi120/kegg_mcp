@@ -108,10 +108,10 @@ class StructuredReport(FrozenModel):
         },
     )
 
-    format_name: Literal["kegg_mcp_analysis_report"] = REPORT_FORMAT_NAME
-    format_version: Literal["3"] = REPORT_FORMAT_VERSION
-    renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
-    renderer_version: Literal["2"] = REPORT_RENDERER_VERSION
+    format_name: Literal["kegg_mcp_analysis_report"]
+    format_version: Literal["3"]
+    renderer_name: Literal["kegg_mcp_reporting"]
+    renderer_version: Literal["2"]
     limits: ReportLimits
     report: ReportInput
 
@@ -164,8 +164,8 @@ class RenderedReport(FrozenModel):
         },
     )
 
-    renderer_name: Literal["kegg_mcp_reporting"] = REPORT_RENDERER_NAME
-    renderer_version: Literal["2"] = REPORT_RENDERER_VERSION
+    renderer_name: Literal["kegg_mcp_reporting"]
+    renderer_version: Literal["2"]
     limits: ReportLimits
     artifacts: Annotated[tuple[ReportArtifact, ...], Field(min_length=3, max_length=3)]
 

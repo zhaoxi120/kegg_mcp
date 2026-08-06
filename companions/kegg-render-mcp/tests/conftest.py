@@ -10,16 +10,15 @@ import pytest
 from kegg_mcp.analysis import (
     ModuleDefinition,
     ModuleDefinitionCollection,
-    PathwayCoverageParameters,
     PathwayKoReference,
     PathwayReferenceNamespace,
     PathwayReferenceScope,
-    evaluate_module_pair,
-    evaluate_pathway_coverage,
     resolve_module_definitions,
 )
 from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
 from kegg_mcp.execution import (
+    ANALYSIS_SERVICE_NAME,
+    ANALYSIS_SERVICE_VERSION,
     AnalysisExecutionProvenance,
     AnalysisServiceLimits,
     PathwayExecutionParameters,
@@ -98,7 +97,6 @@ class SyntheticProvider:
         if kind == "image":
             return RetrievedAsset(
                 pathway_id=self.pathway_id,
-                kind=kind,
                 content=self.image,
                 mime_type="image/png",
                 width=240,
@@ -113,7 +111,6 @@ class SyntheticProvider:
             )
         return RetrievedAsset(
             pathway_id=self.pathway_id,
-            kind=kind,
             content=self.kgml,
             mime_type="application/xml",
             width=None,
@@ -156,7 +153,12 @@ def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
     )
 
 
-def make_render_input() -> RenderInput:
+def make_render_input(
+    *,
+    pathway_id: str = "ko00010",
+    pathway_scope: PathwayReferenceScope = PathwayReferenceScope.STANDARD,
+    allow_global_or_overview: bool = False,
+) -> RenderInput:
     import_limits = ImportLimits(
         max_bytes=100_000,
         max_rows=100,
@@ -184,36 +186,41 @@ def make_render_input() -> RenderInput:
             ),
         )
     )
-    paired = evaluate_module_pair(graph, dataset)
     reference = PathwayKoReference(
         reference_namespace=PathwayReferenceNamespace.KO,
-        reference_scope=PathwayReferenceScope.STANDARD,
-        pathway_id="ko00010",
-        pathway_name="Synthetic pathway",
-        pathway_class=("Metabolism; Synthetic class",),
+        reference_scope=pathway_scope,
+        pathway_id=pathway_id,
+        pathway_name=(
+            "Synthetic overview"
+            if pathway_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+            else "Synthetic pathway"
+        ),
+        pathway_class=(
+            ("Metabolism; Global and overview maps",)
+            if pathway_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+            else ("Metabolism; Synthetic class",)
+        ),
         reference_kos=("K00001", "K00002", "K00003"),
         relationship_row_count=3,
         link_provenance=(_provenance(KeggOperation.LINK),),
         metadata_provenance=(_provenance(KeggOperation.GET),),
     )
-    coverage = evaluate_pathway_coverage(
-        reference,
-        dataset,
-        PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT),
-    )
     execution = AnalysisExecutionProvenance(
+        service_name=ANALYSIS_SERVICE_NAME,
+        service_version=ANALYSIS_SERVICE_VERSION,
         import_limits=import_limits,
         kegg_request_options=KeggRequestOptions(refresh=False, allow_stale=True),
         reference_loading_limits=ReferenceLoadingLimits(),
-        pathway_parameters=PathwayExecutionParameters(evidence_mode=EvidenceMode.LENIENT),
+        pathway_parameters=PathwayExecutionParameters(
+            evidence_mode=EvidenceMode.LENIENT,
+            allow_global_or_overview=allow_global_or_overview,
+        ),
         direct_result_limits=AnalysisServiceLimits(),
     )
     return build_render_input(
         dataset,
         (graph,),
-        (paired,),
         (reference,),
-        (coverage,),
         execution,
     )
 

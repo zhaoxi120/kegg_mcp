@@ -123,7 +123,7 @@ async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
         render_input_path.read_text(encoding="utf-8"),
         strict=True,
     )
-    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "3"
+    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "4"
     assert [item.module_id for item in render_input.modules] == ["M00001"]
     assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
     assert reference_client.call_log == [

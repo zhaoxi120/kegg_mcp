@@ -46,6 +46,7 @@ from kegg_render_mcp.contracts import (
     ConnectivityStatus,
     ErrorCode,
     ErrorDetail,
+    RendererStatus,
     RenderMcpError,
 )
 from kegg_render_mcp.pathway_scene import CorePathwayAssetProvider
@@ -138,8 +139,9 @@ def test_default_network_runtime_uses_zero_wire_retries(
     configured = runtime_config.model_copy(update={"access_mode": "public_academic"})
     runtime = build_runtime(configured)
     assert isinstance(runtime.service.provider, CorePathwayAssetProvider)
-    assert runtime.service.provider.maximum_retries == 0
-    assert runtime.service.provider.maximum_response_bytes == configured.limits.max_asset_bytes
+    client = runtime.service.provider._client  # pyright: ignore[reportPrivateUsage]
+    assert client.config.retry.max_retries == 0
+    assert client.config.limits.max_response_bytes == configured.limits.max_asset_bytes
 
 
 @pytest.mark.asyncio
@@ -390,7 +392,20 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
             cast(dict[str, object], status.structuredContent["result"])["data"],  # type: ignore[index]
         )
         bounds = cast(dict[str, object], status_data["bounds"])
+        assert status_data["render_input_schema_version"] == "4"
+        assert "render_input_schema_version" in RendererStatus.model_json_schema()["required"]
         assert bounds["max_results"] == runtime_config.limits.max_results
+        assert bounds["max_xml_depth"] == runtime_config.limits.max_xml_depth
+        assert bounds["max_total_polyline_points"] == (
+            runtime_config.limits.max_total_polyline_points
+        )
+        assert bounds["max_total_polyline_length"] == (
+            runtime_config.limits.max_total_polyline_length
+        )
+        assert bounds["max_graphic_ko_associations"] == (
+            runtime_config.limits.max_graphic_ko_associations
+        )
+        assert bounds["max_svg_nodes"] == runtime_config.limits.max_svg_nodes
         assert status_data["retained_storage_bytes"] == 0
         probe = await session.call_tool("probe_renderer_kegg_connectivity", {})
         _validate(_tool(tools, "probe_renderer_kegg_connectivity"), probe)

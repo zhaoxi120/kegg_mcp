@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from kegg_mcp.analysis import MODULE_PARSER_NAME, MODULE_PARSER_VERSION
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
@@ -21,6 +22,9 @@ from kegg_mcp.kegg.contracts import (
     RetrievalEndpointClass,
 )
 from kegg_mcp.services.entry_cards import (
+    ENTRY_CARD_PARSER_NAME,
+    ENTRY_CARD_PARSER_VERSION,
+    ENTRY_CARD_SCHEMA_VERSION,
     CompoundEntryCard,
     GenomeEntryCard,
     KeggEntryCard,
@@ -136,6 +140,8 @@ def _snapshot(
     )
     module_definition = KeggModuleDefinitionCard(
         raw_definition="K00001 K00002" if changed else "K00001",
+        parser_name=MODULE_PARSER_NAME,
+        parser_version=MODULE_PARSER_VERSION,
         is_valid=True,
         required_blocks=("K00001", "K00002") if changed else ("K00001",),
         optional_components=(),
@@ -160,6 +166,10 @@ def _snapshot(
             )
         )
     return KeggEntryCardSnapshot(
+        schema_version=ENTRY_CARD_SCHEMA_VERSION,
+        parser_name=ENTRY_CARD_PARSER_NAME,
+        parser_version=ENTRY_CARD_PARSER_VERSION,
+        response_parser_version=PARSER_VERSION,
         requested_entries=(
             _entity(KeggEntryCardKind.KO, "K00001"),
             _entity(KeggEntryCardKind.PATHWAY, "ko00010"),
@@ -181,15 +191,20 @@ def _snapshot(
 def _retain(
     store: SQLiteResultStore,
     scope_id: str,
-    snapshot: KeggEntryCardSnapshot,
+    snapshot: KeggEntryCardSnapshot | bytes,
 ) -> str:
+    content = (
+        snapshot.model_dump_json().encode("utf-8")
+        if isinstance(snapshot, KeggEntryCardSnapshot)
+        else snapshot
+    )
     result = store.create(
         scope_id,
         (
             ResultArtifactInput(
                 section=ENTRY_SNAPSHOT_SECTION,
                 mime_type="application/json",
-                content=snapshot.model_dump_json().encode("utf-8"),
+                content=content,
             ),
         ),
     )
@@ -258,6 +273,10 @@ def test_genome_alias_snapshots_compare_the_same_original_request(
 ) -> None:
     requested = _entity(KeggEntryCardKind.GENOME, "hsa")
     returned = KeggEntryCardSnapshot(
+        schema_version=ENTRY_CARD_SCHEMA_VERSION,
+        parser_name=ENTRY_CARD_PARSER_NAME,
+        parser_version=ENTRY_CARD_PARSER_VERSION,
+        response_parser_version=PARSER_VERSION,
         requested_entries=(requested,),
         entries=(
             GenomeEntryCard(
@@ -268,6 +287,10 @@ def test_genome_alias_snapshots_compare_the_same_original_request(
         provenance=(_provenance("returned-genome", release="Release left"),),
     )
     missing = KeggEntryCardSnapshot(
+        schema_version=ENTRY_CARD_SCHEMA_VERSION,
+        parser_name=ENTRY_CARD_PARSER_NAME,
+        parser_version=ENTRY_CARD_PARSER_VERSION,
+        response_parser_version=PARSER_VERSION,
         requested_entries=(requested,),
         entries=(),
         missing_entries=(requested,),
@@ -386,6 +409,41 @@ def test_comparison_requires_a_current_scope_entry_snapshot(tmp_path: Path) -> N
         )
 
     assert captured.value.detail.code is ErrorCode.RESULT_NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "schema_version",
+        "parser_name",
+        "parser_version",
+        "response_parser_version",
+    ),
+)
+def test_comparison_rejects_snapshot_missing_wire_identity(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    store = SQLiteResultStore(tmp_path / f"missing-{missing_field}.sqlite3")
+    valid = _snapshot(changed=False, release=None)
+    invalid = valid.model_dump(mode="json")
+    del invalid[missing_field]
+    valid_id = _retain(store, "scope", valid)
+    invalid_id = _retain(store, "scope", json.dumps(invalid).encode("utf-8"))
+
+    with pytest.raises(KeggMcpError) as captured:
+        compare_kegg_reference_snapshots(
+            CompareKeggReferenceSnapshotsRequest(
+                left=ReferenceSnapshotSource(result_id=valid_id),
+                right=ReferenceSnapshotSource(result_id=invalid_id),
+            ),
+            result_store=store,
+            scope_id="scope",
+        )
+
+    assert captured.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    details = {item.name: item.value for item in captured.value.detail.safe_details}
+    assert details["required_snapshot_schema_version"] == ENTRY_CARD_SCHEMA_VERSION
 
 
 def test_snapshot_request_rejects_duplicates_and_canonicalizes_dimension_order() -> None:

@@ -10,7 +10,10 @@ import tomllib
 import zipfile
 from pathlib import Path
 
+from kegg_mcp.services.render_contracts import RENDER_INPUT_SCHEMA_VERSION
+
 import kegg_render_mcp
+from kegg_render_mcp.contracts import REQUIRED_RENDER_INPUT_SCHEMA_VERSION
 
 PROJECT = Path(__file__).resolve().parents[1]
 SOURCE = PROJECT / "src" / "kegg_render_mcp"
@@ -26,7 +29,8 @@ def test_distribution_declares_compatible_core_without_annotation_or_browser_sta
     assert not any("Windows" in classifier for classifier in project["classifiers"])
     dependencies = " ".join(project["dependencies"]).lower()
     assert "anyio>=4.10,<5" in dependencies
-    assert "kegg-mcp>=0.5,<0.9" in dependencies
+    assert "kegg-mcp>=0.9,<0.10" in dependencies
+    assert REQUIRED_RENDER_INPUT_SCHEMA_VERSION == RENDER_INPUT_SCHEMA_VERSION == "4"
     for forbidden in ("deepkoala", "torch", "selenium", "playwright", "cairosvg"):
         assert forbidden not in dependencies
 

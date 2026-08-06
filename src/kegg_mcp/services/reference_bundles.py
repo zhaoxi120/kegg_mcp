@@ -29,6 +29,7 @@ from kegg_mcp.services._atomic_bundle import write_text_bundle
 from kegg_mcp.services._text_artifact import TextArtifactSpec
 from kegg_mcp.services.brite_hierarchy import (
     BRITE_DETAIL_MIME_TYPE,
+    BRITE_DETAIL_SCHEMA_VERSION,
     BRITE_DETAIL_SECTION,
     MAX_BRITE_ARTIFACT_BYTES,
     MAX_BRITE_ENTITY_IDS,
@@ -119,7 +120,7 @@ class ReferenceBundleArtifact(ReferenceBundleFileRecord):
 
 
 class ReferenceBundleProducer(FrozenModel):
-    name: Literal["kegg-mcp"] = "kegg-mcp"
+    name: Literal["kegg-mcp"]
     version: str = Field(min_length=1, max_length=100)
 
 
@@ -226,8 +227,8 @@ class ReferenceBundleRetrievalSummary(FrozenModel):
 class ReferenceBundleManifest(FrozenModel):
     """Committed portable manifest; local paths and endpoint labels are excluded."""
 
-    schema_version: Literal["1"] = REFERENCE_BUNDLE_SCHEMA_VERSION
-    bundle_type: Literal["kegg_reference"] = "kegg_reference"
+    schema_version: Literal["1"]
+    bundle_type: Literal["kegg_reference"]
     producer: ReferenceBundleProducer
     selection: ReferenceBundleSelectionSummary
     brite: ReferenceBundleBriteSummary
@@ -279,7 +280,7 @@ class ReferenceBundleRetrievalBatch(FrozenModel):
 class KeggReferenceBundle(FrozenModel):
     """Paths and compact counts for one committed durable reference bundle."""
 
-    schema_version: Literal["1"] = REFERENCE_BUNDLE_SCHEMA_VERSION
+    schema_version: Literal["1"]
     output_directory: str = Field(min_length=1, max_length=4_096)
     manifest: str = Field(min_length=1, max_length=4_096)
     requested_entry_count: int = Field(strict=True, ge=1, le=MAX_ENTRY_CARDS)
@@ -392,7 +393,9 @@ def write_kegg_reference_bundle(
         ReferenceBundleFileRecord.model_validate(spec.integrity_record()) for spec in payload_specs
     )
     manifest = ReferenceBundleManifest(
-        producer=ReferenceBundleProducer(version=__version__),
+        schema_version=REFERENCE_BUNDLE_SCHEMA_VERSION,
+        bundle_type="kegg_reference",
+        producer=ReferenceBundleProducer(name="kegg-mcp", version=__version__),
         selection=selection,
         brite=brite_summary,
         retrieval=retrieval,
@@ -424,6 +427,7 @@ def write_kegg_reference_bundle(
         for spec in all_specs
     )
     return KeggReferenceBundle(
+        schema_version=REFERENCE_BUNDLE_SCHEMA_VERSION,
         output_directory=str(output_directory),
         manifest=str(output_directory / REFERENCE_MANIFEST_NAME),
         requested_entry_count=selection.requested_entry_count,
@@ -641,7 +645,12 @@ def _read_brite_detail(
             ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
             "The selected result does not contain compatible BRITE hierarchy detail.",
             suggested_action="Use the result_id returned by map_brite_hierarchy.",
-            safe_details=(SafeDetail(name="required_brite_detail_schema_version", value="1"),),
+            safe_details=(
+                SafeDetail(
+                    name="required_brite_detail_schema_version",
+                    value=BRITE_DETAIL_SCHEMA_VERSION,
+                ),
+            ),
         )
 
 

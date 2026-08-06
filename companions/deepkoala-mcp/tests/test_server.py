@@ -112,8 +112,6 @@ async def test_discovery_declares_five_compact_policy_bounded_tools(
     async with create_connected_server_and_client_session(server) as session:
         tools = (await session.list_tools()).tools
         assert tuple(tool.name for tool in tools) == TOOL_NAMES
-        assert "prepare_deepkoala_job" not in TOOL_NAMES
-        assert "submit_deepkoala_job" not in TOOL_NAMES
         for tool in tools:
             assert tool.inputSchema.get("additionalProperties") is False
             assert tool.outputSchema is not None

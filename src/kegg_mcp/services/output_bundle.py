@@ -124,9 +124,7 @@ def write_analysis_bundle(
     render_input = build_render_input(
         dataset,
         module_graphs,
-        modules,
         pathway_references,
-        pathways,
         execution,
         limits=render_limits,
     )

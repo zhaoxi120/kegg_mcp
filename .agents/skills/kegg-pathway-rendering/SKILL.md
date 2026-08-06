@@ -7,7 +7,7 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
 
 ## Require an authoritative handoff
 
-1. Accept a controlled `render_input.json` version 3 path or the renderer's bounded inline input
+1. Accept a controlled `render_input.json` version 4 path or the renderer's bounded inline input
    transport. If the original request starts with only protein FASTA or KO evidence, route those
    earlier stages through the installed focused Skills and enter this Skill only after the core
    returns a compatible stable handoff; never call those MCP servers here. Read the missing-stage
@@ -15,17 +15,22 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
    on an unavailable focused Skill or declared MCP dependency.
 2. Require the declared `kegg-render-mcp` dependency and `get_renderer_status` tool to be exposed.
    Follow the reference's activation-versus-repair classification when it is absent. Otherwise call
-   `get_renderer_status`. Require readiness, schema version 3, the requested static output format,
+   `get_renderer_status`. Require readiness, schema version 4, the requested static output format,
    and compatible bounds.
-3. Let the renderer validate the handoff. Never parse, repair, upgrade, or recompute its evidence
-   in the Skill. A user-specified output directory wins. Otherwise, omit `output_directory` and let
-   the renderer allocate a fresh directory beneath its configured project output root. Do not guess
-   a root from the handoff path, create the directory with a shell command, or reuse a non-empty
-   directory.
+3. Let the renderer validate the handoff. Never parse, repair, reinterpret, or recompute its
+   evidence in the Skill. Stop on a schema mismatch and request a current version 4 handoff. A
+   user-specified output directory wins. Otherwise, omit `output_directory` and let the renderer
+   allocate a fresh directory beneath its configured project output root. Do not guess a root from
+   the handoff path, create the directory with a shell command, or reuse a non-empty directory.
 
 ## Call only `kegg-render-mcp`
 
 - Prefer `render_analysis_bundle` for an ordinary bounded multi-target request.
+- Treat that call as one all-or-nothing bundle. The renderer preflights every target capability and
+  publishes only after all selected artifacts succeed. If any target, asset, output bound, or
+  publication fails, do not return or reconstruct a partial result. Surface its typed `target_id`
+  context and, when appropriate, retry an explicitly smaller `target_ids` set rather than merging
+  partial work into the failed bundle.
 - Use `render_pathway` or `render_module` only for one canonical target.
 - Inspect renderer status before considering a connectivity probe. In a live access mode, use
   `probe_renderer_kegg_connectivity` only for an explicit preflight or after a classified

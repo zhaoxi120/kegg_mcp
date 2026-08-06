@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import kegg_mcp.services.result_store as result_store_module
 from kegg_mcp.domain import ErrorCode, KeggMcpError
 from kegg_mcp.services.result_store import (
     DEFAULT_MAX_DATABASE_BYTES,
@@ -360,10 +361,9 @@ def test_expired_results_are_hidden_identically_and_cleanup_reclaims_them(tmp_pa
         _assert_not_found(error, created.result_id, "scope", "expired")
 
     assert store.list_results("scope", now=at_expiry).total_items == 0
-    summary = store.cleanup(now=at_expiry)
+    summary = store.cleanup_expired(now=at_expiry)
     assert summary.expired_results == 1
     assert summary.expired_bytes == len(b"expired")
-    assert summary.evicted_results == 0
     assert summary.remaining_results == 0
     assert summary.remaining_bytes == 0
 
@@ -386,8 +386,6 @@ def test_expired_only_cleanup_preserves_active_results_and_never_quota_evicts(
 
     assert summary.expired_results == 1
     assert summary.expired_bytes == 3
-    assert summary.evicted_results == 0
-    assert summary.evicted_bytes == 0
     assert summary.remaining_results == 1
     assert store.get_result("scope-b", active.result_id, now=_NOW + timedelta(seconds=10)) == active
     with pytest.raises(KeggMcpError) as error:
@@ -493,7 +491,7 @@ def test_max_result_count_bounds_zero_byte_metadata_growth(tmp_path: Path) -> No
     assert store.get_result("scope", second.result_id, now=_NOW + timedelta(seconds=3)) == second
 
 
-def test_create_removes_expired_results_before_evicting_active_results(tmp_path: Path) -> None:
+def test_create_removes_expired_results_before_checking_capacity(tmp_path: Path) -> None:
     limits = ResultStoreLimits(
         retention_seconds=10,
         quota_bytes=6,
@@ -526,49 +524,66 @@ def test_oversized_or_duplicate_artifact_groups_never_partially_store(tmp_path: 
     with pytest.raises(KeggMcpError) as error:
         store.create("scope", (_artifact("large.json", b"1234"),), now=_NOW)
     assert error.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
-    with pytest.raises(ValueError, match="section names must be unique"):
+    with pytest.raises(ResultStoreError) as duplicate_error:
         store.create(
             "scope",
             (_artifact("same.json", b"1"), _artifact("same.json", b"2")),
             now=_NOW,
         )
+    assert duplicate_error.value.stage == "create"
 
     assert store.list_results("scope", now=_NOW).total_items == 0
 
 
-def test_sqlite_failure_after_first_artifact_rolls_back_the_entire_result(
+@pytest.mark.parametrize("tampering", ("weak_tables", "index_direction", "extra_trigger"))
+def test_store_rejects_named_but_structurally_incompatible_current_schema(
     tmp_path: Path,
+    tampering: str,
 ) -> None:
-    database = tmp_path / "store.sqlite3"
+    database = tmp_path / f"invalid-{tampering}.sqlite3"
     store = SQLiteResultStore(database)
-    seed = store.create("scope", (_artifact("seed.json", b"seed"),), now=_NOW)
-    store.delete("scope", seed.result_id, now=_NOW)
+    store.preflight_write()
     with sqlite3.connect(database) as connection:
-        connection.execute(
-            """
-            CREATE TRIGGER reject_second_artifact
-            BEFORE INSERT ON result_artifacts
-            WHEN NEW.section = 'reject.json'
-            BEGIN
-                SELECT RAISE(ABORT, 'sensitive payload path must never escape');
-            END
-            """
-        )
+        if tampering == "weak_tables":
+            connection.execute("DROP TABLE result_artifacts")
+            connection.execute("DROP TABLE stored_results")
+            connection.execute(
+                "CREATE TABLE stored_results ("
+                "result_id TEXT, scope_id TEXT, created_at TEXT, expires_at TEXT, "
+                "total_bytes INTEGER, artifact_count INTEGER)"
+            )
+            connection.execute(
+                "CREATE TABLE result_artifacts ("
+                "result_id TEXT, position INTEGER, section TEXT, mime_type TEXT, "
+                "content BLOB, byte_size INTEGER)"
+            )
+            connection.execute(
+                "CREATE INDEX stored_results_expiry ON stored_results (expires_at, result_id)"
+            )
+            connection.execute(
+                "CREATE INDEX stored_results_scope_created "
+                "ON stored_results (scope_id, created_at DESC, result_id)"
+            )
+        elif tampering == "index_direction":
+            connection.execute("DROP INDEX stored_results_scope_created")
+            connection.execute(
+                "CREATE INDEX stored_results_scope_created "
+                "ON stored_results (scope_id, created_at ASC, result_id)"
+            )
+        else:
+            connection.execute(
+                "CREATE TRIGGER unexpected_result_trigger "
+                "AFTER INSERT ON stored_results BEGIN SELECT 1; END"
+            )
 
     with pytest.raises(ResultStoreError) as error:
-        store.create(
-            "scope",
-            (_artifact("first.json", b"first"), _artifact("reject.json", b"second")),
-            now=_NOW,
-        )
+        store.preflight_write()
 
-    assert error.value.stage == "create"
-    assert "sensitive" not in str(error.value)
-    assert str(database) not in str(error.value)
-    assert store.list_results("scope", now=_NOW).total_items == 0
+    assert error.value.stage == "preflight_write"
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM stored_results").fetchone() == (0,)
-        assert connection.execute("SELECT COUNT(*) FROM result_artifacts").fetchone() == (0,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (
+            result_store_module._SCHEMA_VERSION,  # pyright: ignore[reportPrivateUsage]
+        )
 
 
 def test_explicit_delete_returns_counts_and_then_hides_the_identifier(tmp_path: Path) -> None:
@@ -605,6 +620,30 @@ def test_preflight_write_initializes_store_without_creating_a_result(tmp_path: P
     store.preflight_write()
 
     assert store.list_results("scope", now=_NOW).total_items == 0
+
+
+@pytest.mark.parametrize(
+    "declared_version",
+    (0, result_store_module._SCHEMA_VERSION),  # pyright: ignore[reportPrivateUsage]
+)
+def test_writable_store_never_adopts_or_repairs_a_preexisting_database(
+    tmp_path: Path,
+    declared_version: int,
+) -> None:
+    database = tmp_path / "preexisting.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+        connection.execute(f"PRAGMA user_version = {declared_version}")
+
+    with pytest.raises(ResultStoreError) as error:
+        SQLiteResultStore(database).preflight_write()
+
+    assert error.value.stage == "preflight_write"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (declared_version,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
+        ).fetchall() == [("sentinel",)]
 
 
 def test_preflight_write_sanitizes_unwritable_store_failures(tmp_path: Path) -> None:
@@ -735,7 +774,7 @@ def test_cleanup_releases_free_pages_with_full_auto_vacuum(tmp_path: Path) -> No
     )
     size_before = database.stat().st_size
 
-    summary = store.cleanup(now=_NOW + timedelta(seconds=1))
+    summary = store.cleanup_expired(now=_NOW + timedelta(seconds=1))
     size_after = database.stat().st_size
 
     assert summary.expired_results == 1

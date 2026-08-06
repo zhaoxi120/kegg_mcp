@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from kegg_mcp.services.render_contracts import (
-    RENDER_INPUT_SCHEMA_VERSION,
     ModuleRenderTarget,
     PathwayRenderTarget,
     RenderInput,
@@ -20,9 +19,18 @@ from pydantic import ValidationError
 
 from kegg_render_mcp._filesystem import open_absolute_directory
 from kegg_render_mcp.config import RendererRuntimeConfig
-from kegg_render_mcp.contracts import ErrorCode, ErrorDetail, RenderMcpError, SafeDetail
+from kegg_render_mcp.contracts import (
+    ErrorCode,
+    ErrorDetail,
+    RenderMcpError,
+    SafeDetail,
+)
 from kegg_render_mcp.input_validation import validate_tool_input
 from kegg_render_mcp.validation_errors import summarize_validation_error
+
+_MAX_PATH_BYTES = 4_096
+_MAX_ARTIFACT_NAME_BYTES = 128
+_MAX_OUTPUT_DIRECTORY_BYTES = _MAX_PATH_BYTES - 1 - _MAX_ARTIFACT_NAME_BYTES
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +74,7 @@ def load_render_input(
     if (path_text is None) == (render_input_json is None):
         raise _invalid_input("Provide exactly one renderer input source.")
     if path_text is not None:
-        _, descriptor, _ = _open_beneath(
+        descriptor, _ = _open_beneath(
             path_text,
             config.allowed_roots,
             final_kind="file",
@@ -104,19 +112,6 @@ def _parse_payload(payload: bytes) -> ValidatedRenderInput:
     if not isinstance(parsed, dict):
         raise _invalid_input("The renderer input root must be a JSON object.")
     raw = cast(dict[str, Any], parsed)
-    version: object = raw.get("schema_version")
-    if version != RENDER_INPUT_SCHEMA_VERSION:
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.INCOMPATIBLE_SCHEMA,
-                message=(
-                    "Only renderer handoff schema version "
-                    f"{RENDER_INPUT_SCHEMA_VERSION} is compatible."
-                ),
-                suggested_action="Rerun analysis with a compatible kegg-mcp version.",
-                safe_details=(SafeDetail(name="received_version", value=str(version)[:32]),),
-            )
-        )
     try:
         document = validate_tool_input(RenderInput, raw)
     except ValidationError as error:
@@ -138,25 +133,66 @@ def _parse_payload(payload: bytes) -> ValidatedRenderInput:
     return ValidatedRenderInput(document=document)
 
 
-def resolve_output_directory(path_text: str | None, roots: tuple[Path, ...]) -> Path | None:
+def resolve_output_directory(path_text: str | None, roots: tuple[Path, ...]) -> Path:
     if path_text is None:
-        return roots[-1] / f"kegg-render-{secrets.token_hex(16)}"
-    path, descriptor, _ = _open_beneath(
-        path_text, roots, final_kind="directory", create_final_directory=True
-    )
-    os.close(descriptor)
+        candidate = roots[-1] / f"kegg-render-{secrets.token_hex(16)}"
+        return _output_directory_path(str(candidate))
+    path = _output_directory_path(path_text)
+    root = _containing_root(path, roots)
+    if path == root:
+        descriptor, _ = _open_beneath(path_text, roots, final_kind="directory")
+        os.close(descriptor)
+        return path
+
+    parent_descriptor, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_descriptor,
+            )
+        except FileNotFoundError:
+            return path
+        except OSError as error:
+            raise _path_error(
+                "The renderer output directory could not be opened safely."
+            ) from error
+        try:
+            _validate_private_directory_fd(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
     return path
 
 
 def open_allowed_directory(path: Path, roots: tuple[Path, ...]) -> tuple[int, bool]:
     """Open or create a validated output directory and report whether it was created."""
-    _, descriptor, created = _open_beneath(
+    return _open_beneath(
         str(path),
         roots,
         final_kind="directory",
         create_final_directory=True,
     )
-    return descriptor, created
+
+
+def assert_allowed_directory_identity(
+    path: Path,
+    roots: tuple[Path, ...],
+    descriptor: int,
+) -> None:
+    """Require the public path to still name the pinned output directory."""
+    try:
+        pinned = os.fstat(descriptor)
+        reopened, _ = _open_beneath(str(path), roots, final_kind="directory")
+        try:
+            if _directory_identity(os.fstat(reopened)) != _directory_identity(pinned):
+                raise OSError("renderer output path no longer resolves to the pinned directory")
+        finally:
+            os.close(reopened)
+    except RenderMcpError as error:
+        raise OSError("renderer output path identity could not be validated") from error
 
 
 def remove_created_empty_directory(
@@ -165,12 +201,9 @@ def remove_created_empty_directory(
     descriptor: int,
 ) -> bool:
     """Remove one still-empty created directory only while its pinned identity matches."""
-    with os.scandir(descriptor) as entries:
-        if next(entries, None) is not None:
-            return False
     pinned = os.fstat(descriptor)
     try:
-        _, parent_fd, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
+        parent_fd, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
     except RenderMcpError:
         return False
     try:
@@ -183,6 +216,10 @@ def remove_created_empty_directory(
         os.close(parent_fd)
 
 
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_uid)
+
+
 def _remove_named_empty_directory_if_identity(
     parent_fd: int,
     name: str,
@@ -191,17 +228,10 @@ def _remove_named_empty_directory_if_identity(
     """Best-effort rmdir for an unchanged named directory; rmdir enforces emptiness."""
     try:
         metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(metadata.st_mode)
-            or (
-                metadata.st_dev,
-                metadata.st_ino,
-                metadata.st_uid,
-            )
-            != identity
-        ):
+        if not stat.S_ISDIR(metadata.st_mode) or _directory_identity(metadata) != identity:
             return False
         os.rmdir(name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
         return True
     except OSError:
         return False
@@ -210,8 +240,6 @@ def _remove_named_empty_directory_if_identity(
 def _bounded_read(descriptor: int, limit: int) -> bytes:
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise _path_error("The renderer input must be a direct regular file.")
         if metadata.st_size > limit:
             raise _input_limit(limit)
         content = bytearray()
@@ -231,15 +259,32 @@ def _bounded_read(descriptor: int, limit: int) -> bytes:
         raise _path_error("The renderer input could not be opened safely.") from error
 
 
-def _lexical_absolute(value: str, name: str) -> Path:
-    if len(value.encode("utf-8")) > 4096:
-        raise _path_error(f"{name} exceeds the path-length limit.")
+def _lexical_absolute(
+    value: str,
+    name: str,
+    *,
+    max_bytes: int = _MAX_PATH_BYTES,
+    limit_message: str | None = None,
+) -> Path:
+    if len(value.encode("utf-8")) > max_bytes:
+        raise _path_error(limit_message or f"{name} exceeds the path-length limit.")
     if "\x00" in value:
         raise _path_error(f"{name} contains a prohibited character.")
     path = Path(value)
     if not path.is_absolute() or ".." in path.parts:
         raise _path_error(f"{name} must be an absolute traversal-free path.")
     return path
+
+
+def _output_directory_path(value: str) -> Path:
+    return _lexical_absolute(
+        value,
+        "renderer_output_directory",
+        max_bytes=_MAX_OUTPUT_DIRECTORY_BYTES,
+        limit_message=(
+            "The renderer output directory leaves insufficient path space for artifacts."
+        ),
+    )
 
 
 def _containing_root(path: Path, roots: tuple[Path, ...]) -> Path:
@@ -255,13 +300,10 @@ def _open_beneath(
     *,
     final_kind: str,
     create_final_directory: bool = False,
-) -> tuple[Path, int, bool]:
+) -> tuple[int, bool]:
     path = _lexical_absolute(path_text, "renderer_path")
     root = _containing_root(path, roots)
-    try:
-        relative = path.relative_to(root)
-    except ValueError as error:  # pragma: no cover - guarded above
-        raise _path_error("The path is outside the configured allowed roots.") from error
+    relative = path.relative_to(root)
     descriptor = open_absolute_directory(root)
     created_final_directory = False
     try:
@@ -270,7 +312,7 @@ def _open_beneath(
         if not parts:
             if final_kind != "directory":
                 raise _path_error("The renderer input must be a file below an allowed root.")
-            return path, descriptor, created_final_directory
+            return descriptor, created_final_directory
         for index, part in enumerate(parts):
             final = index == len(parts) - 1
             wants_directory = not final or final_kind == "directory"
@@ -288,11 +330,7 @@ def _open_beneath(
                 created_metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
                 if not stat.S_ISDIR(created_metadata.st_mode):
                     raise OSError("created renderer output entry is not a directory") from None
-                created_identity = (
-                    created_metadata.st_dev,
-                    created_metadata.st_ino,
-                    created_metadata.st_uid,
-                )
+                created_identity = _directory_identity(created_metadata)
                 try:
                     next_descriptor = os.open(part, flags, dir_fd=descriptor)
                 except BaseException:
@@ -306,18 +344,15 @@ def _open_beneath(
                 metadata = os.fstat(next_descriptor)
                 if (
                     created_identity is not None
-                    and (
-                        metadata.st_dev,
-                        metadata.st_ino,
-                        metadata.st_uid,
-                    )
-                    != created_identity
+                    and _directory_identity(metadata) != created_identity
                 ):
                     raise OSError("created renderer output directory was replaced before opening")
                 if wants_directory:
                     _validate_private_directory_fd(next_descriptor)
                 elif not stat.S_ISREG(metadata.st_mode):
                     raise _path_error("The renderer input must be a direct regular file.")
+                if created_identity is not None:
+                    os.fsync(descriptor)
             except BaseException:
                 os.close(next_descriptor)
                 if created_identity is not None:
@@ -329,7 +364,7 @@ def _open_beneath(
                 raise
             os.close(descriptor)
             descriptor = next_descriptor
-        return path, descriptor, created_final_directory
+        return descriptor, created_final_directory
     except RenderMcpError:
         os.close(descriptor)
         raise

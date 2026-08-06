@@ -10,4 +10,7 @@ precedence, line styles, or pixel values in the Skill.
 - **Unsupported:** the renderer cannot map or display the content safely.
 
 Rejected, unclassified, and invalid predictions are excluded. Preserve renderer-provided
-non-color cues and deterministic precedence for graphics that map multiple K numbers.
+non-color cues and deterministic accepted-over-uncertain precedence for boxes and line geometries
+that map multiple K numbers. Unmatched graphics remain unchanged. The source PNG's
+pathway-category colors remain background context; neither unmatched state nor category color is
+evidence of presence or absence.

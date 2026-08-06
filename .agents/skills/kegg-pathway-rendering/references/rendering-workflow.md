@@ -2,15 +2,22 @@
 
 ## Compatible handoff
 
-1. Call `get_renderer_status` and require readiness plus compatible schema version 3.
+1. Call `get_renderer_status` and require readiness plus the current schema version 4.
 2. Pass exactly one controlled absolute `render_input.json` path or bounded inline handoff to
    `render_analysis_bundle`, `render_pathway`, or `render_module`.
 3. Let the renderer validate schema, targets, evidence states, paths, output limits, and assets.
 
-Do not patch or reinterpret an earlier schema version. Version 1 cannot be upgraded losslessly
-because it contains previews rather than complete renderer evidence, and version 2 lacks the current
-version 3 execution and automatic-selection contract. Request a new bundle from the independent
-KO-analysis stage.
+Accept only schema version 4. Do not patch, repair, or reinterpret a schema-mismatched handoff.
+Stop and request a current bundle from the independent KO-analysis stage.
+
+## Atomic multi-target rendering
+
+`render_analysis_bundle` is one transaction, not a best-effort loop. The renderer validates every
+selected target's capability before asset retrieval and retains or publishes nothing until every
+requested artifact is encoded within bounds. Any target, asset, encoding, output, or publication
+failure returns no partial `RenderResult`. Preserve the typed failing `target_id` in the report.
+When a retry is appropriate, select a smaller bounded `target_ids` set; never merge partial work and
+claim that the failed original bundle completed.
 
 ## Pathway access modes
 

@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
@@ -18,11 +18,13 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggOperation, ResponseOrigin
 
-MODULE_PARSER_NAME = "kegg_module_definition"
-MODULE_PARSER_VERSION = "1"
-MODULE_RESOLVER_VERSION = "1"
-MODULE_CALCULATION_METHOD = "exact_completion_and_top_level_block_coverage"
-MODULE_CALCULATION_VERSION = "1"
+MODULE_PARSER_NAME: Literal["kegg_module_definition"] = "kegg_module_definition"
+MODULE_PARSER_VERSION: Literal["1"] = "1"
+MODULE_RESOLVER_VERSION: Literal["1"] = "1"
+MODULE_CALCULATION_METHOD: Literal["exact_completion_and_top_level_block_coverage"] = (
+    "exact_completion_and_top_level_block_coverage"
+)
+MODULE_CALCULATION_VERSION: Literal["1"] = "1"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]

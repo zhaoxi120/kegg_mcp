@@ -48,6 +48,7 @@ def build_handoff(
         SourceMetadataField(name="multi", value=plan.multi),
     )
     source = SourceProvenance(
+        source_name="deepkoala",
         source_version=source_version,
         model_name=plan.model,
         model_version=plan.resolved_model_date,

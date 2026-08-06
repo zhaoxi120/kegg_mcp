@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from kegg_mcp.services.render_contracts import ModuleRenderTarget, PathwayRenderTarget
 
-from kegg_render_mcp.artifacts import ArtifactBlob, RenderArtifactStore
+from kegg_render_mcp._render_preflight import preflight_targets, with_target_context
+from kegg_render_mcp.artifacts import (
+    ArtifactBlob,
+    RenderArtifactStore,
+    manifest_byte_reserve,
+)
 from kegg_render_mcp.config import RendererRuntimeConfig
 from kegg_render_mcp.contracts import (
     MAX_TARGETS,
@@ -16,8 +23,10 @@ from kegg_render_mcp.contracts import (
     RenderFormat,
     RenderMcpError,
     RenderResult,
+    SafeDetail,
 )
-from kegg_render_mcp.module_scene import construct_module_scene
+from kegg_render_mcp.kgml import KGML_PARSER_NAME, KGML_PARSER_VERSION
+from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayAssetProvider, construct_pathway_scene
 from kegg_render_mcp.provenance import safe_batch_provenance
 from kegg_render_mcp.raster import render_module_png, render_pathway_png, validate_png
@@ -31,10 +40,20 @@ from kegg_render_mcp.svg import render_module_svg, render_pathway_svg
 
 @dataclass(frozen=True, slots=True)
 class RenderedTarget:
-    target_id: str
     artifacts: tuple[ArtifactBlob, ...]
     warnings: tuple[str, ...]
     provenance: dict[str, object]
+
+
+class _EncodedArtifact(Protocol):
+    @property
+    def content(self) -> bytes: ...
+
+    @property
+    def width(self) -> int: ...
+
+    @property
+    def height(self) -> int: ...
 
 
 class RendererService:
@@ -71,42 +90,62 @@ class RendererService:
             render_input_json=render_input_json,
         )
         selected = source.target_ids if target_ids is None else target_ids
-        if not selected or len(selected) > MAX_TARGETS or len(selected) != len(set(selected)):
+        if (
+            not selected
+            or len(selected) > MAX_TARGETS
+            or len(selected) != len(set(selected))
+            or not formats
+            or len(formats) != len(set(formats))
+        ):
             raise RenderMcpError(
                 ErrorDetail(
                     code=ErrorCode.INVALID_REQUEST,
-                    message="The selected render target set is empty, duplicated, or too large.",
+                    message=(
+                        "The selected target or format set is empty, duplicated, or too large."
+                    ),
                     suggested_action=(
                         f"Select one through {MAX_TARGETS} retained target identifiers."
                     ),
                 )
             )
         output = resolve_output_directory(output_directory, self.config.allowed_roots)
-        output_was_allocated = output_directory is None
+        prepared = preflight_targets(
+            source,
+            selected,
+            provider=self.provider,
+            max_svg_nodes=self.config.limits.max_svg_nodes,
+        )
         artifacts: list[ArtifactBlob] = []
+        remaining_artifact_bytes = self.config.limits.max_result_bytes - manifest_byte_reserve(
+            self.config.limits.max_result_bytes
+        )
         warnings: list[str] = []
         target_provenance: list[dict[str, object]] = []
-        pathway_ids = {str(item.pathway_id) for item in source.document.pathways}
-        module_ids = {str(item.module_id) for item in source.document.modules}
         for target_id in selected:
-            if target_id in pathway_ids:
-                rendered = await _render_pathway_target(
-                    source,
-                    source.pathway(target_id),
-                    formats=formats,
-                    config=self.config,
-                    provider=self.provider,
-                )
-            elif target_id in module_ids:
-                rendered = _render_module_target(
-                    source,
-                    source.module(target_id),
-                    formats=formats,
-                    config=self.config,
-                )
-            else:
-                source.pathway(target_id)
-                raise AssertionError("unknown render target lookup unexpectedly returned")
+            try:
+                if target := prepared.pathways.get(target_id):
+                    rendered = await _render_pathway_target(
+                        source,
+                        target,
+                        formats=formats,
+                        config=self.config,
+                        provider=self.provider,
+                        max_artifact_bytes=remaining_artifact_bytes,
+                    )
+                elif target := prepared.modules.get(target_id):
+                    rendered = _render_module_target(
+                        target,
+                        scene=prepared.module_scenes[target_id],
+                        formats=formats,
+                        config=self.config,
+                        max_artifact_bytes=remaining_artifact_bytes,
+                    )
+                else:
+                    raise AssertionError("preflight target lookup unexpectedly changed")
+            except RenderMcpError as error:
+                raise with_target_context(error, target_id) from None
+            rendered_bytes = sum(len(item.content) for item in rendered.artifacts)
+            remaining_artifact_bytes -= rendered_bytes
             artifacts.extend(rendered.artifacts)
             warnings.extend(rendered.warnings)
             target_provenance.append(rendered.provenance)
@@ -126,7 +165,6 @@ class RendererService:
                 "targets": target_provenance,
             },
             output_directory=output,
-            remove_created_output_directory_on_failure=output_was_allocated,
         )
 
 
@@ -137,22 +175,13 @@ async def _render_pathway_target(
     formats: tuple[RenderFormat, ...],
     config: RendererRuntimeConfig,
     provider: PathwayAssetProvider,
+    max_artifact_bytes: int,
 ) -> RenderedTarget:
     target_id = str(target.pathway_id)
-    if not target_id.startswith("ko"):
-        raise RenderMcpError(
-            ErrorDetail(
-                code=ErrorCode.TARGET_NOT_RENDERABLE,
-                message="Only regular KO reference pathways are renderable in this release.",
-                suggested_action="Select a retained koNNNNN regular pathway target.",
-            )
-        )
     scene = await construct_pathway_scene(
         source,
         target,
         provider,
-        max_asset_bytes=config.limits.max_asset_bytes,
-        max_pixels=config.limits.max_pixels,
         limits=config.limits,
     )
     decoded = validate_png(
@@ -168,53 +197,41 @@ async def _render_pathway_target(
                 suggested_action="Refresh the matching pathway assets.",
             )
         )
-    artifacts: list[ArtifactBlob] = []
-    if RenderFormat.SVG in formats:
-        svg = render_pathway_svg(
+    artifacts = _render_target_artifacts(
+        target_id,
+        formats,
+        max_artifact_bytes=max_artifact_bytes,
+        max_svg_bytes=config.limits.max_svg_bytes,
+        svg_encoder=lambda limit: render_pathway_svg(
+            scene, max_bytes=limit, max_nodes=config.limits.max_svg_nodes
+        ),
+        png_encoder=lambda limit: render_pathway_png(
             scene,
-            max_bytes=config.limits.max_svg_bytes,
-            max_nodes=config.limits.max_svg_nodes,
-        )
-        artifacts.append(
-            ArtifactBlob(
-                f"{target_id}.svg",
-                "image/svg+xml",
-                svg.content,
-                svg.width,
-                svg.height,
-            )
-        )
-    if RenderFormat.PNG in formats:
-        png = render_pathway_png(
-            scene,
-            max_asset_bytes=config.limits.max_asset_bytes,
             max_pixels=config.limits.max_pixels,
-            max_output_bytes=config.limits.max_result_bytes,
-        )
-        artifacts.append(
-            ArtifactBlob(
-                f"{target_id}.png",
-                "image/png",
-                png.content,
-                png.width,
-                png.height,
-            )
-        )
+            max_output_bytes=limit,
+        ),
+    )
     return RenderedTarget(
-        target_id=target_id,
-        artifacts=tuple(artifacts),
-        warnings=tuple(scene.warnings),
+        artifacts=artifacts,
+        warnings=scene.warnings,
         provenance={
             "target_id": target_id,
             "kind": "pathway",
-            "reference_namespace": scene.reference_namespace,
+            "reference_namespace": target.reference_namespace.value,
             "reference_scope": target.reference_scope.value,
-            "evidence_mode": scene.evidence_mode,
-            "coverage_numerator": scene.coverage_numerator,
-            "coverage_denominator": scene.coverage_denominator,
-            "coverage_ratio": scene.coverage_ratio,
+            "evidence_mode": target.evidence_mode.value,
+            "coverage_numerator": target.coverage_numerator,
+            "coverage_denominator": target.coverage_denominator,
+            "coverage_ratio": target.coverage_ratio,
             "calculation_method": target.calculation_method,
             "calculation_version": target.calculation_version,
+            "kgml_parser_name": KGML_PARSER_NAME,
+            "kgml_parser_version": KGML_PARSER_VERSION,
+            "retained_box_graphic_count": scene.retained_box_graphic_count,
+            "retained_polyline_graphic_count": scene.retained_polyline_graphic_count,
+            "mapped_detected_ko_ids": scene.mapped_detected_ko_ids,
+            "box_overlay_count": scene.box_overlay_count,
+            "polyline_overlay_count": scene.polyline_overlay_count,
             "reference_link_provenance": [
                 safe_batch_provenance(item) for item in target.reference_link_provenance
             ],
@@ -227,53 +244,31 @@ async def _render_pathway_target(
 
 
 def _render_module_target(
-    source: ValidatedRenderInput,
     target: ModuleRenderTarget,
     *,
+    scene: ModuleScene,
     formats: tuple[RenderFormat, ...],
     config: RendererRuntimeConfig,
+    max_artifact_bytes: int,
 ) -> RenderedTarget:
     target_id = str(target.module_id)
-    scene = construct_module_scene(
-        target,
-        analysis_unit=source.document.dataset.analysis_unit,
-        max_nodes=config.limits.max_svg_nodes,
-    )
-    artifacts: list[ArtifactBlob] = []
-    if RenderFormat.SVG in formats:
-        svg = render_module_svg(
-            scene,
-            max_bytes=config.limits.max_svg_bytes,
-            max_nodes=config.limits.max_svg_nodes,
-        )
-        artifacts.append(
-            ArtifactBlob(
-                f"{target_id}.svg",
-                "image/svg+xml",
-                svg.content,
-                svg.width,
-                svg.height,
-            )
-        )
-    if RenderFormat.PNG in formats:
-        png = render_module_png(
+    artifacts = _render_target_artifacts(
+        target_id,
+        formats,
+        max_artifact_bytes=max_artifact_bytes,
+        max_svg_bytes=config.limits.max_svg_bytes,
+        svg_encoder=lambda limit: render_module_svg(
+            scene, max_bytes=limit, max_nodes=config.limits.max_svg_nodes
+        ),
+        png_encoder=lambda limit: render_module_png(
             scene,
             max_pixels=config.limits.max_pixels,
-            max_output_bytes=config.limits.max_result_bytes,
-        )
-        artifacts.append(
-            ArtifactBlob(
-                f"{target_id}.png",
-                "image/png",
-                png.content,
-                png.width,
-                png.height,
-            )
-        )
+            max_output_bytes=limit,
+        ),
+    )
     return RenderedTarget(
-        target_id=target_id,
-        artifacts=tuple(artifacts),
-        warnings=tuple(scene.warnings),
+        artifacts=artifacts,
+        warnings=scene.warnings,
         provenance={
             "target_id": target_id,
             "kind": "module",
@@ -290,4 +285,99 @@ def _render_module_target(
                 safe_batch_provenance(item) for item in target.reference_retrieval_provenance
             ],
         },
+    )
+
+
+def _render_target_artifacts(
+    target_id: str,
+    formats: tuple[RenderFormat, ...],
+    *,
+    max_artifact_bytes: int,
+    max_svg_bytes: int,
+    svg_encoder: Callable[[int], _EncodedArtifact],
+    png_encoder: Callable[[int], _EncodedArtifact],
+) -> tuple[ArtifactBlob, ...]:
+    artifacts: list[ArtifactBlob] = []
+    remaining = max_artifact_bytes
+    for render_format, asset_kind, suffix, mime_type, limit, encoder in (
+        (
+            RenderFormat.SVG,
+            "svg_output",
+            ".svg",
+            "image/svg+xml",
+            max_svg_bytes,
+            svg_encoder,
+        ),
+        (
+            RenderFormat.PNG,
+            "png_output",
+            ".png",
+            "image/png",
+            max_artifact_bytes,
+            png_encoder,
+        ),
+    ):
+        if render_format not in formats:
+            continue
+        artifact, remaining = _encode_artifact(
+            target_id=target_id,
+            asset_kind=asset_kind,
+            name=f"{target_id}{suffix}",
+            mime_type=mime_type,
+            remaining=remaining,
+            format_limit=limit,
+            encode=encoder,
+        )
+        artifacts.append(artifact)
+    return tuple(artifacts)
+
+
+def _encode_artifact(
+    *,
+    target_id: str,
+    asset_kind: str,
+    name: str,
+    mime_type: str,
+    remaining: int,
+    format_limit: int,
+    encode: Callable[[int], _EncodedArtifact],
+) -> tuple[ArtifactBlob, int]:
+    if remaining < 1:
+        raise _target_output_limit(target_id, asset_kind)
+    try:
+        encoded = encode(min(remaining, format_limit))
+    except RenderMcpError as error:
+        if error.detail.code is not ErrorCode.OUTPUT_LIMIT_EXCEEDED:
+            raise
+        contextual = (
+            SafeDetail(name="target_id", value=target_id),
+            SafeDetail(name="asset_kind", value=asset_kind),
+        )
+        existing = tuple(
+            item
+            for item in error.detail.safe_details
+            if item.name not in {"target_id", "asset_kind"}
+        )
+        raise RenderMcpError(
+            error.detail.model_copy(update={"safe_details": (*contextual, *existing)[:8]})
+        ) from None
+    if len(encoded.content) > remaining:
+        raise _target_output_limit(target_id, asset_kind)
+    return (
+        ArtifactBlob(name, mime_type, encoded.content, encoded.width, encoded.height),
+        remaining - len(encoded.content),
+    )
+
+
+def _target_output_limit(target_id: str, asset_kind: str) -> RenderMcpError:
+    return RenderMcpError(
+        ErrorDetail(
+            code=ErrorCode.OUTPUT_LIMIT_EXCEEDED,
+            message="The selected render outputs exceed the remaining bounded result budget.",
+            suggested_action="Select fewer targets, request SVG only, or increase the safe limit.",
+            safe_details=(
+                SafeDetail(name="target_id", value=target_id),
+                SafeDetail(name="asset_kind", value=asset_kind),
+            ),
+        )
     )

@@ -284,7 +284,7 @@ def _local_handoff_cases() -> tuple[tuple[str, dict[str, object], str], ...]:
 
 
 @pytest.mark.asyncio
-async def test_v08_scientist_workflows_through_live_mcp(
+async def test_scientist_workflows_through_live_mcp(
     live_campaign: _LiveCampaign,
     live_requests_per_operation: int,
 ) -> None:
@@ -295,14 +295,14 @@ async def test_v08_scientist_workflows_through_live_mcp(
     runtime = McpRuntime(
         client=live_campaign.client,
         result_store=store,
-        scope_id="live-v08-scientist-workflows",
+        scope_id="live-scientist-workflows",
         allowed_roots=(str(live_campaign.root.resolve()),),
     )
     server = create_server(runtime)
     paginated_artifact_observed = False
-    reference_output = live_campaign.root / "v08-reference-bundle"
+    reference_output = live_campaign.root / "reference-bundle"
     local_handoff_outputs = {
-        target: live_campaign.root / f"v08-{target}" for target, _, _ in _local_handoff_cases()
+        target: live_campaign.root / target for target, _, _ in _local_handoff_cases()
     }
 
     try:

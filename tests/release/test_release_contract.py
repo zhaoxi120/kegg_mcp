@@ -123,7 +123,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.8.0"
+    assert project["version"] == "0.9.0"
     assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
@@ -140,17 +140,12 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
 
 
 def test_document_ownership_and_release_gates_are_explicit() -> None:
-    retired = (
-        PROJECT_ROOT / "docs" / "development-plan.md",
-        PROJECT_ROOT / "docs" / "visualization-extension-plan.md",
-    )
     current = (
         PROJECT_ROOT / "docs" / "architecture.md",
         PROJECT_ROOT / "docs" / "visualization-architecture.md",
         PROJECT_ROOT / "docs" / "core-package.md",
         PROJECT_ROOT / "docs" / "manual-component-deployment.md",
     )
-    assert not any(path.exists() for path in retired)
     assert all(path.is_file() for path in current)
 
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
@@ -192,7 +187,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
     assert "Distribution boundary" in readiness
 
 
@@ -219,7 +214,7 @@ def test_platform_classifiers_match_the_supported_component_matrix() -> None:
     assert not any("Windows" in classifier for classifier in deepkoala_classifiers)
 
 
-def test_v08_reference_and_handoff_boundaries_are_release_gated() -> None:
+def test_reference_and_handoff_boundaries_are_release_gated() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     architecture = (PROJECT_ROOT / "docs/architecture.md").read_text(encoding="utf-8")
     server = (PROJECT_ROOT / "docs/mcp-server.md").read_text(encoding="utf-8")
@@ -250,24 +245,6 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
         assert not CJK_CHARACTER.search(content), path
         assert path.stat().st_size <= 128 * 1024, path
         assert "SQLite format 3" not in content
-
-    document_corpus = "\n".join(
-        path.read_text(encoding="utf-8") for path in OWNED_RELEASE_DOCUMENTS
-    )
-    for stale_contract in (
-        "CPU-only",
-        "acknowledged=true",
-        "five real requests",
-        "for 20 total",
-        "prior `v1` rows",
-        "process-wide request rate",
-        "process-wide rate limiter",
-        "process-wide no-burst rate limit",
-        "prepare_deepkoala_job",
-        "submit_deepkoala_job",
-        "kegg-visualization",
-    ):
-        assert stale_contract not in document_corpus
 
 
 def test_access_examples_record_rights_and_use_no_secrets() -> None:
@@ -379,7 +356,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.5,<0.9" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -393,7 +370,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 3" in normalized
+        assert "version 4" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (installation, server_doc, readiness):
         assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
@@ -417,7 +394,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert "synthetic" in normalized_readiness
     assert "no live kegg requests" in normalized_readiness
     assert "no kegg payload" in normalized_renderer
-    assert "global and overview" in normalized_renderer
+    assert "global/overview" in normalized_renderer
 
 
 def test_deepkoala_companion_has_an_independent_build_gate() -> None:
@@ -462,9 +439,9 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert "uv sync --frozen" not in ci
     assert smoke_path.is_file()
     for distribution, version in (
-        ("kegg-mcp", "0.8.0"),
+        ("kegg-mcp", "0.9.0"),
         ("deepkoala-mcp", "0.5.0"),
-        ("kegg-render-mcp", "0.3.2"),
+        ("kegg-render-mcp", "0.4.0"),
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci

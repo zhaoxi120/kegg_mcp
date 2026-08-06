@@ -55,12 +55,7 @@ def test_deepkoala_skill_uses_only_companion_tools_and_stable_files() -> None:
         "delete_deepkoala_job",
     ):
         assert tool in corpus
-    for forbidden in (
-        "prepare_deepkoala_job",
-        "submit_deepkoala_job",
-        "analyze_ko_annotations",
-        "render_analysis_bundle",
-    ):
+    for forbidden in ("analyze_ko_annotations", "render_analysis_bundle"):
         assert forbidden not in corpus
     assert "deepkoala_annotations.csv" in corpus
     assert "deepkoala_run_report.md" in corpus

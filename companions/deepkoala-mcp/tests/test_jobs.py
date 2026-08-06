@@ -194,7 +194,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
 
 
 @pytest.mark.asyncio
-async def test_run_accepts_valid_fasta_larger_than_the_removed_byte_cap(
+async def test_run_accepts_large_valid_fasta_within_sequence_limits(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     fasta = "".join(f">protein-{index}\n{'M' * 100_000}\n" for index in range(51))
