@@ -39,17 +39,22 @@ The suite installer owns Codex registration. Do not copy Skills, hand-edit gener
 or add duplicate manual MCP entries; these can shadow the version-bound plugin and make rollback
 ambiguous.
 
-If both `codex plugin list --json` and `codex mcp list --json` show the enabled suite and all three
-exact MCP registrations while the installation task lacks their tools, classify the state as
-`task_reload_required`. The installer success summary makes this explicit with
+Treat the inventory as correct only when `codex plugin list --json` reports the exact installed and
+enabled suite version and `codex mcp list --json` reports all three exact bindings. The installer
+also verifies that those bindings resolve to one Codex cache root containing the exact generated
+manifest and Skill trees.
+
+If this exact inventory is present while the installation task lacks the tools, classify the state
+as `task_reload_required`. The installer success summary makes this explicit with
 `new_task_required=true`, `current_task_reload_supported=false`, and
 `repeat_installation_required=false`. Do not reinstall, remove the plugin, add duplicate MCPs, or
 clear caches. Close the installation task and open one new task outside the source checkout.
 
-Restart Codex once only if that fresh task still uses stale discovery state. After the restart,
-repair is appropriate only when the CLI plugin or MCP inventory is incomplete or an exposed status
-tool reports a concrete deployment failure. Tool absence in the original installation task alone is
-never evidence that the installation failed.
+Restart Codex once only if that fresh task still uses stale discovery state. While the exact
+inventory remains complete, missing focused Skills or tools are `plugin_discovery_stale`, not
+permission to reinstall. After the restart, repair is appropriate only when the CLI plugin or MCP
+inventory is incomplete or an exposed status tool reports a concrete deployment failure. Tool
+absence in the original installation task alone is never evidence that the installation failed.
 
 If a fresh task exposes only Core while both inventories remain complete, classify the state as
 `companion_startup_failed`, not `task_reload_required`. Inspect redacted client-side startup logs and
@@ -65,10 +70,13 @@ permissions, symlink, and bounded-content checks before replacement.
 `kegg-mcp` accepts existing K numbers and supported KO annotation evidence; it does not accept raw
 protein FASTA or render pathway graphics. If the user explicitly selected another annotator, wait
 for its supported KO evidence. Otherwise prefer `deepkoala-annotation`; when that Skill or
-`deepkoala-mcp` is unavailable, stop before any core analysis call and ask once for explicit
-permission to install or repair the complete suite. After that action succeeds, open a new Codex
-task and confirm all three Skills and MCP servers before continuing. If permission is declined,
-remain stopped until a selected route supplies supported KO evidence.
+`deepkoala-mcp` is unavailable, stop before any core analysis call and apply the inventory check
+above. A complete exact inventory is a stale-discovery route, not an installation request: restart
+once and retry in a new task, then inspect startup diagnostics if only Core remains. Ask once for
+explicit permission to install or repair only when the inventory is incomplete or a component
+reports a concrete deployment failure. After that action succeeds, open a new Codex task and
+confirm all three Skills and MCP servers before continuing. If permission is declined, remain
+stopped until a selected route supplies supported KO evidence.
 
 If an offline installation lacks a Python artifact, review the failure and either provide the exact
 locked artifact locally or rerun with `--allow-locked-dependency-downloads`. That option authorizes
