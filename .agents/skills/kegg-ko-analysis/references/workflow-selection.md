@@ -224,7 +224,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   `task_reload_required` and resume in one new Codex task outside the source checkout. The fields
   `new_task_required=true`, `current_task_reload_supported=false`, and
   `repeat_installation_required=false` identify a stale tool snapshot; do not request or perform
-  another installation. Only a fresh-task failure with incomplete suite deployment inventory may
+  another installation. In a fresh task, first inspect the plugin and MCP inventories when
+  available. If the exact enabled suite and all three registrations remain present, classify
+  `plugin_discovery_stale`, restart Codex once, and retry in one new task without reinstalling or
+  adding duplicate MCP entries. Only an incomplete inventory or concrete component failure may
   request explicit permission once to install or repair the complete repository suite. If the user
   declines that action, remain stopped until a selected route supplies supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
