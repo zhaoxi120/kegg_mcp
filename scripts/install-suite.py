@@ -1937,6 +1937,8 @@ def _skill_trees_match(generated_root: Path, cached_root: Path) -> bool:
 
 
 def _bounded_tree_file_bytes(path: Path, expected: os.stat_result) -> bytes | None:
+    if expected.st_size > MAX_SKILL_BYTES:
+        return None
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if not hasattr(os, "O_NOFOLLOW"):
         return None
@@ -2002,9 +2004,23 @@ def _codex_plugin_cache_matches(
     cache_root = cache_roots.pop()
     if not cache_root.is_dir():
         return False
+    manifest_path = cache_root / ".codex-plugin" / "plugin.json"
     try:
-        manifest = _read_json_file(cache_root / ".codex-plugin" / "plugin.json")
-    except InstallError:
+        manifest_metadata = manifest_path.lstat()
+    except OSError:
+        return False
+    if (
+        stat.S_ISLNK(manifest_metadata.st_mode)
+        or not stat.S_ISREG(manifest_metadata.st_mode)
+        or manifest_metadata.st_size > MAX_GENERATED_JSON_BYTES
+    ):
+        return False
+    manifest_payload = _bounded_tree_file_bytes(manifest_path, manifest_metadata)
+    if manifest_payload is None:
+        return False
+    try:
+        manifest = json.loads(manifest_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(manifest, dict):
         return False
