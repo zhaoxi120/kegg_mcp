@@ -30,6 +30,8 @@ print(f"{distribution_name} {installed_version}: {module_path}")
 """
 
 _RENDERER_NATIVE_WINDOWS_PROBE = """
+import os
+
 from kegg_render_mcp._platform import (
     UNSUPPORTED_PLATFORM_DIAGNOSTIC,
     UnsupportedRendererPlatformError,
@@ -37,7 +39,7 @@ from kegg_render_mcp._platform import (
 )
 from kegg_render_mcp.config import load_runtime_config
 
-for probe in (validate_renderer_platform, lambda: load_runtime_config({})):
+for probe in (validate_renderer_platform, lambda: load_runtime_config(os.environ)):
     try:
         probe()
     except UnsupportedRendererPlatformError as error:
@@ -179,11 +181,18 @@ def _probe_native_windows(
             environment=environment,
         )
         return
+    renderer_environment = dict(environment)
+    renderer_environment.update(
+        {
+            "KEGG_RENDER_MCP_STATE_ROOT": str(cwd / "renderer-state"),
+            "KEGG_RENDER_MCP_ALLOWED_ROOTS": str(cwd / "renderer-output"),
+        }
+    )
     renderer_console = _venv_console(environment_root, "kegg-render-mcp")
     completed = subprocess.run(
         [str(renderer_console)],
         cwd=cwd,
-        env=environment,
+        env=renderer_environment,
         check=False,
         capture_output=True,
         text=True,
@@ -199,7 +208,7 @@ def _probe_native_windows(
     _run(
         [str(python), "-I", "-c", _RENDERER_NATIVE_WINDOWS_PROBE],
         cwd=cwd,
-        environment=environment,
+        environment=renderer_environment,
     )
 
 
