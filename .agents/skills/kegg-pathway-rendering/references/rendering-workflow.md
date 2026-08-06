@@ -57,7 +57,10 @@ installed a registered suite, classify `task_reload_required`, preserve the orig
 plus graphics formats and target scope, and resume in one new Codex task outside the source
 checkout. The success fields `new_task_required=true`, `current_task_reload_supported=false`, and
 `repeat_installation_required=false` identify a stale tool snapshot; do not request or perform
-another installation. Only a fresh-task failure with incomplete deployment inventory may
+another installation. In a fresh task, inspect the plugin and MCP inventories when available. If
+the exact enabled suite and all three registrations remain present, classify
+`plugin_discovery_stale`, restart Codex once, and retry in one new task without reinstalling or
+adding duplicate MCP entries. Only an incomplete inventory or concrete component failure may
 request explicit permission once to install or repair the complete repository suite.
 If the user explicitly selects another annotator, enter this Skill only after the independent core
 stage produces a compatible handoff from supported KO evidence.
@@ -71,9 +74,9 @@ Skill, or pass a private result identifier between MCP processes.
 If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
 diagnostic and suggested operator action. An unavailable renderer tool immediately after successful
 installation is `task_reload_required`, not evidence that repair is needed. Stop before rendering
-and use one new task; for every other unavailable route, stop before rendering and request explicit
-repair permission only after a fresh-task failure and
-incomplete inventory. The Skill itself does not install software, download assets, or invoke an
+and use one new task. In a fresh task, a complete exact plugin/MCP inventory is
+`plugin_discovery_stale`: restart Codex once and retry in one new task without reinstalling.
+Request explicit repair permission only for incomplete inventory or a concrete renderer failure. The Skill itself does not install software, download assets, or invoke an
 unrelated image tool. Preserve the requested formats and target scope.
 
 Return only renderer-provided `kegg-render://results/{render_id}` and
