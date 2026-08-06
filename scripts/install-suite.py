@@ -1909,28 +1909,71 @@ def _skill_trees_match(generated_root: Path, cached_root: Path) -> bool:
     except InstallError:
         return False
     generated_index = {
-        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata.st_size)
+        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata)
         for relative, path, metadata in generated_entries
     }
     cached_index = {
-        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata.st_size)
+        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata)
         for relative, path, metadata in cached_entries
     }
     if {
-        relative: (is_directory, None if is_directory else size)
-        for relative, (_, is_directory, size) in generated_index.items()
+        relative: (is_directory, None if is_directory else metadata.st_size)
+        for relative, (_, is_directory, metadata) in generated_index.items()
     } != {
-        relative: (is_directory, None if is_directory else size)
-        for relative, (_, is_directory, size) in cached_index.items()
+        relative: (is_directory, None if is_directory else metadata.st_size)
+        for relative, (_, is_directory, metadata) in cached_index.items()
     }:
         return False
-    try:
-        return all(
-            is_directory or path.read_bytes() == cached_index[relative][0].read_bytes()
-            for relative, (path, is_directory, _) in generated_index.items()
+    return all(
+        is_directory
+        or _bounded_tree_files_match(
+            path,
+            metadata,
+            cached_index[relative][0],
+            cached_index[relative][2],
         )
+        for relative, (path, is_directory, metadata) in generated_index.items()
+    )
+
+
+def _bounded_tree_file_bytes(path: Path, expected: os.stat_result) -> bytes | None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if not hasattr(os, "O_NOFOLLOW"):
+        return None
+    try:
+        descriptor = os.open(path, flags | os.O_NOFOLLOW)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+            or opened.st_size != expected.st_size
+        ):
+            os.close(descriptor)
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            payload = stream.read(expected.st_size + 1)
+            closed = os.fstat(stream.fileno())
     except OSError:
+        return None
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if len(payload) != expected.st_size or any(
+        getattr(closed, field) != getattr(opened, field) for field in stable_fields
+    ):
+        return None
+    return payload
+
+
+def _bounded_tree_files_match(
+    generated_path: Path,
+    generated_metadata: os.stat_result,
+    cached_path: Path,
+    cached_metadata: os.stat_result,
+) -> bool:
+    generated = _bounded_tree_file_bytes(generated_path, generated_metadata)
+    if generated is None:
         return False
+    cached = _bounded_tree_file_bytes(cached_path, cached_metadata)
+    return cached is not None and generated == cached
 
 
 def _codex_plugin_cache_matches(
