@@ -455,7 +455,9 @@ class PathwayRenderTarget(FrozenModel):
         ):
             raise ValueError("pathway_id prefix must match reference_namespace")
         if pathway_reference_scope_from_class(self.pathway_class) is not self.reference_scope:
-            raise ValueError("reference_scope conflicts with retained PATHWAY CLASS evidence")
+            raise ValueError(
+                "reference_scope conflicts with retained PATHWAY classification evidence"
+            )
         if any(
             batch.operation is not KeggOperation.LINK for batch in self.reference_link_provenance
         ):

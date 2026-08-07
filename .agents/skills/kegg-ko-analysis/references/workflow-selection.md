@@ -227,9 +227,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   another installation. In a fresh task, first inspect the plugin and MCP inventories when
   available. If the exact enabled suite and all three registrations remain present, classify
   `plugin_discovery_stale`, restart Codex once, and retry in one new task without reinstalling or
-  adding duplicate MCP entries. Only an incomplete inventory or concrete component failure may
-  request explicit permission once to install or repair the complete repository suite. If the user
-  declines that action, remain stopped until a selected route supplies supported KO evidence.
+  adding duplicate MCP entries. Only an incomplete suite deployment inventory or concrete
+  component failure may request explicit permission once to install or repair the complete
+  repository suite. If the user declines that action, remain stopped until a selected route
+  supplies supported KO evidence.
 - A compatible `render_input.json` continues directly with the independent
   `kegg-pathway-rendering` Skill without rerunning core analysis.
 - Statistical enrichment execution, abundance testing, nucleotide assembly, sequence alignment,

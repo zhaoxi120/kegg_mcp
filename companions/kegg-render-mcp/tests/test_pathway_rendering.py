@@ -309,7 +309,7 @@ async def test_renderable_global_target_uses_tagged_polyline_overlays(
             **base.model_dump(mode="python"),
             "pathway_id": "ko01100",
             "pathway_name": "Synthetic overview",
-            "pathway_class": ("Metabolism; Global and overview maps",),
+            "pathway_class": ("ENTRY: Global Pathway",),
             "reference_scope": PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
             "renderability": RenderabilityStatus.RENDERABLE,
             "not_renderable_reason": None,

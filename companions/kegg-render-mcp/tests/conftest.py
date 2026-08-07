@@ -196,7 +196,7 @@ def make_render_input(
             else "Synthetic pathway"
         ),
         pathway_class=(
-            ("Metabolism; Global and overview maps",)
+            ("ENTRY: Global Pathway",)
             if pathway_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
             else ("Metabolism; Synthetic class",)
         ),

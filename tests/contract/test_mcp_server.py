@@ -115,6 +115,22 @@ def _provenance(operation: KeggOperation, marker: str) -> KeggBatchProvenance:
     )
 
 
+def _synthetic_pathway_entry(identifier: str) -> bytes:
+    if identifier == "ko01100":
+        return (
+            "ENTRY       ko01100                    Global    Pathway\n"
+            "NAME        Synthetic metabolic pathways\n"
+            "PATHWAY_MAP ko01100  Synthetic metabolic pathways\n"
+            "///\n"
+        ).encode("ascii")
+    return (
+        f"ENTRY       {identifier}                    Pathway\n"
+        "NAME        Synthetic pathway\n"
+        "CLASS       Metabolism; Carbohydrate metabolism\n"
+        "///\n"
+    ).encode("ascii")
+
+
 class _FakeReferenceClient:
     def __init__(self) -> None:
         self._config = KeggClientConfig(access=PublicAcademicAccess(academic_use_confirmed=True))
@@ -150,15 +166,7 @@ class _FakeReferenceClient:
             )
             marker = "1"
         elif first.database is KeggGetDatabase.PATHWAY:
-            body = b"".join(
-                (
-                    f"ENTRY       {entry.identifier}                    Pathway\n"
-                    "NAME        Synthetic pathway\n"
-                    "CLASS       Metabolism; Carbohydrate metabolism\n"
-                    "///\n"
-                ).encode("ascii")
-                for entry in request.entries
-            )
+            body = b"".join(_synthetic_pathway_entry(entry.identifier) for entry in request.entries)
             marker = f"2-{len(request.entries)}"
         else:
             entries = b"".join(
@@ -1537,6 +1545,38 @@ async def test_high_level_analysis_omitted_output_allocates_render_handoff(
     assert output.parent == output_root
     assert output.name.startswith("kegg-analysis-")
     assert Path(bundle["render_input"]).is_file()
+
+
+@pytest.mark.asyncio
+async def test_map01100_writes_render_handoff_from_current_classless_entry(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "global-map-analysis"
+    server = create_server(_fake_runtime(tmp_path, scope_id="classless-global-map"))
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "ko_text": "K00001",
+                "pathways": [{"pathway_id": "map01100"}],
+                "allow_global_or_overview": True,
+                "output_directory": str(output),
+            },
+        )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    bundle = result.structuredContent["result"]["data"]["output_bundle"]
+    render_input = RenderInput.model_validate_json(
+        Path(bundle["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    target = render_input.pathways[0]
+    assert target.pathway_id == "ko01100"
+    assert target.pathway_class == ("ENTRY: Global Pathway",)
+    assert target.reference_scope.value == "global_or_overview"
+    assert target.renderability.value == "renderable"
 
 
 @pytest.mark.asyncio

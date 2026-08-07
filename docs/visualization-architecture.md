@@ -7,7 +7,8 @@ semantics, graphics security, and visualization-specific rights rules. The cross
 
 External interface review dates: KEGG visualization and rights sources 2026-07-16; inert KGML
 declaration observation 2026-07-21; Codex plugin source 2026-07-23; canonical KO total-map PNG,
-KGML, and line-coordinate behavior 2026-08-06.
+KGML, and line-coordinate behavior 2026-08-06; current broad PATHWAY classification metadata
+2026-08-07.
 
 ## Purpose
 
@@ -96,12 +97,14 @@ Rejected, unclassified, and invalid records remain available in analysis summari
 renderer evidence. Every tuple is deterministically ordered, and total serialized size is bounded.
 No workflow or artifact digest is required.
 
-A pathway render target carries the canonical identifier, namespace, scope, name, class, evidence
-mode, evaluation status, supplied coverage numerator and denominator, detected KOs when complete
-within the render limit, retrieval/cache provenance, calculation version, warnings, and
-renderability state. An explicitly opted-in global/overview target is renderable only when it is a
-canonical KO reference with an evaluated denominator and complete detected evidence. Non-`ko`
-references and unevaluable or incomplete targets remain summary-only or not-renderable.
+A pathway render target carries the canonical identifier, namespace, scope, name, bounded
+classification evidence, evidence mode, evaluation status, supplied coverage numerator and
+denominator, detected KOs when complete within the render limit, retrieval/cache provenance,
+calculation version, warnings, and renderability state. Classification evidence retains `CLASS`
+lines when present; current broad entries that omit `CLASS` use an exact source-tagged `ENTRY`
+Global/Overview subtype. An explicitly opted-in global/overview target is renderable only when it
+is a canonical KO reference with an evaluated denominator and complete detected evidence.
+Non-`ko` references and unevaluable or incomplete targets remain summary-only or not-renderable.
 
 A MODULE render target carries the root and reachable definitions, authoritative AST, reference
 edges and issues, strict and lenient completion, project block coverage, complete bounded block and
