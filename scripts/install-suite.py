@@ -1847,7 +1847,7 @@ def _plugin_is_installed(request: InstallRequest) -> bool:
     )
 
 
-def _plugin_is_ready(request: InstallRequest) -> bool:
+def _plugin_is_ready(request: InstallRequest, expected_version: str) -> bool:
     document = _json_command(
         [str(request.codex), "plugin", "list", "--json"],
         code="codex_plugin_unsupported",
@@ -1866,17 +1866,24 @@ def _plugin_is_ready(request: InstallRequest) -> bool:
         if not isinstance(raw, dict):
             return False
         typed_raw = cast(dict[str, object], raw)
-        return typed_raw.get("installed") is True and typed_raw.get("enabled") is True
+        return (
+            typed_raw.get("installed") is True
+            and typed_raw.get("enabled") is True
+            and typed_raw.get("version") == expected_version
+        )
     return False
 
 
-def _codex_mcp_bindings_match(request: InstallRequest) -> bool:
-    entries = _codex_mcp_entries(request)
-    if not set(SERVER_NAMES).issubset(entries):
+def _codex_mcp_bindings_match(
+    request: InstallRequest,
+    entries: Mapping[str, Mapping[str, object]] | None = None,
+) -> bool:
+    selected_entries = entries if entries is not None else _codex_mcp_entries(request)
+    if not set(SERVER_NAMES).issubset(selected_entries):
         return False
     launcher = request.install_root / "deployment" / "run-installed-mcp.py"
     for server_name in SERVER_NAMES:
-        entry = entries[server_name]
+        entry = selected_entries[server_name]
         transport = entry.get("transport")
         if not isinstance(transport, dict):
             return False
@@ -1893,6 +1900,142 @@ def _codex_mcp_bindings_match(request: InstallRequest) -> bool:
         ):
             return False
     return True
+
+
+def _skill_trees_match(generated_root: Path, cached_root: Path) -> bool:
+    try:
+        generated_entries = _bounded_tree_entries(generated_root)
+        cached_entries = _bounded_tree_entries(cached_root)
+    except InstallError:
+        return False
+    generated_index = {
+        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata)
+        for relative, path, metadata in generated_entries
+    }
+    cached_index = {
+        relative: (path, stat.S_ISDIR(metadata.st_mode), metadata)
+        for relative, path, metadata in cached_entries
+    }
+    if {
+        relative: (is_directory, None if is_directory else metadata.st_size)
+        for relative, (_, is_directory, metadata) in generated_index.items()
+    } != {
+        relative: (is_directory, None if is_directory else metadata.st_size)
+        for relative, (_, is_directory, metadata) in cached_index.items()
+    }:
+        return False
+    return all(
+        is_directory
+        or _bounded_tree_files_match(
+            path,
+            metadata,
+            cached_index[relative][0],
+            cached_index[relative][2],
+        )
+        for relative, (path, is_directory, metadata) in generated_index.items()
+    )
+
+
+def _bounded_tree_file_bytes(path: Path, expected: os.stat_result) -> bytes | None:
+    if expected.st_size > MAX_SKILL_BYTES:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if not hasattr(os, "O_NOFOLLOW"):
+        return None
+    try:
+        descriptor = os.open(path, flags | os.O_NOFOLLOW)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+            or opened.st_size != expected.st_size
+        ):
+            os.close(descriptor)
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            payload = stream.read(expected.st_size + 1)
+            closed = os.fstat(stream.fileno())
+    except OSError:
+        return None
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if len(payload) != expected.st_size or any(
+        getattr(closed, field) != getattr(opened, field) for field in stable_fields
+    ):
+        return None
+    return payload
+
+
+def _bounded_tree_files_match(
+    generated_path: Path,
+    generated_metadata: os.stat_result,
+    cached_path: Path,
+    cached_metadata: os.stat_result,
+) -> bool:
+    generated = _bounded_tree_file_bytes(generated_path, generated_metadata)
+    if generated is None:
+        return False
+    cached = _bounded_tree_file_bytes(cached_path, cached_metadata)
+    return cached is not None and generated == cached
+
+
+def _codex_plugin_cache_matches(
+    generated_plugin_root: Path,
+    expected_version: str,
+    entries: Mapping[str, Mapping[str, object]],
+) -> bool:
+    cache_roots: set[Path] = set()
+    try:
+        for server_name in SERVER_NAMES:
+            entry = entries[server_name]
+            transport = entry.get("transport")
+            if not isinstance(transport, dict):
+                return False
+            cwd = cast(dict[str, object], transport).get("cwd")
+            if not isinstance(cwd, str):
+                return False
+            cwd_path = Path(cwd)
+            if not cwd_path.is_absolute():
+                return False
+            cache_roots.add(cwd_path.resolve(strict=True))
+    except (KeyError, OSError):
+        return False
+    if len(cache_roots) != 1:
+        return False
+    cache_root = cache_roots.pop()
+    if not cache_root.is_dir():
+        return False
+    manifest_path = cache_root / ".codex-plugin" / "plugin.json"
+    try:
+        manifest_metadata = manifest_path.lstat()
+    except OSError:
+        return False
+    if (
+        stat.S_ISLNK(manifest_metadata.st_mode)
+        or not stat.S_ISREG(manifest_metadata.st_mode)
+        or manifest_metadata.st_size > MAX_GENERATED_JSON_BYTES
+    ):
+        return False
+    manifest_payload = _bounded_tree_file_bytes(manifest_path, manifest_metadata)
+    if manifest_payload is None:
+        return False
+    try:
+        manifest = json.loads(manifest_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    typed_manifest = cast(dict[str, object], manifest)
+    if (
+        typed_manifest.get("name") != PLUGIN_NAME
+        or typed_manifest.get("version") != expected_version
+        or typed_manifest.get("skills") != "./skills/"
+        or typed_manifest.get("mcpServers") != "./.mcp.json"
+    ):
+        return False
+    return _skill_trees_match(
+        generated_plugin_root / "skills",
+        cache_root / "skills",
+    )
 
 
 def _register_plugin(
@@ -1919,10 +2062,22 @@ def _register_plugin(
         _error("plugin_registration_failed", "the generated Codex plugin could not be installed")
     journal.plugin_added = True
 
-    if not _plugin_is_ready(request):
+    generated_plugin_root = marketplace_root / "plugins" / PLUGIN_NAME
+    manifest = _read_json_file(generated_plugin_root / ".codex-plugin" / "plugin.json")
+    if not isinstance(manifest, dict):
+        _error("plugin_verification_failed", "Codex did not cache the expected suite plugin")
+    expected_version = cast(dict[str, object], manifest).get("version")
+    if not isinstance(expected_version, str) or not _plugin_is_ready(request, expected_version):
         _error("plugin_verification_failed", "Codex did not report an enabled suite plugin")
-    if not _codex_mcp_bindings_match(request):
+    entries = _codex_mcp_entries(request)
+    if not _codex_mcp_bindings_match(request, entries):
         _error("plugin_verification_failed", "Codex did not expose the exact suite MCP bindings")
+    if not _codex_plugin_cache_matches(
+        generated_plugin_root,
+        expected_version,
+        entries,
+    ):
+        _error("plugin_verification_failed", "Codex did not cache the exact suite Skill bundle")
 
 
 def _rollback_codex(request: InstallRequest, journal: RegistrationJournal) -> bool:

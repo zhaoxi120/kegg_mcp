@@ -144,6 +144,8 @@ Validate `scripts/install-suite.py` independently from the three Python distribu
       private FASTA for one real `multi=true` run; verify model and multi provenance without adding
       inputs, profiles, or results to the repository or release artifacts;
 - [ ] verify generated launchers use validated absolute direct commands without a shell; and
+- [ ] require Codex to report the exact generated plugin version and verify that every MCP binding
+      resolves to one cache root containing a byte-identical copy of all three Skill trees; and
 - [ ] verify rollback removes only state proven to belong to the failed transaction.
 
 No suite path may acquire Python, `uv`, Codex, later model weights, KOfam profiles, KEGG data, or

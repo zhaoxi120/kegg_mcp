@@ -394,7 +394,7 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
         reference_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
         pathway_id="ko01100",
         pathway_name="Synthetic metabolic pathways",
-        pathway_class=("Metabolism; Global and overview maps",),
+        pathway_class=("ENTRY: Global Pathway",),
         reference_kos=("K00001", "K00002", "K00003"),
         relationship_row_count=3,
         link_provenance=(_provenance(KeggOperation.LINK),),
@@ -421,7 +421,7 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
     payload["pathways"][0]["reference_scope"] = PathwayReferenceScope.STANDARD
-    with pytest.raises(ValidationError, match="conflicts with retained PATHWAY CLASS"):
+    with pytest.raises(ValidationError, match="conflicts with retained PATHWAY classification"):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
 

@@ -9,6 +9,9 @@
 - missing declared MCP dependency or required tool in the task immediately after a successful suite
   installation: classify `task_reload_required`, do not install again, and resume the preserved
   request in one new Codex task outside the source checkout.
+- missing declared MCP dependency in a fresh task while the exact enabled suite plugin and all
+  three MCP registrations remain present: classify `plugin_discovery_stale`, restart Codex once,
+  and retry in one new task. Do not reinstall or add duplicate MCP registrations.
 - missing declared MCP dependency in a fresh task with incomplete Codex plugin or MCP inventory:
   stop before annotation, report an incomplete suite deployment, request explicit permission once
   to install or repair the complete repository suite, and resume in a new task after discovery.

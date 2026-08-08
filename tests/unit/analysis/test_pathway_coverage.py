@@ -183,12 +183,14 @@ def _get_result(
     *,
     pathway_name: str = "Glycolysis / Gluconeogenesis",
     pathway_class: str = "Metabolism; Carbohydrate metabolism",
+    entry_type: str | None = None,
     include_class: bool = True,
     missing: bool = False,
 ) -> GetResult:
     entry = KeggEntryRef(database=KeggGetDatabase.PATHWAY, identifier=pathway_id)
+    entry_label = f"{entry_type}    Pathway" if entry_type is not None else "Pathway"
     body = (
-        f"ENTRY       {pathway_id}                    Pathway\n"
+        f"ENTRY       {pathway_id}                    {entry_label}\n"
         f"NAME        {pathway_name}\n"
         + (f"CLASS       {pathway_class}\n" if include_class else "")
         + "///\n"
@@ -489,7 +491,7 @@ def test_scope_is_explicit_and_never_guessed_from_pathway_number() -> None:
     assert PathwayCoverageWarningCode.GLOBAL_OR_OVERVIEW_REFERENCE in _warning_codes(broad)
 
 
-def test_direct_reference_requires_name_and_class_scope_evidence() -> None:
+def test_direct_reference_requires_name_and_consistent_classification_evidence() -> None:
     valid = _reference()
 
     with pytest.raises(ValidationError):
@@ -544,6 +546,44 @@ def test_builder_uses_exact_link_rows_and_get_class_metadata() -> None:
     )
     assert reference.link_provenance == link.batches
     assert reference.metadata_provenance == get.batches
+
+
+@pytest.mark.parametrize(
+    ("pathway_id", "entry_type", "expected_evidence"),
+    (
+        ("ko01100", "Global", "ENTRY: Global Pathway"),
+        ("ko01200", "Overview", "ENTRY: Overview Pathway"),
+    ),
+)
+def test_builder_uses_broad_entry_classification_when_current_class_is_absent(
+    pathway_id: str,
+    entry_type: str,
+    expected_evidence: str,
+) -> None:
+    reference = build_pathway_reference(
+        _link_result(pathway_id, ("ko:K00001", "ko:K00002")),
+        _get_result(
+            pathway_id,
+            pathway_name="Synthetic broad pathway",
+            entry_type=entry_type,
+            include_class=False,
+        ),
+        PathwayReferenceNamespace.KO,
+    )
+
+    assert reference.pathway_class == (expected_evidence,)
+    assert reference.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+
+    with pytest.raises(KeggMcpError) as missing_opt_in:
+        evaluate_pathway_coverage(reference, _dataset())
+    _assert_error_code(missing_opt_in, ErrorCode.ANALYSIS_CONFIGURATION_INVALID)
+
+    evaluated = evaluate_pathway_coverage(
+        reference,
+        _dataset(),
+        PathwayCoverageParameters(allow_global_or_overview=True),
+    )
+    assert PathwayCoverageWarningCode.GLOBAL_OR_OVERVIEW_REFERENCE in _warning_codes(evaluated)
 
 
 def test_builder_accepts_an_empty_link_result_without_fabricating_coverage() -> None:
@@ -618,6 +658,22 @@ def test_builder_fails_closed_for_missing_or_ambiguous_get_metadata() -> None:
             PathwayReferenceNamespace.KO,
         )
     _assert_error_code(missing_class, ErrorCode.KEGG_PARSE_FAILED)
+
+    with pytest.raises(KeggMcpError) as unsupported_entry_type:
+        build_pathway_reference(
+            _link_result("ko00010", ()),
+            _get_result("ko00010", entry_type="Unsupported", include_class=False),
+            PathwayReferenceNamespace.KO,
+        )
+    _assert_error_code(unsupported_entry_type, ErrorCode.KEGG_PARSE_FAILED)
+
+    with pytest.raises(KeggMcpError) as conflicting_classification:
+        build_pathway_reference(
+            _link_result("ko01100", ()),
+            _get_result("ko01100", entry_type="Global"),
+            PathwayReferenceNamespace.KO,
+        )
+    _assert_error_code(conflicting_classification, ErrorCode.KEGG_PARSE_FAILED)
 
 
 @pytest.mark.parametrize(

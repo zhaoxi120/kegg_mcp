@@ -1376,6 +1376,151 @@ def test_codex_verification_requires_exact_transports_not_only_matching_names(
     assert INSTALLER_MODULE._codex_mcp_bindings_match(request) is False
 
 
+def test_codex_plugin_readiness_requires_the_exact_generated_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, snapshot, _, _ = _suite_install_inputs(tmp_path)
+    expected_version = snapshot.versions["kegg-mcp"]
+    installed = {
+        "pluginId": f"kegg-mcp@{request.marketplace_name}",
+        "name": "kegg-mcp",
+        "marketplaceName": request.marketplace_name,
+        "version": expected_version,
+        "installed": True,
+        "enabled": True,
+    }
+
+    def json_command(*_: object, **__: object) -> dict[str, object]:
+        return {"installed": [installed]}
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_json_command", json_command)
+
+    assert INSTALLER_MODULE._plugin_is_ready(request, expected_version) is True
+    installed["version"] = "0.0.0"
+    assert INSTALLER_MODULE._plugin_is_ready(request, expected_version) is False
+
+
+def test_codex_plugin_cache_requires_the_exact_generated_skill_bundle(tmp_path: Path) -> None:
+    _, snapshot, _, plugin_root, _, _ = _materialize_suite_artifacts(tmp_path)
+    cached_root = tmp_path / "codex-cache" / snapshot.versions["kegg-mcp"]
+    shutil.copytree(plugin_root, cached_root)
+    entries = {
+        server_name: {"transport": {"cwd": str(cached_root)}} for server_name in SERVER_NAMES
+    }
+
+    assert (
+        INSTALLER_MODULE._codex_plugin_cache_matches(
+            plugin_root,
+            snapshot.versions["kegg-mcp"],
+            entries,
+        )
+        is True
+    )
+
+    cached_manifest = cached_root / ".codex-plugin" / "plugin.json"
+    cached_manifest.write_text("{}\n", encoding="utf-8")
+    assert (
+        INSTALLER_MODULE._codex_plugin_cache_matches(
+            plugin_root,
+            snapshot.versions["kegg-mcp"],
+            entries,
+        )
+        is False
+    )
+    shutil.copy2(plugin_root / ".codex-plugin" / "plugin.json", cached_manifest)
+
+    cached_skill = cached_root / "skills" / "kegg-ko-analysis" / "SKILL.md"
+    cached_skill.write_text(cached_skill.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert (
+        INSTALLER_MODULE._codex_plugin_cache_matches(
+            plugin_root,
+            snapshot.versions["kegg-mcp"],
+            entries,
+        )
+        is False
+    )
+
+
+def test_plugin_registration_verifies_version_bindings_and_cached_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, snapshot, _, plugin_root, launcher, _ = _materialize_suite_artifacts(tmp_path)
+    marketplace_root = plugin_root.parents[1]
+    cached_root = tmp_path / "codex-cache" / snapshot.versions["kegg-mcp"]
+    shutil.copytree(plugin_root, cached_root)
+    entries: dict[str, dict[str, object]] = {}
+    for server_name in SERVER_NAMES:
+        runtime = INSTALLER_MODULE.RUNTIME_COMMANDS[server_name][0]
+        entries[server_name] = {
+            "name": server_name,
+            "enabled": True,
+            "transport": {
+                "type": "stdio",
+                "command": str(INSTALLER_MODULE._runtime_python(request.install_root, runtime)),
+                "args": ["-I", str(launcher), server_name],
+                "env": None,
+                "env_vars": [],
+                "cwd": str(cached_root),
+            },
+        }
+    installed = {
+        "pluginId": f"kegg-mcp@{request.marketplace_name}",
+        "name": "kegg-mcp",
+        "marketplaceName": request.marketplace_name,
+        "version": snapshot.versions["kegg-mcp"],
+        "installed": True,
+        "enabled": True,
+    }
+    commands: list[tuple[str, ...]] = []
+
+    def run_command(
+        argv: tuple[str, ...] | list[str],
+        **_: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command = tuple(argv)
+        commands.append(command)
+        return subprocess.CompletedProcess(list(command), 0, stdout="{}", stderr="")
+
+    def json_command(*_: object, **__: object) -> dict[str, object]:
+        return {"installed": [installed]}
+
+    def mcp_entries(_: Any) -> dict[str, dict[str, object]]:
+        return entries
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_run_command", run_command)
+    monkeypatch.setattr(INSTALLER_MODULE, "_json_command", json_command)
+    monkeypatch.setattr(INSTALLER_MODULE, "_codex_mcp_entries", mcp_entries)
+    journal = INSTALLER_MODULE.RegistrationJournal()
+
+    INSTALLER_MODULE._register_plugin(request, marketplace_root, journal)
+
+    assert commands == [
+        (
+            str(request.codex),
+            "plugin",
+            "marketplace",
+            "add",
+            str(marketplace_root),
+            "--json",
+        ),
+        (
+            str(request.codex),
+            "plugin",
+            "add",
+            f"kegg-mcp@{request.marketplace_name}",
+            "--json",
+        ),
+    ]
+    assert journal == INSTALLER_MODULE.RegistrationJournal(
+        marketplace_attempted=True,
+        marketplace_added=True,
+        plugin_attempted=True,
+        plugin_added=True,
+    )
+
+
 def test_successful_transaction_publishes_complete_generated_suite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

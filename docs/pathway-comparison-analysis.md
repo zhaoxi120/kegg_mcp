@@ -18,9 +18,12 @@ of the KEGG client layer; persistence and presentation belong to the service and
 - one `GetResult` for exactly the same PATHWAY identifier.
 
 The LINK rows define candidate denominator entries. The GET flat file supplies the retained
-top-level `NAME` and `CLASS` metadata. The builder requires the LINK source, GET request, parsed
-entry identifier, operation-specific provenance, and requested namespace to agree. It rejects a
-mixed or mismatched pair instead of guessing which response is authoritative.
+top-level `NAME` and classification metadata. The builder normally retains `CLASS` value lines.
+When `CLASS` is absent, it accepts only an exact `Global Pathway` or `Overview Pathway` subtype in
+the top-level `ENTRY` field and records that fallback with an `ENTRY:` source prefix. The builder
+requires the LINK source, GET request, parsed entry identifier, operation-specific provenance, and
+requested namespace to agree. It rejects a mixed or mismatched pair instead of guessing which
+response is authoritative.
 
 Canonical `ko:KNNNNN` LINK targets enter the denominator. Repeated relationship rows are
 deduplicated and counted. Invalid or non-KO targets are retained as bounded, typed exclusions; they
@@ -53,12 +56,14 @@ themselves.
 Pooled, MAG, mixed, and unknown analysis units must use a `ko` or `map` reference. This prevents a
 community KO union or other incompatible unit from being presented as one organism pathway.
 
-### Scope from PATHWAY CLASS
+### Scope from PATHWAY classification metadata
 
-Reference scope is derived from retained top-level `CLASS` text, not from a pathway-number range.
-A CLASS line containing `Global and overview maps` produces
-`PathwayReferenceScope.GLOBAL_OR_OVERVIEW`; other retained CLASS evidence produces `STANDARD`.
-Evaluating a global or overview reference requires
+Reference scope is derived from retained top-level metadata, not from a pathway-number range. A
+`CLASS` line containing `Global and overview maps`, or the exact source-tagged `ENTRY: Global
+Pathway` / `ENTRY: Overview Pathway` fallback, produces
+`PathwayReferenceScope.GLOBAL_OR_OVERVIEW`; other retained `CLASS` evidence produces `STANDARD`.
+A regular pathway without `CLASS`, an unknown `ENTRY` subtype, or conflicting `CLASS` and `ENTRY`
+metadata fails closed. Evaluating a global or overview reference requires
 `PathwayCoverageParameters.allow_global_or_overview=True`. The opt-in is serialized and the result
 always carries a broad-reference warning. This keeps a percentage over a large heterogeneous map
 from being treated as an ordinary default analysis.
@@ -98,8 +103,8 @@ caller can recompute the set calculation from the retained immutable dataset and
 exclusion, duplicate, and relationship-row counts. Detected KOs, missing KOs, and excluded
 relationship entries are bounded previews with explicit truncation flags and warnings.
 `PathwayCoverageLimits` also bounds input records, input KOs, reference KOs, relationship rows,
-exclusions, dataset sources, provenance batches, and retained CLASS lines before expensive view or
-result construction.
+exclusions, dataset sources, provenance batches, and retained classification-evidence lines before
+expensive view or result construction.
 
 LINK denominator provenance and GET metadata provenance remain separate. Each retained
 `KeggBatchProvenance` includes the operation, readable request key, access and endpoint class,
@@ -243,12 +248,15 @@ layer. `annotation_dataset`, `first_dataset`, and `second_dataset` are immutable
 
 ## Primary sources
 
-The namespace, LINK/GET, flat-file CLASS, and interpretation contract was checked against these
-primary KEGG pages on 2026-07-14:
+The namespace, LINK/GET, flat-file classification, and interpretation contract was checked against
+these primary KEGG pages on 2026-07-14. The classless broad-entry fallback was checked again on
+2026-08-07 against the current `ko01100` and `ko01200` flat files:
 
 - [KEGG API manual](https://www.kegg.jp/kegg/rest/keggapi.html), page updated 2026-06-17;
-- [KEGG PATHWAY Database](https://www.kegg.jp/kegg/pathway.html); and
+- [KEGG PATHWAY Database](https://www.kegg.jp/kegg/pathway.html);
 - [KEGG database entry format](https://www.kegg.jp/kegg/docs/dbentry.html), page updated
-  2026-06-12.
+  2026-06-12;
+- [KEGG ko01100 entry](https://rest.kegg.jp/get/ko01100); and
+- [KEGG ko01200 entry](https://rest.kegg.jp/get/ko01200).
 
 The deterministic comparison model, bounds, and warning language are project-defined contracts.

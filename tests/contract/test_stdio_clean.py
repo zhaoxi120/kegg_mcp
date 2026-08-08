@@ -21,6 +21,12 @@ def test_server_instructions_fail_closed_for_fasta_only_workflows() -> None:
     assert "as the first FASTA annotation route" in SERVER_INSTRUCTIONS
     assert "report an incomplete suite deployment" in SERVER_INSTRUCTIONS
     assert "request explicit permission once to install or repair" in SERVER_INSTRUCTIONS
+    inventory = SERVER_INSTRUCTIONS.index("Codex plugin and MCP inventories")
+    repair = SERVER_INSTRUCTIONS.index("request explicit permission once to install or repair")
+    assert inventory < repair
+    assert "tool snapshot alone" in SERVER_INSTRUCTIONS
+    assert "is not reinstalled" in SERVER_INSTRUCTIONS
+    assert "restart Codex once and retry in a new task" in SERVER_INSTRUCTIONS
     assert "in a new Codex task" in SERVER_INSTRUCTIONS
     annotation = SERVER_INSTRUCTIONS.index("DeepKOALA annotation")
     analysis = SERVER_INSTRUCTIONS.index("core KO analysis")

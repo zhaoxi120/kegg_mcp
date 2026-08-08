@@ -42,8 +42,14 @@ _MAX_PROVENANCE_BATCHES = 64
 _MAX_DATASET_SOURCES = 128
 _MAX_PATHWAY_CLASS_LINES = 32
 _KO_LINK_TARGET = re.compile(r"^ko:(K[0-9]{5})$")
-# KEGG PATHWAY CLASS wording confirmed from public flat files on 2026-07-14.
+# KEGG PATHWAY classification metadata confirmed from public flat files on 2026-08-07.
+# Current Global and Overview entries such as ko01100 and ko01200 omit CLASS and retain
+# their broad classification only in the ENTRY subtype.
 _BROAD_PATHWAY_CLASS = "Global and overview maps"
+_BROAD_PATHWAY_ENTRY_TYPES = frozenset({"Global", "Overview"})
+_BROAD_PATHWAY_ENTRY_EVIDENCE = frozenset(
+    f"ENTRY: {entry_type} Pathway" for entry_type in _BROAD_PATHWAY_ENTRY_TYPES
+)
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
@@ -284,7 +290,9 @@ class PathwayKoReference(FrozenModel):
         if any(item.operation is not KeggOperation.GET for item in self.metadata_provenance):
             raise ValueError("pathway metadata requires only GET provenance")
         if pathway_reference_scope_from_class(self.pathway_class) is not self.reference_scope:
-            raise ValueError("reference_scope conflicts with retained PATHWAY CLASS evidence")
+            raise ValueError(
+                "reference_scope conflicts with retained PATHWAY classification evidence"
+            )
         return self
 
 
@@ -373,7 +381,9 @@ class PathwayCoverageResult(FrozenModel):
             self.reference_kegg_organism_code,
         )
         if pathway_reference_scope_from_class(self.pathway_class) is not self.reference_scope:
-            raise ValueError("reference_scope conflicts with retained PATHWAY CLASS evidence")
+            raise ValueError(
+                "reference_scope conflicts with retained PATHWAY classification evidence"
+            )
         if (
             self.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
             and not self.parameters.allow_global_or_overview
@@ -849,7 +859,37 @@ def _extract_pathway_metadata(
         )
     entry = document.entries[0]
     name_lines = _required_top_level_field(entry, "NAME", pathway_id)
-    class_lines = _required_top_level_field(entry, "CLASS", pathway_id)
+    class_fields = _top_level_fields(entry, "CLASS")
+    if len(class_fields) > 1:
+        _fail_parse(
+            "The PATHWAY flat file must contain at most one top-level CLASS field.",
+            pathway_id,
+        )
+    entry_scope_evidence = _broad_entry_scope_evidence(entry, pathway_id)
+    if class_fields:
+        class_lines = class_fields[0].value_lines
+        if not class_lines:
+            _fail_parse(
+                "The PATHWAY flat file contains an empty top-level CLASS field.",
+                pathway_id,
+            )
+        if (
+            entry_scope_evidence is not None
+            and pathway_reference_scope_from_class(class_lines)
+            is not PathwayReferenceScope.GLOBAL_OR_OVERVIEW
+        ):
+            _fail_parse(
+                "The PATHWAY CLASS and ENTRY classification metadata conflict.",
+                pathway_id,
+            )
+    else:
+        if entry_scope_evidence is None:
+            _fail_parse(
+                "A PATHWAY flat file without CLASS must identify a Global or Overview "
+                "Pathway in ENTRY.",
+                pathway_id,
+            )
+        class_lines = (entry_scope_evidence,)
     pathway_name = " ".join(name_lines)
     if len(pathway_name) > 1_000:
         _fail_limit("pathway_name_characters", len(pathway_name), "maximum", 1_000)
@@ -875,15 +915,43 @@ def _required_top_level_field(
     field_name: str,
     pathway_id: str,
 ) -> tuple[str, ...]:
-    fields: tuple[KeggFlatFileField, ...] = tuple(
-        field for field in entry.fields if field.indent_columns == 0 and field.name == field_name
-    )
+    fields = _top_level_fields(entry, field_name)
     if len(fields) != 1:
         _fail_parse(
             f"The PATHWAY flat file must contain exactly one top-level {field_name} field.",
             pathway_id,
         )
     return fields[0].value_lines
+
+
+def _top_level_fields(
+    entry: KeggFlatFileEntry,
+    field_name: str,
+) -> tuple[KeggFlatFileField, ...]:
+    return tuple(
+        field for field in entry.fields if field.indent_columns == 0 and field.name == field_name
+    )
+
+
+def _broad_entry_scope_evidence(
+    entry: KeggFlatFileEntry,
+    pathway_id: str,
+) -> str | None:
+    entry_lines = _required_top_level_field(entry, "ENTRY", pathway_id)
+    if len(entry_lines) != 1:
+        _fail_parse(
+            "The PATHWAY ENTRY classification must occupy exactly one line.",
+            pathway_id,
+        )
+    tokens = entry_lines[0].split()
+    if (
+        len(tokens) == 3
+        and tokens[0] == pathway_id
+        and tokens[1] in _BROAD_PATHWAY_ENTRY_TYPES
+        and tokens[2] == "Pathway"
+    ):
+        return f"ENTRY: {tokens[1]} Pathway"
+    return None
 
 
 def _validate_evaluation_request(
@@ -1017,8 +1085,11 @@ def _namespace_from_pathway_id(
 def pathway_reference_scope_from_class(
     pathway_class: tuple[str, ...],
 ) -> PathwayReferenceScope:
-    """Derive the reference scope from retained KEGG PATHWAY CLASS evidence."""
-    if any(_BROAD_PATHWAY_CLASS in line for line in pathway_class):
+    """Derive scope from retained KEGG PATHWAY classification evidence."""
+    if any(
+        _BROAD_PATHWAY_CLASS in line or line in _BROAD_PATHWAY_ENTRY_EVIDENCE
+        for line in pathway_class
+    ):
         return PathwayReferenceScope.GLOBAL_OR_OVERVIEW
     return PathwayReferenceScope.STANDARD
 
