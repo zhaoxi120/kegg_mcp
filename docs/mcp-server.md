@@ -502,9 +502,10 @@ parameters, pathway coverage limits, and report limits. Every high-level analysi
 `normalized_annotations.tsv` and `protein_ko_mapping.tsv`; obtain those files from the separate
 normalization workflow.
 
-The three analysis tools use separate concise output models. Their shared `summary` contains only
-record/status counts, selected unique-KO count, aggregate logical/network/cache request counts,
-response bytes, warnings, and interpretation caveats. `analyze_modules` returns MODULE previews
+The three analysis tools use separate concise output models. Their shared `summary` distinguishes
+source `input_rows` and `skipped_rows` from expanded `assignment_count` and per-status assignment
+counts. It also contains the selected unique-KO count, aggregate logical/network/cache request
+counts, response bytes, warnings, and interpretation caveats. `analyze_modules` returns MODULE previews
 only, `analyze_pathways` returns pathway previews only, and `analyze_ko_annotations` may return both
 plus bounded `automatic_module_selection` and `automatic_pathway_selection` summaries and
 output-bundle metadata. Direct responses do not expose import structures, annotation or KEGG batch

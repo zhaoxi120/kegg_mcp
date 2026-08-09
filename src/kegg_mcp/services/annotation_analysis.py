@@ -233,7 +233,14 @@ def analyze_annotation_targets(
     ranking: PathwayRankingResult | None = None
     ranking_execution: PathwayRankingExecution | None = None
     selected_pathway_rows: tuple[PathwayRankingRow, ...] = ()
-    if pathway_selection is None and not module_ids and not pathways:
+    accepted_ko_ids_empty = not evidence.accepted_ko_ids
+    default_automatic_selection = pathway_selection is None and not module_ids and not pathways
+    automatic_selection_skipped = accepted_ko_ids_empty and (
+        pathway_selection is not None or default_automatic_selection
+    )
+    if accepted_ko_ids_empty:
+        pathway_selection = None
+    elif default_automatic_selection:
         module_selection = ModuleSelection(top_n=5)
         pathway_selection = PathwaySelection(top_n=5)
     if module_selection is not None:
@@ -318,12 +325,16 @@ def analyze_annotation_targets(
         if module_ids
         else ()
     )
-    references = load_pathway_references(
-        budgeted_client,
-        pathways,
-        options=effective_options,
-        limits=effective_reference_limits,
-        pathway_limits=effective_pathway_limits,
+    references = (
+        load_pathway_references(
+            budgeted_client,
+            pathways,
+            options=effective_options,
+            limits=effective_reference_limits,
+            pathway_limits=effective_pathway_limits,
+        )
+        if pathways
+        else ()
     )
     stage_elapsed[ExecutionStage.REFERENCE_LOADING] = _elapsed_ms(started)
 
@@ -476,10 +487,21 @@ def analyze_annotation_targets(
     stage_elapsed[ExecutionStage.BUNDLE_WRITE] = _elapsed_ms(started)
     artifacts = tuple(artifact_metadata)
     caveats = ["K-number assignments are annotation evidence, not experimental validation."]
-    caveats.append(
+    compact_view_caveat = (
         "The analysis used a compact unique accepted-KO view; record-level evidence, "
         "protein-to-KO mappings, and duplicate/conflict accounting were not retained."
     )
+    if automatic_selection_skipped:
+        compact_view_caveat += (
+            " No accepted K numbers were selected, so automatic MODULE and pathway target "
+            "selection was skipped."
+        )
+    if accepted_ko_ids_empty and (module_ids or pathways):
+        compact_view_caveat += (
+            " Any explicit MODULE or pathway targets were evaluated against the empty "
+            "accepted-KO set."
+        )
+    caveats.append(compact_view_caveat)
     if modules:
         caveats.append(
             "Exact MODULE completion and project-defined required-block coverage are separate."

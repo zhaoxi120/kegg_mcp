@@ -12,33 +12,29 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from kegg_mcp.mcp.server import SERVER_INSTRUCTIONS
 
 
-def test_server_instructions_fail_closed_for_fasta_only_workflows() -> None:
-    assert "not raw protein FASTA" in SERVER_INSTRUCTIONS
-    explicit_alternative = SERVER_INSTRUCTIONS.index("explicitly selected another annotator")
-    preferred_route = SERVER_INSTRUCTIONS.index("prefer the installed deepkoala-annotation Skill")
-    assert explicit_alternative < preferred_route
-    assert "prefer the installed deepkoala-annotation Skill" in SERVER_INSTRUCTIONS
-    assert "as the first FASTA annotation route" in SERVER_INSTRUCTIONS
-    assert "report an incomplete suite deployment" in SERVER_INSTRUCTIONS
-    assert "request explicit permission once to install or repair" in SERVER_INSTRUCTIONS
-    inventory = SERVER_INSTRUCTIONS.index("Codex plugin and MCP inventories")
-    repair = SERVER_INSTRUCTIONS.index("request explicit permission once to install or repair")
-    assert inventory < repair
-    assert "tool snapshot alone" in SERVER_INSTRUCTIONS
-    assert "is not reinstalled" in SERVER_INSTRUCTIONS
-    assert "restart Codex once and retry in a new task" in SERVER_INSTRUCTIONS
-    assert "in a new Codex task" in SERVER_INSTRUCTIONS
-    annotation = SERVER_INSTRUCTIONS.index("DeepKOALA annotation")
-    analysis = SERVER_INSTRUCTIONS.index("core KO analysis")
-    rendering = SERVER_INSTRUCTIONS.index("rendering when graphics were requested")
-    assert annotation < analysis < rendering
-    assert "remain stopped until a user-selected route supplies" in SERVER_INSTRUCTIONS
-    assert "kegg-pathway-rendering Skill" in SERVER_INSTRUCTIONS
-    assert "kegg-render-mcp renderer" in SERVER_INSTRUCTIONS
-    assert "PubMed identifiers explicitly listed in KEGG" in SERVER_INSTRUCTIONS
-    assert "KEGG Mapper or KEGG Syntax input bundles" in SERVER_INSTRUCTIONS
-    assert "enrichment" not in SERVER_INSTRUCTIONS
-    assert "upload files" in SERVER_INSTRUCTIONS
+def test_server_instructions_are_concise_and_core_scoped() -> None:
+    assert 150 <= len(SERVER_INSTRUCTIONS.split()) <= 250
+    for required in (
+        "Raw protein FASTA is not a Core analysis input",
+        "sorted unique accepted-KO view",
+        "KEGG-listed PubMed identifiers",
+        "KEGG Mapper or KEGG Syntax input bundles",
+        "normalize_ko_annotations",
+        "Result identifiers are scoped to the current stdio process",
+        "does not establish presence, activity, flux, phenotype, or enrichment",
+        "never executes annotators",
+        "or renders graphics",
+    ):
+        assert required in SERVER_INSTRUCTIONS
+    for orchestration_detail in (
+        "install or repair",
+        "plugin inventories",
+        "restart Codex",
+        "new Codex task",
+        "deepkoala-annotation Skill",
+        "kegg-render-mcp",
+    ):
+        assert orchestration_detail not in SERVER_INSTRUCTIONS
 
 
 @pytest.mark.asyncio

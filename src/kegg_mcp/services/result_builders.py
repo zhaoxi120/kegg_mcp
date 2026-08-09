@@ -223,11 +223,13 @@ def _build_analysis_summary(
     )
     effective_warning_count = len(warnings) if warning_count is None else warning_count
     return AnalysisResultSummary(
-        input_records=evidence.input_rows,
-        accepted_records=status_counts[NormalizedStatus.ACCEPTED],
-        rejected_records=status_counts[NormalizedStatus.REJECTED],
-        unclassified_records=status_counts[NormalizedStatus.UNCLASSIFIED],
-        invalid_records=status_counts[NormalizedStatus.INVALID],
+        input_rows=evidence.input_rows,
+        skipped_rows=evidence.skipped_rows,
+        assignment_count=evidence.assignment_count,
+        accepted_assignments=status_counts[NormalizedStatus.ACCEPTED],
+        rejected_assignments=status_counts[NormalizedStatus.REJECTED],
+        unclassified_assignments=status_counts[NormalizedStatus.UNCLASSIFIED],
+        invalid_assignments=status_counts[NormalizedStatus.INVALID],
         selected_unique_ko_count=len(selected_ko_ids),
         kegg_request_count=sum(item.request_count for item in metrics),
         network_request_count=sum(item.network_request_count for item in metrics),

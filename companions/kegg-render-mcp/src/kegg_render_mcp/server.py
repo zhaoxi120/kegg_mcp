@@ -60,6 +60,7 @@ _RESULT_RE = re.compile(rf"kegg-render://results/({RENDER_ID_PATTERN})\Z")
 _ARTIFACT_RE = re.compile(
     rf"kegg-render://results/({RENDER_ID_PATTERN})/({ARTIFACT_NAME_PATTERN})\Z"
 )
+_RESOURCE_NOT_FOUND = -32002
 _M = TypeVar("_M", bound=BaseModel)
 
 
@@ -446,11 +447,23 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
                     content = blob.content
                 return [ReadResourceContents(content=content, mime_type=blob.mime_type)]
             raise ValueError("unknown resource")
-        except (RenderMcpError, UnicodeDecodeError, ValueError):
+        except RenderMcpError as error:
+            raise McpError(
+                types.ErrorData(
+                    code=(
+                        _RESOURCE_NOT_FOUND
+                        if error.detail.code is ErrorCode.RESULT_NOT_FOUND
+                        else types.INTERNAL_ERROR
+                    ),
+                    message=f"{error.detail.code.value}: {error.detail.message}",
+                    data=error.detail.model_dump(mode="json"),
+                )
+            ) from None
+        except (UnicodeDecodeError, ValueError):
             raise McpError(
                 types.ErrorData(
                     code=types.INVALID_PARAMS,
-                    message="RESULT_NOT_FOUND: unknown or unavailable scoped renderer resource",
+                    message="INVALID_RESOURCE_URI: unknown or non-canonical resource URI",
                 )
             ) from None
 

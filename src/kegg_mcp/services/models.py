@@ -237,11 +237,13 @@ class DatasetSource(FrozenModel):
 class AnalysisResultSummary(FrozenModel):
     """Small shared counts and messages returned by every analysis tool."""
 
-    input_records: int = Field(strict=True, ge=0)
-    accepted_records: int = Field(strict=True, ge=0)
-    rejected_records: int = Field(strict=True, ge=0)
-    unclassified_records: int = Field(strict=True, ge=0)
-    invalid_records: int = Field(strict=True, ge=0)
+    input_rows: int = Field(strict=True, ge=0)
+    skipped_rows: int = Field(strict=True, ge=0)
+    assignment_count: int = Field(strict=True, ge=0)
+    accepted_assignments: int = Field(strict=True, ge=0)
+    rejected_assignments: int = Field(strict=True, ge=0)
+    unclassified_assignments: int = Field(strict=True, ge=0)
+    invalid_assignments: int = Field(strict=True, ge=0)
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     kegg_request_count: int = Field(default=0, strict=True, ge=0)
     network_request_count: int = Field(default=0, strict=True, ge=0)
@@ -254,6 +256,18 @@ class AnalysisResultSummary(FrozenModel):
 
     @model_validator(mode="after")
     def validate_warning_summary(self) -> Self:
+        if self.skipped_rows > self.input_rows:
+            raise ValueError("skipped_rows cannot exceed input_rows")
+        if (
+            self.accepted_assignments
+            + self.rejected_assignments
+            + self.unclassified_assignments
+            + self.invalid_assignments
+            != self.assignment_count
+        ):
+            raise ValueError("normalized assignment counts must sum to assignment_count")
+        if self.selected_unique_ko_count > self.accepted_assignments:
+            raise ValueError("selected unique K numbers cannot exceed accepted assignments")
         if self.warning_count < len(self.warnings):
             raise ValueError("warning_count cannot be smaller than the direct warning preview")
         if self.warnings_truncated != (self.warning_count > len(self.warnings)):
