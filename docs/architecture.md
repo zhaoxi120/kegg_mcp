@@ -120,10 +120,12 @@ subprocesses, manage weights, normalize records, call KEGG directly, parse KGML,
 construct SVG, manipulate pixels, or invent resource URIs. Stable versioned files in user-selected
 allowed output directories are the durable, default stage handoff. The sole same-task exception is
 an upstream Skill reading its own MCP's bounded controlled resource after a typed downstream
-`file_path` allowed-root rejection, then passing the byte-identical content through the downstream
-server's bounded inline input. Each Skill still calls exactly one MCP, and no job or resource
-identifier crosses into Core. Process-scoped job and result identifiers are local optimizations,
-not cross-process authorization or durable handoff tokens.
+`file_path` allowed-root rejection, then passing no more than 5,000,000 bytes of byte-identical
+content through the downstream server's bounded inline input. A larger result remains a stable file
+and requires a shared-root deployment repair; it is never paged through the model. Each Skill still
+calls exactly one MCP, and no job or resource identifier crosses into Core. Process-scoped job and
+result identifiers are local optimizations, not cross-process authorization or durable handoff
+tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
@@ -416,8 +418,12 @@ version 2 handoff is published, private in-memory FASTA IDs are compared with ev
 single-domain output requires exactly `topk` rows per input ID, while multi-domain output requires at
 least one row per input ID and permits additional domain or top-k rows. Only aggregate coverage
 counts enter the handoff and report. The companion continues to cap its generated detailed CSV at
-5,000,000 bytes. Core can stream a larger existing allowed file without changing that companion
-output limit.
+1 GiB and uses bounded-memory validation and no-replace publication. Core streams the stable allowed
+file under matching byte and row limits. The supported suite installer requires Core's allowed
+roots to cover every DeepKOALA input and output root; a manual deployment whose roots are disjoint
+can use resource-to-inline recovery only when the successful output is at most 5,000,000 bytes.
+Larger disjoint-root outputs require an explicit shared-root deployment repair and are never paged
+through the model or sent as inline MCP JSON.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The

@@ -26,8 +26,10 @@ Apply the canonical continuation rules in
 Cross a Skill boundary only through a successful versioned handoff. Prefer the stable file handoff;
 the only non-file transition is the canonical bounded-resource fallback after Core rejects a
 successful DeepKOALA handoff with the exact typed `file_path` allowed-root error. The preceding
-`deepkoala-annotation` Skill completes that resource read and returns the unchanged inline payload;
-this Skill never calls an upstream or rendering MCP.
+`deepkoala-annotation` Skill completes that resource read and returns the unchanged inline payload
+only when the successful output is at most 5,000,000 bytes. Larger outputs require a shared stable
+output path plus unchanged source input provenance covered by Core; they never pass through the
+model or an inline MCP argument. This Skill never calls an upstream or rendering MCP.
 
 ## Call only core `kegg-mcp`
 

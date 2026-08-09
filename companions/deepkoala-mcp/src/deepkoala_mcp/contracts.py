@@ -9,7 +9,8 @@ from typing import Annotated, Generic, Literal, NoReturn, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MAX_OUTPUT_BYTES = 5_000_000
+MAX_OUTPUT_BYTES = 1 << 30
+MAX_OUTPUT_ROWS = 10_000_000
 MAX_SEQUENCE_COUNT = 100_000
 MAX_SEQUENCE_LENGTH = 100_000
 MAX_HEADER_BYTES = 1_024
@@ -324,7 +325,7 @@ class AnnotationOutputCoverage(FrozenModel):
     """Aggregate proof that one successful output covers exactly its input FASTA."""
 
     input_sequence_count: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
-    output_row_count: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
+    output_row_count: int = Field(strict=True, ge=1, le=MAX_OUTPUT_ROWS)
     distinct_output_sequence_count: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
     missing_input_sequence_count: Literal[0] = 0
     unexpected_output_sequence_count: Literal[0] = 0
@@ -474,6 +475,7 @@ __all__ = [
     "HANDOFF_SCHEMA_VERSION",
     "MAX_HEADER_BYTES",
     "MAX_OUTPUT_BYTES",
+    "MAX_OUTPUT_ROWS",
     "MAX_RESOURCE_PAGE_BYTES",
     "MAX_RETAINED_JOBS",
     "MAX_SEQUENCE_COUNT",

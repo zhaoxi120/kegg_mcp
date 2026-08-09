@@ -6,11 +6,12 @@ import asyncio
 import os
 import stat
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import BinaryIO, Final, TypeVar
 
 from anyio.to_thread import run_sync as run_sync_in_worker_thread
 
@@ -23,6 +24,8 @@ from deepkoala_mcp.contracts import (
 
 INPUT_FILENAME: Final = "input.fasta"
 _PROTEIN_ALPHABET: Final = frozenset("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
+_MAX_SEQUENCE_IDENTIFIER_CHARACTERS: Final = 256
+_T = TypeVar("_T")
 
 
 class FastaValidationError(ValueError):
@@ -105,17 +108,20 @@ async def stage_fasta_in_worker(
     max_sequences: int,
 ) -> StagedFasta:
     """Run intake off the event loop and join it before propagating cancellation."""
-    worker = asyncio.create_task(
-        run_sync_in_worker_thread(
-            partial(
-                stage_fasta,
-                fasta_path=fasta_path,
-                input_roots=input_roots,
-                job_directory=job_directory,
-                max_sequences=max_sequences,
-            )
+    return await _run_sync_in_joined_worker(
+        partial(
+            stage_fasta,
+            fasta_path=fasta_path,
+            input_roots=input_roots,
+            job_directory=job_directory,
+            max_sequences=max_sequences,
         )
     )
+
+
+async def _run_sync_in_joined_worker(operation: Callable[[], _T]) -> _T:
+    """Run one blocking operation off-loop and join it before cancellation propagates."""
+    worker = asyncio.create_task(run_sync_in_worker_thread(operation))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError as cancellation:
@@ -325,6 +331,8 @@ def _validate_header(header: str) -> str:
     sequence_id = header.split(maxsplit=1)[0]
     if not sequence_id:
         raise FastaValidationError("FASTA header has no sequence identifier")
+    if len(sequence_id) > _MAX_SEQUENCE_IDENTIFIER_CHARACTERS:
+        raise FastaLimitError("FASTA sequence identifier exceeds the character limit")
     return sequence_id
 
 

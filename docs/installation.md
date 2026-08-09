@@ -471,8 +471,12 @@ assignments, and 100,000 unique accepted K numbers; bounded inline and other sup
 their applicable importer limits without changing the analysis semantics. The view retains
 aggregate counts, source and policy provenance, and bounded diagnostics, but no record evidence,
 protein-to-KO mapping, or duplicate/conflict accounting. Use `normalize_ko_annotations` when those
-records are required. The `deepkoala-mcp` companion still caps its own detailed CSV output at
-5,000,000 bytes; Core streaming does not change that companion contract.
+records are required and the input fits its separate full-record limits. The `deepkoala-mcp`
+companion can validate and publish detailed CSV output up to 1 GiB with bounded memory. The suite
+installer requires Core's allowed roots to cover every DeepKOALA input and output root, so Core can
+validate unchanged source provenance and large results can use the stable file directly. A manual
+disjoint-root deployment has only the 5,000,000-byte bounded resource-to-inline recovery route and
+must be repaired to share larger files.
 
 See [MCP tools, resources, and configuration](mcp-server.md) for explicit target requests, generic
 annotation tables, result pagination, and complete schemas.

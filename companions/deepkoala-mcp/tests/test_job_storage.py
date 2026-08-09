@@ -14,7 +14,12 @@ import pytest
 
 import deepkoala_mcp.job_storage as storage
 from conftest import DETAILED_CSV
-from deepkoala_mcp.contracts import ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME
+from deepkoala_mcp.contracts import (
+    ANNOTATIONS_FILENAME,
+    MAX_OUTPUT_BYTES,
+    MAX_OUTPUT_ROWS,
+    RUN_REPORT_FILENAME,
+)
 from deepkoala_mcp.job_storage import (
     ControlledOutputDirectory,
     OutputAlreadyExistsError,
@@ -76,7 +81,7 @@ def _validate_and_publish_artifacts(
     return _publish_validated_artifacts(
         validated_output=validated,
         output_directory=output_directory,
-        report=report,
+        report_builder=lambda: report,
         max_output_bytes=max_output_bytes,
     )
 
@@ -536,6 +541,339 @@ def test_multi_domain_validation_accepts_multiple_rows_and_reports_coverage(
     assert validated.coverage.distinct_output_sequence_count == 2
     assert validated.coverage.missing_input_sequence_count == 0
     assert validated.coverage.unexpected_output_sequence_count == 0
+
+
+def test_large_detailed_csv_is_streamed_through_validation_and_publication(
+    tmp_path: Path,
+) -> None:
+    _, _, _, controlled = _controlled_output(tmp_path)
+    raw = tmp_path / "large.csv"
+    header = b"name,predict_label,probability,threshold,annotate\n"
+    row = b"protein-1,K00001,0.900000,0.500000,*\n"
+    with raw.open("wb") as stream:
+        stream.write(header)
+        while stream.tell() <= 5_100_000:
+            stream.write(row)
+
+    try:
+        validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=True,
+            topk=1,
+        )
+        assert validated.output_bytes > 5_000_000
+        assert validated.source_path == raw
+        assert not hasattr(validated, "content")
+
+        annotations, _, output_bytes = _publish_validated_artifacts(
+            validated_output=validated,
+            output_directory=controlled,
+            report_builder=lambda: "report\n",
+            max_output_bytes=MAX_OUTPUT_BYTES,
+        )
+        assert output_bytes == raw.stat().st_size == annotations.stat().st_size
+        with annotations.open("rb") as stream:
+            assert stream.read(len(header)) == header
+            stream.seek(-len(row), os.SEEK_END)
+            assert stream.read() == row
+    finally:
+        close_output_directory(controlled)
+
+
+def test_streaming_validation_accepts_maximum_escaped_fields_across_64_columns(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "maximum-record.csv"
+    extra_names = [f"extra_{index}".encode("ascii") for index in range(59)]
+    escaped_field = b'"' + b'""' * 16_384 + b'"'
+    raw.write_bytes(
+        b",".join(
+            [b"name", b"predict_label", b"probability", b"threshold", b"annotate", *extra_names]
+        )
+        + b"\n"
+        + b",".join([b"protein-1", b"K00001", b"0.9", b"0.5", b"*"] + [escaped_field] * 59)
+        + b"\n"
+    )
+
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw,
+        MAX_OUTPUT_BYTES,
+        expected_sequence_ids=frozenset({"protein-1"}),
+        multi=False,
+        topk=1,
+    )
+
+    assert validated.coverage.output_row_count == 1
+
+
+def test_streaming_validation_rejects_oversized_records_fields_and_headers(
+    tmp_path: Path,
+) -> None:
+    header = b"name,predict_label,probability,threshold,annotate"
+    cases = (
+        (b"p" * 2_100_000 + b",K00001,0.9,0.5,*\n", "logical record"),
+        (b"protein-1,K00001,0.9,0.5,*," + b"x" * 16_385 + b"\n", "field limit"),
+    )
+    for index, (row, message) in enumerate(cases):
+        raw = tmp_path / f"oversized-{index}.csv"
+        raw.write_bytes(header + (b",extra" if index == 1 else b"") + b"\n" + row)
+        with pytest.raises(OutputValidationError, match=message):
+            storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+                raw,
+                MAX_OUTPUT_BYTES,
+                expected_sequence_ids=frozenset({"protein-1"}),
+                multi=False,
+                topk=1,
+            )
+
+    oversized_header = tmp_path / "oversized-header.csv"
+    oversized_header.write_bytes(
+        header + b"," + b"x" * 257 + b"\nprotein-1,K00001,0.9,0.5,*,value\n"
+    )
+    with pytest.raises(OutputValidationError, match="unsupported header"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            oversized_header,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=False,
+            topk=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        b"name,predict_label,probability,threshold,annotate,\nprotein-1,K00001,0.9,0.5,*,value\n",
+        b"name,predict_label,probability,threshold,annotate,extra\x00name\n"
+        b"protein-1,K00001,0.9,0.5,*,value\n",
+    ),
+)
+def test_streaming_validation_rejects_core_incompatible_headers(
+    tmp_path: Path,
+    content: bytes,
+) -> None:
+    raw = tmp_path / "unsupported-header.csv"
+    raw.write_bytes(content)
+
+    with pytest.raises(OutputValidationError, match="unsupported header"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=False,
+            topk=1,
+        )
+
+
+def test_streaming_validation_rejects_nul_in_a_data_field(tmp_path: Path) -> None:
+    raw = tmp_path / "nul-field.csv"
+    raw.write_bytes(
+        b"name,predict_label,probability,threshold,annotate,extra\n"
+        b"protein-1,K00001,0.9,0.5,*,binary\x00value\n"
+    )
+
+    with pytest.raises(OutputValidationError, match="binary content"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=False,
+            topk=1,
+        )
+
+
+def test_streaming_validation_stops_at_the_expanded_assignment_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = tmp_path / "too-many-assignments.csv"
+    raw.write_bytes(
+        b"name,predict_label,probability,threshold,annotate\n"
+        b"protein-1,K00001 + K00002,0.9,0.5,*\n"
+        b"protein-1,K00003,0.9,0.5,*\n"
+    )
+    monkeypatch.setattr(storage, "_MAX_EXPANDED_ASSIGNMENTS", 2)
+
+    with pytest.raises(OutputValidationError, match="expanded assignment limit"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=True,
+            topk=1,
+        )
+
+
+def test_streaming_validation_reads_only_the_initial_file_size_when_source_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = tmp_path / "growing.csv"
+    raw.write_bytes(DETAILED_CSV)
+    initial_size = raw.stat().st_size
+    original_read = storage.os.read
+    bytes_returned = 0
+    read_calls = 0
+
+    def append_after_first_read(descriptor: int, size: int) -> bytes:
+        nonlocal bytes_returned, read_calls
+        content = original_read(descriptor, size)
+        read_calls += 1
+        bytes_returned += len(content)
+        if read_calls == 1:
+            with raw.open("ab") as stream:
+                stream.write(b"protein-1,K00002,0.9,0.5,*\n")
+        return content
+
+    monkeypatch.setattr(storage.os, "read", append_after_first_read)
+
+    with pytest.raises(OutputValidationError, match="changed during validation"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=False,
+            topk=1,
+        )
+
+    assert read_calls == 1
+    assert bytes_returned == initial_size
+
+
+def test_streaming_validation_stops_at_the_output_row_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = tmp_path / "too-many-rows.csv"
+    raw.write_bytes(
+        b"name,predict_label,probability,threshold,annotate\n"
+        b"protein-1,K00001,0.9,0.5,*\n"
+        b"protein-1,K00001,0.9,0.5,*\n"
+        b"protein-1,K00001,0.9,0.5,*\n"
+    )
+    monkeypatch.setattr(storage, "MAX_OUTPUT_ROWS", 2)
+
+    with pytest.raises(OutputValidationError, match="output row limit"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            MAX_OUTPUT_BYTES,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=True,
+            topk=1,
+        )
+
+    assert MAX_OUTPUT_ROWS == 10_000_000
+
+
+def test_publication_rejects_validated_source_replacement(tmp_path: Path) -> None:
+    _, _, output, controlled = _controlled_output(tmp_path)
+    raw = _raw_output(tmp_path)
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw,
+        MAX_OUTPUT_BYTES,
+        expected_sequence_ids=frozenset({"protein-1"}),
+        multi=False,
+        topk=1,
+    )
+    raw.unlink()
+    raw.write_bytes(DETAILED_CSV)
+    try:
+        with pytest.raises(OutputValidationError, match="changed before publication"):
+            _publish_validated_artifacts(
+                validated_output=validated,
+                output_directory=controlled,
+                report_builder=lambda: "report\n",
+                max_output_bytes=MAX_OUTPUT_BYTES,
+            )
+        assert not any(output.iterdir())
+    finally:
+        close_output_directory(controlled)
+
+
+def test_report_builder_failure_rolls_back_streamed_annotations(tmp_path: Path) -> None:
+    _, _, output, controlled = _controlled_output(tmp_path)
+    raw = _raw_output(tmp_path)
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw,
+        MAX_OUTPUT_BYTES,
+        expected_sequence_ids=frozenset({"protein-1"}),
+        multi=False,
+        topk=1,
+    )
+
+    def fail_report() -> str:
+        raise RuntimeError("synthetic report failure")
+
+    try:
+        with pytest.raises(RuntimeError, match="synthetic report failure"):
+            _publish_validated_artifacts(
+                validated_output=validated,
+                output_directory=controlled,
+                report_builder=fail_report,
+                max_output_bytes=MAX_OUTPUT_BYTES,
+            )
+        assert not any(output.iterdir())
+    finally:
+        close_output_directory(controlled)
+
+
+def test_publication_rolls_back_if_validated_source_name_changes_during_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, output, controlled = _controlled_output(tmp_path)
+    raw = _raw_output(tmp_path)
+    moved = tmp_path / "moved.csv"
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw,
+        MAX_OUTPUT_BYTES,
+        expected_sequence_ids=frozenset({"protein-1"}),
+        multi=False,
+        topk=1,
+    )
+    original_read = storage.os.read
+    replaced = False
+
+    def replace_after_first_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        content = original_read(descriptor, size)
+        if content and not replaced:
+            replaced = True
+            raw.rename(moved)
+            raw.write_bytes(DETAILED_CSV)
+        return content
+
+    monkeypatch.setattr(storage.os, "read", replace_after_first_read)
+    try:
+        with pytest.raises(OutputValidationError, match="changed during publication"):
+            _publish_validated_artifacts(
+                validated_output=validated,
+                output_directory=controlled,
+                report_builder=lambda: "report\n",
+                max_output_bytes=MAX_OUTPUT_BYTES,
+            )
+        assert not any(output.iterdir())
+    finally:
+        close_output_directory(controlled)
+
+
+def test_artifact_slice_rejects_offsets_at_or_above_the_output_byte_limit(
+    tmp_path: Path,
+) -> None:
+    _, _, _, controlled = _controlled_output(tmp_path)
+    try:
+        with pytest.raises(OutputValidationError, match="supported bounds"):
+            read_artifact_slice(
+                controlled,
+                ANNOTATIONS_FILENAME,
+                max_bytes=MAX_OUTPUT_BYTES,
+                offset=MAX_OUTPUT_BYTES,
+                limit=1,
+            )
+    finally:
+        close_output_directory(controlled)
 
 
 @pytest.mark.parametrize(

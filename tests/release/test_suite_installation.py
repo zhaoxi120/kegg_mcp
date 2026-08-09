@@ -456,6 +456,28 @@ def test_deployment_config_rejects_nonwritable_private_state(tmp_path: Path) -> 
     assert raised.value.code == "deployment_path_invalid"
 
 
+def test_deployment_config_requires_core_to_cover_deepkoala_output_root(
+    tmp_path: Path,
+) -> None:
+    config, paths = _write_config(tmp_path)
+    unshared_output = _mkdir(tmp_path / "unshared-output")
+    document = config.read_text(encoding="utf-8").replace(
+        f"output_roots = [{json.dumps(str(paths['output']))}]",
+        f"output_roots = [{json.dumps(str(unshared_output))}]",
+        1,
+    )
+    config.write_text(document, encoding="utf-8")
+    config.chmod(0o600)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config)
+
+    assert raised.value.code == "deployment_path_invalid"
+    assert str(raised.value) == (
+        "core.allowed_roots must cover every DeepKOALA input and output root"
+    )
+
+
 def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path) -> None:
     config_path, paths = _write_config(tmp_path)
     paths["profiles"].rmdir()

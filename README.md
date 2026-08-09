@@ -185,7 +185,10 @@ The high-level Core workflow applies the same compact analysis semantics to smal
 inputs. An allowed DeepKOALA detailed file is streamed under fixed maxima of 1 GiB, 10 million
 source rows, 20 million expanded assignments, and 100,000 unique accepted K numbers. Bounded inline
 and other supported inputs produce the same accepted-KO view under their applicable importer
-limits. The DeepKOALA companion itself still caps its detailed CSV at 5,000,000 bytes.
+limits. The DeepKOALA companion can validate and publish a detailed CSV up to the same 1 GiB file
+ceiling without loading the complete output into memory. Suite installations require Core's
+allowed roots to cover every DeepKOALA input and output root; the resource-to-inline recovery route
+remains limited to 5,000,000 bytes for manual deployments whose roots are disjoint.
 
 Compact local intake does not raise KEGG request, relationship, reference-loading, ranking, or
 output budgets. Very large accepted-KO sets may therefore require explicit MODULE/pathway targets

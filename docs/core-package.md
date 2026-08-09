@@ -62,8 +62,10 @@ allowed `annotations.file_path` using `input_format="deepkoala_detailed"`, strea
 bounded to 1 GiB, 10 million source rows, 20 million expanded assignments, 100,000 unique accepted
 K numbers, 64 columns, 16,384 characters per field, and a 100-item diagnostic preview. The view
 retains aggregate counts and provenance but no record evidence, protein-to-KO mapping, or
-duplicate/conflict accounting. The separate DeepKOALA companion continues to cap its own generated
-detailed CSV at 5,000,000 bytes.
+duplicate/conflict accounting. The separate DeepKOALA companion can publish a generated detailed
+CSV up to the same 1 GiB ceiling with bounded-memory validation and publication. The supported suite
+installer ensures the stable output path is covered by Core's allowed roots; Core's inline input
+limit remains separate and smaller.
 
 Compact-view bounds do not change any KEGG request, relationship, reference-loading, ranking, or
 output budget. A large accepted-KO set can still exceed automatic KO-to-target mapping limits;

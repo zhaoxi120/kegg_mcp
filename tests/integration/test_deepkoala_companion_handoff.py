@@ -299,13 +299,13 @@ def _core_runtime(root: Path) -> McpRuntime:
     )
 
 
-def _module_core_runtime(root: Path) -> McpRuntime:
+def _module_core_runtime(root: Path, *, allowed_root: Path | None = None) -> McpRuntime:
     root.mkdir(mode=0o700)
     return McpRuntime(
         client=cast(KeggMcpClient, _ModuleReferenceClient()),
         result_store=SQLiteResultStore(root / "core-results.sqlite3"),
         scope_id="deepkoala-disjoint-resource-contract",
-        allowed_roots=(str(root.resolve()),),
+        allowed_roots=(str((allowed_root or root).resolve()),),
     )
 
 
@@ -503,6 +503,78 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         assert stable_annotations.is_file()
         with pytest.raises(McpError, match="ARTIFACT_NOT_FOUND"):
             await session.read_resource(AnyUrl(handoff.annotations_resource_uri))
+
+
+@pytest.mark.asyncio
+async def test_large_shared_file_streams_and_disjoint_core_rejects_the_path(
+    tmp_path: Path,
+) -> None:
+    note = b"x" * 14_000
+    row_count = 360
+    payload = b"name,predict_label,probability,threshold,annotate,note\n" + b"".join(
+        b"protein-1,K00001,0.95,0.50,*," + note + b"\n" for _ in range(row_count)
+    )
+    assert 5_000_000 < len(payload) < 6_000_000
+
+    companion_root = tmp_path / "companion"
+    config = _build_runtime_config(companion_root, multi=True)
+    manager = DeepKoalaJobManager(
+        config,
+        runner=_FakeRunner(payload),
+        runtime_probe=_multi_ready_probe,
+    )
+    companion_server = create_deepkoala_server(manager)
+    shared_core_server = create_core_server(
+        _module_core_runtime(tmp_path / "shared-core", allowed_root=companion_root)
+    )
+    disjoint_core_server = create_core_server(_module_core_runtime(tmp_path / "disjoint-core"))
+
+    async with create_connected_server_and_client_session(companion_server) as companion_session:
+        job_id = await _start_job(
+            companion_session,
+            config,
+            "large-shared-file",
+            sequence_ids=("protein-1",),
+            multi=True,
+        )
+        completed = await _poll_terminal(companion_session, job_id)
+        job = cast(dict[str, object], _wire_data(completed)["job"])
+        assert job["output_bytes"] == len(payload)
+        handoff = _parse_handoff(completed)
+        arguments: dict[str, object] = {
+            "annotations": {
+                "input_format": handoff.input_format,
+                "file_path": handoff.annotations_path,
+                "source": handoff.source.model_dump(mode="json"),
+                "analysis_unit": "isolate_proteome",
+                "sample_id": "large-shared-file",
+            },
+            "module_ids": ["M00001"],
+        }
+
+        async with create_connected_server_and_client_session(shared_core_server) as shared_session:
+            analyzed = await shared_session.call_tool("analyze_ko_annotations", arguments)
+        assert analyzed.isError is False
+        summary = cast(dict[str, object], _wire_data(analyzed)["summary"])
+        assert summary["input_rows"] == row_count
+        assert summary["accepted_assignments"] == row_count
+        assert summary["selected_unique_ko_count"] == 1
+
+        async with create_connected_server_and_client_session(
+            disjoint_core_server
+        ) as disjoint_session:
+            rejected = await disjoint_session.call_tool("analyze_ko_annotations", arguments)
+        assert rejected.isError is True
+        rejection = cast(dict[str, object], _wire_payload(rejected)["error"])
+        assert rejection["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+        assert rejection["message"] == (
+            "A local handoff path is outside the configured allowed roots."
+        )
+        details = {
+            cast(str, item["name"]): item["value"]
+            for item in cast(list[dict[str, object]], rejection["safe_details"])
+        }
+        assert details["field"] == "file_path"
 
 
 @pytest.mark.parametrize(

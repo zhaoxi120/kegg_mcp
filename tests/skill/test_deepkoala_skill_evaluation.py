@@ -124,6 +124,8 @@ def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None
         "`A local handoff path is outside the configured allowed roots.`",
         '`field="file_path"`',
         '`field="output_directory"`',
+        "successful job's `output_bytes`",
+        "at most 5,000,000",
         "`annotations_resource_uri`",
         '`schema_version="1"`',
         "require contiguous offsets and stable `total_bytes`",
@@ -133,11 +135,25 @@ def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None
         "never send both payload selectors",
         "do not rerun DeepKOALA",
         "copy or rewrite the CSV",
+        "do not read resource pages",
+        "shared handoff roots covering both the returned input and output paths in Core",
         "before deleting the job record",
     ):
         assert fragment in normalized
     assert "or when the client already knows" not in normalized
     assert "If a client has no shared filesystem" not in normalized
+
+
+def test_large_output_uses_the_shared_file_handoff() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        "up to 1 GiB",
+        "bounded-memory validation and publication",
+        "requires Core's allowed roots to cover every DeepKOALA input and output root",
+        "must never be reconstructed inline",
+        "resume from the same stable CSV",
+    ):
+        assert fragment in normalized
 
 
 def test_successful_handoff_reports_only_aggregate_exact_id_coverage() -> None:

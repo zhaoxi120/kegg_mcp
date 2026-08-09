@@ -254,6 +254,16 @@ async def test_large_resource_fallback_is_versioned_bounded_and_reconstructable(
         with pytest.raises(McpError) as invalid:
             await session.read_resource(AnyUrl(f"deepkoala://jobs/{job_id}/annotations/00/65536"))
         assert invalid.value.error.code == types.INVALID_PARAMS
+        with pytest.raises(McpError) as outside_file:
+            await session.read_resource(
+                AnyUrl(f"deepkoala://jobs/{job_id}/annotations/1073741823/1")
+            )
+        assert outside_file.value.error.code == -32002
+        with pytest.raises(McpError) as oversized_offset:
+            await session.read_resource(
+                AnyUrl(f"deepkoala://jobs/{job_id}/annotations/1073741824/1")
+            )
+        assert oversized_offset.value.error.code == types.INVALID_PARAMS
         with pytest.raises(McpError) as missing:
             await session.read_resource(AnyUrl(f"deepkoala://jobs/{'job_' + 'f' * 32}/annotations"))
         assert missing.value.error.code == -32002

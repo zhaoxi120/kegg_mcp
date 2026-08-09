@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import stat
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
+import deepkoala_mcp._job_types as job_types_module
 import deepkoala_mcp.fasta as fasta_module
+import deepkoala_mcp.job_storage as storage_module
 import deepkoala_mcp.jobs as jobs_module
 from conftest import DETAILED_CSV, ready_probe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
@@ -21,12 +23,13 @@ from deepkoala_mcp.contracts import (
     DeepKoalaMcpError,
     ErrorCode,
     JobState,
+    JobSummary,
     RunDeepKoalaInput,
     RunDeepKoalaResult,
 )
 from deepkoala_mcp.fasta import StagedFasta
 from deepkoala_mcp.installation import RuntimeProbeResult
-from deepkoala_mcp.job_storage import OutputValidationError
+from deepkoala_mcp.job_storage import ControlledOutputDirectory, OutputValidationError
 from deepkoala_mcp.jobs import DeepKoalaJobManager
 from deepkoala_mcp.runner import ProcessOutcome, RunnerPlan, RunnerTimedOutError
 
@@ -196,6 +199,9 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert handoff.source.model_name == "frag"
         assert handoff.source.model_version == "202401"
         assert handoff.source.annotation_date.utcoffset() is not None
+        assert result.job.completed_at == handoff.source.annotation_date
+        completion_text = handoff.source.annotation_date.isoformat().replace("+00:00", "Z")
+        assert f"- Completed at: `{completion_text}`" in report_text
         metadata = {field.name: field.value for field in handoff.source.source_metadata}
         assert metadata["device_requested"] == "cpu"
         assert metadata["cuda_available_at_preflight"] is False
@@ -252,6 +258,55 @@ async def test_run_accepts_large_valid_fasta_within_sequence_limits(
         assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
 
     assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_blocking_publication_stays_off_loop_and_cancellation_joins_worker(
+    runtime_config: DeepKoalaRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication_started = threading.Event()
+    release_publication = threading.Event()
+    real_publish = job_types_module.publish_artifacts
+
+    def blocking_publish(
+        *,
+        validated_output: storage_module._ValidatedDetailedCsv,  # pyright: ignore[reportPrivateUsage]
+        output_directory: ControlledOutputDirectory,
+        report_builder: Callable[[], str],
+        max_output_bytes: int,
+    ) -> tuple[Path, Path, int]:
+        publication_started.set()
+        if not release_publication.wait(timeout=5):
+            raise TimeoutError("test publication release timed out")
+        return real_publish(
+            validated_output=validated_output,
+            output_directory=output_directory,
+            report_builder=report_builder,
+            max_output_bytes=max_output_bytes,
+        )
+
+    monkeypatch.setattr(job_types_module, "publish_artifacts", blocking_publish)
+    request = _request(runtime_config, name="cancelled-publication")
+    cancel_task: asyncio.Task[JobSummary] | None = None
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        started = await manager.run(request)
+        try:
+            assert await asyncio.to_thread(publication_started.wait, 2)
+            current = await asyncio.wait_for(manager.get_job(started.job.job_id), timeout=0.5)
+            assert current.job.state is JobState.RUNNING
+
+            cancel_task = asyncio.create_task(manager.cancel(started.job.job_id))
+            await asyncio.sleep(0.05)
+            assert not cancel_task.done()
+            assert _explicit_output_path(request).is_dir()
+        finally:
+            release_publication.set()
+
+        assert cancel_task is not None
+        cancelled = await asyncio.wait_for(cancel_task, timeout=5)
+        assert cancelled.state is JobState.CANCELLED
+        assert not _explicit_output_path(request).exists()
 
 
 @pytest.mark.asyncio
@@ -770,6 +825,7 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.issue is None
         assert status.max_input_bytes is None
         assert status.max_sequences == runtime_config.max_sequences
+        assert status.max_output_bytes == runtime_config.max_output_bytes == 1 << 30
         serialized = status.model_dump_json()
         assert str(runtime_config.checkout) not in serialized
         assert str(runtime_config.state_root) not in serialized

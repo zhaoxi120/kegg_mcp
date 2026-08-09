@@ -78,8 +78,11 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   `annotations_path` and pass
   `input_format="deepkoala_detailed"` and the `source` object unchanged. Core derives its compact
   sorted unique accepted-KO analysis view from this handoff; request full normalization separately
-  only when record-level evidence is needed. The companion already caps its generated detailed CSV
-  at 5,000,000 bytes.
+  only when record-level evidence is needed and the file fits that operation's separate intake
+  limits. The companion can publish a generated detailed CSV up to 1 GiB with bounded-memory
+  validation and publication. The supported suite installer requires Core's allowed roots to cover
+  every DeepKOALA input and output root, so Core can validate unchanged source provenance and this
+  stable file path is also the large-result handoff.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
   continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project
@@ -87,12 +90,17 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 - If Core rejects that successful path handoff with `ANALYSIS_CONFIGURATION_INVALID`, the typed
   message `A local handoff path is outside the configured allowed roots.`, and a `safe_details`
   entry of `field="file_path"`, do not rerun DeepKOALA,
-  copy the CSV, weaken either server's allowed roots, or retry the same path. While the job remains
-  retained, read the returned `annotations_resource_uri` through the controlled resource fallback
-  defined in the handoff guide, reconstruct the byte-identical strict UTF-8 payload, and resume
-  `kegg-ko-analysis` with nested `annotations.text` rather than `annotations.file_path`. Pass the
-  original `input_format` and `source` unchanged, never send both payload selectors, and keep
-  annotation context only inside the nested `annotations` object.
+  copy the CSV, change either server's running path policy, or retry the same path. Inspect the
+  successful job's `output_bytes` before reading its resource. Only when `output_bytes` is at most
+  5,000,000 may the retained job use the controlled resource fallback defined in the handoff guide:
+  reconstruct the byte-identical strict UTF-8 payload and resume `kegg-ko-analysis` with nested
+  `annotations.text` rather than `annotations.file_path`. Pass the original `input_format` and
+  `source` unchanged, never send both payload selectors, and keep annotation context only inside
+  the nested `annotations` object. If `output_bytes` is larger, do not read resource pages or place
+  the file in a prompt or inline MCP argument. Stop and report that the deployment must be repaired
+  with shared handoff roots covering both the returned input and output paths in Core, preferably
+  through the complete suite installer;
+  resume from the same stable CSV after the repaired suite is available in a new task.
   The same message with `field="output_directory"` is an output-location error and must not trigger
   this annotation-resource fallback.
 - If the original request also asks for graphics, preserve its requested formats and target scope

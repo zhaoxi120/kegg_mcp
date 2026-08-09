@@ -188,10 +188,14 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    `field="file_path"`, return control to the installed
    `deepkoala-annotation` Skill for its bounded `annotations_resource_uri` fallback. This Skill
    does not call the companion MCP, change either server's allowed roots, copy the CSV, or retry the
-   same unreadable path. After the preceding Skill returns the byte-identical UTF-8 payload, call
-   Core with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
-   `annotations.file_path` and keep any analysis context only inside `annotations`. The same message
-   with `field="output_directory"` is an output-location error and must not enter this fallback.
+   same unreadable path. The preceding Skill may return byte-identical UTF-8 content only when the
+   successful job's `output_bytes` is at most the 5,000,000-byte Core inline limit. Then call Core
+   with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
+   `annotations.file_path` and keep any analysis context only inside `annotations`. For a larger
+   result, stop without reading resource pages and require repaired shared handoff roots that cover
+   the returned input and output paths in Core, as enforced by the supported suite installer. The
+   same message with
+   `field="output_directory"` is an output-location error and must not enter this fallback.
 
 ### Compact high-level analysis view
 
@@ -221,8 +225,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   `annotations_path`, `input_format`, and `source` object unchanged;
   do not ask the user to restate the path, copy it, repeat the request, or confirm a KEGG-analysis
   stage already present in the original request. If the typed allowed-root error described above
-  occurs, use only the canonical resource fallback and then the mutually exclusive
-  `annotations.text` branch. Do not rerun annotation or rewrite the CSV.
+  occurs, use the canonical resource fallback and then the mutually exclusive `annotations.text`
+  branch only for an output no larger than 5,000,000 bytes. A larger output must remain a stable
+  file and requires the shared-root deployment repair described above. Do not page it into the
+  prompt. Do not rerun annotation or rewrite the CSV.
 - When the original request also asks to render, visualize, draw, or export graphics, first require
   a successfully written, compatible `render_input.json`, then automatically continue with the installed
   `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path while

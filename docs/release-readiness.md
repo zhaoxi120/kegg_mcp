@@ -238,8 +238,13 @@ advice.
 - [ ] High-level reports state that record evidence, protein-to-KO mapping, and
       duplicate/conflict accounting are unavailable; they do not fabricate an
       `AnnotationDataset`. Full normalization remains unchanged.
-- [ ] The DeepKOALA companion's generated detailed CSV remains capped at 5,000,000 bytes. Core's
-      streaming analysis intake does not increase that companion output limit.
+- [ ] The DeepKOALA companion validates and publishes generated detailed CSV files with bounded
+      memory under a deployment-selected limit no greater than 1 GiB, 10,000,000 rows, 20,000,000
+      expanded assignments, 64 columns, 256 characters per non-empty column name, and 16,384
+      characters per NUL-free field. Publication remains no-replace and race-safe.
+- [ ] Suite installation requires Core's allowed roots to cover every DeepKOALA input and output
+      root. The manual disjoint-root resource-to-inline recovery route is limited to 5,000,000
+      bytes and larger results fail before resource paging with a shared-root repair action.
 - [ ] DeepKOALA handoff schema version 2 proves exact input/output sequence-ID coverage before
       publication. Single-domain output has exactly `topk` rows per input; multi-domain output has
       at least one row per input. Only bounded aggregate counts enter the handoff and run report.
