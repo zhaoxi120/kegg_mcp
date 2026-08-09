@@ -525,7 +525,7 @@ def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> No
     value = _render_input(
         limits=RenderInputLimits(
             max_module_required_blocks_per_target=2,
-            max_pathway_detected_ko_ids_per_target=1,
+            max_pathway_detected_ko_ids_per_target=0,
         )
     )
 
