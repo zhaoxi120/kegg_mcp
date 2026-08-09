@@ -96,18 +96,25 @@ def test_annotation_stage_preserves_scientific_boundaries() -> None:
     assert "notice digest" in CORPUS
     assert "workflow digests" in CORPUS
     assert "python3 -m deepkoala" not in CORPUS
+    assert "metabolic-reconstruction" not in CORPUS
+    assert "metabolic reconstruction" not in CORPUS
 
 
 def test_original_fasta_to_analysis_request_continues_without_reprompting() -> None:
+    normalized = " ".join(CORPUS.split())
     for fragment in (
         "If the original request ends at protein annotation",
+        "KO analysis",
+        "MODULE evaluation",
+        "descriptive pathway KO coverage",
+        "deterministic KO-set comparison",
         "automatically continue with the installed `kegg-ko-analysis` Skill",
         'input_format="deepkoala_detailed"',
         "send another prompt",
         "parse, or rewrite the CSV",
         "preserve its requested formats and target scope",
     ):
-        assert fragment in CORPUS
+        assert fragment in normalized
 
 
 def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None:
@@ -131,6 +138,19 @@ def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None
         assert fragment in normalized
     assert "or when the client already knows" not in normalized
     assert "If a client has no shared filesystem" not in normalized
+
+
+def test_successful_handoff_reports_only_aggregate_exact_id_coverage() -> None:
+    normalized = " ".join(CORPUS.split())
+    for fragment in (
+        'handoff `schema_version="2"`',
+        "`output_coverage`",
+        "all and only the unique input FASTA IDs",
+        "exactly the requested `topk` rows per input sequence",
+        "at least one row per input sequence",
+        "never returned as a list or digest",
+    ):
+        assert fragment in normalized
 
 
 def test_multi_domain_mode_requires_explicit_ready_opt_in() -> None:

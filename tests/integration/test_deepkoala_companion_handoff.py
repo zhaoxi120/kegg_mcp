@@ -218,7 +218,7 @@ class _ModuleReferenceClient(_OfflineOnlyKeggClient):
         )
 
 
-def _build_runtime_config(root: Path) -> DeepKoalaRuntimeConfig:
+def _build_runtime_config(root: Path, *, multi: bool = False) -> DeepKoalaRuntimeConfig:
     checkout = root / "deepkoala-checkout"
     package = checkout / "deepkoala"
     package.mkdir(parents=True)
@@ -241,13 +241,28 @@ def _build_runtime_config(root: Path) -> DeepKoalaRuntimeConfig:
     outputs = root / "outputs"
     inputs.mkdir()
     outputs.mkdir()
-    return DeepKoalaRuntimeConfig(
+    config = DeepKoalaRuntimeConfig(
         checkout=checkout.resolve(),
         python_executable=Path(sys.executable).resolve(),
         state_root=(root / "companion-state").resolve(),
         input_roots=(inputs.resolve(),),
         output_roots=(outputs.resolve(),),
         max_timeout_seconds=30,
+    )
+    if not multi:
+        return config
+    profiles = root / "profiles"
+    profiles.mkdir(mode=0o700)
+    (profiles / "K00001.hmm").write_text("HMMER3/f\n", encoding="ascii")
+    hmmsearch = root / "hmmsearch"
+    hmmsearch.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+    hmmsearch.chmod(0o700)
+    return config.model_copy(
+        update={
+            "allow_multi": True,
+            "profiles_dir": profiles,
+            "hmmsearch_executable": hmmsearch,
+        }
     )
 
 
@@ -259,6 +274,20 @@ def _ready_probe(
 ) -> RuntimeProbeResult:
     del checkout, python_executable, cpu_threads
     return RuntimeProbeResult(runtime_ready=True, cuda_available=False)
+
+
+def _multi_ready_probe(
+    *,
+    checkout: Path,
+    python_executable: Path,
+    cpu_threads: int,
+) -> RuntimeProbeResult:
+    del checkout, python_executable, cpu_threads
+    return RuntimeProbeResult(
+        runtime_ready=True,
+        cuda_available=False,
+        multi_adapter_compatible=True,
+    )
 
 
 def _core_runtime(root: Path) -> McpRuntime:
@@ -280,12 +309,24 @@ def _module_core_runtime(root: Path) -> McpRuntime:
     )
 
 
-def _run_arguments(config: DeepKoalaRuntimeConfig, name: str) -> dict[str, object]:
+def _run_arguments(
+    config: DeepKoalaRuntimeConfig,
+    name: str,
+    *,
+    sequence_ids: tuple[str, ...] = ("protein-1", "protein-2"),
+    topk: int = 1,
+    multi: bool = False,
+) -> dict[str, object]:
     fasta = config.input_roots[0] / f"{name}.faa"
-    fasta.write_text(">protein-1\nMPEPTIDE\n>protein-2\nMPEPTIDE\n", encoding="ascii")
+    fasta.write_text(
+        "".join(f">{sequence_id}\nMPEPTIDE\n" for sequence_id in sequence_ids),
+        encoding="ascii",
+    )
     return {
         "fasta_path": str(fasta),
         "output_directory": str(config.output_roots[0] / name),
+        "topk": topk,
+        "multi": multi,
     }
 
 
@@ -316,8 +357,21 @@ async def _start_job(
     session: ClientSession,
     config: DeepKoalaRuntimeConfig,
     name: str,
+    *,
+    sequence_ids: tuple[str, ...] = ("protein-1", "protein-2"),
+    topk: int = 1,
+    multi: bool = False,
 ) -> str:
-    started = await session.call_tool("run_deepkoala_job", _run_arguments(config, name))
+    started = await session.call_tool(
+        "run_deepkoala_job",
+        _run_arguments(
+            config,
+            name,
+            sequence_ids=sequence_ids,
+            topk=topk,
+            multi=multi,
+        ),
+    )
     assert started.isError is False
     job = cast(dict[str, object], _wire_data(started)["job"])
     return cast(str, job["job_id"])
@@ -425,7 +479,9 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         raw_source = cast(dict[str, object], raw_handoff["source"])
         assert cast(str, raw_source["annotation_date"]).endswith("Z")
         handoff = _parse_handoff(completed)
-        assert handoff.schema_version == "1"
+        assert handoff.schema_version == "2"
+        assert handoff.output_coverage.input_sequence_count == 2
+        assert handoff.output_coverage.output_row_count == 2
         assert handoff.source.annotation_date.isoformat().endswith("+00:00")
         assert Path(handoff.annotations_path).read_bytes() == _SMALL_DETAILED_CSV
         assert Path(handoff.report_path).is_file()
@@ -450,10 +506,11 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected_preview"),
+    ("payload", "topk", "expected_preview"),
     [
         (
             _MULTI_DOMAIN_DETAILED_CSV,
+            1,
             [
                 ("K00001", "accepted", 1, 80),
                 ("K00002", "accepted", 81, 160),
@@ -461,6 +518,7 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         ),
         (
             _UNCLASSIFIED_MULTI_DOMAIN_CSV,
+            1,
             [(None, "unclassified", None, None)],
         ),
     ],
@@ -470,18 +528,26 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
 async def test_advanced_csv_variants_cross_the_companion_core_boundary(
     tmp_path: Path,
     payload: bytes,
+    topk: int,
     expected_preview: list[tuple[str | None, str, int | None, int | None]],
 ) -> None:
-    config = _build_runtime_config(tmp_path)
+    config = _build_runtime_config(tmp_path, multi=True)
     manager = DeepKoalaJobManager(
         config,
         runner=_FakeRunner(payload),
-        runtime_probe=_ready_probe,
+        runtime_probe=_multi_ready_probe,
     )
     server = create_deepkoala_server(manager)
 
     async with create_connected_server_and_client_session(server) as session:
-        job_id = await _start_job(session, config, "advanced-csv")
+        job_id = await _start_job(
+            session,
+            config,
+            "advanced-csv",
+            sequence_ids=("protein-1",),
+            topk=topk,
+            multi=True,
+        )
         completed = await _poll_terminal(session, job_id)
         handoff = _parse_handoff(completed)
         normalized = await _normalize_once(tmp_path, _core_arguments(handoff))
@@ -514,7 +580,12 @@ async def test_resource_fallback_reconstructs_inline_core_input_with_offset_time
     server = create_deepkoala_server(manager)
 
     async with create_connected_server_and_client_session(server) as session:
-        job_id = await _start_job(session, config, f"resource-{large}")
+        job_id = await _start_job(
+            session,
+            config,
+            f"resource-{large}",
+            sequence_ids=tuple(f"protein-{index}" for index in range(rows)),
+        )
         completed = await _poll_terminal(session, job_id)
         handoff = _parse_handoff(completed)
         annotation_text = await _read_annotation_resource(
@@ -630,7 +701,11 @@ async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_r
             assert analyzed.isError is False
             analyzed_data = _wire_data(analyzed)
             analyzed_summary = cast(dict[str, object], analyzed_data["summary"])
-            assert analyzed_summary["input_records"] == 2
+            assert analyzed_summary["input_rows"] == 2
+            assert analyzed_summary["assignment_count"] == 3
+            assert analyzed_summary["accepted_assignments"] == 2
+            assert analyzed_summary["rejected_assignments"] == 1
+            assert analyzed_summary["selected_unique_ko_count"] == 2
 
             normalized = await core_session.call_tool(
                 "normalize_ko_annotations",
@@ -683,7 +758,12 @@ async def test_handoff_and_resource_schemas_fail_closed(tmp_path: Path) -> None:
     manager = DeepKoalaJobManager(config, runner=runner, runtime_probe=_ready_probe)
     server = create_deepkoala_server(manager)
     async with create_connected_server_and_client_session(server) as session:
-        job_id = await _start_job(session, config, "schema-errors")
+        job_id = await _start_job(
+            session,
+            config,
+            "schema-errors",
+            sequence_ids=tuple(f"protein-{index}" for index in range(3_000)),
+        )
         completed = await _poll_terminal(session, job_id)
         raw_handoff = cast(dict[str, object], _wire_data(completed)["handoff"])
         for value in (None, "unsupported"):

@@ -6,7 +6,7 @@ import asyncio
 import os
 import stat
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -43,6 +43,7 @@ class StagedFasta:
 
     summary: FastaSummary
     input_path: Path
+    sequence_ids: frozenset[str] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +72,7 @@ def stage_fasta(
             os.fdopen(os.dup(pinned.descriptor), "rb") as source,
             os.fdopen(output_descriptor, "wb", closefd=False) as destination,
         ):
-            summary = _validate_fasta_stream(
+            summary, sequence_ids = _validate_fasta_stream(
                 source,
                 destination,
                 max_sequences=max_sequences,
@@ -81,7 +82,11 @@ def stage_fasta(
         if pinned.file_state != _file_state(os.fstat(pinned.descriptor)):
             raise InputPathError("input file changed during intake")
         _revalidate_pinned_path(pinned)
-        return StagedFasta(summary=summary, input_path=pinned.resolved)
+        return StagedFasta(
+            summary=summary,
+            input_path=pinned.resolved,
+            sequence_ids=sequence_ids,
+        )
     except Exception:
         if output_descriptor is not None:
             _remove_owned_staging_file(staged_path, output_descriptor)
@@ -134,7 +139,7 @@ def validate_fasta_bytes(
     """Validate protein FASTA bytes and return canonical ASCII bytes."""
     source = BytesIO(content)
     canonical = BytesIO()
-    summary = _validate_fasta_stream(source, canonical, max_sequences=max_sequences)
+    summary, _ = _validate_fasta_stream(source, canonical, max_sequences=max_sequences)
     return summary, canonical.getvalue()
 
 
@@ -143,7 +148,7 @@ def _validate_fasta_stream(
     destination: BinaryIO,
     *,
     max_sequences: int,
-) -> FastaSummary:
+) -> tuple[FastaSummary, frozenset[str]]:
     if not 1 <= max_sequences <= MAX_SEQUENCE_COUNT:
         raise ValueError("max_sequences is outside the hard companion limit")
     sequence_ids: set[str] = set()
@@ -199,11 +204,14 @@ def _validate_fasta_stream(
     if current_length is None:
         raise FastaValidationError("FASTA contains no records")
     _finish_sequence(current_length, lengths)
-    return FastaSummary(
-        sequence_count=len(lengths),
-        total_residues=total_residues,
-        max_sequence_length=max(lengths),
-        input_bytes=input_bytes,
+    return (
+        FastaSummary(
+            sequence_count=len(lengths),
+            total_residues=total_residues,
+            max_sequence_length=max(lengths),
+            input_bytes=input_bytes,
+        ),
+        frozenset(sequence_ids),
     )
 
 

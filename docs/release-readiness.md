@@ -240,6 +240,9 @@ advice.
       `AnnotationDataset`. Full normalization remains unchanged.
 - [ ] The DeepKOALA companion's generated detailed CSV remains capped at 5,000,000 bytes. Core's
       streaming analysis intake does not increase that companion output limit.
+- [ ] DeepKOALA handoff schema version 2 proves exact input/output sequence-ID coverage before
+      publication. Single-domain output has exactly `topk` rows per input; multi-domain output has
+      at least one row per input. Only bounded aggregate counts enter the handoff and run report.
 - [ ] Core advertises exactly eighteen tools with self-contained schemas, including deterministic
       card/citation projection, local current-scope reference comparison, selected-reference
       export, and local KEGG Mapper/Syntax handoff preparation.

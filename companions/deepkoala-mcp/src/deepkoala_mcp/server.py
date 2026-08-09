@@ -47,6 +47,7 @@ _RESOURCE = re.compile(
     rf"^deepkoala://jobs/({JOB_ID_PATTERN})/(annotations|report)"
     r"(?:/(0|[1-9][0-9]{0,7})/([1-9][0-9]{0,5}))?$"
 )
+_RESOURCE_NOT_FOUND = -32002
 _M = TypeVar("_M", bound=BaseModel)
 
 
@@ -299,7 +300,12 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         except DeepKoalaMcpError as error:
             raise McpError(
                 types.ErrorData(
-                    code=types.INVALID_PARAMS,
+                    code=(
+                        _RESOURCE_NOT_FOUND
+                        if error.detail.code
+                        in {ErrorCode.JOB_NOT_FOUND, ErrorCode.ARTIFACT_NOT_FOUND}
+                        else types.INTERNAL_ERROR
+                    ),
                     message=f"{error.detail.code.value}: {error.detail.message}",
                     data=error.detail.model_dump(mode="json"),
                 )

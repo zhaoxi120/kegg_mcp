@@ -15,7 +15,7 @@ MAX_SEQUENCE_LENGTH = 100_000
 MAX_HEADER_BYTES = 1_024
 MAX_RETAINED_JOBS = 32
 MAX_RESOURCE_PAGE_BYTES = 65_536
-HANDOFF_SCHEMA_VERSION = "1"
+HANDOFF_SCHEMA_VERSION = "2"
 ANNOTATIONS_FILENAME = "deepkoala_annotations.csv"
 RUN_REPORT_FILENAME = "deepkoala_run_report.md"
 DEFAULT_MODEL_DATE = "202502"
@@ -320,10 +320,30 @@ class SourceProvenance(FrozenModel):
         return self
 
 
+class AnnotationOutputCoverage(FrozenModel):
+    """Aggregate proof that one successful output covers exactly its input FASTA."""
+
+    input_sequence_count: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
+    output_row_count: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
+    distinct_output_sequence_count: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
+    missing_input_sequence_count: Literal[0] = 0
+    unexpected_output_sequence_count: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def validate_complete_coverage(self) -> Self:
+        if self.distinct_output_sequence_count != self.input_sequence_count:
+            raise ValueError(
+                "successful output must cover every input sequence exactly by identity"
+            )
+        if self.output_row_count < self.distinct_output_sequence_count:
+            raise ValueError("output rows cannot be fewer than distinct output sequences")
+        return self
+
+
 class ImportHandoff(FrozenModel):
     """Versioned stable file handoff consumed by core normalization."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     tool_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$", max_length=32)
     input_path: str = Field(min_length=1, max_length=4_096)
     annotations_path: str = Field(min_length=1, max_length=4_096)
@@ -337,6 +357,7 @@ class ImportHandoff(FrozenModel):
         pattern=rf"^deepkoala://jobs/{JOB_ID_PATTERN}/report$",
         max_length=80,
     )
+    output_coverage: AnnotationOutputCoverage
     source: SourceProvenance
 
     @field_validator("input_path", "annotations_path", "report_path")
@@ -458,6 +479,7 @@ __all__ = [
     "MAX_SEQUENCE_COUNT",
     "MAX_SEQUENCE_LENGTH",
     "RUN_REPORT_FILENAME",
+    "AnnotationOutputCoverage",
     "CancelDeepKoalaJobInput",
     "CompanionRouteState",
     "CompanionStatus",

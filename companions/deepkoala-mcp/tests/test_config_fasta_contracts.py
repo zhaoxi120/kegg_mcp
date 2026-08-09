@@ -33,6 +33,7 @@ from deepkoala_mcp.contracts import (
     DEFAULT_MODEL_DATE,
     MAX_HEADER_BYTES,
     MAX_SEQUENCE_LENGTH,
+    AnnotationOutputCoverage,
     FastaSummary,
     ImportHandoff,
     RunDeepKoalaInput,
@@ -269,7 +270,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
         input_path="/allowed/original.faa",
     )
     handoff = ImportHandoff(
-        schema_version="1",
+        schema_version="2",
         tool_version="0.5.0",
         input_path="/allowed/original.faa",
         annotations_path="/outputs/run/deepkoala_annotations.csv",
@@ -277,6 +278,11 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
         input_format="deepkoala_detailed",
         annotations_resource_uri=f"deepkoala://jobs/{job_id}/annotations",
         report_resource_uri=f"deepkoala://jobs/{job_id}/report",
+        output_coverage=AnnotationOutputCoverage(
+            input_sequence_count=2,
+            output_row_count=3,
+            distinct_output_sequence_count=2,
+        ),
         source=source,
     )
     assert "+05:30" in handoff.model_dump_json()
@@ -291,6 +297,14 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     payload = handoff.model_dump(mode="python")
     del payload["input_format"]
     with pytest.raises(ValidationError, match="input_format"):
+        ImportHandoff.model_validate(payload, strict=True)
+    payload = handoff.model_dump(mode="python")
+    del payload["output_coverage"]
+    with pytest.raises(ValidationError, match="output_coverage"):
+        ImportHandoff.model_validate(payload, strict=True)
+    payload = handoff.model_dump(mode="python")
+    payload["output_coverage"]["missing_input_sequence_count"] = 1
+    with pytest.raises(ValidationError, match="missing_input_sequence_count"):
         ImportHandoff.model_validate(payload, strict=True)
     for field in ("source_name", "source_version"):
         payload = handoff.model_dump(mode="python")
@@ -358,6 +372,8 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
     )
     staged = job / "input.fasta"
     assert staged_result.input_path == source.resolve()
+    assert staged_result.sequence_ids == frozenset({"p"})
+    assert "sequence_ids" not in repr(staged_result)
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
@@ -386,6 +402,7 @@ def test_stage_accepts_large_valid_fasta_within_sequence_limits(tmp_path: Path) 
     assert staged.stat().st_size > 5_000_000
     assert staged_result.summary.total_residues == 5_100_000
     assert staged_result.summary.input_bytes == staged.stat().st_size
+    assert staged_result.sequence_ids == frozenset(f"protein-{index}" for index in range(51))
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
@@ -427,7 +444,7 @@ def test_failed_stage_preserves_a_replacement_staging_inode(
         destination: BinaryIO,
         *,
         max_sequences: int,
-    ) -> FastaSummary:
+    ) -> tuple[FastaSummary, frozenset[str]]:
         del source_stream, destination, max_sequences
         staged.unlink()
         staged.write_text("replacement content", encoding="ascii")
@@ -464,7 +481,7 @@ def test_stage_rejects_ancestor_replacement_during_intake(
         destination: BinaryIO,
         *,
         max_sequences: int,
-    ) -> FastaSummary:
+    ) -> tuple[FastaSummary, frozenset[str]]:
         summary = validate_stream(source, destination, max_sequences=max_sequences)
         allowed.rename(moved)
         allowed.mkdir()

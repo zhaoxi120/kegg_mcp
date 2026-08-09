@@ -58,10 +58,11 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 7. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
    `cancel_deepkoala_job` only for a user cancellation, an agreed deadline, or safe recovery from
    a lost client operation.
-8. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
-   `deepkoala_run_report.md` paths, schema/tool versions, original FASTA path, model parameters,
-   timing, and caveats. Explicitly state the resolved model name and model version reported by the
-   service, plus the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
+8. On success, require handoff `schema_version="2"` and return the companion-provided absolute
+   `deepkoala_annotations.csv` and `deepkoala_run_report.md` paths, schema/tool versions, original
+   FASTA path, model parameters, timing, caveats, and the bounded `output_coverage` aggregate
+   counts. Explicitly state the resolved model name and model version reported by the service, plus
+   the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
 9. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.
@@ -70,9 +71,11 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 
 - If the original request ends at protein annotation, return the stable CSV, run report, and
   source provenance, then stop.
-- If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
-  reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
-  annotation job succeeds. Prefer the returned `annotations_path` and pass
+- If the original request also asks for KO analysis, MODULE evaluation, descriptive pathway KO
+  coverage, deterministic KO-set comparison, or reporting work,
+  automatically continue with the installed `kegg-ko-analysis` Skill after the annotation job
+  succeeds. Prefer the returned
+  `annotations_path` and pass
   `input_format="deepkoala_detailed"` and the `source` object unchanged. Core derives its compact
   sorted unique accepted-KO analysis view from this handoff; request full normalization separately
   only when record-level evidence is needed. The companion already caps its generated detailed CSV

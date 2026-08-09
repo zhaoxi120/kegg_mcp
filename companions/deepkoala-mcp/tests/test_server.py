@@ -51,9 +51,17 @@ def _manager(config: DeepKoalaRuntimeConfig, payload: bytes = DETAILED_CSV) -> D
     return DeepKoalaJobManager(config, runner=_Runner(payload), runtime_probe=ready_probe)
 
 
-def _input(config: DeepKoalaRuntimeConfig, name: str = "mcp-run") -> dict[str, object]:
+def _input(
+    config: DeepKoalaRuntimeConfig,
+    name: str = "mcp-run",
+    *,
+    sequence_ids: tuple[str, ...] = ("protein-1",),
+) -> dict[str, object]:
     fasta = config.input_roots[0] / f"{name}.faa"
-    fasta.write_text(">protein-1\nMPEPTIDE\n", encoding="ascii")
+    fasta.write_text(
+        "".join(f">{sequence_id}\nMPEPTIDE\n" for sequence_id in sequence_ids),
+        encoding="ascii",
+    )
     return {
         "fasta_path": str(fasta),
         "output_directory": str(config.output_roots[0] / name),
@@ -173,8 +181,15 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         assert cast(str, job["started_at"]).endswith("Z")
         assert cast(str, job["completed_at"]).endswith("Z")
         handoff = cast(dict[str, object], data["handoff"])
-        assert handoff["schema_version"] == "1"
+        assert handoff["schema_version"] == "2"
         assert handoff["tool_version"] == "0.5.0"
+        assert handoff["output_coverage"] == {
+            "input_sequence_count": 1,
+            "output_row_count": 1,
+            "distinct_output_sequence_count": 1,
+            "missing_input_sequence_count": 0,
+            "unexpected_output_sequence_count": 0,
+        }
         assert Path(cast(str, handoff["annotations_path"])).read_bytes() == DETAILED_CSV
         assert Path(cast(str, handoff["report_path"])).is_file()
         source = cast(dict[str, object], handoff["source"])
@@ -190,8 +205,9 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         deleted = await session.call_tool("delete_deepkoala_job", {"job_id": job_id})
         _validate(_tool(tools, "delete_deepkoala_job"), deleted)
         assert stable_path.is_file()
-        with pytest.raises(McpError):
+        with pytest.raises(McpError) as missing:
             await session.read_resource(AnyUrl(cast(str, handoff["annotations_resource_uri"])))
+        assert missing.value.error.code == -32002
 
 
 @pytest.mark.asyncio
@@ -202,7 +218,14 @@ async def test_large_resource_fallback_is_versioned_bounded_and_reconstructable(
     payload = b"name,predict_label,probability,threshold,annotate\n" + rows
     server = create_server(_manager(runtime_config, payload))
     async with create_connected_server_and_client_session(server) as session:
-        started = await session.call_tool("run_deepkoala_job", _input(runtime_config, "large"))
+        started = await session.call_tool(
+            "run_deepkoala_job",
+            _input(
+                runtime_config,
+                "large",
+                sequence_ids=tuple(f"protein-{index}" for index in range(4_000)),
+            ),
+        )
         job_id = cast(str, cast(dict[str, object], _data(started)["job"])["job_id"])
         async with asyncio.timeout(5):
             while True:
@@ -228,10 +251,12 @@ async def test_large_resource_fallback_is_versioned_bounded_and_reconstructable(
             chunks.append(base64.b64decode(page["content_base64"], validate=True))
             next_uri = cast(str | None, page["next_uri"])
         assert b"".join(chunks) == payload
-        with pytest.raises(McpError):
+        with pytest.raises(McpError) as invalid:
             await session.read_resource(AnyUrl(f"deepkoala://jobs/{job_id}/annotations/00/65536"))
-        with pytest.raises(McpError):
+        assert invalid.value.error.code == types.INVALID_PARAMS
+        with pytest.raises(McpError) as missing:
             await session.read_resource(AnyUrl(f"deepkoala://jobs/{'job_' + 'f' * 32}/annotations"))
+        assert missing.value.error.code == -32002
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from deepkoala_mcp import __version__
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
     HANDOFF_SCHEMA_VERSION,
+    AnnotationOutputCoverage,
     ExecutionPlan,
     FastaSummary,
     ImportHandoff,
@@ -29,6 +30,7 @@ def build_handoff(
     report_path: Path,
     completed_at: datetime,
     runtime: RuntimeProbeResult,
+    output_coverage: AnnotationOutputCoverage,
 ) -> ImportHandoff:
     """Build the versioned stable file handoff without a digest or private result ID."""
     metadata = (
@@ -66,6 +68,7 @@ def build_handoff(
         input_format="deepkoala_detailed",
         annotations_resource_uri=f"{base}/annotations",
         report_resource_uri=f"{base}/report",
+        output_coverage=output_coverage,
         source=source,
     )
 
@@ -79,6 +82,7 @@ def build_run_report(
     started_at: datetime,
     completed_at: datetime,
     runtime: RuntimeProbeResult,
+    output_coverage: AnnotationOutputCoverage,
 ) -> str:
     """Build a bounded human-readable record of the completed local run."""
     return "\n".join(
@@ -101,7 +105,18 @@ def build_run_report(
             f"- Top-k: `{plan.topk}`",
             f"- Multi-domain mode: `{str(plan.multi).lower()}`",
             f"- Timeout seconds: `{plan.timeout_seconds}`",
-            f"- Sequence count: `{fasta.sequence_count}`",
+            f"- Input sequence count: `{output_coverage.input_sequence_count}`",
+            f"- Output row count: `{output_coverage.output_row_count}`",
+            (
+                "- Distinct output sequence count: "
+                f"`{output_coverage.distinct_output_sequence_count}`"
+            ),
+            (f"- Missing input sequence count: `{output_coverage.missing_input_sequence_count}`"),
+            (
+                "- Unexpected output sequence count: "
+                f"`{output_coverage.unexpected_output_sequence_count}`"
+            ),
+            f"- Input residue count: `{fasta.total_residues}`",
             f"- Started at: `{_iso(started_at)}`",
             f"- Completed at: `{_iso(completed_at)}`",
             "",

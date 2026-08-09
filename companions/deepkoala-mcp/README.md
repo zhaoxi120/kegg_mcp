@@ -145,10 +145,18 @@ probability, threshold, annotation marker, and coordinate tuple is retained as a
 multi-domain row; partially empty or malformed evidence is rejected. The companion validates the
 shape and score evidence but does not normalize K numbers or decide which rows enter KEGG analysis.
 
+The companion also verifies output identity coverage against the staged FASTA before publication.
+Successful single-domain output contains exactly the requested `topk` rows for every input ID;
+successful multi-domain output contains at least one row per input ID and may contain additional
+domain or top-k rows. Missing or unexpected IDs fail the job without publishing a handoff. The
+complete input ID set remains private process memory and is not returned or hashed.
+
 The Markdown report records the original FASTA path, companion and DeepKOALA versions, resolved model
-name and date, fixed parameters, sequence count, readiness, and timezone-aware timestamps. The
-successful job response returns handoff schema version `1`, absolute input, annotation, and report
-paths, `input_format="deepkoala_detailed"`, and source provenance accepted by the core importer.
+name and date, fixed parameters, readiness, timezone-aware timestamps, and bounded aggregate output
+coverage counts. The successful job response returns handoff schema version `2`, the same aggregate
+coverage, absolute input, annotation, and report paths, `input_format="deepkoala_detailed"`, and
+source provenance accepted by the core importer. Resource-pagination envelopes retain their
+independent schema version `1`.
 
 Stable files are the cross-MCP contract. The job ID is process-scoped. Deleting a terminal job
 forgets only its record; delivered files remain after deletion and server exit. Failed, cancelled,

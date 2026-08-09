@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from deepkoala_mcp.contracts import ExecutionPlan, FastaSummary, ImportHandoff, JobState
 from deepkoala_mcp.installation import RuntimeProbeResult
-from deepkoala_mcp.job_storage import ControlledOutputDirectory
+from deepkoala_mcp.job_storage import (
+    ControlledOutputDirectory,
+    _validate_detailed_csv,  # pyright: ignore[reportPrivateUsage]
+    _ValidatedDetailedCsv,  # pyright: ignore[reportPrivateUsage]
+)
 from deepkoala_mcp.runner import ProcessOutcome, RunnerPlan
+
+ArtifactName = Literal["annotations", "report"]
 
 
 class Runner(Protocol):
@@ -37,6 +43,7 @@ class JobRecord:
     source_version: str
     plan: ExecutionPlan
     fasta: FastaSummary
+    input_sequence_ids: frozenset[str] = field(repr=False)
     started_at: datetime
     runner_lock_fd: int | None
     state: JobState = JobState.RUNNING
@@ -48,3 +55,14 @@ class JobRecord:
     handoff: ImportHandoff | None = None
     task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
+
+    def validate_output(self, max_output_bytes: int) -> _ValidatedDetailedCsv:
+        if len(self.input_sequence_ids) != self.fasta.sequence_count:
+            raise RuntimeError("staged FASTA identifier accounting is inconsistent")
+        return _validate_detailed_csv(
+            self.directory / "output.csv",
+            max_output_bytes,
+            expected_sequence_ids=self.input_sequence_ids,
+            multi=self.plan.multi,
+            topk=self.plan.topk,
+        )

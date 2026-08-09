@@ -52,17 +52,26 @@ network requests.
 
 A successful job provides:
 
-- `schema_version` and `tool_version`;
+- handoff `schema_version="2"` and `tool_version`;
 - the original allowlisted absolute protein FASTA path;
 - an absolute `deepkoala_annotations.csv` path;
 - an absolute `deepkoala_run_report.md` path;
 - `input_format="deepkoala_detailed"`;
+- bounded `output_coverage` counts for input sequences, output rows, distinct output sequence IDs,
+  missing input sequences, and unexpected output sequences;
 - source provenance without workflow digests; and
 - model, installed resource date, fixed execution parameters, and timestamps.
 
-The execution parameters include the actual boolean `multi` value. A fully empty prediction,
-score, annotation marker, and coordinate tuple is an unclassified row rather than a KO assignment;
-partially empty or malformed evidence is invalid.
+The execution parameters include the actual boolean `multi` value. In multi-domain mode, a fully
+empty prediction, score, annotation marker, and coordinate tuple is an unclassified row rather than
+a KO assignment; single-domain empty predictions and partially empty or malformed evidence are
+invalid.
+
+Before publishing a successful handoff, the companion proves that output sequence IDs cover
+all and only the unique input FASTA IDs. Single-domain output has exactly the requested `topk`
+rows per input sequence. Multi-domain output has at least one row per input sequence and may retain
+multiple domain or top-k rows. Missing and unexpected counts are therefore zero in every successful
+version 2 handoff. Input IDs remain private process memory and are never returned as a list or digest.
 
 Pass the CSV path and provenance to the independent KO-analysis stage first; do not infer Core's
 allowed-root policy from deployment topology. Only the exact typed `file_path` rejection below may
@@ -90,7 +99,8 @@ unreadable path.
 
 Read the handoff's `annotations_resource_uri` while the process-scoped job remains retained. A
 direct `text/csv` response is the complete payload. For a paged `application/json` response, require
-`schema_version="1"`, `artifact="annotations"`, and `encoding="base64"`; follow only the returned
+resource-page `schema_version="1"`, `artifact="annotations"`, and `encoding="base64"`; follow only
+the returned
 `next_uri` chain, reject repeated URIs, require contiguous offsets and stable `total_bytes`, verify
 each `returned_bytes` value, and require the final byte count to equal `total_bytes`. Decode the
 completed payload as strict UTF-8 without parsing or transforming CSV rows.

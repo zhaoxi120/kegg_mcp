@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from deepkoala_mcp.contracts import (
@@ -19,7 +19,9 @@ from deepkoala_mcp.contracts import (
     JOB_ID_PATTERN,
     MAX_RESOURCE_PAGE_BYTES,
     MAX_RETAINED_JOBS,
+    MAX_SEQUENCE_COUNT,
     RUN_REPORT_FILENAME,
+    AnnotationOutputCoverage,
 )
 
 _JOB = re.compile(rf"^{JOB_ID_PATTERN}$")
@@ -57,6 +59,15 @@ class ArtifactSlice:
 
     content: bytes
     total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedDetailedCsv:
+    """One immutable validated output payload and its aggregate identity coverage."""
+
+    content: bytes = field(repr=False)
+    output_bytes: int
+    coverage: AnnotationOutputCoverage
 
 
 @dataclass(slots=True)
@@ -209,13 +220,16 @@ def create_output_directory(
 
 def publish_artifacts(
     *,
-    raw_output: Path,
+    validated_output: _ValidatedDetailedCsv,
     output_directory: ControlledOutputDirectory,
     report: str,
     max_output_bytes: int,
 ) -> tuple[Path, Path, int]:
-    """Validate detailed CSV and atomically publish both stable named artifacts."""
-    annotations, output_bytes = _validated_detailed_csv(raw_output, max_output_bytes)
+    """Atomically publish one validated CSV and its stable run report."""
+    annotations = validated_output.content
+    output_bytes = validated_output.output_bytes
+    if output_bytes > max_output_bytes or len(annotations) != output_bytes:
+        raise OutputValidationError("validated output exceeds the publication bound")
     report_bytes = report.encode("utf-8")
     if not report_bytes or len(report_bytes) > _MAX_REPORT_BYTES:
         raise OutputValidationError("run report exceeds the bounded size")
@@ -384,7 +398,23 @@ def close_output_directory(output_directory: ControlledOutputDirectory) -> None:
         os.close(descriptor)
 
 
-def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
+def _validate_detailed_csv(  # pyright: ignore[reportUnusedFunction]
+    path: Path,
+    max_bytes: int,
+    *,
+    expected_sequence_ids: frozenset[str],
+    multi: bool,
+    topk: int,
+) -> _ValidatedDetailedCsv:
+    """Validate detailed evidence and prove exact input-sequence identity coverage."""
+    if (
+        not expected_sequence_ids
+        or len(expected_sequence_ids) > MAX_SEQUENCE_COUNT
+        or any(not identifier for identifier in expected_sequence_ids)
+    ):
+        raise ValueError("expected FASTA identifiers are outside the internal bounds")
+    if not 1 <= topk <= 10:
+        raise ValueError("output coverage policy is outside the execution bounds")
     named = _artifact_metadata(path, max_bytes)
     descriptor = os.open(
         path,
@@ -424,14 +454,29 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
             (header.index("start"), header.index("end")) if "start" in header else None
         )
         rows = 0
+        output_counts: dict[str, int] = {}
         for row in reader:
             if len(row) != len(header):
                 raise OutputValidationError("DeepKOALA detailed CSV has a malformed row")
             rows += 1
-            if not row[indexes["name"]]:
+            sequence_id = row[indexes["name"]]
+            if not sequence_id:
                 raise OutputValidationError("DeepKOALA detailed CSV has a missing identifier")
+            if sequence_id not in expected_sequence_ids:
+                raise OutputValidationError(
+                    "DeepKOALA detailed CSV contains an unexpected sequence identifier"
+                )
+            output_counts[sequence_id] = output_counts.get(sequence_id, 0) + 1
+            if not multi and output_counts[sequence_id] > topk:
+                raise OutputValidationError(
+                    "DeepKOALA single-domain output exceeds the requested top-k row count"
+                )
             prediction = row[indexes["predict_label"]]
             if not prediction:
+                if not multi:
+                    raise OutputValidationError(
+                        "DeepKOALA single-domain output requires a prediction for every row"
+                    )
                 coordinates = (
                     []
                     if coordinate_indexes is None
@@ -471,11 +516,28 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
                         )
         if rows == 0:
             raise OutputValidationError("DeepKOALA detailed CSV has no prediction rows")
+        if output_counts.keys() != expected_sequence_ids:
+            raise OutputValidationError(
+                "DeepKOALA detailed CSV does not cover every input sequence identifier"
+            )
+        if not multi and any(count != topk for count in output_counts.values()):
+            raise OutputValidationError(
+                "DeepKOALA single-domain output does not contain the requested top-k rows"
+            )
     except (UnicodeError, csv.Error, StopIteration, ValueError) as error:
         if isinstance(error, OutputValidationError):
             raise
         raise OutputValidationError("DeepKOALA detailed CSV is malformed") from error
-    return bytes(content), named.st_size
+    coverage = AnnotationOutputCoverage(
+        input_sequence_count=len(expected_sequence_ids),
+        output_row_count=rows,
+        distinct_output_sequence_count=len(output_counts),
+    )
+    return _ValidatedDetailedCsv(
+        content=bytes(content),
+        output_bytes=named.st_size,
+        coverage=coverage,
+    )
 
 
 def _bounded_probability(value: str) -> float | None:

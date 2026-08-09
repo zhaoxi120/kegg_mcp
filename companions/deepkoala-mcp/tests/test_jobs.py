@@ -159,7 +159,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     runner = SuccessfulRunner()
-    request = _request(runtime_config, model="frag", model_date="202401", topk=2)
+    request = _request(runtime_config, model="frag", model_date="202401")
     async with _manager(runtime_config, runner) as manager:
         started = await manager.run(request)
         assert started.job.state is JobState.RUNNING
@@ -178,9 +178,19 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         report_text = report.read_text(encoding="utf-8")
         assert str(Path(request.fasta_path).resolve()) in report_text
         assert "- Device policy: `cpu`" in report_text
+        assert "- Input sequence count: `1`" in report_text
+        assert "- Output row count: `1`" in report_text
+        assert "- Missing input sequence count: `0`" in report_text
+        assert "- Unexpected output sequence count: `0`" in report_text
         assert stat.S_IMODE(annotations.stat().st_mode) == 0o600
-        assert handoff.schema_version == "1"
+        assert handoff.schema_version == "2"
         assert handoff.tool_version == "0.5.0"
+        assert handoff.output_coverage.input_sequence_count == 1
+        assert handoff.output_coverage.output_row_count == 1
+        assert handoff.output_coverage.distinct_output_sequence_count == 1
+        assert handoff.output_coverage.missing_input_sequence_count == 0
+        assert handoff.output_coverage.unexpected_output_sequence_count == 0
+        assert "sequence_ids" not in handoff.model_dump_json()
         assert handoff.input_path == request.fasta_path
         assert handoff.source.input_path == request.fasta_path
         assert handoff.source.model_name == "frag"
@@ -193,12 +203,46 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert "sha" not in handoff.model_dump_json().lower()
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        (b"name,predict_label,probability,threshold,annotate\nprotein-1,K00001,0.95,0.50,*\n"),
+        (
+            b"name,predict_label,probability,threshold,annotate\n"
+            b"protein-1,K00001,0.95,0.50,*\n"
+            b"unexpected,K00002,0.95,0.50,*\n"
+        ),
+    ],
+    ids=["missing-input-id", "unexpected-output-id"],
+)
+@pytest.mark.asyncio
+async def test_job_does_not_publish_a_handoff_for_incomplete_identity_coverage(
+    runtime_config: DeepKoalaRuntimeConfig,
+    payload: bytes,
+) -> None:
+    request = _request(
+        runtime_config,
+        name="invalid-coverage",
+        fasta=">protein-1\nMPEPTIDE\n>protein-2\nMPEPTIDE\n",
+    )
+    async with _manager(runtime_config, SuccessfulRunner(payload)) as manager:
+        started = await manager.run(request)
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+        result = await manager.get_job(started.job.job_id)
+
+    assert result.handoff is None
+    assert not _explicit_output_path(request).exists()
+
+
 @pytest.mark.asyncio
 async def test_run_accepts_large_valid_fasta_within_sequence_limits(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     fasta = "".join(f">protein-{index}\n{'M' * 100_000}\n" for index in range(51))
-    runner = SuccessfulRunner()
+    payload = b"name,predict_label,probability,threshold,annotate\n" + b"".join(
+        f"protein-{index},K00001,0.95,0.50,*\n".encode("ascii") for index in range(51)
+    )
+    runner = SuccessfulRunner(payload)
     request = _request(runtime_config, name="large-fasta", fasta=fasta)
 
     async with _manager(runtime_config, runner) as manager:
@@ -588,7 +632,7 @@ async def test_omitted_output_directory_allocates_a_fresh_configured_child(
         update={"output_roots": (*runtime_config.output_roots, default_output_root)}
     )
     input_path = runtime_config.input_roots[0] / "allocated.faa"
-    input_path.write_text(">protein\nMPEPTIDE\n", encoding="ascii")
+    input_path.write_text(">protein-1\nMPEPTIDE\n", encoding="ascii")
     request = RunDeepKoalaInput(fasta_path=str(input_path))
 
     async with _manager(config, SuccessfulRunner()) as manager:

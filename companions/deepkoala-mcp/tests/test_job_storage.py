@@ -27,12 +27,14 @@ from deepkoala_mcp.job_storage import (
     close_state_session,
     create_output_directory,
     open_state_session,
-    publish_artifacts,
     read_artifact_slice,
     release_runner_lock,
     remove_job_directory,
     try_acquire_runner_lock,
     validate_delivered_artifacts,
+)
+from deepkoala_mcp.job_storage import (
+    publish_artifacts as _publish_validated_artifacts,
 )
 
 
@@ -51,6 +53,32 @@ def _raw_output(tmp_path: Path) -> Path:
     raw = tmp_path / "raw.csv"
     raw.write_bytes(DETAILED_CSV)
     return raw
+
+
+def _validate_and_publish_artifacts(
+    *,
+    raw_output: Path,
+    output_directory: ControlledOutputDirectory,
+    report: str,
+    max_output_bytes: int,
+    expected_sequence_ids: frozenset[str] = frozenset({"protein-1"}),
+    multi: bool = False,
+    topk: int = 1,
+) -> tuple[Path, Path, int]:
+    """Validate and publish one small synthetic detailed output."""
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw_output,
+        max_output_bytes,
+        expected_sequence_ids=expected_sequence_ids,
+        multi=multi,
+        topk=topk,
+    )
+    return _publish_validated_artifacts(
+        validated_output=validated,
+        output_directory=output_directory,
+        report=report,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def test_existing_empty_output_is_pinned_and_not_removed_by_cleanup(tmp_path: Path) -> None:
@@ -164,7 +192,7 @@ def test_cleanup_preserves_replaced_delivered_file_in_adopted_directory(
     output = root / "existing"
     output.mkdir(mode=0o700)
     controlled = create_output_directory(output, (root,))
-    publish_artifacts(
+    _validate_and_publish_artifacts(
         raw_output=_raw_output(tmp_path),
         output_directory=controlled,
         report="report\n",
@@ -411,15 +439,103 @@ def test_publish_accepts_fully_empty_multi_domain_unclassified_row(tmp_path: Pat
     raw = tmp_path / "multi.csv"
     raw.write_bytes(b"name,predict_label,probability,threshold,start,end,annotate\nshort,,,,,,\n")
     try:
-        annotations, _, _ = publish_artifacts(
+        annotations, _, _ = _validate_and_publish_artifacts(
             raw_output=raw,
             output_directory=controlled,
             report="report\n",
             max_output_bytes=5_000_000,
+            expected_sequence_ids=frozenset({"short"}),
+            multi=True,
         )
         assert annotations.read_bytes() == raw.read_bytes()
     finally:
         close_output_directory(controlled)
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (b"protein-1,K00001,0.9,0.5,*\n", "does not cover every input"),
+        (
+            b"protein-1,K00001,0.9,0.5,*\nunexpected,K00002,0.9,0.5,*\n",
+            "unexpected sequence identifier",
+        ),
+    ],
+)
+def test_validation_rejects_missing_or_unexpected_sequence_ids(
+    tmp_path: Path,
+    rows: bytes,
+    message: str,
+) -> None:
+    raw = tmp_path / "coverage.csv"
+    raw.write_bytes(b"name,predict_label,probability,threshold,annotate\n" + rows)
+
+    with pytest.raises(OutputValidationError, match=message):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            5_000_000,
+            expected_sequence_ids=frozenset({"protein-1", "protein-2"}),
+            multi=False,
+            topk=1,
+        )
+
+
+def test_single_domain_validation_requires_exact_topk_rows_per_sequence(tmp_path: Path) -> None:
+    raw = tmp_path / "topk.csv"
+    raw.write_bytes(
+        b"name,predict_label,probability,threshold,annotate\n"
+        b"protein-1,K00001,0.9,0.5,*\n"
+        b"protein-2,K00002,0.9,0.5,*\n"
+    )
+
+    with pytest.raises(OutputValidationError, match="requested top-k rows"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            5_000_000,
+            expected_sequence_ids=frozenset({"protein-1", "protein-2"}),
+            multi=False,
+            topk=2,
+        )
+
+
+def test_single_domain_validation_rejects_an_empty_prediction_row(tmp_path: Path) -> None:
+    raw = tmp_path / "single-empty.csv"
+    raw.write_bytes(b"name,predict_label,probability,threshold,annotate\nprotein-1,,,,\n")
+
+    with pytest.raises(OutputValidationError, match="requires a prediction"):
+        storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            5_000_000,
+            expected_sequence_ids=frozenset({"protein-1"}),
+            multi=False,
+            topk=1,
+        )
+
+
+def test_multi_domain_validation_accepts_multiple_rows_and_reports_coverage(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "multi-coverage.csv"
+    raw.write_bytes(
+        b"name,predict_label,probability,threshold,start,end,annotate\n"
+        b"protein-1,K00001,0.9,0.5,1,50,*\n"
+        b"protein-1,K00002,0.8,0.5,51,100,*\n"
+        b"protein-2,,,,,,\n"
+    )
+
+    validated = storage._validate_detailed_csv(  # pyright: ignore[reportPrivateUsage]
+        raw,
+        5_000_000,
+        expected_sequence_ids=frozenset({"protein-1", "protein-2"}),
+        multi=True,
+        topk=1,
+    )
+
+    assert validated.coverage.input_sequence_count == 2
+    assert validated.coverage.output_row_count == 3
+    assert validated.coverage.distinct_output_sequence_count == 2
+    assert validated.coverage.missing_input_sequence_count == 0
+    assert validated.coverage.unexpected_output_sequence_count == 0
 
 
 @pytest.mark.parametrize(
@@ -439,7 +555,7 @@ def test_publish_rejects_partial_empty_or_malformed_multi_domain_rows(
     raw.write_bytes(b"name,predict_label,probability,threshold,start,end,annotate\n" + row)
     try:
         with pytest.raises(OutputValidationError):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=raw,
                 output_directory=controlled,
                 report="report\n",
@@ -459,7 +575,7 @@ def test_publish_rejects_ancestor_symlink_substitution(tmp_path: Path) -> None:
     parent.symlink_to(escape, target_is_directory=True)
     try:
         with pytest.raises(OutputValidationError, match="changed or became unsafe"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -481,7 +597,7 @@ def test_publish_rejects_same_name_directory_replacement(tmp_path: Path) -> None
     output.mkdir(mode=0o700)
     try:
         with pytest.raises(OutputValidationError, match="changed or became unsafe"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -504,7 +620,7 @@ def test_publish_rejects_configured_root_replacement(tmp_path: Path) -> None:
     replacement.mkdir(parents=True, mode=0o700)
     try:
         with pytest.raises(OutputValidationError, match="changed or became unsafe"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -523,7 +639,7 @@ def test_resources_and_cleanup_reject_post_publish_ancestor_substitution(
     tmp_path: Path,
 ) -> None:
     root, parent, _, controlled = _controlled_output(tmp_path)
-    publish_artifacts(
+    _validate_and_publish_artifacts(
         raw_output=_raw_output(tmp_path),
         output_directory=controlled,
         report="report\n",
@@ -592,7 +708,7 @@ def test_publish_checks_only_the_first_unexpected_entry(
     monkeypatch.setattr(storage.os, "scandir", _scandir)
     try:
         with pytest.raises(OutputValidationError, match="no longer empty"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -641,7 +757,7 @@ def test_publish_rolls_back_if_the_stable_path_changes_during_writes(
     monkeypatch.setattr(storage, "_write_noreplace", _write)
     try:
         with pytest.raises(OutputValidationError, match="changed or became unsafe"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -677,7 +793,7 @@ def test_publish_rejects_and_rolls_back_an_entry_added_during_writes(
     monkeypatch.setattr(storage, "_write_noreplace", _write)
     try:
         with pytest.raises(OutputValidationError, match="exactly two artifacts"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -712,7 +828,7 @@ def test_publish_rechecks_the_named_path_after_artifact_capture(
     monkeypatch.setattr(storage, "_capture_delivered_identities", _capture)
     try:
         with pytest.raises(OutputValidationError, match="changed or became unsafe"):
-            publish_artifacts(
+            _validate_and_publish_artifacts(
                 raw_output=_raw_output(tmp_path),
                 output_directory=controlled,
                 report="report\n",
@@ -730,7 +846,7 @@ def test_delivered_artifact_replacement_fails_closed(
     artifact_name: str,
 ) -> None:
     _, _, output, controlled = _controlled_output(tmp_path)
-    publish_artifacts(
+    _validate_and_publish_artifacts(
         raw_output=_raw_output(tmp_path),
         output_directory=controlled,
         report="report\n",
@@ -758,7 +874,7 @@ def test_delivered_artifact_replacement_fails_closed(
 
 def test_delivered_artifact_in_place_mutation_fails_closed(tmp_path: Path) -> None:
     _, _, output, controlled = _controlled_output(tmp_path)
-    publish_artifacts(
+    _validate_and_publish_artifacts(
         raw_output=_raw_output(tmp_path),
         output_directory=controlled,
         report="report\n",

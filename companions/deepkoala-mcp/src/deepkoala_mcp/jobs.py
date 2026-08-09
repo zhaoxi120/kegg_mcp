@@ -7,11 +7,11 @@ import secrets
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import NoReturn
 
 from deepkoala_mcp import __version__
+from deepkoala_mcp._job_types import ArtifactName, Runner, RuntimeProbe
 from deepkoala_mcp._job_types import JobRecord as _JobRecord
-from deepkoala_mcp._job_types import Runner, RuntimeProbe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
@@ -76,7 +76,6 @@ from deepkoala_mcp.runner import (
     RunnerTimedOutError,
 )
 
-ArtifactName = Literal["annotations", "report"]
 _TERMINAL = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED, JobState.TIMED_OUT})
 
 
@@ -226,6 +225,7 @@ class DeepKoalaJobManager:
                     source_version=installation.source_version,
                     plan=plan,
                     fasta=staged.summary,
+                    input_sequence_ids=staged.sequence_ids,
                     started_at=_now(),
                     runner_lock_fd=runner_lock_fd,
                 )
@@ -500,8 +500,9 @@ class DeepKoalaJobManager:
                 else:
                     stage = "artifact_publication"
                     completed_at = _now()
+                    validated_output = record.validate_output(self.config.max_output_bytes)
                     annotations, report, output_bytes = publish_artifacts(
-                        raw_output=record.directory / "output.csv",
+                        validated_output=validated_output,
                         output_directory=record.output_directory,
                         report=build_run_report(
                             input_path=record.input_path,
@@ -511,6 +512,7 @@ class DeepKoalaJobManager:
                             started_at=record.started_at,
                             completed_at=completed_at,
                             runtime=runtime,
+                            output_coverage=validated_output.coverage,
                         ),
                         max_output_bytes=self.config.max_output_bytes,
                     )
@@ -523,6 +525,7 @@ class DeepKoalaJobManager:
                         report_path=report,
                         completed_at=completed_at,
                         runtime=runtime,
+                        output_coverage=validated_output.coverage,
                     )
                     state = JobState.SUCCEEDED
                     reason = None
@@ -566,6 +569,7 @@ class DeepKoalaJobManager:
             completed_at = completed_at or _now()
             self._release_record_runner(record)
             async with self._lock:
+                record.input_sequence_ids = frozenset()
                 record.state = state
                 record.failure_reason = reason
                 record.output_bytes = output_bytes if state is JobState.SUCCEEDED else None
