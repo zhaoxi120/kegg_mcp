@@ -3,6 +3,7 @@
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
@@ -94,6 +95,7 @@ def parse_deepkoala_row(
     diagnostics: list[ImportDiagnostic],
     remaining_assignment_capacity: int | None = None,
     max_assignment_count: int | None = None,
+    assignment_limit_name: Literal["max_records", "max_expanded_assignments"] = "max_records",
 ) -> DeepKoalaParsedRow | None:
     """Classify one validated-width source row without retaining cross-row state."""
     values = {field.name: field.value for field in evidence.fields}
@@ -122,7 +124,7 @@ def parse_deepkoala_row(
             suggested_action="Reduce the input or use a larger safe assignment limit.",
             safe_details=(
                 SafeDetail(
-                    name="max_assignments",
+                    name=assignment_limit_name,
                     value=str(max_assignment_count or remaining_assignment_capacity),
                 ),
             ),

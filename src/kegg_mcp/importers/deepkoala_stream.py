@@ -267,6 +267,7 @@ def stream_deepkoala_analysis_view(
                         stream_limits.max_expanded_assignments - expanded_assignments
                     ),
                     max_assignment_count=stream_limits.max_expanded_assignments,
+                    assignment_limit_name="max_expanded_assignments",
                 )
                 diagnostics.extend(row_diagnostics)
                 if parsed is None:
