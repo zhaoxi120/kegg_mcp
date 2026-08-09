@@ -40,7 +40,7 @@ protein FASTA
   -> deepkoala-mcp
   -> deepkoala_annotations.csv plus source provenance
   -> kegg-mcp
-  -> output bundle plus render_input.json version 5
+  -> output bundle plus render_input.json version 6
   -> kegg-render-mcp
   -> bounded static SVG or PNG artifacts
 ```
@@ -82,7 +82,7 @@ The repository keeps three process boundaries:
 | --- | --- | --- |
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
-| `kegg-render-mcp` | Validate a version 5 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
+| `kegg-render-mcp` | Validate a version 6 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 ### Platform boundary
 
@@ -161,7 +161,7 @@ The following rules are invariant:
 
 - Raw source evidence is immutable after import.
 - One sequence may have multiple KO records, ranks, or domain-coordinate assignments.
-- In full-record retention, a KO set is a derived view of records, not the primary evidence model.
+- In full normalization, a KO set is a derived view of records, not the primary evidence model.
 - The source decision is preserved separately from a named and versioned normalization policy.
 - Normalized states are `accepted`, `rejected`, `unclassified`, and `invalid`.
 - Malformed identifiers and unparsed rows remain visible in the import report.
@@ -175,20 +175,18 @@ Every MODULE, pathway, ranking, comparison, and rendering workflow uses one sort
 accepted K numbers. Rejected, unclassified, invalid, and below-threshold predictions never enter
 analysis.
 
-Full normalization remains the evidence-preserving default and retains annotation records,
+Full normalization is the evidence-preserving operation and retains annotation records,
 protein-to-KO mappings, raw decisions and score evidence, and duplicate/conflict accounting. The
-high-level `analyze_ko_annotations` workflow also exposes the explicit
-`unique_accepted_ko_projection` retention mode only for an allowed
-`annotations.file_path` with `input_format="deepkoala_detailed"`. It streams at most 1 GiB,
-10 million source rows, and 20 million expanded assignments into at most 100,000 sorted unique
-accepted K numbers. It retains aggregate counts, source and policy provenance, and at most 100
-diagnostics; it intentionally does not retain record evidence, protein-to-KO mappings, or
-duplicate/conflict accounting. There is no automatic size-based switch, and
-`normalize_ko_annotations` always uses full-record retention.
+high-level `analyze_ko_annotations` workflow always uses a compact `KoAnalysisView` with sorted
+unique accepted K numbers, aggregate counts, source and policy provenance, and bounded diagnostics.
+It intentionally does not retain record evidence, protein-to-KO mappings, or duplicate/conflict
+accounting. Allowed DeepKOALA detailed-file intake streams at most 1 GiB, 10 million source rows,
+and 20 million expanded assignments into at most 100,000 unique accepted K numbers. Other
+supported inputs produce the same analysis view under their applicable importer limits.
 
-Projection retention changes only local intake and retained evidence. It does not increase KEGG
-request, relationship-row, reference-loading, target-ranking, report, or output budgets. A
-projection can fit its local limits while automatic KO-to-target mapping exceeds its own budget;
+Compact intake does not increase KEGG request, relationship-row, reference-loading,
+target-ranking, report, or output budgets. A view can fit its local limits while automatic
+KO-to-target mapping exceeds its own budget;
 callers then provide bounded explicit MODULE/pathway targets or split the input into scientifically
 independent analysis units rather than merging ad hoc shards.
 
@@ -338,7 +336,7 @@ support an organism-specific pathway claim.
 `PathwaySpec` validates the namespace, canonicalizes an omitted `map` view to `ko`, and
 de-duplicates paired views by pathway number. Global and overview references require explicit core
 analysis opt-in and a warning. A canonical KO target with an evaluated denominator and complete
-detected evidence is renderable through the version 5 handoff; `map` and organism references remain
+detected evidence is renderable through the version 6 handoff; `map` and organism references remain
 summary-only renderer targets.
 
 Pathway output does not contain `pathway_present`. Coverage must not be described as pathway
@@ -365,16 +363,16 @@ The core MCP server uses stdio transport. Protocol messages are the only stdout 
 diagnostics use stderr or a configured file. All tool inputs and outputs use explicit schemas,
 schema-conforming `structuredContent`, bounded text summaries, and accurate MCP annotations.
 
-`analyze_ko_annotations` is the common one-call workflow. It imports evidence once, performs
+`analyze_ko_annotations` is the common one-call workflow. It builds one compact analysis view,
 bounded optional Top-N selection, loads only required references, evaluates requested targets,
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
 reuse the same service and domain functions.
 
-For an explicitly selected large-file projection, the same workflow consumes the pinned
-DeepKOALA detailed file once and carries `KoAnalysisProjection` through ranking, analysis,
-reporting, bundle construction, and rendering handoff. The projection is a first-class lossy
-contract, never a fabricated `AnnotationDataset`; reports and manifests disclose that record-level
-evidence, protein mapping, and duplicate/conflict accounting are unavailable.
+For an allowed DeepKOALA detailed file, the workflow consumes the pinned descriptor once and
+carries `KoAnalysisView` through ranking, analysis, reporting, bundle construction, and rendering
+handoff. Other supported inputs are reduced to the same view. It is a first-class compact contract,
+never a fabricated `AnnotationDataset`; reports disclose that record-level evidence, protein
+mapping, and duplicate/conflict accounting are unavailable.
 
 The bounded retrieval/card, search, resolver, relation-trace, BRITE, mapping-audit, local
 snapshot-comparison, selected-reference export, and input-handoff tools are separate
@@ -416,8 +414,8 @@ subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the configur
 and device-resolver contract plus its target interpreter platform, bounded polling and cleanup, and
 stable `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves
 detailed source evidence and resolved model provenance; it never normalizes K numbers. The
-companion continues to cap its generated detailed CSV at 5,000,000 bytes. Core's larger explicit
-projection accepts an existing allowed file and does not change that companion output limit.
+companion continues to cap its generated detailed CSV at 5,000,000 bytes. Core can stream a larger
+existing allowed file without changing that companion output limit.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The
@@ -426,8 +424,8 @@ configuration, tool, lifecycle, and detailed handoff behavior.
 
 ## Renderer contract
 
-The renderer consumes the Core's immutable `render_input.json` schema version 5 and
-`AnalysisExecutionProvenance` version 4. It never normalizes annotations, chooses another KO
+The renderer consumes the Core's immutable `render_input.json` schema version 6 and
+`AnalysisExecutionProvenance` version 5. It never normalizes annotations, chooses another KO
 selection policy, or recomputes MODULE completion, block coverage, pathway denominators, or
 coverage ratios.
 It produces bounded static regular-pathway box overlays, explicitly opted-in canonical KO

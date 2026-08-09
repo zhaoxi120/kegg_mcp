@@ -144,9 +144,9 @@ than making a false minimality claim. Not-evaluable expressions do not claim mis
 ## Accepted-only evidence
 
 The evaluator returns one `ModuleEvaluationResult` from the sorted unique accepted K numbers.
-Rejected, unclassified, and invalid records never enter MODULE evaluation. Full-record evidence can
-still retain those records for audit and reporting; the explicit large-file projection instead
-retains aggregate counts and bounded diagnostics without record-level evidence.
+Rejected, unclassified, and invalid records never enter MODULE evaluation. Full normalization can
+retain those records for audit and reporting; high-level analysis retains aggregate counts and
+bounded diagnostics without record-level evidence.
 
 Matched K-number lists, block-state previews, optional-component summaries, and missing
 alternatives all have serialized limits. Truncation is represented by typed flags and warnings
@@ -161,9 +161,9 @@ organism, pathway activity, flux, or phenotype.
 
 Each MODULE result serializes the exact root and reachable definition text, sanitized retrieval
 provenance, dataset and decision-policy identity, parser and calculation versions, and the
-effective limits. Service-level `AnalysisExecutionProvenance` separately records full-record or
-projection retention. Raw KEGG payloads, cache paths, endpoints, and credentials are not emitted by
-this layer.
+effective limits. Service-level `AnalysisExecutionProvenance` separately records the applicable
+intake-limit contract. Raw KEGG payloads, cache paths, endpoints, and credentials are not emitted
+by this layer.
 
 Definitions obtained from a cache retain retrieval time, endpoint class and label, database release
 when available, and stale status. A stale definition produces an explicit warning.
@@ -190,12 +190,12 @@ definitions = ModuleDefinitionCollection(
     ),
 )
 graph = resolve_module_definitions(definitions)
-result = evaluate_module(graph, annotation_dataset)
+result = evaluate_module(graph, analysis_view)
 ```
 
-The evidence argument may be an immutable `AnnotationDataset` or a `KoAnalysisProjection`; both
-expose the same sorted unique accepted-KO set to evaluation. Definition retrieval remains an
-explicit caller step; none of these functions performs network or filesystem I/O.
+The evidence argument is an immutable `KoAnalysisView` containing the sorted unique accepted-KO
+set and aggregate intake provenance. Definition retrieval remains an explicit caller step; none of
+these functions performs network or filesystem I/O.
 
 ## Primary sources
 

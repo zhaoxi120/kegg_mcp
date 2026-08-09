@@ -21,6 +21,7 @@ from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
     AnalysisUnit,
     AnnotationDataset,
+    build_ko_analysis_view,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -205,7 +206,8 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
     reference = _pathway_reference()
 
     coverage_results = tuple(
-        evaluate_pathway_coverage(reference, dataset) for dataset in datasets
+        evaluate_pathway_coverage(reference, build_ko_analysis_view(dataset))
+        for dataset in datasets
     )
 
     assert reference.reference_kos == ("K00001", "K00002")
@@ -255,16 +257,14 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
         0.5,
     ]
     assert [
-        outcome.detected_reference_ko_count
-        for outcome in pathway_target.comparison.outcomes
+        outcome.detected_reference_ko_count for outcome in pathway_target.comparison.outcomes
     ] == [
         2,
         1,
         1,
     ]
     assert all(
-        outcome.reference_unique_ko_count == 2
-        for outcome in pathway_target.comparison.outcomes
+        outcome.reference_unique_ko_count == 2 for outcome in pathway_target.comparison.outcomes
     )
     assert pathway_target.comparison.evaluated_in_set_indexes == (0, 1, 2)
     assert pathway_target.comparison.outcomes_differ is True
@@ -295,10 +295,7 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
         "filtered",
         "incomplete",
     ]
-    assert [
-        outcome.evaluation_status
-        for outcome in module_target.comparison.outcomes
-    ] == [
+    assert [outcome.evaluation_status for outcome in module_target.comparison.outcomes] == [
         ModuleEvaluationStatus.COMPLETE,
         ModuleEvaluationStatus.INCOMPLETE,
         ModuleEvaluationStatus.INCOMPLETE,

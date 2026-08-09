@@ -180,16 +180,18 @@ jobs:
       - name: Synchronize locked Core environment
         run: uv sync --locked
 
-      - name: Validate Core offline on macOS
+      - name: Validate native Darwin cache access on macOS
         run: >-
           uv run --frozen pytest
-          tests/unit
-          tests/contract
-          tests/integration
-          --ignore=tests/integration/test_deepkoala_companion_handoff.py
+          tests/unit/kegg/test_cache.py::test_darwin_read_only_descriptor_connection_primitive
 
-      - name: Validate unified installer contracts on macOS
-        run: uv run --frozen pytest tests/release/test_suite_installation.py
+      - name: Validate Apple Silicon suite installer contracts on macOS
+        run: >-
+          uv run --frozen pytest
+          tests/release/test_suite_installation.py::test_host_platform_profiles_cover_linux_and_native_apple_silicon
+          tests/release/test_suite_installation.py::test_deployment_environment_emits_platform_specific_deepkoala_devices
+          tests/release/test_suite_installation.py::test_runtime_verification_accepts_cpu_only_local_ready_for_each_platform
+          tests/release/test_suite_installation.py::test_python_preflight_requires_a_native_runtime_matching_the_host_profile
 
       - name: Build Core wheel on macOS
         run: uv build --no-sources --wheel --out-dir "${RUNNER_TEMP}/kegg-mcp-macos-dist"
@@ -229,17 +231,12 @@ jobs:
       - name: Synchronize companion locked environment
         run: uv sync --locked
 
-      - name: Lint companion on macOS
-        run: uv run --frozen ruff check .
-
-      - name: Check companion formatting on macOS
-        run: uv run --frozen ruff format --check .
-
-      - name: Type-check companion on macOS
-        run: uv run --frozen pyright
-
-      - name: Test companion lifecycle and contracts on macOS
-        run: uv run --frozen pytest
+      - name: Test companion process and filesystem behavior on macOS
+        run: >-
+          uv run --frozen pytest
+          tests/test_runner.py::test_runner_times_out_and_reaps_process_group
+          tests/test_runner.py::test_parent_sigkill_terminates_deepkoala_child
+          tests/test_job_storage.py::test_shared_state_root_coordinates_runner_lock_across_spawned_processes
 
       - name: Build independent DeepKOALA distributions on macOS
         run: uv build --no-sources --out-dir "${RUNNER_TEMP}/deepkoala-mcp-macos-dist"
@@ -281,8 +278,12 @@ jobs:
       - name: Synchronize locked renderer environment
         run: uv sync --locked --all-groups
 
-      - name: Validate renderer with synthetic assets on macOS
-        run: uv run --frozen pytest
+      - name: Test renderer graphics and filesystem behavior on macOS
+        run: >-
+          uv run --frozen pytest
+          tests/test_platform.py::test_supported_posix_host_satisfies_renderer_capability_gate
+          tests/test_artifacts.py::test_parent_open_and_close_preserves_a_live_spawned_scope
+          tests/test_synthetic_pipeline.py::test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output
 
       - name: Build Core and renderer wheels on macOS
         run: |

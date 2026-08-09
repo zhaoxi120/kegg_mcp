@@ -162,13 +162,6 @@ class RendererService:
                 "taxon_id": source.document.dataset.taxon_id,
                 "kegg_organism_code": source.document.dataset.kegg_organism_code,
                 "decision_policy": source.document.decision_policy.model_dump(mode="json"),
-                "annotation_retention": (
-                    source.document.execution.analysis.annotation_retention.value
-                ),
-                "record_level_evidence_retained": (
-                    source.document.execution.analysis.annotation_retention.value
-                    == "full_records"
-                ),
                 "accepted_unique_ko_count": len(source.document.evidence.accepted_ko_ids),
                 "targets": target_provenance,
             },

@@ -41,10 +41,9 @@ def test_module_scene_preserves_and_or_grouping_and_authoritative_state(
     assert scene.exact_completion is True
     assert scene.block_coverage == 1.0
     assert {block.state for block in scene.blocks} == {"complete"}
-    assert tuple(
-        (item.source_module_id, item.state)
-        for item in scene.optional_components
-    ) == (("M00001", "absent"),)
+    assert tuple((item.source_module_id, item.state) for item in scene.optional_components) == (
+        ("M00001", "absent"),
+    )
     assert tuple(
         (item.source_module_id, item.target_module_id) for item in scene.reference_edges
     ) == (("M00001", "M00002"),)

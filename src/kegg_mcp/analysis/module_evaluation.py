@@ -30,11 +30,7 @@ from kegg_mcp.analysis.contracts import (
     ResolvedModuleGraph,
     SourceSpan,
 )
-from kegg_mcp.domain.projections import (
-    KoAnalysisEvidence,
-    analysis_accepted_ko_ids,
-    analysis_decision_policy,
-)
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 
 __all__ = ["evaluate_module"]
 
@@ -133,7 +129,7 @@ _WARNING_MESSAGES = {
 
 def evaluate_module(
     graph: ResolvedModuleGraph,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     limits: ModuleAnalysisLimits | ModuleEvaluationLimits | None = None,
 ) -> ModuleEvaluationResult:
     """Evaluate one resolved MODULE graph against sorted unique accepted K numbers."""
@@ -141,7 +137,7 @@ def evaluate_module(
     return _evaluate(
         graph,
         evidence,
-        frozenset(analysis_accepted_ko_ids(evidence)),
+        frozenset(evidence.accepted_ko_ids),
         analysis_limits,
     )
 
@@ -165,7 +161,7 @@ def _coerce_limits(
 
 def _evaluate(
     graph: ResolvedModuleGraph,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     ko_ids: frozenset[str],
     limits: ModuleAnalysisLimits,
 ) -> ModuleEvaluationResult:
@@ -269,7 +265,7 @@ def _evaluate(
         module_id=root.definition.module_id,
         module_name=root.definition.module_name,
         dataset_id=evidence.dataset_id,
-        decision_policy=analysis_decision_policy(evidence),
+        decision_policy=evidence.decision_policy,
         evidence_ko_count=len(ko_ids),
         evaluation_status=status,
         is_complete=(

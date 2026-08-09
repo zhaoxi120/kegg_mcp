@@ -6,6 +6,15 @@ from typing import Annotated, Self
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
+from kegg_mcp.domain.analysis_view import (
+    MAX_ANALYSIS_VIEW_COLUMNS,
+    MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
+    MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
+    MAX_ANALYSIS_VIEW_FIELD_LENGTH,
+    MAX_ANALYSIS_VIEW_INPUT_BYTES,
+    MAX_ANALYSIS_VIEW_INPUT_ROWS,
+    MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
+)
 from kegg_mcp.domain.annotations import (
     MAX_EVIDENCE_STRING_CHARACTERS,
     EvidenceField,
@@ -16,15 +25,6 @@ from kegg_mcp.domain.annotations import (
     validate_absolute_input_path,
     validate_logical_input_uri,
     validate_utf8_text,
-)
-from kegg_mcp.domain.projections import (
-    MAX_PROJECTION_COLUMNS,
-    MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
-    MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
-    MAX_PROJECTION_FIELD_LENGTH,
-    MAX_PROJECTION_INPUT_BYTES,
-    MAX_PROJECTION_INPUT_ROWS,
-    MAX_PROJECTION_UNIQUE_KO_IDS,
 )
 
 MAX_IMPORT_LIMIT_VALUE = 2_147_483_647
@@ -62,50 +62,50 @@ class ImportLimits(FrozenModel):
     max_field_length: ImportFieldLength
 
 
-class ProjectionImportLimits(FrozenModel):
-    """Deployment-owned bounds for streaming unique-KO analysis projection."""
+class AnalysisViewImportLimits(FrozenModel):
+    """Deployment-owned bounds for streaming compact analysis-view intake."""
 
     max_bytes: int = Field(
-        default=MAX_PROJECTION_INPUT_BYTES,
+        default=MAX_ANALYSIS_VIEW_INPUT_BYTES,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_INPUT_BYTES,
+        le=MAX_ANALYSIS_VIEW_INPUT_BYTES,
     )
     max_rows: int = Field(
-        default=MAX_PROJECTION_INPUT_ROWS,
+        default=MAX_ANALYSIS_VIEW_INPUT_ROWS,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_INPUT_ROWS,
+        le=MAX_ANALYSIS_VIEW_INPUT_ROWS,
     )
     max_expanded_assignments: int = Field(
-        default=MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
+        default=MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
+        le=MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
     )
     max_unique_ko_ids: int = Field(
-        default=MAX_PROJECTION_UNIQUE_KO_IDS,
+        default=MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_UNIQUE_KO_IDS,
+        le=MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
     )
     max_columns: int = Field(
-        default=MAX_PROJECTION_COLUMNS,
+        default=MAX_ANALYSIS_VIEW_COLUMNS,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_COLUMNS,
+        le=MAX_ANALYSIS_VIEW_COLUMNS,
     )
     max_field_length: int = Field(
-        default=MAX_PROJECTION_FIELD_LENGTH,
+        default=MAX_ANALYSIS_VIEW_FIELD_LENGTH,
         strict=True,
         gt=0,
-        le=MAX_PROJECTION_FIELD_LENGTH,
+        le=MAX_ANALYSIS_VIEW_FIELD_LENGTH,
     )
     max_diagnostic_preview: int = Field(
-        default=MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
+        default=MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
         strict=True,
         ge=0,
-        le=MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
+        le=MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
     )
 
 

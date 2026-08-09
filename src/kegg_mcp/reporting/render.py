@@ -1,4 +1,4 @@
-"""Pure deterministic rendering for bounded JSON, Markdown, and annotation CSV artifacts."""
+"""Pure deterministic rendering for bounded JSON, Markdown, and accepted-KO CSV artifacts."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import csv
 import io
 import json
 from collections.abc import Iterable, Sequence
-from enum import Enum
 from itertools import chain
-from typing import Any, Literal, NoReturn
+from typing import Literal, NoReturn
 
-from kegg_mcp._serialization import escape_spreadsheet_formula
 from kegg_mcp.analysis.contracts import ModuleEvaluationResult
 from kegg_mcp.analysis.functional_comparison import (
     ModuleTargetComparison,
@@ -20,20 +18,9 @@ from kegg_mcp.analysis.pathway_coverage import PathwayCoverageResult
 from kegg_mcp.analysis.pathway_ranking import PATHWAY_RANKING_METHOD
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
-    AnnotationDataset,
-    AnnotationRecord,
     NormalizedStatus,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.domain.projections import (
-    KoAnalysisProjection,
-    analysis_accepted_ko_ids,
-    analysis_assignment_count,
-    analysis_decision_policy,
-    analysis_diagnostic_preview,
-    analysis_input_rows,
-    analysis_status_counts,
-)
 from kegg_mcp.reporting.contracts import (
     REPORT_FORMAT_NAME,
     REPORT_FORMAT_VERSION,
@@ -47,31 +34,10 @@ from kegg_mcp.reporting.contracts import (
     StructuredReport,
 )
 
-_CSV_HEADER = (
-    "record_id",
-    "sample_id",
-    "sequence_id",
-    "ko_id",
-    "raw_ko",
-    "raw_decision",
-    "normalized_status",
-    "status_reason",
-    "decision_policy_name",
-    "decision_policy_version",
-    "score",
-    "score_type",
-    "threshold",
-    "threshold_rule",
-    "rank",
-    "domain_start",
-    "domain_end",
-    "evidence_json",
-    "source_json",
-)
-_PROJECTION_CSV_HEADER = ("ko_id", "normalized_status")
+_ANALYSIS_CSV_HEADER = ("ko_id", "normalized_status")
 _MARKDOWN_TRUNCATION_NOTICE = (
     "> Markdown summary truncated at the recorded preview or UTF-8 byte limit. "
-    "The structured JSON and annotation CSV artifacts remain complete within their hard limits."
+    "The structured JSON and accepted-KO CSV artifacts remain complete within their hard limits."
 )
 _MARKDOWN_TEXT_TRANSLATION = str.maketrans(
     {
@@ -122,7 +88,7 @@ def _source_entry_count(report: ReportInput) -> int:
 
 
 def _warning_entry_count(report: ReportInput) -> int:
-    count = len(analysis_diagnostic_preview(report.dataset))
+    count = len(report.dataset.diagnostic_preview)
     for result in report.module_evaluations:
         count += len(result.warnings) + len(result.unresolved_references)
     for result in report.pathway_coverages:
@@ -142,19 +108,15 @@ def _warning_entry_count(report: ReportInput) -> int:
 
 
 def _preflight(report: ReportInput, limits: ReportLimits) -> None:
-    input_rows = analysis_input_rows(report.dataset)
+    input_rows = report.dataset.input_rows
     if input_rows > limits.max_input_rows:
         _limit_exceeded("input rows", input_rows, limits.max_input_rows)
-    record_count = (
-        len(report.dataset.records)
-        if isinstance(report.dataset, AnnotationDataset)
-        else len(report.dataset.accepted_ko_ids)
-    )
-    if record_count > limits.max_annotation_records:
+    accepted_ko_count = len(report.dataset.accepted_ko_ids)
+    if accepted_ko_count > limits.max_accepted_ko_ids:
         _limit_exceeded(
-            "annotation records",
-            record_count,
-            limits.max_annotation_records,
+            "accepted K numbers",
+            accepted_ko_count,
+            limits.max_accepted_ko_ids,
         )
 
     source_entries = _source_entry_count(report)
@@ -216,53 +178,6 @@ def _render_canonical_json(report: ReportInput, limits: ReportLimits) -> str:
     return "".join(chunks)
 
 
-def _canonical_json_cell(value: Any) -> str:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-
-
-def _flat_csv_cell(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, Enum):
-        return str(value.value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float):
-        return json.dumps(value, allow_nan=False, separators=(",", ":"))
-    return str(value)
-
-
-def _record_csv_row(record: AnnotationRecord) -> tuple[str, ...]:
-    values: tuple[object, ...] = (
-        record.record_id,
-        record.sample_id,
-        record.sequence_id,
-        record.ko_id,
-        record.raw_ko,
-        record.raw_decision,
-        record.normalized_status,
-        record.status_reason,
-        record.decision_policy.name,
-        record.decision_policy.version,
-        record.score,
-        record.score_type,
-        record.threshold,
-        record.threshold_rule,
-        record.rank,
-        record.domain_start,
-        record.domain_end,
-        _canonical_json_cell(record.evidence.model_dump(mode="json")),
-        _canonical_json_cell(record.source.model_dump(mode="json")),
-    )
-    return tuple(escape_spreadsheet_formula(_flat_csv_cell(value)) for value in values)
-
-
 def _csv_line(values: Sequence[str]) -> str:
     stream = io.StringIO(newline="")
     writer = csv.writer(stream, dialect="excel", lineterminator="\n")
@@ -270,27 +185,21 @@ def _csv_line(values: Sequence[str]) -> str:
     return stream.getvalue()
 
 
-def _render_annotation_csv(report: ReportInput, limits: ReportLimits) -> str:
+def _render_accepted_ko_csv(report: ReportInput, limits: ReportLimits) -> str:
     chunks: list[str] = []
     byte_count = 0
-    if isinstance(report.dataset, AnnotationDataset):
-        rows: Iterable[Sequence[str]] = chain(
-            (_CSV_HEADER,),
-            (_record_csv_row(record) for record in report.dataset.records),
-        )
-    else:
-        rows = chain(
-            (_PROJECTION_CSV_HEADER,),
-            ((ko_id, NormalizedStatus.ACCEPTED.value) for ko_id in report.dataset.accepted_ko_ids),
-        )
+    rows: Iterable[Sequence[str]] = chain(
+        (_ANALYSIS_CSV_HEADER,),
+        ((ko_id, NormalizedStatus.ACCEPTED.value) for ko_id in report.dataset.accepted_ko_ids),
+    )
     for values in rows:
         line = _csv_line(values)
         byte_count += len(line.encode("utf-8"))
-        if byte_count > limits.max_annotation_csv_bytes:
+        if byte_count > limits.max_accepted_ko_csv_bytes:
             _limit_exceeded(
-                "annotation CSV bytes",
+                "accepted-KO CSV bytes",
                 byte_count,
-                limits.max_annotation_csv_bytes,
+                limits.max_accepted_ko_csv_bytes,
             )
         chunks.append(line)
     return "".join(chunks)
@@ -364,7 +273,7 @@ def _analysis_unit_caveat(unit: AnalysisUnit) -> str:
 
 def _warning_items(report: ReportInput) -> tuple[tuple[str, str], ...]:
     items: list[tuple[str, str]] = []
-    for diagnostic in analysis_diagnostic_preview(report.dataset):
+    for diagnostic in report.dataset.diagnostic_preview:
         items.append((diagnostic.code.value, diagnostic.message))
     for result in report.module_evaluations:
         items.extend((warning.code.value, warning.message) for warning in result.warnings)
@@ -660,9 +569,7 @@ def _append_comparisons(
         )
         selected = report.module_comparison.targets[: limits.max_markdown_comparison_targets]
         for target in selected:
-            lines.append(
-                f"| {target.module_id} | {_module_comparison_outcomes(target)} |"
-            )
+            lines.append(f"| {target.module_id} | {_module_comparison_outcomes(target)} |")
         if len(selected) < len(report.module_comparison.targets):
             truncated = True
             lines.append(
@@ -735,7 +642,7 @@ def _append_warnings_and_provenance(
 
     lines.extend(("", "## Provenance", ""))
     lines.append(
-        f"Decision policy: `{analysis_decision_policy(report.dataset).identifier}`. "
+        f"Decision policy: `{report.dataset.decision_policy.identifier}`. "
         f"Taxon ID: "
         f"`{report.dataset.taxon_id if report.dataset.taxon_id is not None else 'unknown'}`. "
         f"KEGG organism code: "
@@ -804,18 +711,14 @@ def _bound_markdown(lines: Iterable[str], maximum_bytes: int) -> tuple[str, bool
 
 
 def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bool]:
-    counts = {item.status.value: item.count for item in analysis_status_counts(report.dataset)}
-    if isinstance(report.dataset, KoAnalysisProjection):
-        normalized_count_label = "Normalized assignment counts"
-        intake_summary = (
-            f"Expanded assignments classified: {analysis_assignment_count(report.dataset)}. "
-            "Retained accepted unique K numbers: "
-            f"{len(analysis_accepted_ko_ids(report.dataset))}. Record-level evidence, "
-            "protein-to-KO mappings, and duplicate/conflict accounting were not retained."
-        )
-    else:
-        normalized_count_label = "Normalized record counts"
-        intake_summary = f"Emitted annotation records: {len(report.dataset.records)}."
+    counts = {item.status.value: item.count for item in report.dataset.status_counts}
+    normalized_count_label = "Normalized assignment counts"
+    intake_summary = (
+        f"Assignments classified: {report.dataset.assignment_count}. "
+        "Retained accepted unique K numbers: "
+        f"{len(report.dataset.accepted_ko_ids)}. Record-level evidence, "
+        "protein-to-KO mappings, and duplicate/conflict accounting were not retained."
+    )
     lines = [
         "# KEGG-aware KO annotation report",
         "",
@@ -836,7 +739,7 @@ def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bo
         "",
         f"Dataset: `{report.dataset.dataset_id}`. Analysis unit: "
         f"`{report.dataset.analysis_unit.value}`. Input rows: "
-        f"{analysis_input_rows(report.dataset)}. {intake_summary}",
+        f"{report.dataset.input_rows}. {intake_summary}",
         "",
         f"{normalized_count_label}: "
         + ", ".join(f"{name}={count}" for name, count in counts.items())
@@ -882,7 +785,7 @@ def render_report(
     _preflight(report, effective_limits)
     structured_content = _render_canonical_json(report, effective_limits)
     markdown_content, markdown_truncated = _render_markdown(report, effective_limits)
-    annotation_content = _render_annotation_csv(report, effective_limits)
+    accepted_ko_content = _render_accepted_ko_csv(report, effective_limits)
     artifacts = (
         _artifact(
             ReportSection.STRUCTURED,
@@ -897,9 +800,9 @@ def render_report(
             truncated=markdown_truncated,
         ),
         _artifact(
-            ReportSection.ANNOTATIONS,
+            ReportSection.ACCEPTED_KOS,
             "text/csv",
-            annotation_content,
+            accepted_ko_content,
             truncated=False,
         ),
     )

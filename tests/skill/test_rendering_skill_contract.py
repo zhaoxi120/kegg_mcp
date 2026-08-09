@@ -116,10 +116,10 @@ def test_rendering_skill_treats_multi_target_bundle_as_atomic() -> None:
         assert fragment in corpus
 
 
-def test_rendering_skill_requires_authoritative_v5_total_map_handoff() -> None:
+def test_rendering_skill_requires_authoritative_v6_total_map_handoff() -> None:
     corpus = _corpus()
     for fragment in (
-        "version 5 handoff",
+        "version 6 handoff",
         "`allow_global_or_overview=True`",
         "bounded KGML `line` coordinates",
         "overlay highlights accepted KO annotation",

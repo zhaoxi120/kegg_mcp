@@ -17,13 +17,12 @@ from kegg_mcp.domain.annotations import (
     FrozenModel,
     ModuleId,
 )
-from kegg_mcp.domain.projections import AnnotationRetention
-from kegg_mcp.importers.contracts import ImportLimits, ProjectionImportLimits
+from kegg_mcp.importers.contracts import AnalysisViewImportLimits, ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
 from kegg_mcp.report_limits import ReportLimits
 
 ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
-ANALYSIS_SERVICE_VERSION = "4"
+ANALYSIS_SERVICE_VERSION = "5"
 
 
 class ExecutionStage(StrEnum):
@@ -181,19 +180,18 @@ class AnalysisExecutionProvenance(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:4",
+            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:5",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     service_name: Literal["kegg_mcp_annotation_analysis"]
-    service_version: Literal["4"]
-    annotation_retention: AnnotationRetention = AnnotationRetention.FULL_RECORDS
+    service_version: Literal["5"]
     import_limits: ImportLimits | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
-    projection_import_limits: ProjectionImportLimits | None = Field(
+    stream_import_limits: AnalysisViewImportLimits | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -213,11 +211,8 @@ class AnalysisExecutionProvenance(FrozenModel):
 
     @model_validator(mode="after")
     def validate_intake_limits(self) -> Self:
-        if self.annotation_retention is AnnotationRetention.FULL_RECORDS:
-            if self.import_limits is None or self.projection_import_limits is not None:
-                raise ValueError("full-record analysis requires only import_limits")
-        elif self.import_limits is not None or self.projection_import_limits is None:
-            raise ValueError("unique-KO projection analysis requires only projection_import_limits")
+        if (self.import_limits is None) == (self.stream_import_limits is None):
+            raise ValueError("analysis execution requires exactly one intake-limit contract")
         return self
 
 

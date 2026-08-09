@@ -1,5 +1,6 @@
 """Stable domain contracts for KO annotation evidence."""
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     AnnotationDataset,
@@ -33,25 +34,12 @@ from kegg_mcp.domain.decisions import (
 )
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError
 from kegg_mcp.domain.identifiers import normalize_ko_id, try_normalize_ko_id
-from kegg_mcp.domain.projections import (
-    AnnotationRetention,
-    KoAnalysisEvidence,
-    KoAnalysisProjection,
-    analysis_accepted_ko_ids,
-    analysis_assignment_count,
-    analysis_decision_policy,
-    analysis_diagnostic_count,
-    analysis_diagnostic_preview,
-    analysis_input_rows,
-    analysis_status_counts,
-)
 
 __all__ = [
     "CANONICAL_SOURCE_STATUS",
     "DEEPKOALA_DETAILED",
     "USER_SUPPLIED_KO",
     "AnalysisUnit",
-    "AnnotationRetention",
     "AnnotationDataset",
     "AnnotationRecord",
     "ColumnBinding",
@@ -68,9 +56,8 @@ __all__ = [
     "InputFormat",
     "KOEvidenceView",
     "KORecordIndexEntry",
-    "KoAnalysisEvidence",
-    "KoAnalysisProjection",
     "KeggMcpError",
+    "KoAnalysisView",
     "NormalizedStatus",
     "RowEvidence",
     "ScoreType",
@@ -78,13 +65,7 @@ __all__ = [
     "SourceProvenance",
     "StatusCount",
     "ThresholdRule",
-    "analysis_accepted_ko_ids",
-    "analysis_assignment_count",
-    "analysis_decision_policy",
-    "analysis_diagnostic_count",
-    "analysis_diagnostic_preview",
-    "analysis_input_rows",
-    "analysis_status_counts",
+    "build_ko_analysis_view",
     "build_ko_evidence_view",
     "normalize_ko_id",
     "select_ko_ids",

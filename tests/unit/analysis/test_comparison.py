@@ -122,9 +122,7 @@ def test_three_set_comparison_retains_shared_specific_and_partial_memberships() 
     assert partition.partially_shared[0].member_labels == ("first", "second")
     assert partition.partially_shared[0].ko_ids == ("K00009",)
     assert "K00010" not in {
-        ko_id
-        for item in detail.partition.set_specific
-        for ko_id in item.ko_ids
+        ko_id for item in detail.partition.set_specific for ko_id in item.ko_ids
     }
 
     assert [item.input_index for item in detail.datasets] == [0, 1, 2]

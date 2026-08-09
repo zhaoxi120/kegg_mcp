@@ -15,24 +15,19 @@ from pydantic import Field
 from kegg_mcp.analysis import (
     KoModuleRelationship,
     KoPathwayRelationship,
+    ModuleEvaluationResult,
     ModuleRankingResult,
     ModuleRankingRow,
-    ModuleEvaluationResult,
     PathwayCoverageResult,
     PathwayKoReference,
     PathwayRankingResult,
     PathwayRankingRow,
     ResolvedModuleGraph,
 )
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     AnnotationDataset,
     FrozenModel,
-)
-from kegg_mcp.domain.projections import (
-    AnnotationRetention,
-    KoAnalysisEvidence,
-    KoAnalysisProjection,
-    analysis_accepted_ko_ids,
 )
 from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.services._atomic_bundle import write_text_bundle
@@ -44,7 +39,7 @@ from kegg_mcp.services.render_contracts import (
     serialize_render_input,
 )
 
-OUTPUT_BUNDLE_SCHEMA_VERSION = "4"
+OUTPUT_BUNDLE_SCHEMA_VERSION = "5"
 
 
 class ManifestPathMode(StrEnum):
@@ -115,7 +110,7 @@ def write_normalization_bundle(
 
 
 def write_analysis_bundle(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     module_graphs: tuple[ResolvedModuleGraph, ...],
     modules: tuple[ModuleEvaluationResult, ...],
     pathway_references: tuple[PathwayKoReference, ...],
@@ -138,23 +133,13 @@ def write_analysis_bundle(
         execution,
         limits=render_limits,
     )
-    files: dict[str, str] = {}
-    if isinstance(evidence, AnnotationDataset):
-        files.update(
-            {
-                "normalized_annotations.tsv": _normalized_annotations_tsv(evidence),
-                "protein_ko_mapping.tsv": _protein_ko_mapping_tsv(evidence),
-            }
-        )
-    files.update(
-        {
-            "unique_accepted_kos.tsv": _unique_accepted_kos_tsv(evidence),
-            "pathway_coverage.tsv": _pathway_coverage_tsv(pathways),
-            "module_completion.tsv": _module_completion_tsv(modules),
-            "analysis_report.md": analysis_report,
-            "render_input.json": serialize_render_input(render_input),
-        }
-    )
+    files: dict[str, str] = {
+        "unique_accepted_kos.tsv": _unique_accepted_kos_tsv(evidence),
+        "pathway_coverage.tsv": _pathway_coverage_tsv(pathways),
+        "module_completion.tsv": _module_completion_tsv(modules),
+        "analysis_report.md": analysis_report,
+        "render_input.json": serialize_render_input(render_input),
+    }
     if pathway_ranking is not None:
         files["pathway_ranking.tsv"] = _pathway_ranking_tsv(pathway_ranking.rows)
         files["ko_pathway_relationships.tsv"] = _ko_pathway_relationships_tsv(
@@ -243,9 +228,8 @@ def _protein_ko_mapping_tsv(dataset: AnnotationDataset) -> str:
     )
 
 
-def _unique_accepted_kos_tsv(evidence: KoAnalysisEvidence) -> str:
-    ko_ids = analysis_accepted_ko_ids(evidence)
-    return _tsv(("ko_id",), ((ko_id,) for ko_id in ko_ids))
+def _unique_accepted_kos_tsv(evidence: KoAnalysisView) -> str:
+    return _tsv(("ko_id",), ((ko_id,) for ko_id in evidence.accepted_ko_ids))
 
 
 def _module_completion_tsv(modules: tuple[ModuleEvaluationResult, ...]) -> str:
@@ -401,7 +385,7 @@ def _ko_module_relationships_tsv(rows: tuple[KoModuleRelationship, ...]) -> str:
 
 
 def _manifest(
-    evidence: KoAnalysisEvidence,
+    evidence: AnnotationDataset | KoAnalysisView,
     files: tuple[str, ...],
     *,
     stage: str,
@@ -426,18 +410,6 @@ def _manifest(
             "values": manifest_paths,
         },
         "analysis_unit": evidence.analysis_unit.value,
-        "annotation_retention": (
-            evidence.annotation_retention
-            if isinstance(evidence, KoAnalysisProjection)
-            else AnnotationRetention.FULL_RECORDS.value
-        ),
-        "record_level_evidence_retained": isinstance(evidence, AnnotationDataset),
-        "protein_ko_mapping_available": isinstance(evidence, AnnotationDataset),
-        "duplicate_conflict_accounting": (
-            evidence.duplicate_conflict_accounting
-            if isinstance(evidence, KoAnalysisProjection)
-            else "evaluated"
-        ),
         "files": list(files),
     }
     if render_input_schema is not None:

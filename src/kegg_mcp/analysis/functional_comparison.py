@@ -6,7 +6,7 @@ from typing import Annotated, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from kegg_mcp.analysis.comparison import compare_ko_datasets
+from kegg_mcp.analysis.comparison import compare_ko_datasets_with_views
 from kegg_mcp.analysis.comparison_contracts import (
     ComparisonDatasetInput,
     ComparisonDatasetProvenance,
@@ -41,6 +41,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     FrozenModel,
@@ -413,7 +414,12 @@ def compare_module_graphs(
     """Recompute every dataset against the same resolved MODULE graphs before comparison."""
     effective_comparison_limits = comparison_limits or ComparisonLimits()
     effective_functional_limits = functional_limits or FunctionalComparisonLimits()
-    ko_detail = compare_ko_datasets(inputs, limits=effective_comparison_limits)
+    analysis_views = tuple(build_ko_analysis_view(item.dataset) for item in inputs)
+    ko_detail = compare_ko_datasets_with_views(
+        inputs,
+        analysis_views,
+        limits=effective_comparison_limits,
+    )
     if len(graphs) > effective_functional_limits.max_modules:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
@@ -436,7 +442,13 @@ def compare_module_graphs(
         )
 
     targets = tuple(
-        _compare_one_module(graph, inputs, evaluation_limits=evaluation_limits) for graph in graphs
+        _compare_one_module(
+            graph,
+            inputs,
+            analysis_views,
+            evaluation_limits=evaluation_limits,
+        )
+        for graph in graphs
     )
     return ModuleComparisonResult(
         datasets=ko_detail.datasets,
@@ -466,7 +478,12 @@ def compare_pathway_references(
     effective_comparison_limits = comparison_limits or ComparisonLimits()
     effective_functional_limits = functional_limits or FunctionalComparisonLimits()
     effective_coverage_limits = coverage_limits or PathwayCoverageLimits()
-    ko_detail = compare_ko_datasets(inputs, limits=effective_comparison_limits)
+    analysis_views = tuple(build_ko_analysis_view(item.dataset) for item in inputs)
+    ko_detail = compare_ko_datasets_with_views(
+        inputs,
+        analysis_views,
+        limits=effective_comparison_limits,
+    )
 
     if len(references) > effective_functional_limits.max_pathways:
         fail(
@@ -522,6 +539,7 @@ def compare_pathway_references(
         _compare_one_pathway(
             reference,
             inputs,
+            analysis_views,
             coverage_limits=effective_coverage_limits,
             organism_contexts=organism_contexts,
             allow_global_or_overview=allow_global_or_overview,
@@ -547,11 +565,17 @@ def compare_pathway_references(
 def _compare_one_module(
     graph: ResolvedModuleGraph,
     inputs: tuple[ComparisonDatasetInput, ...],
+    analysis_views: tuple[KoAnalysisView, ...],
     *,
     evaluation_limits: ModuleEvaluationLimits | None,
 ) -> ModuleTargetComparison:
     results = tuple(
-        evaluate_module(graph, item.dataset, limits=evaluation_limits) for item in inputs
+        evaluate_module(
+            graph,
+            analysis_views[index],
+            limits=evaluation_limits,
+        )
+        for index, _item in enumerate(inputs)
     )
     identity_fields = (
         "module_id",
@@ -680,6 +704,7 @@ def _validate_pathway_organism_contexts(
 def _compare_one_pathway(
     reference: PathwayKoReference,
     inputs: tuple[ComparisonDatasetInput, ...],
+    analysis_views: tuple[KoAnalysisView, ...],
     *,
     coverage_limits: PathwayCoverageLimits,
     organism_contexts: tuple[PathwayComparisonOrganismContext, ...],
@@ -688,7 +713,7 @@ def _compare_one_pathway(
     results = tuple(
         evaluate_pathway_coverage(
             reference,
-            item.dataset,
+            analysis_views[index],
             _pathway_parameters(
                 reference,
                 index,
@@ -697,7 +722,7 @@ def _compare_one_pathway(
             ),
             coverage_limits,
         )
-        for index, item in enumerate(inputs)
+        for index, _item in enumerate(inputs)
     )
     identity_fields = (
         "pathway_id",

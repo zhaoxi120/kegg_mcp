@@ -584,12 +584,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         analysis_properties = analysis_schema["properties"]
         assert "pathway_selection" in analysis_properties
         assert "pathway_evidence_mode" not in analysis_properties
-        retention_schema = analysis_properties["annotation_retention"]
-        assert retention_schema["default"] == "full_records"
-        assert set(retention_schema["enum"]) == {
-            "full_records",
-            "unique_accepted_ko_projection",
-        }
+        assert "annotation_retention" not in analysis_properties
         assert analysis_properties["pathway_selection"]["type"] == "object"
         selection_schema = analysis_properties["pathway_selection"]["properties"]
         assert selection_schema["top_n"]["minimum"] == 1
@@ -607,9 +602,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert "hsa" not in pathway_items["properties"]["pathway_id"]["description"]
         assert "pathway objects" in analysis_properties["pathways"]["description"]
         for tool_name in ("analyze_modules", "analyze_pathways", "compare_ko_sets"):
-            assert "evidence_mode" not in _tool_by_name(tools, tool_name).inputSchema[
-                "properties"
-            ]
+            assert "evidence_mode" not in _tool_by_name(tools, tool_name).inputSchema["properties"]
         delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
         assert set(delete_schema["properties"]) == {"result_id"}
         list_schema = _tool_by_name(tools, "list_analysis_results").inputSchema
@@ -711,7 +704,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "record_level_evidence_retained",
             "protein_ko_mapping_available",
             "duplicate_conflict_accounting",
-        }.issubset(high_level_properties)
+        }.isdisjoint(high_level_properties)
         assert high_level_properties["module_previews"]["maxItems"] == 25
         assert high_level_properties["pathway_previews"]["maxItems"] == 25
         selection_properties = high_level_output["$defs"]["AutomaticPathwaySelectionSummary"][
@@ -733,9 +726,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         module_properties = module_output["$defs"]["AnalyzeModulesResult"]["properties"]
         assert module_properties["module_previews"]["maxItems"] == 25
         assert "pathway_previews" not in module_properties
-        module_preview_properties = module_output["$defs"]["ModuleAnalysisPreview"][
-            "properties"
-        ]
+        module_preview_properties = module_output["$defs"]["ModuleAnalysisPreview"]["properties"]
         assert {"evaluation_status", "is_complete", "block_coverage"}.issubset(
             module_preview_properties
         )
@@ -747,9 +738,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         pathway_properties = pathway_output["$defs"]["AnalyzePathwaysResult"]["properties"]
         assert pathway_properties["pathway_previews"]["maxItems"] == 25
         assert "module_previews" not in pathway_properties
-        pathway_preview_properties = pathway_output["$defs"]["PathwayAnalysisPreview"][
-            "properties"
-        ]
+        pathway_preview_properties = pathway_output["$defs"]["PathwayAnalysisPreview"]["properties"]
         assert "evidence_mode" not in pathway_preview_properties
 
         search_output = _tool_by_name(tools, "search_kegg_entries").outputSchema
@@ -814,9 +803,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert "detail" not in audit_properties
         assert audit_properties["mappings"]["maxItems"] == 5
         assert audit_properties["warning_preview"]["maxItems"] == 5
-        audit_mapping_properties = audit_output["$defs"]["KoMappingAuditSummary"][
-            "properties"
-        ]
+        audit_mapping_properties = audit_output["$defs"]["KoMappingAuditSummary"]["properties"]
         assert "target_degree_distribution" not in audit_mapping_properties
         assert "unmapped_ko_preview" not in audit_mapping_properties
         audit_retrieval_properties = audit_output["$defs"]["QueryRetrievalSummary"]["properties"]
@@ -846,9 +833,7 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert comparison_output is not None
         comparison_output_defs = comparison_output["$defs"]
         assert comparison_output_defs["KoPreview"]["properties"]["ko_ids"]["maxItems"] == 100
-        partition_properties = comparison_output_defs["KoMembershipComparisonSummary"][
-            "properties"
-        ]
+        partition_properties = comparison_output_defs["KoMembershipComparisonSummary"]["properties"]
         assert partition_properties["set_specific"]["maxItems"] == 10
         assert partition_properties["partially_shared_patterns_preview"]["maxItems"] == 256
         membership_properties = comparison_output_defs["KoMembershipPatternPreview"]["properties"]
@@ -1359,39 +1344,15 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "payload",
-    (
-        {
-            "ko_text": "K00001",
-            "annotation_retention": "unique_accepted_ko_projection",
-        },
-        {
-            "annotations": {
-                "text": (
-                    "name,predict_label,probability,threshold,annotate\n"
-                    "p1,K00001,0.9,0.5,*\n"
-                ),
-                "input_format": "deepkoala_detailed",
-            },
-            "annotation_retention": "unique_accepted_ko_projection",
-        },
-        {
-            "annotations": {
-                "file_path": "/allowed/synthetic.csv",
-                "input_format": "generic_csv",
-            },
-            "annotation_retention": "unique_accepted_ko_projection",
-        },
-    ),
-)
-async def test_unique_projection_rejects_non_file_or_non_deepkoala_inputs(
+async def test_high_level_analysis_rejects_the_removed_retention_selector(
     tmp_path: Path,
-    payload: dict[str, object],
 ) -> None:
     server = create_server(_runtime(tmp_path))
     async with create_connected_server_and_client_session(server) as session:
-        result = await session.call_tool("analyze_ko_annotations", payload)
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {"ko_text": "K00001", "annotation_retention": "full_records"},
+        )
 
     assert result.isError is True
     assert result.structuredContent is not None
@@ -1399,11 +1360,11 @@ async def test_unique_projection_rejects_non_file_or_non_deepkoala_inputs(
 
 
 @pytest.mark.asyncio
-async def test_high_level_unique_projection_analyzes_allowed_deepkoala_file(
+async def test_high_level_analysis_streams_an_allowed_deepkoala_file(
     tmp_path: Path,
 ) -> None:
     annotations = tmp_path / "deepkoala-detailed.csv"
-    output = tmp_path / "projection-analysis"
+    output = tmp_path / "compact-analysis"
     annotations.write_text(
         "name,predict_label,probability,threshold,annotate\n"
         "p1,K00001,0.90,0.50,*\n"
@@ -1411,7 +1372,7 @@ async def test_high_level_unique_projection_analyzes_allowed_deepkoala_file(
         "p3,K00002,0.10,0.50,\n",
         encoding="utf-8",
     )
-    runtime = _fake_runtime(tmp_path, scope_id="projection-contract")
+    runtime = _fake_runtime(tmp_path, scope_id="compact-view-contract")
     server = create_server(runtime)
 
     async with create_connected_server_and_client_session(server) as session:
@@ -1424,7 +1385,6 @@ async def test_high_level_unique_projection_analyzes_allowed_deepkoala_file(
                     "input_format": "deepkoala_detailed",
                     "source": {"source_name": "deepkoala"},
                 },
-                "annotation_retention": "unique_accepted_ko_projection",
                 "module_ids": ["M00001"],
                 "pathways": [{"pathway_id": "ko00010"}],
                 "output_directory": str(output),
@@ -1435,10 +1395,12 @@ async def test_high_level_unique_projection_analyzes_allowed_deepkoala_file(
     assert result.isError is False
     assert result.structuredContent is not None
     data = result.structuredContent["result"]["data"]
-    assert data["annotation_retention"] == "unique_accepted_ko_projection"
-    assert data["record_level_evidence_retained"] is False
-    assert data["protein_ko_mapping_available"] is False
-    assert data["duplicate_conflict_accounting"] == "not_evaluated"
+    assert {
+        "annotation_retention",
+        "record_level_evidence_retained",
+        "protein_ko_mapping_available",
+        "duplicate_conflict_accounting",
+    }.isdisjoint(data)
     assert data["summary"]["input_records"] == 3
     assert data["summary"]["accepted_records"] == 2
     assert data["summary"]["rejected_records"] == 1
@@ -1447,26 +1409,23 @@ async def test_high_level_unique_projection_analyzes_allowed_deepkoala_file(
     bundle = data["output_bundle"]
     assert bundle["normalized_annotations"] is None
     assert bundle["protein_ko_mapping"] is None
-    assert Path(bundle["unique_accepted_kos"]).read_text(encoding="utf-8") == (
-        "ko_id\nK00001\n"
-    )
+    assert Path(bundle["unique_accepted_kos"]).read_text(encoding="utf-8") == ("ko_id\nK00001\n")
     manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "4"
-    assert manifest["annotation_retention"] == "unique_accepted_ko_projection"
-    assert manifest["record_level_evidence_retained"] is False
-    assert manifest["protein_ko_mapping_available"] is False
-    assert manifest["duplicate_conflict_accounting"] == "not_evaluated"
+    assert manifest["schema_version"] == "5"
+    assert {
+        "annotation_retention",
+        "record_level_evidence_retained",
+        "protein_ko_mapping_available",
+        "duplicate_conflict_accounting",
+    }.isdisjoint(manifest)
 
     render_input = RenderInput.model_validate_json(
         Path(bundle["render_input"]).read_text(encoding="utf-8"),
         strict=True,
     )
     assert render_input.evidence.accepted_ko_ids == ("K00001",)
-    assert render_input.execution.analysis.annotation_retention.value == (
-        "unique_accepted_ko_projection"
-    )
     assert render_input.execution.analysis.import_limits is None
-    assert render_input.execution.analysis.projection_import_limits is not None
+    assert render_input.execution.analysis.stream_import_limits is not None
 
 
 @pytest.mark.asyncio
@@ -1523,11 +1482,13 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         manifest_path = Path(bundle["manifest"])
         manifest_text = manifest_path.read_text(encoding="utf-8")
         manifest = json.loads(manifest_text)
-        assert manifest["schema_version"] == "4"
-        assert manifest["annotation_retention"] == "full_records"
-        assert manifest["record_level_evidence_retained"] is True
-        assert manifest["protein_ko_mapping_available"] is True
-        assert manifest["duplicate_conflict_accounting"] == "evaluated"
+        assert manifest["schema_version"] == "5"
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(manifest)
         assert manifest["input_path_provenance"] == {
             "mode": "redacted",
             "source_count": 1,
@@ -1830,11 +1791,13 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
         assert module_ranking is not None
         assert module_ranking.selection.top_n == 5
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == "4"
-        assert manifest["annotation_retention"] == "full_records"
-        assert manifest["record_level_evidence_retained"] is True
-        assert manifest["protein_ko_mapping_available"] is True
-        assert manifest["duplicate_conflict_accounting"] == "evaluated"
+        assert manifest["schema_version"] == "5"
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(manifest)
         assert manifest["render_input"] == {
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
@@ -1974,7 +1937,7 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         assert tuple(item["section"] for item in data["artifacts"]) == (
             "structured",
             "summary",
-            "annotations",
+            "accepted_kos",
             "pathway_ranking",
             "ko_pathway_relationships",
         )
@@ -2179,13 +2142,15 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert tuple(item["section"] for item in high_data["artifacts"]) == (
             "structured",
             "summary",
-            "annotations",
+            "accepted_kos",
         )
         assert high_data["summary"]["input_records"] == 2
-        assert high_data["annotation_retention"] == "full_records"
-        assert high_data["record_level_evidence_retained"] is True
-        assert high_data["protein_ko_mapping_available"] is True
-        assert high_data["duplicate_conflict_accounting"] == "evaluated"
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(high_data)
         assert "import_summary" not in high_data
         assert "execution" not in high_data
         assert "reference_provenance" not in high_data
@@ -2197,13 +2162,12 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
                 limit=1_000_000,
             ).content
         )["report"]
-        assert retained_high["dataset"]["import_report"]["input_rows"] == 2
+        assert retained_high["dataset"]["input_rows"] == 2
+        assert retained_high["dataset"]["accepted_ko_ids"] == ["K00001", "K00002"]
+        assert "records" not in retained_high["dataset"]
         assert retained_high["execution"]["service_name"] == "kegg_mcp_annotation_analysis"
         assert len(retained_high["execution_metrics"]) == 6
-        assert (
-            len(retained_high["module_evaluations"][0]["reference_retrieval_provenance"])
-            == 1
-        )
+        assert len(retained_high["module_evaluations"][0]["reference_retrieval_provenance"]) == 1
         assert len(retained_high["pathway_coverages"][0]["reference_link_provenance"]) == 1
         assert len(retained_high["pathway_coverages"][0]["reference_metadata_provenance"]) == 1
 

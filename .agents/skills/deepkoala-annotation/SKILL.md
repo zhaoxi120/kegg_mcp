@@ -73,9 +73,10 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 - If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
   reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
   annotation job succeeds. Prefer the returned `annotations_path` and pass
-  `input_format="deepkoala_detailed"` and the `source` object unchanged. Omit
-  `annotation_retention` so this companion handoff keeps Core's full-record default; the companion
-  already caps its generated detailed CSV at 5,000,000 bytes.
+  `input_format="deepkoala_detailed"` and the `source` object unchanged. Core derives its compact
+  sorted unique accepted-KO analysis view from this handoff; request full normalization separately
+  only when record-level evidence is needed. The companion already caps its generated detailed CSV
+  at 5,000,000 bytes.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
   continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project

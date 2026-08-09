@@ -15,7 +15,9 @@ from kegg_mcp.analysis.module_resolution import resolve_module_definitions
 from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
+    KoAnalysisView,
     NormalizedStatus,
+    build_ko_analysis_view,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -50,7 +52,7 @@ def _graph(
     return resolve_module_definitions(collection)
 
 
-def _dataset(
+def _normalized_dataset(
     *rows: tuple[str, str, str, int, int, int],
 ) -> AnnotationDataset:
     payload = "sequence,ko,decision,rank,start,end\n" + "".join(
@@ -71,6 +73,12 @@ def _dataset(
         policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
+
+
+def _dataset(
+    *rows: tuple[str, str, str, int, int, int],
+) -> KoAnalysisView:
+    return build_ko_analysis_view(_normalized_dataset(*rows))
 
 
 def _row(
@@ -211,7 +219,7 @@ def test_unsupported_content_fails_closed_even_when_an_or_branch_is_true() -> No
 
 def test_unclassified_records_do_not_contribute_to_completion() -> None:
     graph = _graph(("M00001", "K00001 K00002"))
-    dataset = _dataset(
+    normalized = _normalized_dataset(
         _row("K00001", "accepted"),
         _row(
             "K00002",
@@ -231,14 +239,14 @@ def test_unclassified_records_do_not_contribute_to_completion() -> None:
         ),
     )
 
-    result = evaluate_module(graph, dataset)
+    result = evaluate_module(graph, build_ko_analysis_view(normalized))
 
     assert result.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
     assert result.evidence_ko_count == 1
     assert result.missing_blocks_preview[0].block_index == 2
     assert all(
         record.normalized_status is NormalizedStatus.UNCLASSIFIED
-        for record in dataset.records[1:]
+        for record in normalized.records[1:]
     )
 
 
@@ -257,15 +265,15 @@ def test_rejected_and_unclassified_predictions_never_enter_analysis_evidence() -
 
 def test_top_k_multi_domain_records_remain_distinct_and_can_satisfy_one_block() -> None:
     graph = _graph(("M00001", "K00001+K00002"))
-    dataset = _dataset(
+    normalized = _normalized_dataset(
         _row("K00001", "accepted", rank=1, start=1, end=50),
         _row("K00002", "accepted", rank=2, start=51, end=100),
     )
 
-    result = evaluate_module(graph, dataset)
+    result = evaluate_module(graph, build_ko_analysis_view(normalized))
 
-    assert len(dataset.records) == 2
-    assert [record.rank for record in dataset.records] == [1, 2]
+    assert len(normalized.records) == 2
+    assert [record.rank for record in normalized.records] == [1, 2]
     assert result.evaluation_status is ModuleEvaluationStatus.COMPLETE
 
 

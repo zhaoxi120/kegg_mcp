@@ -50,11 +50,14 @@ def test_generic_import_to_accepted_unique_view_is_stable_and_lossless() -> None
     assert first.accepted_kos == ("K00006",)
     assert first.rejected_kos == ("K00003", "K00006")
     assert select_ko_ids(first) == ("K00006",)
-    assert next(
-        item.count
-        for item in first.status_counts
-        if item.status is NormalizedStatus.UNCLASSIFIED
-    ) == 1
+    assert (
+        next(
+            item.count
+            for item in first.status_counts
+            if item.status is NormalizedStatus.UNCLASSIFIED
+        )
+        == 1
+    )
     assert dataset.model_dump_json() == before
     assert AnnotationDataset.model_validate_json(before) == dataset
     assert KOEvidenceView.model_validate_json(first.model_dump_json()) == first

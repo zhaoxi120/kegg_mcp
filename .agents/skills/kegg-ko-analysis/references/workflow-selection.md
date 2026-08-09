@@ -157,7 +157,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   retained ranking but excludes them before Top-N target truncation. If the user explicitly
   requests a canonical KO total map such as `ko01100`, pass that explicit pathway target with
   `allow_global_or_overview=True`. Continue to rendering only after Core emits a complete,
-  renderable version 5 handoff. Do not substitute a `map` or organism reference, promote a
+  renderable version 6 handoff. Do not substitute a `map` or organism reference, promote a
   summary-only result, or request a model-native conceptual fallback.
 - Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
   exact completion and required-block coverage separately from the selected MODULE definitions.
@@ -172,9 +172,11 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    `normalize_ko_annotations` alone only when the user wants a reusable normalized table.
 2. Let the server infer unambiguous common columns and report the mapping. Supply an explicit
    column mapping only for ambiguous or non-standard tables.
-3. For full-record intake, preserve raw source decisions, scores, thresholds, ranks, domains,
-   protein names, source/model versions, timestamps, and the original absolute input path. If the
-   caller explicitly chooses the lossy large-file route, follow its disclosure rules below.
+3. `analyze_ko_annotations` always derives a compact analysis view and does not retain raw
+   per-record evidence. Use `normalize_ko_annotations` when the request requires raw source
+   decisions, scores, thresholds, ranks, domains, protein names, sequence-to-KO mappings, or
+   duplicate/conflict accounting. Preserve source/model versions, timestamps, and the original
+   absolute input path as provenance in either route.
 4. Run every analysis with sorted unique accepted K numbers. Rejected, unclassified, and invalid
    records remain evidence outcomes and do not enter MODULE, pathway, ranking, comparison, or
    rendering results.
@@ -191,29 +193,26 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    `annotations.file_path` and keep any analysis context only inside `annotations`. The same message
    with `field="output_directory"` is an output-location error and must not enter this fallback.
 
-### Explicit large DeepKOALA file projection
+### Compact high-level analysis view
 
-- Keep `annotation_retention="full_records"` or omit it for ordinary inputs and whenever the user
-  needs record evidence, protein mappings, or duplicate/conflict accounting. The DeepKOALA
-  companion's own output is capped at 5,000,000 bytes and normally follows this route.
-- Use `annotation_retention="unique_accepted_ko_projection"` only for
-  `analyze_ko_annotations` when an existing large input is supplied through
-  `annotations.file_path` with `input_format="deepkoala_detailed"`. Never use it with
-  `annotations.text`, `ko_text`, generic or plain-KO input, a resource fallback, a narrower tool,
-  or `normalize_ko_annotations`. Never switch modes implicitly because a file is large.
-- State before the call that the projection retains sorted unique accepted K numbers, aggregate
-  intake/status counts, source and decision-policy provenance, and a bounded diagnostic preview.
-  It does not retain record evidence, sequence/protein-to-KO mappings, raw per-record score or
-  threshold evidence, or duplicate/conflict accounting.
-- Let Core enforce the fixed maxima: 1 GiB, 10,000,000 source rows, 20,000,000 expanded
-  assignments, 100,000 unique accepted K numbers, 64 columns, 16,384 characters per field, and 100
-  retained diagnostics. Do not split and merge file chunks in the Skill to evade these limits.
-- This option changes only local intake and retention. Existing KEGG request, reference-loading,
-  relationship-row, response-byte, ranking, and output budgets still apply. A compact projection
-  does not promise that automatic Top-N KO-to-target mapping can process every large accepted-KO
-  set. If the accepted set is likely to exhaust those budgets, provide bounded explicit
-  `module_ids` or `pathways` when the scientific targets are known, or split the source into
-  independently meaningful analysis units; do not shard one unit and merge rankings in the LLM.
+- Every `analyze_ko_annotations` input produces the same sorted unique accepted-KO analysis view.
+  Do not supply or look for an annotation-retention selector, and never change analysis semantics
+  because a file is large or small.
+- State when relevant that the view retains aggregate intake/status counts, source and
+  decision-policy provenance, and bounded diagnostics. It does not retain record evidence,
+  sequence/protein-to-KO mappings, raw per-record score or threshold evidence, or
+  duplicate/conflict accounting. Use `normalize_ko_annotations` or the audit workflow when the
+  user needs those records.
+- For an allowed DeepKOALA detailed `annotations.file_path`, let Core stream the source under its
+  fixed maxima: 1 GiB, 10,000,000 source rows, 20,000,000 expanded assignments, 100,000 unique
+  accepted K numbers, 64 columns, 16,384 characters per field, and 100 retained diagnostics. Do
+  not split and merge file chunks in the Skill to evade these limits. Other formats and bounded
+  inline inputs keep their applicable importer limits but produce the same analysis view.
+- Compact local intake does not raise existing KEGG request, reference-loading, relationship-row,
+  response-byte, ranking, or output budgets. If the accepted set is likely to exhaust those
+  budgets, provide bounded explicit `module_ids` or `pathways` when the scientific targets are
+  known, or split the source into independently meaningful analysis units; do not shard one unit
+  and merge rankings in the LLM.
 
 ## Automatic cross-Skill continuation
 

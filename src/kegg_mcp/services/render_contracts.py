@@ -41,6 +41,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     evaluate_pathway_coverage,
     pathway_reference_scope_from_class,
 )
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     AnalysisUnit,
@@ -53,21 +54,13 @@ from kegg_mcp.domain.annotations import (
     StatusCount,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.domain.projections import (
-    AnnotationRetention,
-    KoAnalysisEvidence,
-    KoAnalysisProjection,
-    analysis_accepted_ko_ids,
-    analysis_decision_policy,
-    analysis_status_counts,
-)
 from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggOperation
 
-RENDER_INPUT_SCHEMA_VERSION = "5"
-RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=5"
+RENDER_INPUT_SCHEMA_VERSION = "6"
+RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=6"
 RENDER_INPUT_BUILDER_NAME = "kegg_render_handoff"
-RENDER_INPUT_BUILDER_VERSION = "3"
+RENDER_INPUT_BUILDER_VERSION = "5"
 MODULE_RENDER_MAX_CANVAS_DIMENSION = 20_000
 MODULE_RENDER_MAX_CANVAS_PIXELS = 20_000_000
 MODULE_RENDER_MAX_SVG_NODES = 4_096
@@ -141,7 +134,7 @@ def module_scene_fits_renderer(
 
 
 class RenderInputLimits(FrozenModel):
-    """Serialized renderer-handoff bounds recorded with every version 5 document."""
+    """Serialized renderer-handoff bounds recorded with every version 6 document."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -199,9 +192,7 @@ class VisualizationEvidence(FrozenModel):
         if statuses != tuple(NormalizedStatus):
             raise ValueError("status_counts must use canonical normalized-status order")
         accepted_count = next(
-            item.count
-            for item in self.status_counts
-            if item.status is NormalizedStatus.ACCEPTED
+            item.count for item in self.status_counts if item.status is NormalizedStatus.ACCEPTED
         )
         if len(self.accepted_ko_ids) > accepted_count:
             raise ValueError("unique accepted K numbers cannot exceed accepted assignments")
@@ -468,7 +459,7 @@ class PathwayRenderTarget(FrozenModel):
             if not self.detected_ko_ids_complete:
                 raise ValueError("renderable pathway targets require complete detected evidence")
             if self.reference_namespace is not PathwayReferenceNamespace.KO:
-                raise ValueError("version 5 renders only KO-reference pathway targets")
+                raise ValueError("version 6 renders only KO-reference pathway targets")
             if self.evaluation_status is not PathwayCoverageStatus.EVALUATED:
                 raise ValueError("renderable pathway targets require an evaluated denominator")
         elif self.not_renderable_reason is None:
@@ -481,7 +472,7 @@ class RenderExecutionProvenance(FrozenModel):
 
     analysis: AnalysisExecutionProvenance
     handoff_builder_name: Literal["kegg_render_handoff"]
-    handoff_builder_version: Literal["3"]
+    handoff_builder_version: Literal["5"]
 
 
 class RenderInput(FrozenModel):
@@ -489,12 +480,12 @@ class RenderInput(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:render-input:5",
+            "$id": "urn:kegg-mcp:schema:render-input:6",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
-    schema_version: Literal["5"]
+    schema_version: Literal["6"]
     producer: RenderProducer
     dataset: RenderDataset
     decision_policy: DecisionPolicyReference
@@ -552,27 +543,20 @@ class RenderInput(FrozenModel):
 
 
 def build_render_input(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     module_graphs: tuple[ResolvedModuleGraph, ...],
     pathway_references: tuple[PathwayKoReference, ...],
     execution: AnalysisExecutionProvenance,
     *,
     limits: RenderInputLimits | None = None,
 ) -> RenderInput:
-    """Build one handoff from full records or a unique accepted-KO projection."""
+    """Build one handoff from the canonical compact accepted-KO analysis view."""
     bounds = limits or RenderInputLimits()
-    expected_retention = (
-        AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
-        if isinstance(evidence, KoAnalysisProjection)
-        else AnnotationRetention.FULL_RECORDS
-    )
-    if execution.annotation_retention is not expected_retention:
-        _fail_identity("analysis evidence retention does not match execution provenance")
     _validate_target_counts(module_graphs, pathway_references, bounds)
 
     visualization_evidence = VisualizationEvidence(
-        accepted_ko_ids=analysis_accepted_ko_ids(evidence),
-        status_counts=analysis_status_counts(evidence),
+        accepted_ko_ids=evidence.accepted_ko_ids,
+        status_counts=evidence.status_counts,
     )
     evidence_ko_count = len(visualization_evidence.accepted_ko_ids)
     if evidence_ko_count > bounds.max_evidence_ko_ids:
@@ -619,7 +603,7 @@ def build_render_input(
             kegg_organism_code=evidence.kegg_organism_code,
             sources=sources,
         ),
-        decision_policy=analysis_decision_policy(evidence),
+        decision_policy=evidence.decision_policy,
         evidence=visualization_evidence,
         modules=module_targets,
         pathways=pathway_targets,
@@ -706,7 +690,7 @@ def _module_definition_scene_metrics(
 
 
 def _module_target(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     graph: ResolvedModuleGraph,
     analysis_limits: ModuleAnalysisLimits,
     bounds: RenderInputLimits,
@@ -800,7 +784,7 @@ def _module_target(
 
 def _complete_render_evaluation(
     graph: ResolvedModuleGraph,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     original_limits: ModuleAnalysisLimits,
     bounds: RenderInputLimits,
 ) -> ModuleEvaluationResult:
@@ -862,7 +846,7 @@ def _optional_states(
 
 
 def _pathway_target(
-    analysis_evidence: KoAnalysisEvidence,
+    analysis_evidence: KoAnalysisView,
     reference: PathwayKoReference,
     execution: AnalysisExecutionProvenance,
     visualization_evidence: VisualizationEvidence,

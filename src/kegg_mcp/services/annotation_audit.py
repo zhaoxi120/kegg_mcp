@@ -287,6 +287,7 @@ class MappingDegreeCount(FrozenModel):
 
 class KoMappingAudit(FrozenModel):
     """Mapping yield for accepted KOs and one fixed relationship target."""
+
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     mapped_unique_ko_count: int = Field(strict=True, ge=0)
     mapping_yield: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
@@ -433,9 +434,7 @@ class AnnotationAuditDetail(FrozenModel):
         mapping_completed = (
             self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
         )
-        if mapping_completed != (
-            self.accepted_without_any_audited_relationship_count is not None
-        ):
+        if mapping_completed != (self.accepted_without_any_audited_relationship_count is not None):
             raise ValueError("no-relationship counts are available only after completed mapping")
         if not mapping_completed and self.accepted_without_any_audited_relationship_preview:
             raise ValueError("skipped mapping cannot provide no-relationship previews")
@@ -479,9 +478,7 @@ class AnnotationMappingAuditResult(FrozenModel):
         mapping_completed = (
             self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
         )
-        if mapping_completed != (
-            self.accepted_without_any_audited_relationship_count is not None
-        ):
+        if mapping_completed != (self.accepted_without_any_audited_relationship_count is not None):
             raise ValueError("no-relationship counts are available only after completed mapping")
         if self.warning_count < len(self.warning_preview):
             raise ValueError("warning_count cannot be smaller than warning_preview")

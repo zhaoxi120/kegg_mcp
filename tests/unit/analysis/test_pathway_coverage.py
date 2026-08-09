@@ -23,7 +23,12 @@ from kegg_mcp.analysis.pathway_coverage import (
     build_pathway_reference,
     evaluate_pathway_coverage,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit
+from kegg_mcp.domain import (
+    CANONICAL_SOURCE_STATUS,
+    AnalysisUnit,
+    KoAnalysisView,
+    build_ko_analysis_view,
+)
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -91,30 +96,32 @@ def _dataset(
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN,
     taxon_id: int | None = None,
     organism_code: str | None = None,
-):
-    return import_generic_table(
-        (
-            "sequence,ko,decision\n"
-            "accepted-pathway,K00001,accepted\n"
-            "accepted-outside,K00004,accepted\n"
-            "unclassified-pathway,K00002,unclassified\n"
-            "rejected-pathway,K00003,rejected\n"
-        ),
-        dialect=TableDialect.CSV,
-        mapping=GenericColumnMapping(
-            sequence_id="sequence",
-            ko_id="ko",
-            raw_decision="decision",
-        ),
-        policy=CANONICAL_SOURCE_STATUS,
-        limits=_IMPORT_LIMITS,
-        analysis_unit=analysis_unit,
-        taxon_id=taxon_id,
-        kegg_organism_code=organism_code,
-        source=SourceProvenanceInput(
-            source_name="test_annotations",
-            source_version="1",
-        ),
+) -> KoAnalysisView:
+    return build_ko_analysis_view(
+        import_generic_table(
+            (
+                "sequence,ko,decision\n"
+                "accepted-pathway,K00001,accepted\n"
+                "accepted-outside,K00004,accepted\n"
+                "unclassified-pathway,K00002,unclassified\n"
+                "rejected-pathway,K00003,rejected\n"
+            ),
+            dialect=TableDialect.CSV,
+            mapping=GenericColumnMapping(
+                sequence_id="sequence",
+                ko_id="ko",
+                raw_decision="decision",
+            ),
+            policy=CANONICAL_SOURCE_STATUS,
+            limits=_IMPORT_LIMITS,
+            analysis_unit=analysis_unit,
+            taxon_id=taxon_id,
+            kegg_organism_code=organism_code,
+            source=SourceProvenanceInput(
+                source_name="test_annotations",
+                source_version="1",
+            ),
+        )
     )
 
 
@@ -238,7 +245,7 @@ def test_accepted_ko_reference_uses_dataset_evidence_and_preserves_provenance() 
     assert result.reference_namespace is PathwayReferenceNamespace.KO
     assert result.pathway_id == "ko00010"
     assert result.evaluation_status is PathwayCoverageStatus.EVALUATED
-    assert result.input_record_count == len(dataset.records)
+    assert result.input_record_count == dataset.assignment_count
     assert result.input_unique_ko_count == 2
     assert result.detected_unique_ko_count == 1
     assert result.missing_unique_ko_count == 2
@@ -815,7 +822,7 @@ def test_builder_unique_reference_limits_use_input_limit_error(
     _assert_error_code(caught, ErrorCode.INPUT_LIMIT_EXCEEDED)
 
 
-def test_input_record_limit_fails_before_evidence_view_construction() -> None:
+def test_input_assignment_limit_fails_before_coverage_calculation() -> None:
     with pytest.raises(KeggMcpError) as caught:
         evaluate_pathway_coverage(
             _reference(),

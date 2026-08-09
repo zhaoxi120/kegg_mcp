@@ -56,7 +56,7 @@ class DeepKoalaAssignment:
 
 @dataclass(frozen=True, slots=True)
 class DeepKoalaParsedRow:
-    """One classified source row shared by full and projection importers."""
+    """One classified source row shared by full and streaming importers."""
 
     evidence: RowEvidence
     sequence_id: str
@@ -192,12 +192,7 @@ def parse_deepkoala_row(
                 field="annotate",
             )
         )
-    if (
-        raw_decision == "*"
-        and score is not None
-        and threshold is not None
-        and score < threshold
-    ):
+    if raw_decision == "*" and score is not None and threshold is not None and score < threshold:
         diagnostics.append(
             ImportDiagnostic(
                 code=DiagnosticCode.SOURCE_DECISION_CONFLICT,
@@ -283,9 +278,7 @@ def import_deepkoala_detailed(
                     score=parsed.score,
                     score_type=ScoreType.PROBABILITY,
                     threshold=parsed.threshold,
-                    threshold_rule=(
-                        ThresholdRule.GTE if parsed.threshold is not None else None
-                    ),
+                    threshold_rule=(ThresholdRule.GTE if parsed.threshold is not None else None),
                     rank=None,
                     domain_start=parsed.domain_start,
                     domain_end=parsed.domain_end,

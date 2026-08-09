@@ -13,7 +13,9 @@ import pytest
 import kegg_mcp.kegg.client as client_module
 import kegg_mcp.services.kegg_entries as kegg_entries_module
 from kegg_mcp.analysis import PathwaySelection
+from kegg_mcp.domain import build_ko_analysis_view
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, fail
+from kegg_mcp.importers import import_plain_ko
 from kegg_mcp.kegg.cache import CacheLookup, CacheReadState, SQLiteKeggCache
 from kegg_mcp.kegg.client import KeggClient
 from kegg_mcp.kegg.contracts import (
@@ -933,6 +935,19 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
     )
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     request = NormalizeAnnotationsRequest(text="\n".join(ko_ids))
+    assert request.text is not None
+    analysis_view = build_ko_analysis_view(
+        import_plain_ko(
+            request.text,
+            limits=request.import_limits,
+            analysis_unit=request.analysis_unit,
+            sample_id=request.sample_id,
+            taxon_id=request.taxon_id,
+            kegg_organism_code=request.kegg_organism_code,
+            source=request.source,
+        ),
+        input_bytes=len(request.text.encode()),
+    )
     selection = PathwaySelection(top_n=1)
 
     first = analyze_annotation_targets(
@@ -943,6 +958,7 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
         client=client,
         result_store=store,
         scope_id="cache-summary",
+        analysis_view=analysis_view,
     )
     second = analyze_annotation_targets(
         request,
@@ -952,6 +968,7 @@ def test_equivalent_top_pathway_analysis_reports_cache_hits_without_network_repe
         client=client,
         result_store=store,
         scope_id="cache-summary",
+        analysis_view=analysis_view,
     )
 
     assert len(transport.urls) == 3

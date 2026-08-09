@@ -2,8 +2,8 @@
 
 This document records the current annotation-import contract. It covers immutable
 annotation evidence, exact K-number normalization, three full-record import formats, versioned
-decision policies, import diagnostics, the accepted-KO analysis view, and the explicit streaming
-DeepKOALA projection. It does not cover KEGG access, module or pathway analysis, reporting
+decision policies, import diagnostics, the accepted-KO analysis view, and streaming DeepKOALA
+analysis intake. It does not cover KEGG access, module or pathway analysis, reporting
 services, MCP transport, or the repository-scoped Codex Skill.
 
 ## Public modules
@@ -18,13 +18,13 @@ The importer entry points are:
 import_plain_ko(...)
 import_generic_table(...)
 import_deepkoala_detailed(...)
-project_deepkoala_detailed(...)
+stream_deepkoala_analysis_view(...)
 ```
 
-The three full-record importers accept only inline `str` or `bytes` payloads. The projection entry
-point consumes a pinned binary stream plus its exact byte count. The service/MCP layer owns
+The three full-record importers accept only inline `str` or `bytes` payloads. The streaming analysis
+entry point consumes a pinned binary stream plus its exact byte count. The service/MCP layer owns
 allowed-root path resolution, descriptor pinning, and final file-identity verification before and
-after the streaming projection.
+after streaming intake.
 
 ## Input limits
 
@@ -53,8 +53,8 @@ portable signed 32-bit parser range. Field length has a separate hard ceiling of
 characters, aligned with the immutable retained-evidence string contract; callers should normally
 select a substantially lower application limit.
 
-The separate `ProjectionImportLimits` contract applies only to the explicit streaming
-`unique_accepted_ko_projection` path. Its hard maxima are:
+The separate `AnalysisViewImportLimits` contract applies to streaming DeepKOALA detailed-file
+analysis intake. Its hard maxima are:
 
 | Bound | Maximum |
 | --- | ---: |
@@ -69,7 +69,8 @@ The separate `ProjectionImportLimits` contract applies only to the explicit stre
 The streaming parser counts every diagnostic but retains only the bounded leading preview. It
 streams from the pinned descriptor, checks the observed byte count, and the MCP path boundary
 verifies that the same file identity remains selected throughout intake. These bounds do not
-change the 5,000,000-byte full-record import limit used by current Core services.
+change the 5,000,000-byte full-record import limit used by normalization and bounded inline or
+other table intake.
 
 ## K-number normalization
 
@@ -107,8 +108,8 @@ The primary models are:
 - `AnnotationDataset`
 - `KOEvidenceView`
 
-`KoAnalysisProjection` is a separate, explicitly lossy analysis contract. It is not an
-`AnnotationDataset` and must not be presented as normalized record evidence.
+`KoAnalysisView` is a separate, compact analysis contract. It is not an `AnnotationDataset` and
+must not be presented as normalized record evidence.
 
 `AnnotationDataset.sources` retains source provenance even when an input is empty or every logical
 row is structurally skipped. Every emitted record source must also appear in this tuple.
@@ -314,18 +315,16 @@ indexes without mutating the dataset.
 This accepted-KO set is an annotation-evidence view, not a statement that a biological function is
 experimentally present or absent.
 
-## Explicit unique accepted-KO projection
+## Compact accepted-KO analysis view
 
-The high-level `analyze_ko_annotations` tool normally uses `annotation_retention="full_records"`.
-The caller may explicitly choose
-`annotation_retention="unique_accepted_ko_projection"` only when the same request supplies
-`annotations.file_path` and `input_format="deepkoala_detailed"`. Inline `annotations.text`,
-`ko_text`, generic tables, plain KO input, the narrower analysis tools, and
-`normalize_ko_annotations` do not accept this retention mode. There is no automatic size-based
-switch.
+The high-level `analyze_ko_annotations` tool always produces a `KoAnalysisView`; callers do not
+select a retention mode. Inline `annotations.text`, `ko_text`, generic tables, plain KO input, and
+DeepKOALA detailed files all expose the same sorted unique accepted-KO analysis semantics.
+`normalize_ko_annotations` remains the separate full-record operation.
 
-`project_deepkoala_detailed` applies the same DeepKOALA decision and composite-label parsing rules
-while streaming. The resulting `KoAnalysisProjection` retains:
+`stream_deepkoala_analysis_view` applies the same decision and composite-label parsing rules as full
+normalization while streaming. `build_ko_analysis_view` immediately reduces other bounded imported
+datasets. The resulting `KoAnalysisView` retains:
 
 - sorted unique accepted K numbers;
 - exact input-byte, source-row, expanded-assignment, skipped-row, and normalized-status counts;
@@ -335,21 +334,19 @@ while streaming. The resulting `KoAnalysisProjection` retains:
   flag.
 
 It intentionally does not retain source rows, annotation records, sequence-to-KO or protein-to-KO
-mappings, raw score/threshold evidence, record identifiers, or duplicate/conflict indexes. Its
-contract therefore declares `record_level_evidence_retained=false`,
-`protein_ko_mapping_available=false`, and `duplicate_conflict_accounting="not_evaluated"`.
-Downstream analysis consumes the same sorted unique accepted-KO abstraction in both retention
-modes, while reports and manifests disclose which evidence contract was retained.
+mappings, raw score/threshold evidence, record identifiers, or duplicate/conflict indexes.
+Downstream analysis consumes this one accepted-KO abstraction. Reports and manifests do not expose
+a large-file/small-file retention selector or claim that omitted evidence was retained.
 
 The separate `deepkoala-mcp` companion continues to enforce its 5,000,000-byte detailed-output
-cap. The Core projection is for an allowed existing DeepKOALA detailed file, including a large file
-created outside that companion; it does not expand the companion's generation contract.
+cap. Core can stream an allowed existing DeepKOALA detailed file, including a large file created
+outside that companion; this does not expand the companion's generation contract.
 
-The projection changes local intake and retention only. KEGG request, relationship-row,
-reference-loading, ranking, and output budgets remain unchanged. In particular, a projection that
-fits the local limits may still contain too many accepted K numbers for automatic KO-to-target
-mapping. Higher layers must use bounded explicit targets or separate biologically meaningful
-analysis units rather than treating projection capacity as an unbounded KEGG workflow.
+Compact intake does not change KEGG request, relationship-row, reference-loading, ranking, or
+output budgets. A view that fits the local limits may still contain too many accepted K numbers for
+automatic KO-to-target mapping. Higher layers must use bounded explicit targets or separate
+biologically meaningful analysis units rather than treating local intake capacity as an unbounded
+KEGG workflow.
 
 ## Errors and JSON Schema
 

@@ -402,10 +402,10 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 5" in normalized
+        assert "version 6" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (installation, server_doc, readiness):
-        assert "AnalysisExecutionProvenance` version 4" in re.sub(r"\s+", " ", document)
+        assert "AnalysisExecutionProvenance` version 5" in re.sub(r"\s+", " ", document)
 
     renderer_job = _workflow_job(ci, "validate-renderer-companion")
     for command in (
@@ -521,10 +521,18 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "runs-on: macos-14" in macos_core
     assert "platform.machine() == 'arm64'" in macos_core
     assert "KEGG_MCP_ACCESS_MODE: offline_cache" in macos_core
-    assert "tests/unit" in macos_core
-    assert "tests/contract" in macos_core
-    assert "tests/integration" in macos_core
-    assert "--ignore=tests/integration/test_deepkoala_companion_handoff.py" in macos_core
+    assert (
+        "tests/unit/kegg/test_cache.py::test_darwin_read_only_descriptor_connection_primitive"
+    ) in macos_core
+    for selector in (
+        "test_host_platform_profiles_cover_linux_and_native_apple_silicon",
+        "test_deployment_environment_emits_platform_specific_deepkoala_devices",
+        "test_runtime_verification_accepts_cpu_only_local_ready_for_each_platform",
+        "test_python_preflight_requires_a_native_runtime_matching_the_host_profile",
+    ):
+        assert f"tests/release/test_suite_installation.py::{selector}" in macos_core
+    assert "tests/contract" not in macos_core
+    assert "tests/integration" not in macos_core
     assert "--distribution kegg-mcp" in macos_core
     assert "--console kegg-mcp" in macos_core
 
@@ -533,6 +541,13 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "working-directory: companions/kegg-render-mcp" in macos_renderer
     assert "uv sync --locked --all-groups" in macos_renderer
     assert "uv run --frozen pytest" in macos_renderer
+    for selector in (
+        "tests/test_platform.py::test_supported_posix_host_satisfies_renderer_capability_gate",
+        "tests/test_artifacts.py::test_parent_open_and_close_preserves_a_live_spawned_scope",
+        "tests/test_synthetic_pipeline.py::"
+        "test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output",
+    ):
+        assert selector in macos_renderer
     assert "--distribution kegg-render-mcp" in macos_renderer
 
     assert "runs-on: macos-14" in macos_deepkoala
@@ -540,14 +555,26 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "platform.machine() == 'arm64'" in macos_deepkoala
     for command in (
         "uv sync --locked",
-        "uv run --frozen ruff check .",
-        "uv run --frozen ruff format --check .",
-        "uv run --frozen pyright",
         "uv run --frozen pytest",
         "uv build --no-sources",
         "--distribution deepkoala-mcp",
     ):
         assert command in macos_deepkoala
+    for selector in (
+        "tests/test_runner.py::test_runner_times_out_and_reaps_process_group",
+        "tests/test_runner.py::test_parent_sigkill_terminates_deepkoala_child",
+        "tests/test_job_storage.py::"
+        "test_shared_state_root_coordinates_runner_lock_across_spawned_processes",
+    ):
+        assert selector in macos_deepkoala
+    for duplicate_command in (
+        "uv run --frozen ruff check .",
+        "uv run --frozen ruff format --check .",
+        "uv run --frozen pyright",
+    ):
+        assert duplicate_command not in macos_core
+        assert duplicate_command not in macos_deepkoala
+        assert duplicate_command not in macos_renderer
 
     assert "validate-macos-intel-components:" not in ci
     assert "macos-15-intel" not in ci

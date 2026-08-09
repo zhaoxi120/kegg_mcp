@@ -77,13 +77,12 @@ schema, parser, fixture, or acceptance test.
   accepted K numbers. Rejected, unclassified, and invalid records remain evidence or intake
   outcomes and never enter analysis.
 - Full normalization preserves record-level evidence, protein-to-KO mappings, duplicate/conflict
-  accounting, and provenance. The high-level `analyze_ko_annotations` workflow may instead use the
-  explicit `unique_accepted_ko_projection` retention mode only for an allowed
-  `annotations.file_path` with `input_format="deepkoala_detailed"`. That streaming, intentionally
-  lossy mode retains sorted unique accepted K numbers, aggregate intake/status counts, source and
-  policy provenance, and bounded diagnostics; it does not retain record-level evidence,
-  protein-to-KO mappings, or duplicate/conflict accounting. `normalize_ko_annotations` never uses
-  the lossy projection.
+  accounting, and provenance. The high-level `analyze_ko_annotations` workflow always derives a
+  compact analysis view containing sorted unique accepted K numbers, aggregate intake/status
+  counts, source and policy provenance, and bounded diagnostics. It does not retain record-level
+  evidence, protein-to-KO mappings, or duplicate/conflict accounting. Use
+  `normalize_ko_annotations` or the audit workflow when those records are required; file size never
+  changes analysis semantics.
 - Do not compare scores or thresholds across annotation systems unless their semantics are known to
   be comparable.
 - Report exact MODULE completion separately from project block coverage. Follow KEGG MODULE logic:

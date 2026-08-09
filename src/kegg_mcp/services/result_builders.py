@@ -6,19 +6,12 @@ import json
 import time
 
 from kegg_mcp.analysis import ModuleEvaluationResult, PathwayCoverageResult
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     AnnotationDataset,
     NormalizedStatus,
 )
 from kegg_mcp.domain.errors import ErrorCode, fail
-from kegg_mcp.domain.projections import (
-    KoAnalysisEvidence,
-    analysis_accepted_ko_ids,
-    analysis_diagnostic_count,
-    analysis_diagnostic_preview,
-    analysis_input_rows,
-    analysis_status_counts,
-)
 from kegg_mcp.execution import ExecutionStage, StageMetric
 from kegg_mcp.importers import import_plain_ko
 from kegg_mcp.kegg import ResponseOrigin
@@ -86,8 +79,8 @@ def _elapsed_ms(started_ns: int) -> int:
     return max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)
 
 
-def _status_record_counts(evidence: KoAnalysisEvidence) -> dict[NormalizedStatus, int]:
-    return {item.status: item.count for item in analysis_status_counts(evidence)}
+def _status_record_counts(evidence: KoAnalysisView) -> dict[NormalizedStatus, int]:
+    return {item.status: item.count for item in evidence.status_counts}
 
 
 def _execution_metrics(
@@ -129,9 +122,7 @@ def _reference_provenance(
     additional: tuple[KeggBatchProvenance, ...] = (),
 ) -> tuple[KeggBatchProvenance, ...]:
     batches = list(additional)
-    batches.extend(
-        batch for module in modules for batch in module.reference_retrieval_provenance
-    )
+    batches.extend(batch for module in modules for batch in module.reference_retrieval_provenance)
     batches.extend(
         batch
         for pathway in pathways
@@ -158,24 +149,24 @@ def _reference_provenance(
 
 
 def _analysis_warnings(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     modules: tuple[ModuleEvaluationResult, ...],
     pathways: tuple[PathwayCoverageResult, ...],
 ) -> tuple[str, ...]:
-    values = [diagnostic.message for diagnostic in analysis_diagnostic_preview(evidence)]
+    values = [diagnostic.message for diagnostic in evidence.diagnostic_preview]
     values.extend(warning.message for module in modules for warning in module.warnings)
     values.extend(warning.message for pathway in pathways for warning in pathway.warnings)
     return tuple(dict.fromkeys(values))
 
 
 def _analysis_warning_count(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     modules: tuple[ModuleEvaluationResult, ...],
     pathways: tuple[PathwayCoverageResult, ...],
 ) -> int:
-    """Count diagnostics exactly even when a lossy projection retains only a preview."""
+    """Count diagnostics exactly even though the analysis view retains only a preview."""
     return (
-        analysis_diagnostic_count(evidence)
+        evidence.diagnostic_count
         + sum(len(module.warnings) for module in modules)
         + sum(len(pathway.warnings) for pathway in pathways)
     )
@@ -217,7 +208,7 @@ def _retain_json_detail(
 
 
 def _build_analysis_summary(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     *,
     metrics: tuple[StageMetric, ...],
     caveats: tuple[str, ...],
@@ -226,13 +217,13 @@ def _build_analysis_summary(
 ) -> AnalysisResultSummary:
     """Build the small count and message summary shared by analysis tools."""
     status_counts = _status_record_counts(evidence)
-    selected_ko_ids = analysis_accepted_ko_ids(evidence)
+    selected_ko_ids = evidence.accepted_ko_ids
     warning_preview = tuple(
         warning[:MAX_DIRECT_WARNING_CHARACTERS] for warning in warnings[:MAX_DIRECT_WARNINGS]
     )
     effective_warning_count = len(warnings) if warning_count is None else warning_count
     return AnalysisResultSummary(
-        input_records=analysis_input_rows(evidence),
+        input_records=evidence.input_rows,
         accepted_records=status_counts[NormalizedStatus.ACCEPTED],
         rejected_records=status_counts[NormalizedStatus.REJECTED],
         unclassified_records=status_counts[NormalizedStatus.UNCLASSIFIED],
@@ -266,7 +257,7 @@ def _validate_report_capacity(limits: ReportLimits, store: SQLiteResultStore) ->
     maxima = (
         limits.max_structured_json_bytes,
         limits.max_markdown_bytes,
-        limits.max_annotation_csv_bytes,
+        limits.max_accepted_ko_csv_bytes,
     )
     if any(maximum > store.limits.max_artifact_bytes for maximum in maxima):
         fail(

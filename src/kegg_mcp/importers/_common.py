@@ -4,11 +4,10 @@ import csv
 import io
 import math
 import uuid
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Iterator
 
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
@@ -29,8 +28,8 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.importers.contracts import (
+    AnalysisViewImportLimits,
     ImportLimits,
-    ProjectionImportLimits,
     SourceProvenanceInput,
 )
 
@@ -113,7 +112,7 @@ def decode_payload(payload: object, limits: ImportLimits) -> DecodedInput:
 def validate_auxiliary_evidence(
     metadata: Sequence[EvidenceField],
     source_input: SourceProvenanceInput | None,
-    limits: ImportLimits | ProjectionImportLimits,
+    limits: ImportLimits | AnalysisViewImportLimits,
 ) -> None:
     """Apply caller-selected field and byte bounds to non-payload metadata."""
     if len(metadata) > MAX_AUXILIARY_METADATA_FIELDS:
@@ -224,7 +223,7 @@ def parse_table(
 
 @contextmanager
 def configured_csv_field_limit(
-    limits: ImportLimits | ProjectionImportLimits,
+    limits: ImportLimits | AnalysisViewImportLimits,
 ) -> Iterator[None]:
     """Temporarily coordinate Python's process-wide CSV field-size setting."""
     with _CSV_FIELD_SIZE_LOCK:
@@ -303,7 +302,7 @@ def _parse_table(
 
 def read_table_header(
     reader: Iterator[list[str]],
-    limits: ImportLimits | ProjectionImportLimits,
+    limits: ImportLimits | AnalysisViewImportLimits,
 ) -> tuple[str, ...]:
     """Read and validate one exact delimited-table header without retaining payload rows."""
     raw_header = next(reader, None)
@@ -719,7 +718,7 @@ def sequence_or_domain_assignment_slot(record: AnnotationRecord) -> tuple[object
 
 def check_table_columns(
     cells: Sequence[str],
-    limits: ImportLimits | ProjectionImportLimits,
+    limits: ImportLimits | AnalysisViewImportLimits,
 ) -> None:
     """Enforce common column, field-length, and text-safety limits."""
     if len(cells) > limits.max_columns:

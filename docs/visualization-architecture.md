@@ -27,7 +27,7 @@ Protein FASTA
     -> deepkoala-mcp
     -> deepkoala_annotations.csv plus source provenance
     -> kegg-mcp
-    -> render_input.json schema version 5
+    -> render_input.json schema version 6
     -> kegg-render-mcp
     -> static SVG, optional PNG, and render_manifest.json
 ```
@@ -88,9 +88,9 @@ automatic Top-N truncation. Explicit broad-map analysis requires
 MODULE completion and project block coverage are calculated separately after reference loading.
 
 The core exposes transport-independent Pydantic models in `kegg_mcp.services.render_contracts`.
-`RenderInput` schema version 5 contains producer and dataset identity, analysis unit, taxonomic and
+`RenderInput` schema version 6 contains producer and dataset identity, analysis unit, taxonomic and
 source provenance, decision-policy identity, sorted unique accepted K numbers, bounded MODULE and
-pathway targets, and serializable parameters, limits, retention mode, ranking provenance, and
+pathway targets, and serializable parameters, intake limits, ranking provenance, and
 calculation versions.
 
 Rejected, unclassified, and invalid records remain available in analysis summaries but never enter
@@ -112,9 +112,9 @@ optional-component states, unsupported content, and parser/evaluator provenance.
 Oversized content is marked `not_renderable`; a truncated preview is never relabeled as complete
 renderer evidence.
 
-The output-bundle manifest records renderer schema version 5 and its MIME type independently from
+The output-bundle manifest records renderer schema version 6 and its MIME type independently from
 the output-bundle schema. Graph, reference, result, target-count, and byte-limit validation completes
-before publication. The bundle manifest is published last. Only schema version 5 is accepted. A
+before publication. The bundle manifest is published last. Only schema version 6 is accepted. A
 schema-mismatched handoff is rejected with an action to rerun core analysis; it is not repaired or
 reinterpreted.
 
@@ -294,7 +294,7 @@ configuration and lifecycle; generic clients use
 
 The visualization implementation is covered by:
 
-- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 5
+- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 6
   and typed pathway assets;
 - renderer schema, pathway, MODULE, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
   and distribution tests using only synthetic assets;

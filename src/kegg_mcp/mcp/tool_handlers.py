@@ -10,8 +10,8 @@ from typing import cast
 from pydantic import BaseModel
 
 from kegg_mcp import __version__
-from kegg_mcp.domain.projections import AnnotationRetention, KoAnalysisProjection
-from kegg_mcp.importers import ProjectionImportLimits, project_deepkoala_detailed
+from kegg_mcp.domain.analysis_view import KoAnalysisView
+from kegg_mcp.importers import AnalysisViewImportLimits, stream_deepkoala_analysis_view
 from kegg_mcp.kegg import GetRequest
 from kegg_mcp.mcp.contracts import (
     AnalyzeKoAnnotationsInput,
@@ -52,9 +52,9 @@ from kegg_mcp.services.entity_resolution import resolve_kegg_entities
 from kegg_mcp.services.external_handoff import prepare_external_handoff
 from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
 from kegg_mcp.services.kegg_search import search_kegg_entries
-from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.models import AnnotationInputFormat, NormalizeAnnotationsRequest
 from kegg_mcp.services.module_analysis import analyze_module_targets
-from kegg_mcp.services.normalization import normalize_annotations
+from kegg_mcp.services.normalization import build_analysis_view, normalize_annotations
 from kegg_mcp.services.operational import (
     delete_analysis_result,
     get_server_status_service,
@@ -87,20 +87,20 @@ ToolHandler = Callable[[ToolContext, BaseModel], ToolOutcome]
 def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeKoAnnotationsInput, model)
     runtime = context.runtime
-    analysis_projection: KoAnalysisProjection | None = None
-    projection_limits: ProjectionImportLimits | None = None
-    projection_import_elapsed_ms: int | None = None
+    analysis_view: KoAnalysisView | None = None
+    stream_limits: AnalysisViewImportLimits | None = None
+    import_started = time.perf_counter_ns()
     if request.annotations is not None:
         normalization = request.annotations.to_service_request()
-        if request.annotation_retention is AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION:
-            if normalization.file_path is None:  # pragma: no cover - input model guard
-                raise AssertionError("validated unique-KO projection omitted file_path")
-            projection_limits = ProjectionImportLimits()
-            projection_started = time.perf_counter_ns()
+        if (
+            normalization.file_path is not None
+            and normalization.input_format is AnnotationInputFormat.DEEPKOALA_DETAILED
+        ):
+            stream_limits = AnalysisViewImportLimits()
             with open_annotation_file_stream(
                 normalization.file_path,
                 runtime.allowed_roots,
-                max_bytes=projection_limits.max_bytes,
+                max_bytes=stream_limits.max_bytes,
             ) as pinned:
                 source = bind_annotation_file_source(
                     normalization.source,
@@ -109,19 +109,15 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
                     allowed_roots=runtime.allowed_roots,
                     default_source_name="deepkoala",
                 )
-                analysis_projection = project_deepkoala_detailed(
+                analysis_view = stream_deepkoala_analysis_view(
                     pinned.stream,
                     input_bytes=pinned.byte_size,
-                    limits=projection_limits,
+                    limits=stream_limits,
                     analysis_unit=normalization.analysis_unit,
                     taxon_id=normalization.taxon_id,
                     kegg_organism_code=normalization.kegg_organism_code,
                     source=source,
                 )
-            projection_import_elapsed_ms = max(
-                0,
-                (time.perf_counter_ns() - projection_started) // 1_000_000,
-            )
             normalization = normalization.model_copy(update={"source": source})
         else:
             normalization = materialize_annotation_file(normalization, runtime.allowed_roots)
@@ -133,6 +129,14 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
             analysis_unit=request.analysis_unit,
             sample_id=request.sample_id,
         )
+    if analysis_view is None:
+        if normalization.text is None:  # pragma: no cover - materialization invariant
+            raise AssertionError("bounded analysis input was not materialized")
+        analysis_view = build_analysis_view(normalization)
+    annotation_import_elapsed_ms = max(
+        0,
+        (time.perf_counter_ns() - import_started) // 1_000_000,
+    )
     requested_output = request.output_directory or normalization.output_directory
     resolved_output = resolve_output_directory(
         requested_output,
@@ -148,20 +152,16 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
         scope_id=runtime.scope_id,
         pathway_selection=request.pathway_selection,
         allow_global_or_overview=request.allow_global_or_overview,
-        analysis_projection=analysis_projection,
-        projection_import_limits=projection_limits,
-        annotation_import_elapsed_ms=projection_import_elapsed_ms,
+        analysis_view=analysis_view,
+        stream_import_limits=stream_limits,
+        annotation_import_elapsed_ms=annotation_import_elapsed_ms,
         output_directory=resolved_output,
         remove_created_output_on_failure=requested_output is None and resolved_output is not None,
     )
     return ToolOutcome(
         result,
-        (
-            "A lossy accepted unique-KO projection was analyzed; record-level evidence and "
-            "protein mappings were not retained."
-            if analysis_projection is not None
-            else "KO annotations were normalized and the requested KEGG analyses completed."
-        ),
+        "A compact sorted unique accepted-KO view was analyzed; record-level evidence and "
+        "protein mappings were not retained by this workflow.",
         result.result.result_id,
     )
 

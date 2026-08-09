@@ -22,12 +22,11 @@ from kegg_mcp.analysis.comparison_contracts import (
     KoSetComparisonSummary,
 )
 from kegg_mcp.analysis.contracts import CalculationMethodReference
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     DecisionPolicyReference,
     SourceProvenance,
-    build_ko_evidence_view,
-    select_ko_ids,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 
@@ -38,11 +37,24 @@ def compare_ko_datasets(
     limits: ComparisonLimits | None = None,
 ) -> KoSetComparisonDetail:
     """Partition selected unique accepted KOs across two or more datasets."""
+    views = tuple(build_ko_analysis_view(item.dataset) for item in inputs)
+    return compare_ko_datasets_with_views(inputs, views, limits=limits)
+
+
+def compare_ko_datasets_with_views(
+    inputs: tuple[ComparisonDatasetInput, ...],
+    views: tuple[KoAnalysisView, ...],
+    *,
+    limits: ComparisonLimits | None = None,
+) -> KoSetComparisonDetail:
+    """Package-internal comparison using views already derived by the current workflow."""
     effective_limits = limits or ComparisonLimits()
     _validate_comparison_inputs(inputs, effective_limits)
-
-    views = tuple(build_ko_evidence_view(item.dataset) for item in inputs)
-    policies = tuple(view.policy for view in views)
+    if len(views) != len(inputs) or any(
+        view.dataset_id != item.dataset.dataset_id for item, view in zip(inputs, views, strict=True)
+    ):
+        raise ValueError("analysis views must align with comparison inputs")
+    policies = tuple(view.decision_policy for view in views)
     if any(policy != policies[0] for policy in policies[1:]):
         policy_preview = tuple(
             SafeDetail(name=f"policy_{index}", value=policy.identifier)
@@ -66,7 +78,7 @@ def compare_ko_datasets(
             safe_details=safe_details,
         )
 
-    selected_sets = tuple(frozenset(select_ko_ids(view)) for view in views)
+    selected_sets = tuple(frozenset(view.accepted_ko_ids) for view in views)
     for index, ko_ids in enumerate(selected_sets):
         if len(ko_ids) > effective_limits.max_unique_kos_per_set:
             fail(
@@ -100,7 +112,7 @@ def compare_ko_datasets(
     labels = tuple(item.label for item in inputs)
     partition = _partition_selected_kos(selected_sets, labels)
     datasets = tuple(
-        _dataset_provenance(index, item, selected_sets, views[index].policy)
+        _dataset_provenance(index, item, selected_sets, views[index].decision_policy)
         for index, item in enumerate(inputs)
     )
     return KoSetComparisonDetail(
@@ -132,9 +144,7 @@ def summarize_ko_comparison(
         )
         for item in detail_partition.set_specific
     )
-    selected_patterns = detail_partition.partially_shared[
-        : preview_limits.max_membership_patterns
-    ]
+    selected_patterns = detail_partition.partially_shared[: preview_limits.max_membership_patterns]
     patterns = tuple(
         KoMembershipPatternPreview(
             member_set_indexes=item.member_set_indexes,

@@ -197,7 +197,7 @@ async def construct_pathway_scene(
         raise _asset_invalid(
             "Core-detected pathway evidence has no safely retained box or polyline geometry in "
             "the matching KGML asset."
-    )
+        )
     overlays = _accepted_overlays(kgml, detected)
     ratio = cast(float, target.coverage_ratio)
     name = target.pathway_name
@@ -274,12 +274,8 @@ async def _retrieve_pair(
     return image, kgml
 
 
-def _accepted_overlays(
-    kgml: KgmlDocument, accepted: frozenset[str]
-) -> tuple[KgmlGraphic, ...]:
-    return tuple(
-        graphic for graphic in kgml.graphics if accepted.intersection(graphic.ko_ids)
-    )
+def _accepted_overlays(kgml: KgmlDocument, accepted: frozenset[str]) -> tuple[KgmlGraphic, ...]:
+    return tuple(graphic for graphic in kgml.graphics if accepted.intersection(graphic.ko_ids))
 
 
 def _classify_probe_error(error: CoreKeggMcpError) -> ConnectivityStatus:

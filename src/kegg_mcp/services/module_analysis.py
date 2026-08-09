@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from kegg_mcp.analysis import ModuleAnalysisLimits, evaluate_module
+from kegg_mcp.domain.analysis_view import build_ko_analysis_view
 from kegg_mcp.execution import ExecutionStage
 from kegg_mcp.kegg import KeggRequestOptions
 from kegg_mcp.services.models import AnalyzeModulesResult, DatasetSource
@@ -34,6 +35,10 @@ def analyze_module_targets(
 ) -> AnalyzeModulesResult:
     """Evaluate bounded MODULE targets using inline or retained annotation evidence."""
     dataset = _resolve_dataset(source, result_store=result_store, scope_id=scope_id)
+    analysis_view = build_ko_analysis_view(
+        dataset,
+        input_bytes=(len(source.ko_text.encode()) if source.ko_text is not None else None),
+    )
     effective_options = options or KeggRequestOptions()
     effective_reference_limits = reference_limits or ReferenceLoadingLimits()
     effective_analysis_limits = analysis_limits or ModuleAnalysisLimits()
@@ -45,14 +50,14 @@ def analyze_module_targets(
         analysis_limits=effective_analysis_limits,
     )
     evaluations = tuple(
-        evaluate_module(graph, dataset, effective_analysis_limits) for graph in refs
+        evaluate_module(graph, analysis_view, effective_analysis_limits) for graph in refs
     )
     reference_provenance = _reference_provenance(evaluations, ())
     metrics = _execution_metrics(
         {stage: 0 for stage in ExecutionStage},
         reference_provenance=reference_provenance,
     )
-    warnings = _analysis_warnings(dataset, evaluations, ())
+    warnings = _analysis_warnings(analysis_view, evaluations, ())
     result, artifacts = _retain_json_detail(
         {
             "analysis_kind": "modules",
@@ -74,7 +79,7 @@ def analyze_module_targets(
         result=result,
         artifacts=artifacts,
         summary=_build_analysis_summary(
-            dataset,
+            analysis_view,
             metrics=metrics,
             caveats=(
                 (

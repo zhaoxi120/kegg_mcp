@@ -1,4 +1,4 @@
-"""Streaming, explicitly lossy unique-KO projection for DeepKOALA detailed CSV."""
+"""Streaming construction of a compact DeepKOALA accepted-KO analysis view."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import io
 import uuid
 from collections.abc import Iterator
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     DiagnosticCode,
@@ -17,7 +18,6 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.decisions import DEEPKOALA_DETAILED
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.domain.projections import KoAnalysisProjection
 from kegg_mcp.importers._common import (
     build_row_evidence,
     build_source,
@@ -26,16 +26,16 @@ from kegg_mcp.importers._common import (
     read_table_header,
     validate_auxiliary_evidence,
 )
-from kegg_mcp.importers.contracts import ProjectionImportLimits, SourceProvenanceInput
+from kegg_mcp.importers.contracts import AnalysisViewImportLimits, SourceProvenanceInput
 from kegg_mcp.importers.deepkoala import (
     parse_deepkoala_row,
     validate_deepkoala_header,
 )
 
 
-class _ProjectionInputLimit(Exception):
+class _StreamInputLimit(Exception):
     def __init__(self, actual_bytes: int) -> None:
-        super().__init__("projection input exceeds its hard byte limit")
+        super().__init__("streaming intake exceeds its hard byte limit")
         self.actual_bytes = actual_bytes
 
 
@@ -56,15 +56,15 @@ class _CountingBoundedReader(io.RawIOBase):
             raise ValueError("I/O operation on closed file")
         remaining_with_sentinel = self._max_bytes + 1 - self.bytes_read
         if remaining_with_sentinel <= 0:
-            raise _ProjectionInputLimit(self.bytes_read)
+            raise _StreamInputLimit(self.bytes_read)
         chunk = self._source.read(min(len(buffer), 65_536, remaining_with_sentinel))
         if chunk is None:
-            raise BlockingIOError("projection input must be a blocking binary stream")
+            raise BlockingIOError("streaming intake requires a blocking binary stream")
         if not chunk:
             return 0
         self.bytes_read += len(chunk)
         if self.bytes_read > self._max_bytes:
-            raise _ProjectionInputLimit(self.bytes_read)
+            raise _StreamInputLimit(self.bytes_read)
         buffer[: len(chunk)] = chunk
         return len(chunk)
 
@@ -91,7 +91,7 @@ class _DiagnosticAccumulator:
 
 def _bounded_csv_lines(
     stream: io.TextIOBase,
-    limits: ProjectionImportLimits,
+    limits: AnalysisViewImportLimits,
 ) -> Iterator[str]:
     """Yield physical CSV lines only while the current logical record remains bounded."""
     max_record_characters = limits.max_columns * (2 * limits.max_field_length + 3) + 2
@@ -108,7 +108,7 @@ def _bounded_csv_lines(
         if len(line) > remaining:
             fail(
                 ErrorCode.INPUT_LIMIT_EXCEEDED,
-                "A DeepKOALA CSV record exceeds the projection record-size limit.",
+                "A DeepKOALA CSV record exceeds the streaming intake record-size limit.",
                 suggested_action="Split or repair the oversized logical CSV record.",
                 safe_details=(
                     SafeDetail(
@@ -148,7 +148,7 @@ def _bounded_csv_lines(
                 if column_count > limits.max_columns:
                     fail(
                         ErrorCode.INPUT_LIMIT_EXCEEDED,
-                        "A DeepKOALA CSV record exceeds the projection column limit.",
+                        "A DeepKOALA CSV record exceeds the streaming intake column limit.",
                         suggested_action="Reduce the number of source columns and retry.",
                         safe_details=(
                             SafeDetail(name="max_columns", value=str(limits.max_columns)),
@@ -166,50 +166,50 @@ def _bounded_csv_lines(
             at_field_start = True
 
 
-def project_deepkoala_detailed(
+def stream_deepkoala_analysis_view(
     stream: io.BufferedIOBase,
     *,
     input_bytes: int,
-    limits: ProjectionImportLimits | None = None,
+    limits: AnalysisViewImportLimits | None = None,
     analysis_unit: AnalysisUnit = AnalysisUnit.UNKNOWN,
     taxon_id: int | None = None,
     kegg_organism_code: str | None = None,
     metadata: tuple[EvidenceField, ...] = (),
     source: SourceProvenanceInput | None = None,
-) -> KoAnalysisProjection:
+) -> KoAnalysisView:
     """Stream detailed CSV into sorted unique accepted KOs and aggregate accounting only."""
-    projection_limits = limits or ProjectionImportLimits()
-    if input_bytes < 0 or input_bytes > projection_limits.max_bytes:
+    stream_limits = limits or AnalysisViewImportLimits()
+    if input_bytes < 0 or input_bytes > stream_limits.max_bytes:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
-            "The annotation file exceeds the unique-KO projection input size limit.",
+            "The annotation file exceeds the streamed analysis-view input size limit.",
             suggested_action="Provide a smaller DeepKOALA detailed-output file.",
             safe_details=(
-                SafeDetail(name="max_bytes", value=str(projection_limits.max_bytes)),
+                SafeDetail(name="max_bytes", value=str(stream_limits.max_bytes)),
                 SafeDetail(name="actual_bytes", value=str(max(input_bytes, 0))),
             ),
         )
-    validate_auxiliary_evidence(metadata, source, projection_limits)
+    validate_auxiliary_evidence(metadata, source, stream_limits)
     if source is not None and source.source_name != "deepkoala":
         fail(
             ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
             "DeepKOALA detailed input requires source_name='deepkoala'.",
-            suggested_action="Correct the source provenance before projecting the table.",
+            suggested_action="Correct the source provenance before streaming the table.",
             safe_details=(SafeDetail(name="source_name", value=source.source_name),),
         )
     provenance = build_source(
         source,
         default_source_name="deepkoala",
-        importer_name="deepkoala_unique_ko_projection",
+        importer_name="deepkoala_analysis_view",
     )
     counts = {status: 0 for status in NormalizedStatus}
     accepted_ko_ids: set[str] = set()
-    diagnostics = _DiagnosticAccumulator(projection_limits.max_diagnostic_preview)
+    diagnostics = _DiagnosticAccumulator(stream_limits.max_diagnostic_preview)
     input_rows = 0
     expanded_assignments = 0
     skipped_rows = 0
 
-    bounded_raw_stream = _CountingBoundedReader(stream, projection_limits.max_bytes)
+    bounded_raw_stream = _CountingBoundedReader(stream, stream_limits.max_bytes)
     bounded_binary_stream = io.BufferedReader(bounded_raw_stream, buffer_size=65_536)
     text_stream = io.TextIOWrapper(
         bounded_binary_stream,
@@ -218,28 +218,28 @@ def project_deepkoala_detailed(
         newline="",
     )
     try:
-        with configured_csv_field_limit(projection_limits):
+        with configured_csv_field_limit(stream_limits):
             reader = csv.reader(
-                _bounded_csv_lines(text_stream, projection_limits),
+                _bounded_csv_lines(text_stream, stream_limits),
                 delimiter=",",
                 strict=True,
             )
-            header = read_table_header(reader, projection_limits)
+            header = read_table_header(reader, stream_limits)
             has_domain_coordinates = validate_deepkoala_header(header)
             for cells in reader:
                 if not cells:
                     continue
                 input_rows += 1
-                if input_rows > projection_limits.max_rows:
+                if input_rows > stream_limits.max_rows:
                     fail(
                         ErrorCode.INPUT_LIMIT_EXCEEDED,
-                        "The annotation table exceeds the unique-KO projection row limit.",
+                        "The annotation table exceeds the streaming intake row limit.",
                         suggested_action="Split the input into independently analyzed datasets.",
                         safe_details=(
-                            SafeDetail(name="max_rows", value=str(projection_limits.max_rows)),
+                            SafeDetail(name="max_rows", value=str(stream_limits.max_rows)),
                         ),
                     )
-                check_table_columns(cells, projection_limits)
+                check_table_columns(cells, stream_limits)
                 evidence = build_row_evidence(header, cells, reader.line_num)
                 if len(cells) != len(header):
                     skipped_rows += 1
@@ -263,9 +263,9 @@ def project_deepkoala_detailed(
                     has_domain_coordinates=has_domain_coordinates,
                     diagnostics=row_diagnostics,
                     remaining_assignment_capacity=(
-                        projection_limits.max_expanded_assignments - expanded_assignments
+                        stream_limits.max_expanded_assignments - expanded_assignments
                     ),
-                    max_assignment_count=projection_limits.max_expanded_assignments,
+                    max_assignment_count=stream_limits.max_expanded_assignments,
                 )
                 diagnostics.extend(row_diagnostics)
                 if parsed is None:
@@ -280,29 +280,29 @@ def project_deepkoala_detailed(
                     ):
                         if (
                             assignment.ko_id not in accepted_ko_ids
-                            and len(accepted_ko_ids) >= projection_limits.max_unique_ko_ids
+                            and len(accepted_ko_ids) >= stream_limits.max_unique_ko_ids
                         ):
                             fail(
                                 ErrorCode.INPUT_LIMIT_EXCEEDED,
-                                "Unique accepted K numbers exceed the projection limit.",
+                                "Unique accepted K numbers exceed the analysis-view limit.",
                                 suggested_action=(
                                     "Verify that the input uses canonical KEGG K numbers."
                                 ),
                                 safe_details=(
                                     SafeDetail(
                                         name="max_unique_ko_ids",
-                                        value=str(projection_limits.max_unique_ko_ids),
+                                        value=str(stream_limits.max_unique_ko_ids),
                                     ),
                                 ),
                             )
                         accepted_ko_ids.add(assignment.ko_id)
-    except _ProjectionInputLimit as error:
+    except _StreamInputLimit as error:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
-            "The annotation file exceeds the unique-KO projection input size limit.",
+            "The annotation file exceeds the streamed analysis-view input size limit.",
             suggested_action="Provide a smaller DeepKOALA detailed-output file.",
             safe_details=(
-                SafeDetail(name="max_bytes", value=str(projection_limits.max_bytes)),
+                SafeDetail(name="max_bytes", value=str(stream_limits.max_bytes)),
                 SafeDetail(name="actual_bytes", value=str(error.actual_bytes)),
             ),
         )
@@ -333,12 +333,12 @@ def project_deepkoala_detailed(
             ),
         )
 
-    return KoAnalysisProjection(
-        dataset_id=f"projection-{uuid.uuid4().hex}",
+    return KoAnalysisView(
+        dataset_id=f"analysis-{uuid.uuid4().hex}",
         accepted_ko_ids=tuple(sorted(accepted_ko_ids)),
         input_bytes=input_bytes,
         input_rows=input_rows,
-        expanded_assignments=expanded_assignments,
+        assignment_count=expanded_assignments,
         skipped_rows=skipped_rows,
         source_columns=header,
         status_counts=tuple(
@@ -356,4 +356,4 @@ def project_deepkoala_detailed(
     )
 
 
-__all__ = ["project_deepkoala_detailed"]
+__all__ = ["stream_deepkoala_analysis_view"]

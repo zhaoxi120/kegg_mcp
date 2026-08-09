@@ -6,10 +6,11 @@ import io
 import os
 import secrets
 import stat
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, NoReturn
+from typing import NoReturn
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.importers import SourceProvenanceInput

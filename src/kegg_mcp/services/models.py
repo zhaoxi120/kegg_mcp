@@ -29,7 +29,6 @@ from kegg_mcp.domain.annotations import (
     ThresholdRule,
 )
 from kegg_mcp.domain.errors import ErrorCode
-from kegg_mcp.domain.projections import AnnotationRetention
 from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvenanceInput
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
@@ -303,10 +302,6 @@ class AnalyzeKoAnnotationsResult(FrozenModel):
 
     result: ResultMetadata
     artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=7)]
-    annotation_retention: AnnotationRetention
-    record_level_evidence_retained: bool
-    protein_ko_mapping_available: bool
-    duplicate_conflict_accounting: Literal["evaluated", "not_evaluated"]
     summary: AnalysisResultSummary
     module_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
     module_previews: Annotated[
@@ -322,14 +317,6 @@ class AnalyzeKoAnnotationsResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_direct_metadata(self) -> Self:
-        full_records = self.annotation_retention is AnnotationRetention.FULL_RECORDS
-        if (
-            self.record_level_evidence_retained is not full_records
-            or self.protein_ko_mapping_available is not full_records
-            or self.duplicate_conflict_accounting
-            != ("evaluated" if full_records else "not_evaluated")
-        ):
-            raise ValueError("analysis retention metadata is internally inconsistent")
         if self.result.artifact_count != len(self.artifacts):
             raise ValueError("result artifact_count must match direct artifact metadata")
         if self.module_target_count != len(self.module_previews):

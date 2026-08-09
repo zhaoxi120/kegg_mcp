@@ -32,11 +32,11 @@ from kegg_mcp.analysis import (
     resolve_module_definitions,
 )
 from kegg_mcp.domain import (
-    AnnotationRetention,
     CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
-    KoAnalysisProjection,
+    KoAnalysisView,
     NormalizedStatus,
+    build_ko_analysis_view,
 )
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.execution import (
@@ -49,9 +49,9 @@ from kegg_mcp.execution import (
     PathwayRankingExecution,
 )
 from kegg_mcp.importers import (
+    AnalysisViewImportLimits,
     GenericColumnMapping,
     ImportLimits,
-    ProjectionImportLimits,
     TableDialect,
     import_generic_table,
 )
@@ -111,7 +111,7 @@ def _dataset() -> AnnotationDataset:
 
 
 def _module_values(
-    dataset: AnnotationDataset,
+    view: KoAnalysisView,
 ) -> tuple[ResolvedModuleGraph, ModuleEvaluationResult]:
     graph = resolve_module_definitions(
         ModuleDefinitionCollection(
@@ -126,26 +126,11 @@ def _module_values(
         ),
         _MODULE_LIMITS,
     )
-    return graph, evaluate_module(graph, dataset, _MODULE_LIMITS)
+    return graph, evaluate_module(graph, view, _MODULE_LIMITS)
 
 
-def _projection(dataset: AnnotationDataset) -> KoAnalysisProjection:
-    return KoAnalysisProjection(
-        dataset_id=dataset.dataset_id,
-        accepted_ko_ids=("K00001",),
-        input_bytes=500,
-        input_rows=dataset.import_report.input_rows,
-        expanded_assignments=dataset.import_report.emitted_records,
-        skipped_rows=dataset.import_report.skipped_rows,
-        source_columns=("name", "predict_label", "probability", "threshold", "annotate"),
-        status_counts=dataset.import_report.status_counts,
-        diagnostic_count=0,
-        decision_policy=dataset.import_report.decision_policy,
-        sources=dataset.sources,
-        analysis_unit=dataset.analysis_unit,
-        taxon_id=dataset.taxon_id,
-        kegg_organism_code=dataset.kegg_organism_code,
-    )
+def _view(dataset: AnnotationDataset) -> KoAnalysisView:
+    return build_ko_analysis_view(dataset, input_bytes=500)
 
 
 def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
@@ -169,7 +154,7 @@ def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
 
 
 def _pathway_values(
-    dataset: AnnotationDataset,
+    view: KoAnalysisView,
 ) -> tuple[PathwayKoReference, PathwayCoverageResult]:
     reference = PathwayKoReference(
         reference_namespace=PathwayReferenceNamespace.KO,
@@ -184,7 +169,7 @@ def _pathway_values(
     )
     result = evaluate_pathway_coverage(
         reference,
-        dataset,
+        view,
         PathwayCoverageParameters(),
         _PATHWAY_LIMITS,
     )
@@ -195,13 +180,13 @@ def _pathway_values(
 def _execution(
     *,
     allow_global_or_overview: bool = False,
-    ranking_dataset: AnnotationDataset | None = None,
-    annotation_retention: AnnotationRetention = AnnotationRetention.FULL_RECORDS,
+    ranking_view: KoAnalysisView | None = None,
+    stream_intake: bool = False,
 ) -> AnalysisExecutionProvenance:
     module_ranking: ModuleRankingExecution | None = None
     pathway_ranking: PathwayRankingExecution | None = None
-    if ranking_dataset is not None:
-        decision_policy = ranking_dataset.import_report.decision_policy
+    if ranking_view is not None:
+        decision_policy = ranking_view.decision_policy
         module_ranking = ModuleRankingExecution(
             method=MODULE_RANKING_METHOD,
             method_version=MODULE_RANKING_VERSION,
@@ -231,17 +216,8 @@ def _execution(
     return AnalysisExecutionProvenance(
         service_name=ANALYSIS_SERVICE_NAME,
         service_version=ANALYSIS_SERVICE_VERSION,
-        annotation_retention=annotation_retention,
-        import_limits=(
-            _IMPORT_LIMITS
-            if annotation_retention is AnnotationRetention.FULL_RECORDS
-            else None
-        ),
-        projection_import_limits=(
-            ProjectionImportLimits()
-            if annotation_retention is AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
-            else None
-        ),
+        import_limits=None if stream_intake else _IMPORT_LIMITS,
+        stream_import_limits=AnalysisViewImportLimits() if stream_intake else None,
         kegg_request_options=KeggRequestOptions(),
         reference_loading_limits=ReferenceLoadingLimits(),
         module_analysis_limits=_MODULE_LIMITS,
@@ -265,21 +241,18 @@ def test_execution_provenance_requires_the_current_service_identity() -> None:
         AnalysisExecutionProvenance.model_validate(payload)
 
 
-def test_execution_provenance_requires_limits_for_exactly_one_retention_mode() -> None:
-    full = _execution()
-    assert full.annotation_retention is AnnotationRetention.FULL_RECORDS
-    assert full.import_limits == _IMPORT_LIMITS
-    assert full.projection_import_limits is None
+def test_execution_provenance_requires_exactly_one_intake_limit_contract() -> None:
+    bounded = _execution()
+    assert bounded.import_limits == _IMPORT_LIMITS
+    assert bounded.stream_import_limits is None
 
-    projection = _execution(
-        annotation_retention=AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
-    )
-    assert projection.import_limits is None
-    assert projection.projection_import_limits == ProjectionImportLimits()
+    streamed = _execution(stream_intake=True)
+    assert streamed.import_limits is None
+    assert streamed.stream_import_limits == AnalysisViewImportLimits()
 
-    mismatched = full.model_dump(mode="json")
-    mismatched["annotation_retention"] = "unique_accepted_ko_projection"
-    with pytest.raises(ValidationError, match="projection_import_limits"):
+    mismatched = bounded.model_dump(mode="json")
+    mismatched["stream_import_limits"] = AnalysisViewImportLimits().model_dump(mode="json")
+    with pytest.raises(ValidationError, match="exactly one intake-limit contract"):
         AnalysisExecutionProvenance.model_validate(mismatched)
 
 
@@ -289,36 +262,37 @@ def _render_input(
     include_rankings: bool = False,
 ) -> RenderInput:
     dataset = _dataset()
-    graph, _ = _module_values(dataset)
-    reference, _ = _pathway_values(dataset)
+    view = _view(dataset)
+    graph, _ = _module_values(view)
+    reference, _ = _pathway_values(view)
     return build_render_input(
-        dataset,
+        view,
         (graph,),
         (reference,),
-        _execution(ranking_dataset=dataset if include_rankings else None),
+        _execution(ranking_view=view if include_rankings else None),
         limits=limits,
     )
 
 
-def test_version_5_schema_and_canonical_json_round_trip() -> None:
+def test_version_6_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
     schema = RenderInput.model_json_schema()
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:5"
+    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:6"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["$defs"]["PathwayRenderTarget"]["$id"] == (
         "urn:kegg-mcp:schema:pathway-render-target:4"
     )
     assert "workflow_digest" not in json.dumps(schema)
-    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "5"
-    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "3"
+    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "6"
+    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "5"
     assert RenderInput.model_validate_json(serialized, strict=True) == value
     assert (
         serialize_render_input(RenderInput.model_validate_json(serialized, strict=True))
         == serialized
     )
-    assert RENDER_INPUT_MIME_TYPE.endswith("version=5")
+    assert RENDER_INPUT_MIME_TYPE.endswith("version=6")
 
     assert "schema_version" in schema["required"]
     assert "name" in schema["$defs"]["RenderProducer"]["required"]
@@ -328,31 +302,26 @@ def test_version_5_schema_and_canonical_json_round_trip() -> None:
     )
 
 
-def test_version_5_handoff_accepts_explicit_unique_accepted_ko_projection() -> None:
+def test_version_6_handoff_accepts_the_compact_analysis_view() -> None:
     dataset = _dataset()
-    graph, _ = _module_values(dataset)
-    reference, _ = _pathway_values(dataset)
-    projection = _projection(dataset)
+    view = _view(dataset)
+    graph, _ = _module_values(view)
+    reference, _ = _pathway_values(view)
     value = build_render_input(
-        projection,
+        view,
         (graph,),
         (reference,),
-        _execution(
-            annotation_retention=AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
-        ),
+        _execution(),
     )
 
     assert value.evidence.accepted_ko_ids == ("K00001",)
-    assert value.execution.analysis.annotation_retention is (
-        AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
-    )
     assert value.modules[0].completion.block_coverage == 1 / 3
     assert value.pathways[0].detected_ko_ids == ("K00001",)
 
 
-def test_current_render_input_rejects_version_4_or_missing_wire_versions() -> None:
+def test_current_render_input_rejects_version_5_or_missing_wire_versions() -> None:
     payload = json.loads(serialize_render_input(_render_input()))
-    payload["schema_version"] = "4"
+    payload["schema_version"] = "5"
     with pytest.raises(ValidationError):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -458,6 +427,7 @@ def test_current_render_input_requires_analysis_and_ranking_identity_fields() ->
 
 def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
     dataset = _dataset()
+    view = _view(dataset)
     reference = PathwayKoReference(
         reference_namespace=PathwayReferenceNamespace.KO,
         reference_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
@@ -470,7 +440,7 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
         metadata_provenance=(_provenance(KeggOperation.GET),),
     )
     value = build_render_input(
-        dataset,
+        view,
         (),
         (reference,),
         _execution(allow_global_or_overview=True),
@@ -496,6 +466,7 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
 
 def test_unevaluable_global_or_overview_ko_pathway_remains_summary_only() -> None:
     dataset = _dataset()
+    view = _view(dataset)
     reference = PathwayKoReference(
         reference_namespace=PathwayReferenceNamespace.KO,
         reference_scope=PathwayReferenceScope.GLOBAL_OR_OVERVIEW,
@@ -508,7 +479,7 @@ def test_unevaluable_global_or_overview_ko_pathway_remains_summary_only() -> Non
         metadata_provenance=(_provenance(KeggOperation.GET),),
     )
     value = build_render_input(
-        dataset,
+        view,
         (),
         (reference,),
         _execution(allow_global_or_overview=True),
@@ -574,6 +545,7 @@ def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> No
 
 def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -> None:
     dataset = _dataset()
+    view = _view(dataset)
     graph = resolve_module_definitions(
         ModuleDefinitionCollection(
             root_module_id="M00001",
@@ -588,7 +560,7 @@ def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -
         _MODULE_LIMITS,
     )
     value = build_render_input(
-        dataset,
+        view,
         (graph,),
         (),
         _execution(),
@@ -620,7 +592,8 @@ def test_serialized_byte_limit_fails_with_dedicated_error() -> None:
 
 def test_execution_provenance_must_match_module_graph_limits() -> None:
     dataset = _dataset()
-    graph, _ = _module_values(dataset)
+    view = _view(dataset)
+    graph, _ = _module_values(view)
     mismatched_graph = graph.model_copy(
         update={
             "limits": graph.limits.model_copy(update={"max_modules": graph.limits.max_modules + 1})
@@ -628,7 +601,7 @@ def test_execution_provenance_must_match_module_graph_limits() -> None:
     )
     with pytest.raises(KeggMcpError) as raised:
         build_render_input(
-            dataset,
+            view,
             (mismatched_graph,),
             (),
             _execution(),
@@ -653,7 +626,8 @@ def test_visualization_unique_accepted_kos_cannot_exceed_accepted_assignments() 
 
 def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
     dataset = _dataset()
-    reference, _ = _pathway_values(dataset)
+    view = _view(dataset)
+    reference, _ = _pathway_values(view)
     map_reference = reference.model_copy(
         update={
             "reference_namespace": PathwayReferenceNamespace.MAP,
@@ -661,7 +635,7 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
         }
     )
     value = build_render_input(
-        dataset,
+        view,
         (),
         (map_reference,),
         _execution(),
@@ -673,13 +647,14 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
 
 def test_analysis_bundle_limit_failure_writes_no_partial_directory(tmp_path: Path) -> None:
     dataset = _dataset()
-    graph, evaluation = _module_values(dataset)
-    reference, coverage = _pathway_values(dataset)
+    view = _view(dataset)
+    graph, evaluation = _module_values(view)
+    reference, coverage = _pathway_values(view)
     output_directory = tmp_path / "bounded-analysis"
 
     with pytest.raises(KeggMcpError) as error:
         write_analysis_bundle(
-            dataset,
+            view,
             (graph,),
             (evaluation,),
             (reference,),

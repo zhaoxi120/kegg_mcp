@@ -88,16 +88,16 @@ and detected and missing counts are zero. An empty denominator is never reported
 pathway absence, or successful evaluation.
 
 Rejected, unclassified, and invalid records do not enter coverage. The result records the named
-decision policy, selected and reference KO sets, and their exact counts. With full-record evidence,
-a caller can recompute the set calculation from the retained immutable dataset and pathway
-reference. An explicit `KoAnalysisProjection` retains the selected accepted-KO set and aggregate
-intake counts but intentionally cannot reproduce record-level evidence.
+decision policy, selected and reference KO sets, and their exact counts. Full normalization lets a
+caller recompute the set calculation from the retained immutable dataset and pathway reference.
+The high-level `KoAnalysisView` retains the selected accepted-KO set and aggregate intake counts but
+intentionally cannot reproduce record-level evidence.
 
 ### Result bounds and provenance
 
 `PathwayCoverageResult` returns exact numerator, denominator, input-evidence, input-KO, missing,
-exclusion, duplicate, and relationship-row counts. `input_record_count` is the retained record
-count for a full dataset and the expanded-assignment count for a projection. Detected KOs, missing
+exclusion, duplicate, and relationship-row counts. `input_record_count` is the expanded-assignment
+count carried by the compact analysis view. Detected KOs, missing
 KOs, and excluded
 relationship entries are bounded previews with explicit truncation flags and warnings.
 `PathwayCoverageLimits` also bounds input records, input KOs, reference KOs, relationship rows,
@@ -216,7 +216,7 @@ reference = build_pathway_reference(
     get_result,
     PathwayReferenceNamespace.KO,
 )
-coverage_result = evaluate_pathway_coverage(reference, annotation_dataset)
+coverage_result = evaluate_pathway_coverage(reference, analysis_view)
 
 inputs = (
     ComparisonDatasetInput(label="first", dataset=first_dataset),

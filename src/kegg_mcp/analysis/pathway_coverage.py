@@ -8,6 +8,7 @@ from typing import Annotated, Literal, NoReturn, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     AnalysisUnit,
@@ -18,12 +19,6 @@ from kegg_mcp.domain.annotations import (
     validate_utf8_text,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.domain.projections import (
-    KoAnalysisEvidence,
-    analysis_accepted_ko_ids,
-    analysis_assignment_count,
-    analysis_decision_policy,
-)
 from kegg_mcp.kegg.contracts import (
     GetResult,
     KeggBatchProvenance,
@@ -673,7 +668,7 @@ def build_pathway_reference(
 
 def evaluate_pathway_coverage(
     reference: PathwayKoReference,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     parameters: PathwayCoverageParameters | None = None,
     limits: PathwayCoverageLimits | None = None,
 ) -> PathwayCoverageResult:
@@ -682,7 +677,7 @@ def evaluate_pathway_coverage(
     bounds = limits or PathwayCoverageLimits()
     _validate_evaluation_request(reference, evidence, request, bounds)
 
-    selected = analysis_accepted_ko_ids(evidence)
+    selected = evidence.accepted_ko_ids
     if len(selected) > bounds.max_input_kos:
         _fail_limit("selected_ko_count", len(selected), "max_input_kos", bounds.max_input_kos)
 
@@ -714,7 +709,7 @@ def evaluate_pathway_coverage(
         reference_scope=reference.reference_scope,
         reference_kegg_organism_code=reference.kegg_organism_code,
         dataset_id=evidence.dataset_id,
-        decision_policy=analysis_decision_policy(evidence),
+        decision_policy=evidence.decision_policy,
         analysis_unit=evidence.analysis_unit,
         taxon_id=evidence.taxon_id,
         kegg_organism_code=evidence.kegg_organism_code,
@@ -724,7 +719,7 @@ def evaluate_pathway_coverage(
             if denominator_count > 0
             else PathwayCoverageStatus.NOT_EVALUABLE
         ),
-        input_record_count=analysis_assignment_count(evidence),
+        input_record_count=evidence.assignment_count,
         input_unique_ko_count=len(selected),
         detected_unique_ko_count=len(detected),
         missing_unique_ko_count=len(missing),
@@ -952,7 +947,7 @@ def _broad_entry_scope_evidence(
 
 def _validate_evaluation_request(
     reference: PathwayKoReference,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     parameters: PathwayCoverageParameters,
     limits: PathwayCoverageLimits,
 ) -> None:
@@ -966,7 +961,7 @@ def _validate_evaluation_request(
                 SafeDetail(name="reference_namespace", value=reference.reference_namespace.value),
             ),
         )
-    assignment_count = analysis_assignment_count(evidence)
+    assignment_count = evidence.assignment_count
     if assignment_count > limits.max_input_records:
         _fail_limit(
             "input_record_count",
@@ -1034,7 +1029,7 @@ def _validate_evaluation_request(
 
 def _validate_organism_context(
     reference: PathwayKoReference,
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     parameters: PathwayCoverageParameters,
 ) -> None:
     context = parameters.input_context

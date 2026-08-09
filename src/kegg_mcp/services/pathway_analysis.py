@@ -7,6 +7,7 @@ from kegg_mcp.analysis import (
     PathwayCoverageParameters,
     evaluate_pathway_coverage,
 )
+from kegg_mcp.domain.analysis_view import build_ko_analysis_view
 from kegg_mcp.execution import ExecutionStage
 from kegg_mcp.kegg import KeggRequestOptions
 from kegg_mcp.services.models import AnalyzePathwaysResult, DatasetSource
@@ -43,6 +44,10 @@ def analyze_pathway_targets(
 ) -> AnalyzePathwaysResult:
     """Evaluate bounded descriptive pathway coverage from retained or inline evidence."""
     dataset = _resolve_dataset(source, result_store=result_store, scope_id=scope_id)
+    analysis_view = build_ko_analysis_view(
+        dataset,
+        input_bytes=(len(source.ko_text.encode()) if source.ko_text is not None else None),
+    )
     effective_options = options or KeggRequestOptions()
     effective_reference_limits = reference_limits or ReferenceLoadingLimits()
     effective_pathway_limits = pathway_limits or PathwayCoverageLimits()
@@ -56,7 +61,7 @@ def analyze_pathway_targets(
     coverages = tuple(
         evaluate_pathway_coverage(
             reference,
-            dataset,
+            analysis_view,
             PathwayCoverageParameters(
                 reference_namespace=reference.reference_namespace,
                 allow_global_or_overview=allow_global_or_overview,
@@ -70,7 +75,7 @@ def analyze_pathway_targets(
         {stage: 0 for stage in ExecutionStage},
         reference_provenance=reference_provenance,
     )
-    warnings = _analysis_warnings(dataset, (), coverages)
+    warnings = _analysis_warnings(analysis_view, (), coverages)
     result, artifacts = _retain_json_detail(
         {
             "analysis_kind": "pathways",
@@ -93,7 +98,7 @@ def analyze_pathway_targets(
         result=result,
         artifacts=artifacts,
         summary=_build_analysis_summary(
-            dataset,
+            analysis_view,
             metrics=metrics,
             caveats=(
                 (

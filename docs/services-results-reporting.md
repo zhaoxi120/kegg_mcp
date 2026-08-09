@@ -35,25 +35,23 @@ traversal, classification, or audit logic.
 ## High-level analysis
 
 `analyze_ko_annotations` is the supported one-call service for a K-number list or annotation table.
-It either normalizes full-record evidence or constructs the explicitly requested accepted-KO
-projection once, optionally selects bounded MODULE and pathway targets, loads references, evaluates
-requested targets, renders retained artifacts, and optionally writes one transactional output
-bundle. Narrower normalization, mapping, MODULE, pathway, and comparison tools reuse the same
-service functions.
+It constructs one compact accepted-KO analysis view, optionally selects bounded MODULE and pathway
+targets, loads references, evaluates requested targets, renders retained artifacts, and optionally
+writes one transactional output bundle. Narrower normalization, mapping, MODULE, pathway, and
+comparison tools reuse the same service functions.
 
-Full-record retention is the default. An explicit
-`annotation_retention="unique_accepted_ko_projection"` request may instead stream only an allowed
-`annotations.file_path` with `input_format="deepkoala_detailed"`. It produces a first-class
-`KoAnalysisProjection` rather than an `AnnotationDataset`, retaining sorted unique accepted K
-numbers, aggregate intake/status counts, provenance, and bounded diagnostics. Record evidence,
-protein-to-KO mappings, and duplicate/conflict accounting are unavailable in this mode.
-`normalize_ko_annotations` and every inline input remain full-record workflows.
+Every supported high-level input produces a first-class `KoAnalysisView` containing sorted unique
+accepted K numbers, aggregate intake/status counts, provenance, and bounded diagnostics. Record
+evidence, protein-to-KO mappings, and duplicate/conflict accounting are unavailable in this
+workflow. `normalize_ko_annotations` remains the separate full-record workflow. Allowed DeepKOALA
+detailed file input is streamed; other formats and bounded inline input use their applicable
+importer bounds without changing the analysis semantics.
 
-This retention choice does not raise KEGG request, relationship-row, reference-loading, ranking,
-report, or output limits. Automatic Top-N mapping can still reject a large accepted-KO set at its
-own budget. The caller should supply bounded explicit MODULE/pathway targets when known or split
-the input into independently meaningful analysis units; the service does not merge arbitrary
-shards into one ranking.
+Compact intake does not raise KEGG request, relationship-row, reference-loading, ranking, report,
+or output limits. Automatic Top-N mapping can still reject a large accepted-KO set at its own
+budget. The caller should supply bounded explicit MODULE/pathway targets when known or split the
+input into independently meaningful analysis units; the service does not merge arbitrary shards
+into one ranking.
 
 When neither explicit targets nor explicit selection are supplied, the service independently
 selects up to five MODULEs and five canonical KO reference pathways. Ranking uses sorted unique
@@ -238,11 +236,11 @@ provenance remain retained and are never rebuilt by the LLM.
 | --- | --- | --- |
 | `structured` | `application/json` | Canonical complete result within the configured JSON limit. |
 | `summary` | `text/markdown` | Conservative bounded report with explicit truncation. |
-| `annotations` | `text/csv` | Complete flat annotation records in full-record mode, or sorted accepted K numbers plus their accepted status in projection mode. |
+| `accepted_kos` | `text/csv` | Sorted unique accepted K numbers plus their accepted status for high-level analysis. |
 
 Serialization rejects non-finite JSON, uses stable CSV columns, protects spreadsheet-formula cells,
 and records exact UTF-8 byte sizes. Structured JSON and CSV fail rather than returning partial
-content. Only the Markdown preview may be truncated. A projection report states that record-level
+content. Only the Markdown preview may be truncated. High-level reports state that record-level
 evidence, protein mappings, and duplicate/conflict accounting were not retained.
 
 ## Output bundles and renderer handoff
@@ -252,13 +250,10 @@ directory, validates the complete planned artifact set, publishes files without 
 installs the manifest last as the transaction marker. Source-path redaction is applied while
 constructing the manifest rather than by MCP transport.
 
-Every analysis bundle includes `unique_accepted_kos.tsv`. Full-record analysis additionally
-includes `normalized_annotations.tsv` and `protein_ko_mapping.tsv`. Projection analysis omits both
-record-derived files, and bundle schema version 4 records
-`annotation_retention="unique_accepted_ko_projection"`,
-`record_level_evidence_retained=false`, `protein_ko_mapping_available=false`, and
-`duplicate_conflict_accounting="not_evaluated"`. The manifest does not imply that omitted evidence
-was evaluated or retained.
+Every analysis bundle includes `unique_accepted_kos.tsv` and omits
+`normalized_annotations.tsv` and `protein_ko_mapping.tsv`. Bundle schema version 5 does not expose
+a retention-mode selector or claim that omitted evidence was evaluated or retained. Use the
+normalization bundle for complete normalized records and protein mappings.
 
 Reference and input-handoff writers reuse the same fail-closed publication boundary. They
 preflight per-artifact and aggregate UTF-8 bytes, create owner-only regular files without following
@@ -268,7 +263,7 @@ preserve caller text verbatim after validation rejects tabs, line breaks, NUL, a
 format-breaking controls. A failed transaction removes only files and a fresh directory proven to
 belong to that transaction.
 
-The renderer handoff is a separate typed version 5 service model. It contains sorted unique
+The renderer handoff is a separate typed version 6 service model. It contains sorted unique
 accepted K numbers plus complete-within-limit authoritative analysis state; rejected,
 unclassified, and invalid records never enter visualization evidence. Its detailed schema and
 renderability semantics are owned by

@@ -8,11 +8,13 @@ from typing import cast
 
 import pytest
 
+from kegg_mcp.domain import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
-    ProjectionImportLimits,
+    AnalysisViewImportLimits,
     SourceProvenanceInput,
-    project_deepkoala_detailed,
+    import_plain_ko,
+    stream_deepkoala_analysis_view,
 )
 from kegg_mcp.services import annotation_analysis
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
@@ -30,6 +32,17 @@ from kegg_mcp.services.result_store import (
 
 def _request() -> NormalizeAnnotationsRequest:
     return NormalizeAnnotationsRequest(text="K00001\n")
+
+
+def _analysis_view() -> KoAnalysisView:
+    request = _request()
+    assert request.text is not None
+    dataset = import_plain_ko(
+        request.text,
+        limits=request.import_limits,
+        analysis_unit=request.analysis_unit,
+    )
+    return build_ko_analysis_view(dataset, input_bytes=len(request.text.encode()))
 
 
 def _analyze_with_pathway(
@@ -52,6 +65,7 @@ def _analyze_with_pathway(
         client=cast(KeggPrimitiveClient, object()),
         result_store=store,
         scope_id="scope",
+        analysis_view=_analysis_view(),
         output_directory=output,
     )
 
@@ -164,31 +178,26 @@ def test_analysis_result_create_failure_occurs_before_bundle_write(
     assert not output.exists()
 
 
-def test_analysis_rejects_projection_from_a_different_importer_version(
+def test_analysis_rejects_streamed_view_from_a_different_importer_version(
     tmp_path: Path,
 ) -> None:
-    payload = (
-        "name,predict_label,probability,threshold,annotate\n"
-        "p1,K00001,0.9,0.5,*\n"
-    ).encode()
+    payload = b"name,predict_label,probability,threshold,annotate\np1,K00001,0.9,0.5,*\n"
     input_path = str(tmp_path / "deepkoala.csv")
     source = SourceProvenanceInput(source_name="deepkoala", input_path=input_path)
-    projection = project_deepkoala_detailed(
+    view = stream_deepkoala_analysis_view(
         BytesIO(payload),
         input_bytes=len(payload),
         source=source,
     )
-    forged_source = projection.sources[0].model_copy(
-        update={"importer_version": "stale"}
-    )
-    forged_projection = projection.model_copy(update={"sources": (forged_source,)})
+    forged_source = view.sources[0].model_copy(update={"importer_version": "stale"})
+    forged_view = view.model_copy(update={"sources": (forged_source,)})
     request = NormalizeAnnotationsRequest(
         file_path=input_path,
         input_format=AnnotationInputFormat.DEEPKOALA_DETAILED,
         source=source,
     )
 
-    with pytest.raises(ValueError, match="projection source"):
+    with pytest.raises(ValueError, match="analysis_view source"):
         analyze_annotation_targets(
             request,
             module_ids=(),
@@ -196,8 +205,8 @@ def test_analysis_rejects_projection_from_a_different_importer_version(
             client=cast(KeggPrimitiveClient, object()),
             result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
             scope_id="scope",
-            analysis_projection=forged_projection,
-            projection_import_limits=ProjectionImportLimits(),
+            analysis_view=forged_view,
+            stream_import_limits=AnalysisViewImportLimits(),
         )
 
 

@@ -116,9 +116,10 @@ TOOL_SPECS = (
         "analyze_ko_annotations",
         "Analyze KO annotations",
         (
-            "Normalize an inline KO list or supported annotation table and run requested "
-            "MODULE and pathway analyses in one call; pathway_selection can rank candidates "
-            "server-side and load references only for a bounded Top-N."
+            "Derive a compact sorted unique accepted-KO view from an inline KO list or supported "
+            "annotation table and run requested MODULE and pathway analyses in one call; use "
+            "normalize_ko_annotations when record-level evidence is required. pathway_selection "
+            "can rank candidates server-side and load references only for a bounded Top-N."
         ),
         AnalyzeKoAnnotationsInput,
         AnalyzeKoAnnotationsToolEnvelope,

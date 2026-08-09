@@ -18,8 +18,8 @@ DeepKOALA detailed output. It:
   full-record normalization;
 - derives one sorted unique accepted-KO analysis set for MODULE, pathway, ranking, comparison, and
   rendering workflows;
-- optionally streams an explicitly selected, intentionally lossy accepted-KO projection from an
-  allowed DeepKOALA detailed file for high-level analysis while leaving normalization unchanged;
+- streams allowed DeepKOALA detailed files into the same compact accepted-KO analysis view used by
+  every high-level input while leaving full normalization unchanged;
 - retrieves bounded KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
   references through a local cache;
 - searches endpoint candidates, projects supported GET entries into deterministic typed cards,
@@ -53,20 +53,19 @@ remain independent stdio processes connected by stable versioned files:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 5 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
 ```
 
-`normalize_ko_annotations` always retains complete bounded evidence. Only
-`analyze_ko_annotations` accepts
-`annotation_retention="unique_accepted_ko_projection"`, and only with an allowed
-`annotations.file_path` using `input_format="deepkoala_detailed"`. The streaming projection is
+`normalize_ko_annotations` always retains complete bounded evidence.
+`analyze_ko_annotations` always derives a compact sorted unique accepted-KO analysis view. For an
+allowed `annotations.file_path` using `input_format="deepkoala_detailed"`, streaming intake is
 bounded to 1 GiB, 10 million source rows, 20 million expanded assignments, 100,000 unique accepted
-K numbers, 64 columns, 16,384 characters per field, and a 100-item diagnostic preview. It retains
-aggregate counts and provenance but no record evidence, protein-to-KO mapping, or duplicate/conflict
-accounting. The separate DeepKOALA companion continues to cap its own generated detailed CSV at
-5,000,000 bytes.
+K numbers, 64 columns, 16,384 characters per field, and a 100-item diagnostic preview. The view
+retains aggregate counts and provenance but no record evidence, protein-to-KO mapping, or
+duplicate/conflict accounting. The separate DeepKOALA companion continues to cap its own generated
+detailed CSV at 5,000,000 bytes.
 
-Projection bounds do not change any KEGG request, relationship, reference-loading, ranking, or
+Compact-view bounds do not change any KEGG request, relationship, reference-loading, ranking, or
 output budget. A large accepted-KO set can still exceed automatic KO-to-target mapping limits;
 callers should provide bounded explicit MODULE/pathway targets when known or split the input into
 scientifically independent analysis units rather than expecting unbounded Top-N ranking.

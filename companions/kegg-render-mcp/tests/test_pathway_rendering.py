@@ -73,9 +73,7 @@ async def test_pathway_colors_only_authoritative_detected_evidence(
         limits=runtime_config.limits,
     )
 
-    assert tuple(item.ko_ids for item in scene.overlays) == (
-        ("K00001", "K00002"),
-    )
+    assert tuple(item.ko_ids for item in scene.overlays) == (("K00001", "K00002"),)
 
 
 @pytest.mark.asyncio

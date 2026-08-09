@@ -15,7 +15,8 @@ A K-number assignment is computational annotation evidence, not experimental val
 - Preserve multiple assignments to one sequence, including top-k and domain-level records. Derive
   a KO set as an analysis view; do not replace the record-level evidence with it.
 
-Full normalization and the default high-level route retain record-level evidence. The explicit
-`unique_accepted_ko_projection` route is intentionally lossy: state that it retains aggregate
-counts and accepted K numbers but not record evidence, protein-to-KO mappings, or
-duplicate/conflict accounting. Never imply that this projection is a normalized annotation table.
+Full normalization retains record-level evidence. The high-level analysis route always uses an
+intentionally compact analysis view: state that it retains aggregate counts and sorted unique
+accepted K numbers but not record evidence, protein-to-KO mappings, or duplicate/conflict
+accounting. Never imply that this view is a normalized annotation table. Route requests for those
+records through `normalize_ko_annotations` or the audit workflow, regardless of input size.

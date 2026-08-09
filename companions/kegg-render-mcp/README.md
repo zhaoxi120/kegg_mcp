@@ -1,7 +1,7 @@
 # kegg-render-mcp
 
 `kegg-render-mcp` is the independently packaged local stdio renderer for KEGG annotation-evidence
-graphics. It consumes the complete `render_input.json` schema version 5 handoff produced by a
+graphics. It consumes the compact `render_input.json` schema version 6 handoff produced by a
 compatible `kegg-mcp` analysis. It never imports annotation tables, assigns K numbers, evaluates
 MODULE completion, or recomputes pathway coverage.
 
@@ -17,8 +17,8 @@ evidence of biological presence or absence.
 
 Core continues to exclude Global, Overview, and higher-level Overview maps from automatic Top-N
 selection. An explicit broad target is renderable only when Core evaluated a canonical KO reference
-with `allow_global_or_overview=true` and emitted complete evidence in the version 5 handoff. The
-renderer follows bounded KGML line coordinates while preserving arrows already present in the
+with `allow_global_or_overview=true` and emitted complete target evidence in the version 6 handoff.
+The renderer follows bounded KGML line coordinates while preserving arrows already present in the
 source PNG; it does not reconstruct arrow direction or infer pathway direction, activity,
 completeness, flux, phenotype, or experimental validation. `map` and organism-specific targets
 remain summary-only.
@@ -142,7 +142,7 @@ Example high-level input:
 ```
 
 Every render tool accepts exactly one handoff source: an allowed `render_input_path` or bounded
-`render_input_json`. Only schema version 5 is accepted. A schema mismatch returns an actionable
+`render_input_json`. Only schema version 6 is accepted. A schema mismatch returns an actionable
 incompatible-input error; the renderer never repairs or reinterprets the handoff.
 
 The fixed status resource is `kegg-render://status`. Result templates are:
@@ -156,7 +156,7 @@ kegg-render://results/{render_id}/{artifact}
 
 A successful call returns an opaque process-scoped `render_id`, the resolved output directory,
 bounded metadata, warnings, server-generated resource URIs, and stable artifact output paths. Image
-response metadata includes MIME type, byte size, and dimensions. The published schema-version-3
+response metadata includes MIME type, byte size, and dimensions. The published schema-version-4
 `render_manifest.json` records renderer, analysis, target, retrieval/cache, and artifact provenance
 without exposing private configuration. Each image entry records a controlled relative `path`, MIME
 type, byte size, width, and height. Process-scoped render IDs, expiry timestamps, and

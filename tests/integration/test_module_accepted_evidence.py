@@ -11,7 +11,12 @@ from kegg_mcp.analysis.contracts import (
 )
 from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, AnnotationDataset
+from kegg_mcp.domain import (
+    CANONICAL_SOURCE_STATUS,
+    AnalysisUnit,
+    KoAnalysisView,
+    build_ko_analysis_view,
+)
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
@@ -20,7 +25,7 @@ from kegg_mcp.importers import (
 )
 
 
-def _annotation_dataset() -> AnnotationDataset:
+def _annotation_view() -> KoAnalysisView:
     payload = (
         "protein,ko,status\n"
         "accepted-root,K00001,accepted\n"
@@ -30,22 +35,24 @@ def _annotation_dataset() -> AnnotationDataset:
         "accepted-reference,K00005,accepted\n"
         "accepted-or-guard,K00008,accepted\n"
     )
-    return import_generic_table(
-        payload,
-        dialect=TableDialect.CSV,
-        mapping=GenericColumnMapping(
-            sequence_id="protein",
-            ko_id="ko",
-            raw_decision="status",
-        ),
-        policy=CANONICAL_SOURCE_STATUS,
-        limits=ImportLimits(
-            max_bytes=10_000,
-            max_rows=100,
-            max_columns=10,
-            max_field_length=1_000,
-        ),
-        analysis_unit=AnalysisUnit.ISOLATE_PROTEOME,
+    return build_ko_analysis_view(
+        import_generic_table(
+            payload,
+            dialect=TableDialect.CSV,
+            mapping=GenericColumnMapping(
+                sequence_id="protein",
+                ko_id="ko",
+                raw_decision="status",
+            ),
+            policy=CANONICAL_SOURCE_STATUS,
+            limits=ImportLimits(
+                max_bytes=10_000,
+                max_rows=100,
+                max_columns=10,
+                max_field_length=1_000,
+            ),
+            analysis_unit=AnalysisUnit.ISOLATE_PROTEOME,
+        )
     )
 
 
@@ -67,7 +74,7 @@ def test_accepted_only_evaluation_preserves_policy_references_and_unknown_or_bra
     )
     graph = resolve_module_definitions(definitions)
 
-    result = evaluate_module(graph, _annotation_dataset())
+    result = evaluate_module(graph, _annotation_view())
 
     assert result.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
     assert result.is_complete is False
@@ -90,9 +97,7 @@ def test_accepted_only_evaluation_preserves_policy_references_and_unknown_or_bra
     assert optional.matched_ko_ids == ()
 
     assert [issue.target_module_id for issue in result.unresolved_references] == ["M00003"]
-    assert ModuleWarningCode.UNRESOLVED_REFERENCE in {
-        warning.code for warning in result.warnings
-    }
+    assert ModuleWarningCode.UNRESOLVED_REFERENCE in {warning.code for warning in result.warnings}
     assert [item.module_id for item in result.provenance] == ["M00001", "M00002"]
     assert result.decision_policy == CANONICAL_SOURCE_STATUS.reference
 

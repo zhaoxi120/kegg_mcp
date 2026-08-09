@@ -9,6 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     FrozenModel,
@@ -17,7 +18,6 @@ from kegg_mcp.domain.annotations import (
 )
 from kegg_mcp.domain.errors import ErrorCode, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
-from kegg_mcp.domain.projections import KoAnalysisEvidence, analysis_accepted_ko_ids
 from kegg_mcp.kegg.contracts import KeggPairRow, is_kegg_pathway_identifier
 
 PATHWAY_RANKING_METHOD = "selected_unique_ko_count"
@@ -245,14 +245,14 @@ TargetNormalizer = Callable[[str, str], tuple[str, str] | None]
 
 
 def _rank_ko_targets(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
     *,
     target_name: str,
     normalize_target: TargetNormalizer,
 ) -> tuple[tuple[str, ...], tuple[_RankedRelationship, ...], tuple[_RankedTarget, ...]]:
     """Apply one selected KO view and deterministic overlap ranking to a typed target."""
-    selected_ko_ids = analysis_accepted_ko_ids(evidence)
+    selected_ko_ids = evidence.accepted_ko_ids
     selected = frozenset(selected_ko_ids)
     relationships: list[_RankedRelationship] = []
     detected_by_target: dict[str, set[str]] = {}
@@ -319,7 +319,7 @@ def _normalize_module_target(raw_target: str, target_value: str) -> tuple[str, s
 
 
 def rank_pathways(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
 ) -> PathwayRankingResult:
     """Aggregate KO-to-pathway rows using one selected evidence view and stable ordering."""
@@ -362,7 +362,7 @@ def rank_pathways(
 
 
 def rank_modules(
-    evidence: KoAnalysisEvidence,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
 ) -> ModuleRankingResult:
     """Aggregate KO-to-MODULE rows using the shared selected-evidence ranking policy."""

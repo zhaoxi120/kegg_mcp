@@ -1,6 +1,6 @@
 # Pathway rendering
 
-Render a pathway only from the current version 5 handoff whose canonical `koNNNNN` target is
+Render a pathway only from the current version 6 handoff whose canonical `koNNNNN` target is
 marked `renderable`. Use `render_pathway` for one target and `render_analysis_bundle` for a bounded
 selection. The renderer owns KEGG PNG/KGML retrieval, validation, mapping, scene creation, SVG,
 and optional bounded PNG rasterization.
@@ -12,7 +12,7 @@ phenotype.
 
 Regular maps use bounded KGML box geometry. An explicitly requested canonical KO global or
 overview map, such as `ko01100`, is eligible only when Core evaluated it with
-`allow_global_or_overview=True` and emitted a complete renderable version 5 target. Its evidence
+`allow_global_or_overview=True` and emitted a complete renderable version 6 target. Its evidence
 overlay follows bounded KGML `line` coordinates. The overlay highlights accepted KO annotation
 evidence only. Arrows already present in the validated PNG remain background context;
 the overlay does not reconstruct arrow direction or establish pathway direction, activity,

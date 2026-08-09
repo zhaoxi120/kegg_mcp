@@ -54,7 +54,7 @@ def _forbid_network(*_: object, **__: object) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fasta_handoff_unique_ko_projection_flows_into_safe_renderer_output(
+async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
     tmp_path: Path,
     allowed_root: Path,
     runtime_config: RendererRuntimeConfig,
@@ -110,7 +110,6 @@ async def test_fasta_handoff_unique_ko_projection_flows_into_safe_renderer_outpu
                 },
                 "module_ids": ["M00001"],
                 "pathways": [{"pathway_id": "ko00010"}],
-                "annotation_retention": "unique_accepted_ko_projection",
                 "output_directory": str(analysis_output),
             },
         )
@@ -123,7 +122,7 @@ async def test_fasta_handoff_unique_ko_projection_flows_into_safe_renderer_outpu
         render_input_path.read_text(encoding="utf-8"),
         strict=True,
     )
-    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "5"
+    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "6"
     assert render_input.evidence.accepted_ko_ids == ("K00001",)
     assert [item.module_id for item in render_input.modules] == ["M00001"]
     assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
@@ -178,8 +177,9 @@ async def test_fasta_handoff_unique_ko_projection_flows_into_safe_renderer_outpu
     manifest_text = (render_output / "render_manifest.json").read_text(encoding="utf-8")
     manifest = cast(dict[str, object], json.loads(manifest_text))
     provenance = cast(dict[str, object], manifest["provenance"])
-    assert provenance["annotation_retention"] == "unique_accepted_ko_projection"
-    assert provenance["record_level_evidence_retained"] is False
+    assert manifest["schema_version"] == "4"
     assert provenance["accepted_unique_ko_count"] == 1
+    assert "annotation_retention" not in provenance
+    assert "record_level_evidence_retained" not in provenance
     assert str(runtime_config.state_root) not in manifest_text
     assert str(render_input_path) not in manifest_text
