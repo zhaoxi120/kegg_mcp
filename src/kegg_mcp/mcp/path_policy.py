@@ -6,11 +6,13 @@ import io
 import os
 import secrets
 import stat
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
+
+from typing_extensions import Buffer
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.importers import SourceProvenanceInput
@@ -34,7 +36,7 @@ class PinnedAnnotationFile:
     """One regular file held by an unchanged no-follow descriptor walk."""
 
     path: Path
-    stream: io.BufferedReader
+    stream: io.BufferedIOBase
     byte_size: int
 
 
@@ -57,20 +59,21 @@ class _BoundedDescriptorReader(io.RawIOBase):
     def readable(self) -> bool:
         return True
 
-    def readinto(self, buffer: bytearray | memoryview) -> int:
+    def readinto(self, buffer: Buffer, /) -> int:
         if self.closed:
             raise ValueError("I/O operation on closed file")
+        view = memoryview(buffer)
         remaining_with_sentinel = self._max_bytes + 1 - self._bytes_read
         if remaining_with_sentinel <= 0:
             raise _InputFileLimit(self._bytes_read)
-        requested = min(len(buffer), 65_536, remaining_with_sentinel)
+        requested = min(len(view), 65_536, remaining_with_sentinel)
         chunk = os.read(self._descriptor, requested)
         if not chunk:
             return 0
         self._bytes_read += len(chunk)
         if self._bytes_read > self._max_bytes:
             raise _InputFileLimit(self._bytes_read)
-        buffer[: len(chunk)] = chunk
+        view[: len(chunk)] = chunk
         return len(chunk)
 
 
@@ -124,7 +127,7 @@ def open_annotation_file_stream(
     allowed_roots: tuple[str, ...],
     *,
     max_bytes: int,
-) -> Iterator[PinnedAnnotationFile]:
+) -> Generator[PinnedAnnotationFile, None, None]:
     """Yield a bounded stream while retaining and revalidating the opened file descriptor."""
     try:
         with _open_allowed_file_descriptor(
@@ -257,7 +260,7 @@ def _open_allowed_file_descriptor(
     allowed_roots: tuple[str, ...],
     *,
     max_bytes: int | None,
-) -> Iterator[_PinnedDescriptor]:
+) -> Generator[_PinnedDescriptor, None, None]:
     """Open and finally revalidate one regular file through no-follow directory descriptors."""
     candidate = Path(value)
     root = _select_allowed_root(candidate, allowed_roots, field="file_path")

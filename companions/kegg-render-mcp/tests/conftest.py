@@ -15,7 +15,7 @@ from kegg_mcp.analysis import (
     PathwayReferenceScope,
     resolve_module_definitions,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, build_ko_analysis_view
 from kegg_mcp.execution import (
     ANALYSIS_SERVICE_NAME,
     ANALYSIS_SERVICE_VERSION,
@@ -223,7 +223,7 @@ def make_render_input(
         direct_result_limits=AnalysisServiceLimits(),
     )
     return build_render_input(
-        dataset,
+        build_ko_analysis_view(dataset),
         (graph,),
         (reference,),
         execution,

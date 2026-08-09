@@ -7,6 +7,8 @@ import io
 import uuid
 from collections.abc import Iterator
 
+from typing_extensions import Buffer
+
 from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
@@ -51,21 +53,20 @@ class _CountingBoundedReader(io.RawIOBase):
     def readable(self) -> bool:
         return True
 
-    def readinto(self, buffer: bytearray | memoryview) -> int:
+    def readinto(self, buffer: Buffer, /) -> int:
         if self.closed:
             raise ValueError("I/O operation on closed file")
+        view = memoryview(buffer)
         remaining_with_sentinel = self._max_bytes + 1 - self.bytes_read
         if remaining_with_sentinel <= 0:
             raise _StreamInputLimit(self.bytes_read)
-        chunk = self._source.read(min(len(buffer), 65_536, remaining_with_sentinel))
-        if chunk is None:
-            raise BlockingIOError("streaming intake requires a blocking binary stream")
+        chunk = self._source.read(min(len(view), 65_536, remaining_with_sentinel))
         if not chunk:
             return 0
         self.bytes_read += len(chunk)
         if self.bytes_read > self._max_bytes:
             raise _StreamInputLimit(self.bytes_read)
-        buffer[: len(chunk)] = chunk
+        view[: len(chunk)] = chunk
         return len(chunk)
 
 

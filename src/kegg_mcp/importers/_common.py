@@ -4,7 +4,7 @@ import csv
 import io
 import math
 import uuid
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
@@ -224,7 +224,7 @@ def parse_table(
 @contextmanager
 def configured_csv_field_limit(
     limits: ImportLimits | AnalysisViewImportLimits,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Temporarily coordinate Python's process-wide CSV field-size setting."""
     with _CSV_FIELD_SIZE_LOCK:
         previous_limit = csv.field_size_limit()

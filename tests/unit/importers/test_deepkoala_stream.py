@@ -30,8 +30,8 @@ class _BoundedReadStream(BytesIO):
         super().__init__(payload)
         self.max_requested_bytes = 0
 
-    def read(self, size: int = -1, /) -> bytes:
-        if size < 0 or size > 65_536:
+    def read(self, size: int | None = -1, /) -> bytes:
+        if size is None or size < 0 or size > 65_536:
             raise AssertionError("analysis source reads must remain bounded")
         self.max_requested_bytes = max(self.max_requested_bytes, size)
         return super().read(size)
