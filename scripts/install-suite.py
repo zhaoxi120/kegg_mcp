@@ -689,13 +689,10 @@ def _covered(path: Path, roots: tuple[Path, ...]) -> bool:
 
 
 def _validate_cross_component_paths(config: DeploymentConfig) -> None:
-    if any(
-        not _covered(root, config.core.allowed_roots)
-        for root in (*config.deepkoala.input_roots, *config.deepkoala.output_roots)
-    ):
+    if any(not _covered(root, config.core.allowed_roots) for root in config.deepkoala.output_roots):
         _error(
             "deployment_path_invalid",
-            "core.allowed_roots must cover every DeepKOALA input and output root",
+            "core.allowed_roots must cover every DeepKOALA output root",
         )
     if any(not _covered(root, config.core.allowed_roots) for root in config.renderer.allowed_roots):
         _error(

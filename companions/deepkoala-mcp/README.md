@@ -172,9 +172,9 @@ The status field `resource_fallback_enabled=true` and bounded process-scoped res
 `deepkoala://jobs/{job_id}/...` describe companion artifact access only. Stable files remain the
 default handoff, and resource IDs must not be passed to another server as result identity. Core's
 inline recovery remains limited to 5,000,000 bytes; an annotation CSV above that size therefore
-requires a stable output path allowed by both components. Core also validates the unchanged FASTA
-input path in source provenance, so supported deployments share both DeepKOALA input and output
-roots with Core.
+requires a stable output path allowed by both components. Core retains the unchanged FASTA input
+path as provenance without reopening it under annotation-file path policy, so supported deployments
+need to share DeepKOALA output roots with Core but not DeepKOALA input roots.
 
 ## Process and filesystem safety
 

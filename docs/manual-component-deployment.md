@@ -119,12 +119,12 @@ manual deployment needs an existing official DeepKOALA checkout and Python envir
 licensed/offline configuration, and cache rules are in the
 [Renderer companion README](../companions/kegg-render-mcp/README.md).
 
-When Core will consume DeepKOALA output, include every configured DeepKOALA input and output root in
-`KEGG_MCP_ALLOWED_ROOTS`. Core validates both the unchanged source input path and the generated CSV
-path; the shared stable output path is required for files larger than 5,000,000 bytes. The
-controlled resource-to-inline recovery route is only for smaller successful outputs after the exact
-typed Core path rejection; it is not a large-file transport. The supported suite installer
-validates this root coverage automatically.
+When Core will consume DeepKOALA output, include every configured DeepKOALA output root in
+`KEGG_MCP_ALLOWED_ROOTS`. Core validates the generated CSV path while retaining the original FASTA
+path as provenance without reopening it. The shared stable output path is required for files larger
+than 5,000,000 bytes. The controlled resource-to-inline recovery route is only for smaller
+successful outputs after the exact typed Core path rejection; it is not a large-file transport. The
+supported suite installer validates this output-root coverage automatically.
 
 Use direct absolute stdio commands. Do not use a remote URL, shell activation wrapper, `module
 load`, or output redirection. Stdout is reserved for MCP protocol messages; diagnostics use stderr.

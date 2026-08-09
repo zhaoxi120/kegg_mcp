@@ -420,10 +420,11 @@ least one row per input ID and permits additional domain or top-k rows. Only agg
 counts enter the handoff and report. The companion continues to cap its generated detailed CSV at
 1 GiB and uses bounded-memory validation and no-replace publication. Core streams the stable allowed
 file under matching byte and row limits. The supported suite installer requires Core's allowed
-roots to cover every DeepKOALA input and output root; a manual deployment whose roots are disjoint
-can use resource-to-inline recovery only when the successful output is at most 5,000,000 bytes.
-Larger disjoint-root outputs require an explicit shared-root deployment repair and are never paged
-through the model or sent as inline MCP JSON.
+roots to cover every DeepKOALA output root. Core retains the original FASTA path as provenance
+without opening it under annotation-file path policy. A manual deployment whose output root is
+disjoint can use resource-to-inline recovery only when the successful output is at most 5,000,000
+bytes. Larger disjoint-root outputs require an explicit shared-root deployment repair and are never
+paged through the model or sent as inline MCP JSON.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The

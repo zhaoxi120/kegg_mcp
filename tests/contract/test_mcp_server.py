@@ -1449,6 +1449,56 @@ async def test_high_level_analysis_streams_an_allowed_deepkoala_file(
 
 
 @pytest.mark.asyncio
+async def test_high_level_analysis_preserves_deleted_out_of_root_source_provenance(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "handoff"
+    allowed_root.mkdir()
+    annotations = allowed_root / "deepkoala-detailed.csv"
+    output = allowed_root / "compact-analysis"
+    original_fasta = tmp_path / "original-proteins.faa"
+    original_fasta.write_text(">p1\nM\n", encoding="utf-8")
+    annotations.write_text(
+        "name,predict_label,probability,threshold,annotate\np1,K00001,0.90,0.50,*\n",
+        encoding="utf-8",
+    )
+    original_fasta.unlink()
+    runtime = _fake_runtime(
+        allowed_root,
+        scope_id="deleted-source-provenance-contract",
+    )
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "file_path": str(annotations),
+                    "input_format": "deepkoala_detailed",
+                    "source": {
+                        "source_name": "deepkoala",
+                        "input_path": str(original_fasta),
+                    },
+                },
+                "module_ids": ["M00001"],
+                "output_directory": str(output),
+            },
+        )
+
+    assert original_fasta.is_relative_to(allowed_root) is False
+    assert original_fasta.exists() is False
+    assert result.isError is False
+    assert result.structuredContent is not None
+    data = result.structuredContent["result"]["data"]
+    assert data["summary"]["selected_unique_ko_count"] == 1
+    render_input = RenderInput.model_validate_json(
+        Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    assert render_input.dataset.sources[0].input_path == str(original_fasta)
+
+
+@pytest.mark.asyncio
 async def test_high_level_summary_distinguishes_rows_from_expanded_assignments(
     tmp_path: Path,
 ) -> None:
@@ -1946,8 +1996,7 @@ async def test_high_level_analysis_accepts_an_empty_accepted_ko_set(
     assert data["pathway_previews"] == []
     assert data["automatic_pathway_selection"] is None
     assert any(
-        "No accepted K numbers were selected, so automatic MODULE and pathway target selection "
-        "was skipped." in caveat
+        "No accepted K numbers were selected, so automatic target selection was skipped." in caveat
         for caveat in data["summary"]["caveats"]
     )
     assert client.call_log == []

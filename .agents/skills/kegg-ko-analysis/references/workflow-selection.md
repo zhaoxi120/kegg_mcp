@@ -176,7 +176,8 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    per-record evidence. Use `normalize_ko_annotations` when the request requires raw source
    decisions, scores, thresholds, ranks, domains, protein names, sequence-to-KO mappings, or
    duplicate/conflict accounting. Preserve source/model versions, timestamps, and the original
-   absolute input path as provenance in either route.
+   absolute input path as provenance in either route. Core validates the annotation `file_path`
+   under its allowed roots but does not reopen a distinct provenance `input_path`.
 4. Run every analysis with sorted unique accepted K numbers. Rejected, unclassified, and invalid
    records remain evidence outcomes and do not enter MODULE, pathway, ranking, comparison, or
    rendering results.
@@ -192,9 +193,9 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    successful job's `output_bytes` is at most the 5,000,000-byte Core inline limit. Then call Core
    with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
    `annotations.file_path` and keep any analysis context only inside `annotations`. For a larger
-   result, stop without reading resource pages and require repaired shared handoff roots that cover
-   the returned input and output paths in Core, as enforced by the supported suite installer. The
-   same message with
+   result, stop without reading resource pages and require repaired Core allowed roots that cover
+   the returned DeepKOALA output path, as enforced by the supported suite installer. The original
+   FASTA `input_path` is provenance only and does not trigger this fallback. The same message with
    `field="output_directory"` is an output-location error and must not enter this fallback.
 
 ### Compact high-level analysis view

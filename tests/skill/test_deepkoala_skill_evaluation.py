@@ -136,7 +136,8 @@ def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None
         "do not rerun DeepKOALA",
         "copy or rewrite the CSV",
         "do not read resource pages",
-        "shared handoff roots covering both the returned input and output paths in Core",
+        "Core allowed roots covering the returned DeepKOALA output path",
+        "original FASTA `input_path` is provenance only and does not trigger this fallback",
         "before deleting the job record",
     ):
         assert fragment in normalized
@@ -149,7 +150,8 @@ def test_large_output_uses_the_shared_file_handoff() -> None:
     for fragment in (
         "up to 1 GiB",
         "bounded-memory validation and publication",
-        "requires Core's allowed roots to cover every DeepKOALA input and output root",
+        "requires Core's allowed roots to cover every DeepKOALA output root",
+        "need not be accessible beneath a Core allowed root",
         "resume from the same stable CSV",
     ):
         assert fragment in normalized

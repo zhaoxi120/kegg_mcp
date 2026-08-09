@@ -123,8 +123,9 @@ The installation root itself must not exist yet. Its direct parent must be owner
 the installation root inside the source checkout, an input/output root, a cache, or another
 component's state root.
 
-Private state roots must not overlap each other or the shared input/output roots. The core allowed
-roots must cover the DeepKOALA input and output roots and every renderer handoff root.
+Private state roots must not overlap each other or the shared input/output roots. The Core allowed
+roots must cover the DeepKOALA output roots and every renderer handoff root. DeepKOALA input roots
+remain part of private-state overlap validation but need not be readable by Core.
 
 ### 2. Write the strict deployment TOML
 
@@ -145,7 +146,6 @@ rate_limit_root = "/absolute/private/kegg-rate-limit"
 [core]
 result_store_path = "/absolute/private/core/results.sqlite3"
 allowed_roots = [
-  "/absolute/project/inputs",
   "/absolute/project/annotations",
   "/absolute/project/analysis",
 ]
@@ -473,10 +473,10 @@ aggregate counts, source and policy provenance, and bounded diagnostics, but no 
 protein-to-KO mapping, or duplicate/conflict accounting. Use `normalize_ko_annotations` when those
 records are required and the input fits its separate full-record limits. The `deepkoala-mcp`
 companion can validate and publish detailed CSV output up to 1 GiB with bounded memory. The suite
-installer requires Core's allowed roots to cover every DeepKOALA input and output root, so Core can
-validate unchanged source provenance and large results can use the stable file directly. A manual
-disjoint-root deployment has only the 5,000,000-byte bounded resource-to-inline recovery route and
-must be repaired to share larger files.
+installer requires Core's allowed roots to cover every DeepKOALA output root, so large results can
+use the stable file directly. Core preserves a distinct original FASTA path as provenance without
+reopening it under annotation-file path policy. A manual output-disjoint deployment has only the
+5,000,000-byte bounded resource-to-inline recovery route and must be repaired to share larger files.
 
 See [MCP tools, resources, and configuration](mcp-server.md) for explicit target requests, generic
 annotation tables, result pagination, and complete schemas.

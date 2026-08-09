@@ -109,7 +109,6 @@ def materialize_annotation_file(
         request.source,
         requested_path=request.file_path,
         resolved_path=path,
-        allowed_roots=allowed_roots,
         default_source_name="file_handoff",
     )
     return request.model_copy(
@@ -156,31 +155,16 @@ def bind_annotation_file_source(
     *,
     requested_path: str,
     resolved_path: Path,
-    allowed_roots: tuple[str, ...],
     default_source_name: str,
 ) -> SourceProvenanceInput:
-    """Bind provenance to one validated handoff path without rewriting another source path."""
+    """Bind annotation-file provenance without accessing an independent source path."""
     bound = source or SourceProvenanceInput(
         source_name=default_source_name,
         input_path=str(resolved_path),
     )
-    if bound.input_path is None:
-        return bound
-    source_path = (
-        str(resolved_path)
-        if Path(bound.input_path) == Path(requested_path)
-        else str(resolve_existing_file(bound.input_path, allowed_roots))
-    )
-    return bound.model_copy(update={"input_path": source_path})
-
-
-def resolve_existing_file(value: str, allowed_roots: tuple[str, ...]) -> Path:
-    """Validate one direct regular file without reading its payload."""
-    try:
-        _, path = _access_allowed_file(value, allowed_roots, max_bytes=None)
-        return path
-    except (OSError, _UnsafeInputFile):
-        _raise_disallowed_path("file_path")
+    if bound.input_path is not None and Path(bound.input_path) == Path(requested_path):
+        return bound.model_copy(update={"input_path": str(resolved_path)})
+    return bound
 
 
 def resolve_output_directory(
@@ -221,25 +205,20 @@ def _read_allowed_file(
     *,
     max_bytes: int,
 ) -> tuple[bytes, Path]:
-    content, path = _access_allowed_file(value, allowed_roots, max_bytes=max_bytes)
-    if content is None:
-        raise AssertionError("bounded file intake returned no content")
-    return content, path
+    return _access_allowed_file(value, allowed_roots, max_bytes=max_bytes)
 
 
 def _access_allowed_file(
     value: str,
     allowed_roots: tuple[str, ...],
     *,
-    max_bytes: int | None,
-) -> tuple[bytes | None, Path]:
+    max_bytes: int,
+) -> tuple[bytes, Path]:
     with _open_allowed_file_descriptor(
         value,
         allowed_roots,
         max_bytes=max_bytes,
     ) as pinned:
-        if max_bytes is None:
-            return None, pinned.path
         buffered = bytearray()
         while len(buffered) <= max_bytes:
             chunk = os.read(
@@ -259,7 +238,7 @@ def _open_allowed_file_descriptor(
     value: str,
     allowed_roots: tuple[str, ...],
     *,
-    max_bytes: int | None,
+    max_bytes: int,
 ) -> Generator[_PinnedDescriptor, None, None]:
     """Open and finally revalidate one regular file through no-follow directory descriptors."""
     candidate = Path(value)
@@ -289,7 +268,7 @@ def _open_allowed_file_descriptor(
             named_before
         ):
             raise _UnsafeInputFile
-        if max_bytes is not None and opened_before.st_size > max_bytes:
+        if opened_before.st_size > max_bytes:
             raise _InputFileLimit(opened_before.st_size)
         try:
             yield _PinnedDescriptor(
@@ -471,6 +450,5 @@ __all__ = [
     "bind_annotation_file_source",
     "materialize_annotation_file",
     "open_annotation_file_stream",
-    "resolve_existing_file",
     "resolve_output_directory",
 ]

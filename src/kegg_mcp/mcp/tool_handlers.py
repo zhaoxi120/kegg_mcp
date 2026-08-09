@@ -106,7 +106,6 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
                     normalization.source,
                     requested_path=normalization.file_path,
                     resolved_path=pinned.path,
-                    allowed_roots=runtime.allowed_roots,
                     default_source_name="deepkoala",
                 )
                 analysis_view = stream_deepkoala_analysis_view(

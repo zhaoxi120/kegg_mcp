@@ -493,8 +493,7 @@ def analyze_annotation_targets(
     )
     if automatic_selection_skipped:
         compact_view_caveat += (
-            " No accepted K numbers were selected, so automatic MODULE and pathway target "
-            "selection was skipped."
+            " No accepted K numbers were selected, so automatic target selection was skipped."
         )
     if accepted_ko_ids_empty and (module_ids or pathways):
         compact_view_caveat += (

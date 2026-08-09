@@ -81,8 +81,8 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   only when record-level evidence is needed and the file fits that operation's separate intake
   limits. The companion can publish a generated detailed CSV up to 1 GiB with bounded-memory
   validation and publication. The supported suite installer requires Core's allowed roots to cover
-  every DeepKOALA input and output root, so Core can validate unchanged source provenance and this
-  stable file path is also the large-result handoff.
+  every DeepKOALA output root so Core can validate the stable annotation file. The original FASTA
+  `input_path` remains unchanged provenance and need not be accessible beneath a Core allowed root.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
   continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project
@@ -98,8 +98,8 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
   `source` unchanged, never send both payload selectors, and keep annotation context only inside
   the nested `annotations` object. If `output_bytes` is larger, do not read resource pages or place
   the file in a prompt or inline MCP argument. Stop and report that the deployment must be repaired
-  with shared handoff roots covering both the returned input and output paths in Core, preferably
-  through the complete suite installer;
+  with Core allowed roots covering the returned DeepKOALA output path, preferably through the
+  complete suite installer;
   resume from the same stable CSV after the repaired suite is available in a new task.
   The same message with `field="output_directory"` is an output-location error and must not trigger
   this annotation-resource fallback.

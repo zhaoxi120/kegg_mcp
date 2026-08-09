@@ -4,9 +4,9 @@
 graphics—locally.**
 
 KEGG MCP helps researchers annotate protein sequences, inspect existing KEGG Orthology (KO)
-evidence, and explore selected KEGG references through natural-language requests. It keeps the
-evidence, decisions, provenance, and generated files together so results can be reviewed instead
-of treated as a black box.
+evidence, and explore selected KEGG references through natural-language requests. Normalization and
+audit workflows can preserve annotation evidence, decisions, and provenance for review, while
+high-level analysis deliberately uses a compact sorted unique accepted-KO view.
 
 MCP stands for Model Context Protocol: it is the local interface that lets Codex call the tools in
 this suite. KEGG MCP is not a website or hosted analysis service.
@@ -67,7 +67,8 @@ step is skipped. Rendering is always optional.
 
 - You have protein FASTA, KO identifiers, or annotation tables.
 - You want Codex to coordinate a reproducible KEGG-oriented workflow.
-- You need ambiguity, multiple assignments, thresholds, and provenance to remain visible.
+- You need normalization or audit to preserve ambiguity, multiple assignments, thresholds, and
+  provenance.
 - You prefer local files and explicit network access over a hosted multi-user service.
 
 ### Not designed for
@@ -187,8 +188,10 @@ source rows, 20 million expanded assignments, and 100,000 unique accepted K numb
 and other supported inputs produce the same accepted-KO view under their applicable importer
 limits. The DeepKOALA companion can validate and publish a detailed CSV up to the same 1 GiB file
 ceiling without loading the complete output into memory. Suite installations require Core's
-allowed roots to cover every DeepKOALA input and output root; the resource-to-inline recovery route
-remains limited to 5,000,000 bytes for manual deployments whose roots are disjoint.
+allowed roots to cover every DeepKOALA output root. Core validates the stable annotation CSV while
+retaining the original FASTA path as provenance without reopening it. The resource-to-inline
+recovery route remains limited to 5,000,000 bytes for manual deployments whose output roots are
+disjoint.
 
 Compact local intake does not raise KEGG request, relationship, reference-loading, ranking, or
 output budgets. Very large accepted-KO sets may therefore require explicit MODULE/pathway targets

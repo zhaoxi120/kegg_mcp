@@ -116,9 +116,10 @@ row is structurally skipped. Every emitted record source must also appear in thi
 
 Nullable provenance fields remain `None` when the source did not provide them. Importers never
 infer a tool version, model name, model/database version, annotation date, organism, or domain
-coordinate. Workflow digests are not part of source provenance. A caller may provide a controlled
-absolute `input_path`; the MCP boundary validates it against deployment allowed roots before the
-importer sees the content.
+coordinate. Workflow digests are not part of source provenance. A caller may provide an absolute
+`input_path` as provenance. The MCP boundary does not open a distinct provenance path or validate it
+against deployment allowed roots; allowed-root file policy applies to the actual annotation
+`file_path`.
 
 `SourceProvenance.input_uri` is a sanitized logical identifier and remains distinct from
 `input_path`. It accepts a simple basename or the `inline`, `mcp`, `resource`, and `urn` schemes.
@@ -340,10 +341,10 @@ a large-file/small-file retention selector or claim that omitted evidence was re
 
 The separate `deepkoala-mcp` companion enforces a deployment-selected detailed-output limit no
 greater than 1 GiB and validates and publishes generated files with bounded memory. The supported
-suite installer requires Core's allowed roots to cover every DeepKOALA input and output root, so
-Core can validate the unchanged source provenance and stream the stable companion file directly.
-This does not expand the separate 5,000,000-byte full-record normalization or bounded-inline
-contracts.
+suite installer requires Core's allowed roots to cover every DeepKOALA output root so Core can
+validate and stream the stable companion file directly. A distinct original FASTA path remains
+unchanged provenance and is not reopened under Core's annotation-file path policy. This does not
+expand the separate 5,000,000-byte full-record normalization or bounded-inline contracts.
 
 Compact intake does not change KEGG request, relationship-row, reference-loading, ranking, or
 output budgets. A view that fits the local limits may still contain too many accepted K numbers for

@@ -290,12 +290,13 @@ def _multi_ready_probe(
     )
 
 
-def _core_runtime(root: Path) -> McpRuntime:
+def _core_runtime(root: Path, *, allowed_root: Path | None = None) -> McpRuntime:
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     return McpRuntime(
         client=cast(KeggMcpClient, _OfflineOnlyKeggClient()),
         result_store=SQLiteResultStore(root / "core-results.sqlite3"),
         scope_id="deepkoala-cross-server-contract",
-        allowed_roots=(str(root.resolve()),),
+        allowed_roots=(str((allowed_root or root).resolve()),),
     )
 
 
@@ -406,8 +407,13 @@ def _core_arguments(
     return arguments
 
 
-async def _normalize_once(root: Path, arguments: dict[str, object]) -> dict[str, object]:
-    server = create_core_server(_core_runtime(root))
+async def _normalize_once(
+    root: Path,
+    arguments: dict[str, object],
+    *,
+    allowed_root: Path | None = None,
+) -> dict[str, object]:
+    server = create_core_server(_core_runtime(root, allowed_root=allowed_root))
     with patch(
         "kegg_mcp.services.normalization.import_deepkoala_detailed",
         wraps=import_deepkoala_detailed,
@@ -486,7 +492,11 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         assert Path(handoff.annotations_path).read_bytes() == _SMALL_DETAILED_CSV
         assert Path(handoff.report_path).is_file()
 
-        normalized = await _normalize_once(tmp_path, _core_arguments(handoff))
+        normalized = await _normalize_once(
+            tmp_path / "core",
+            _core_arguments(handoff),
+            allowed_root=config.output_roots[0],
+        )
         summary = cast(dict[str, object], normalized["import_summary"])
         assert summary["input_rows"] == 2
         assert summary["emitted_records"] == 3
@@ -496,6 +506,7 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         source = cast(dict[str, object], cast(list[object], provenance["source_preview"])[0])
         assert source["source_name"] == "deepkoala"
         assert source["input_path"] == str(config.input_roots[0] / "shared-filesystem.faa")
+        assert not Path(cast(str, source["input_path"])).is_relative_to(config.output_roots[0])
 
         stable_annotations = Path(handoff.annotations_path)
         deleted = await session.call_tool("delete_deepkoala_job", {"job_id": job_id})
@@ -525,7 +536,7 @@ async def test_large_shared_file_streams_through_core(
     )
     companion_server = create_deepkoala_server(manager)
     shared_core_server = create_core_server(
-        _module_core_runtime(tmp_path / "shared-core", allowed_root=companion_root)
+        _module_core_runtime(tmp_path / "shared-core", allowed_root=config.output_roots[0])
     )
 
     async with create_connected_server_and_client_session(companion_server) as companion_session:

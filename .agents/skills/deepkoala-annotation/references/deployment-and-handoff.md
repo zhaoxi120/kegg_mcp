@@ -80,9 +80,11 @@ transform, or validate CSV rows itself.
 
 The companion accepts a deployment-selected generated detailed-CSV limit up to 1 GiB and validates
 and publishes that file with bounded memory. Pass every successful output unchanged to Core. The
-supported suite installer requires Core's allowed roots to cover every DeepKOALA input and output
-root, so an allowed stable path is the normal and large-result handoff. Core uses the same compact
-sorted unique accepted-KO analysis view for file and bounded inline inputs. Request full
+supported suite installer requires Core's allowed roots to cover every DeepKOALA output root, so an
+allowed stable annotation path is the normal and large-result handoff. The original FASTA
+`input_path` is retained as provenance without being opened or required beneath a Core allowed
+root. Core uses the same compact sorted unique accepted-KO analysis view for file and bounded inline
+inputs. Request full
 normalization separately when record-level evidence or protein mappings are required and the input
 fits that operation's separate full-record limits; never truncate a large file to make it fit.
 
@@ -97,13 +99,14 @@ Prefer `annotations_path`. Use the fallback only after a successful handoff when
 `field="file_path"` for that path. The same message with `field="output_directory"` is not a
 handoff failure and must not trigger this fallback. Do not use it to hide malformed
 CSV, an expired or deleted job, an unsupported handoff version, or another Core validation error.
+The original FASTA `input_path` is provenance only and does not trigger this fallback.
 Do not rerun DeepKOALA, copy or rewrite the CSV, weaken or change allowed-root policy in a running
 server, or retry the same unreadable path. Inspect the successful job's `output_bytes` first. The
 inline fallback limit is 5,000,000 bytes and is separate from the companion's generated-file limit.
 
 When `output_bytes` exceeds 5,000,000, do not read the annotation resource, follow its page chain,
 place its bytes in a prompt, or send `annotations.text`. Stop and report a deployment configuration
-failure: Core must be restarted with allowed roots that cover the DeepKOALA input and output roots,
+failure: Core must be restarted with allowed roots that cover the DeepKOALA output roots,
 normally by repairing the complete suite deployment. Do not copy the CSV or change either server's
 running path policy. The stable CSV remains the resumption point after the shared handoff roots are
 available in a new task.
