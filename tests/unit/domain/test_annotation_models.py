@@ -220,9 +220,9 @@ def test_dataset_schema_is_versioned_draft_2020_12_and_forbids_extra_fields() ->
     ("model", "schema_id"),
     [
         (SourceProvenance, "urn:kegg-mcp:schema:source-provenance:1"),
-        (AnnotationRecord, "urn:kegg-mcp:schema:annotation-record:1"),
-        (ImportReport, "urn:kegg-mcp:schema:import-report:1"),
-        (KOEvidenceView, "urn:kegg-mcp:schema:ko-evidence-view:1"),
+        (AnnotationRecord, "urn:kegg-mcp:schema:annotation-record:2"),
+        (ImportReport, "urn:kegg-mcp:schema:import-report:2"),
+        (KOEvidenceView, "urn:kegg-mcp:schema:ko-evidence-view:2"),
     ],
 )
 def test_top_level_contract_schemas_have_stable_ids(
