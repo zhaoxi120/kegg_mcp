@@ -93,8 +93,8 @@ prompts can focus on the research task.
 
 ### Existing KO evidence
 
-> Analyze `/absolute/project/inputs/mag-ko.tsv` as a MAG. Keep accepted and uncertain evidence
-> separate, and explain exact MODULE completion separately from pathway KO coverage.
+> Analyze `/absolute/project/inputs/mag-ko.tsv` as a MAG. Use accepted K numbers only, and explain
+> exact MODULE completion separately from pathway KO coverage.
 
 ### KEGG candidate search
 
@@ -161,9 +161,25 @@ see [manual deployment](docs/manual-component-deployment.md).
 - A search result is a candidate, not an automatically confirmed identity.
 - An unmapped identifier or cache miss is not evidence that a biological entity is absent.
 
-Reports keep accepted, uncertain, rejected, duplicated, and conflicting evidence distinct where
-the source and policy support those decisions. Community and pangenome results describe pooled
-encoded potential rather than one isolate.
+Full-record reports keep accepted, rejected, unclassified, invalid, duplicated, and conflicting
+evidence distinct where the source and policy support those decisions. Every MODULE, pathway,
+ranking, comparison, and rendering result uses only sorted unique accepted K numbers. Community
+and pangenome results describe pooled encoded potential rather than one isolate.
+
+For an unusually large previously generated DeepKOALA detailed CSV, the high-level Core analysis
+can explicitly stream `annotations.file_path` with `input_format="deepkoala_detailed"` and
+`annotation_retention="unique_accepted_ko_projection"`. This mode accepts at most 1 GiB, 10 million
+source rows, 20 million expanded assignments, and 100,000 unique accepted K numbers. It retains the
+accepted KO set, aggregate counts, provenance, and bounded diagnostics, but intentionally omits
+record evidence, protein-to-KO mappings, and duplicate/conflict accounting. Normalization remains
+the full-record route. The DeepKOALA companion itself still caps its detailed CSV at 5,000,000
+bytes; the projection supports large files produced outside that companion and does not raise its
+output limit.
+
+This projection changes local file intake and evidence retention only. It does not raise KEGG
+request, relationship, reference-loading, ranking, or output budgets. Very large accepted-KO sets
+may therefore require explicit MODULE/pathway targets or division into scientifically independent
+analysis units instead of automatic Top-N target mapping.
 
 ## Local data and KEGG access
 

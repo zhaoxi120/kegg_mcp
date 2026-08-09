@@ -11,7 +11,6 @@ from pydantic import Field, field_validator, model_validator
 
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
-    EvidenceMode,
     FrozenModel,
     NormalizedStatus,
     SourceProvenance,
@@ -260,8 +259,7 @@ class AnnotationEvidenceAudit(FrozenModel):
     skipped_rows: int = Field(strict=True, ge=0)
     records_with_valid_ko: int = Field(strict=True, ge=0)
     unique_valid_ko_count: int = Field(strict=True, ge=0)
-    strict_unique_ko_count: int = Field(strict=True, ge=0)
-    lenient_unique_ko_count: int = Field(strict=True, ge=0)
+    accepted_unique_ko_count: int = Field(strict=True, ge=0)
     rejected_unique_ko_count: int = Field(strict=True, ge=0)
     duplicate_assignment_count: int = Field(strict=True, ge=0)
     conflicting_assignment_count: int = Field(strict=True, ge=0)
@@ -275,10 +273,8 @@ class AnnotationEvidenceAudit(FrozenModel):
     def validate_counts(self) -> AnnotationEvidenceAudit:
         if sum(item.count for item in self.status_counts) != self.emitted_records:
             raise ValueError("status_counts must sum to emitted_records")
-        if self.strict_unique_ko_count > self.lenient_unique_ko_count:
-            raise ValueError("strict KO count cannot exceed lenient KO count")
-        if self.lenient_unique_ko_count > self.unique_valid_ko_count:
-            raise ValueError("lenient KO count cannot exceed all valid K numbers")
+        if self.accepted_unique_ko_count > self.unique_valid_ko_count:
+            raise ValueError("accepted KO count cannot exceed all valid K numbers")
         return self
 
 
@@ -289,10 +285,8 @@ class MappingDegreeCount(FrozenModel):
     ko_count: int = Field(strict=True, ge=1)
 
 
-class EvidenceModeMappingAudit(FrozenModel):
-    """Mapping yield for one evidence view and one fixed relationship target."""
-
-    evidence_mode: EvidenceMode
+class KoMappingAudit(FrozenModel):
+    """Mapping yield for accepted KOs and one fixed relationship target."""
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     mapped_unique_ko_count: int = Field(strict=True, ge=0)
     mapping_yield: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
@@ -308,7 +302,7 @@ class EvidenceModeMappingAudit(FrozenModel):
     unmapped_preview_truncated: bool
 
     @model_validator(mode="after")
-    def validate_mapping_counts(self) -> EvidenceModeMappingAudit:
+    def validate_mapping_counts(self) -> KoMappingAudit:
         if self.mapped_unique_ko_count + self.unmapped_ko_count != self.selected_unique_ko_count:
             raise ValueError("mapped and unmapped KO counts must partition the selected set")
         expected_yield = (
@@ -339,17 +333,15 @@ class EvidenceModeMappingAudit(FrozenModel):
 
 
 class AnnotationTargetMappingAudit(FrozenModel):
-    """Strict and lenient yields derived from one shared KEGG retrieval."""
+    """Accepted-KO mapping yield for one relationship target."""
 
     target: AnnotationMappingTarget
-    strict: EvidenceModeMappingAudit
-    lenient: EvidenceModeMappingAudit
+    mapping: KoMappingAudit
 
 
-class EvidenceModeMappingAuditSummary(FrozenModel):
+class KoMappingAuditSummary(FrozenModel):
     """Compact direct mapping counts without degree distributions or KO previews."""
 
-    evidence_mode: EvidenceMode
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     mapped_unique_ko_count: int = Field(strict=True, ge=0)
     mapping_yield: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
@@ -359,7 +351,7 @@ class EvidenceModeMappingAuditSummary(FrozenModel):
     unmapped_ko_count: int = Field(strict=True, ge=0)
 
     @model_validator(mode="after")
-    def validate_counts(self) -> EvidenceModeMappingAuditSummary:
+    def validate_counts(self) -> KoMappingAuditSummary:
         if self.mapped_unique_ko_count + self.unmapped_ko_count != self.selected_unique_ko_count:
             raise ValueError("mapped and unmapped KO counts must partition the selected set")
         expected_yield = (
@@ -375,11 +367,10 @@ class EvidenceModeMappingAuditSummary(FrozenModel):
 
 
 class AnnotationTargetMappingAuditSummary(FrozenModel):
-    """Compact strict and lenient mapping summary for one selected relationship."""
+    """Compact accepted-KO mapping summary for one selected relationship."""
 
     target: AnnotationMappingTarget
-    strict: EvidenceModeMappingAuditSummary
-    lenient: EvidenceModeMappingAuditSummary
+    mapping: KoMappingAuditSummary
 
 
 class AnnotationAuditWarningPreview(FrozenModel):
@@ -412,24 +403,12 @@ class AnnotationAuditDetail(FrozenModel):
         Field(max_length=len(AnnotationMappingTarget)),
     ]
     mapping_execution: AnnotationMappingExecution
-    lenient_only_ko_count: int = Field(strict=True, ge=0)
-    lenient_only_ko_preview: Annotated[
-        tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
-    ]
-    strict_without_any_audited_relationship_count: int | None = Field(
+    accepted_without_any_audited_relationship_count: int | None = Field(
         default=None,
         strict=True,
         ge=0,
     )
-    strict_without_any_audited_relationship_preview: Annotated[
-        tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
-    ]
-    lenient_without_any_audited_relationship_count: int | None = Field(
-        default=None,
-        strict=True,
-        ge=0,
-    )
-    lenient_without_any_audited_relationship_preview: Annotated[
+    accepted_without_any_audited_relationship_preview: Annotated[
         tuple[str, ...], Field(max_length=MAX_AUDIT_UNMAPPED_PREVIEW)
     ]
     retrieval: QueryRetrievalSummary
@@ -444,27 +423,21 @@ class AnnotationAuditDetail(FrozenModel):
             self.mapping_execution.completed_targets
         ):
             raise ValueError("mappings must match completed targets in stable order")
-        if self.lenient_only_ko_count != (
-            self.evidence.lenient_unique_ko_count - self.evidence.strict_unique_ko_count
+        if (
+            self.mapping_execution.selected_unique_ko_count
+            != self.evidence.accepted_unique_ko_count
         ):
-            raise ValueError("lenient-only count must match strict and lenient evidence counts")
-        if self.mapping_execution.selected_unique_ko_count != self.evidence.lenient_unique_ko_count:
-            raise ValueError("mapping execution must use the lenient unique-KO denominator")
+            raise ValueError("mapping execution must use the accepted unique-KO denominator")
         if self.warning_count != len(self.warnings):
             raise ValueError("warning_count must match warnings")
         mapping_completed = (
             self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
         )
-        without_counts = (
-            self.strict_without_any_audited_relationship_count,
-            self.lenient_without_any_audited_relationship_count,
-        )
-        if mapping_completed != all(value is not None for value in without_counts):
-            raise ValueError("no-relationship counts are available only after completed mapping")
-        if not mapping_completed and (
-            self.strict_without_any_audited_relationship_preview
-            or self.lenient_without_any_audited_relationship_preview
+        if mapping_completed != (
+            self.accepted_without_any_audited_relationship_count is not None
         ):
+            raise ValueError("no-relationship counts are available only after completed mapping")
+        if not mapping_completed and self.accepted_without_any_audited_relationship_preview:
             raise ValueError("skipped mapping cannot provide no-relationship previews")
         return self
 
@@ -480,13 +453,7 @@ class AnnotationMappingAuditResult(FrozenModel):
         tuple[AnnotationTargetMappingAuditSummary, ...],
         Field(max_length=len(AnnotationMappingTarget)),
     ]
-    lenient_only_ko_count: int = Field(strict=True, ge=0)
-    strict_without_any_audited_relationship_count: int | None = Field(
-        default=None,
-        strict=True,
-        ge=0,
-    )
-    lenient_without_any_audited_relationship_count: int | None = Field(
+    accepted_without_any_audited_relationship_count: int | None = Field(
         default=None,
         strict=True,
         ge=0,
@@ -504,20 +471,17 @@ class AnnotationMappingAuditResult(FrozenModel):
     def validate_summary(self) -> AnnotationMappingAuditResult:
         if tuple(item.target for item in self.mappings) != self.mapping_execution.completed_targets:
             raise ValueError("mapping summaries must match completed targets in stable order")
-        if self.lenient_only_ko_count != (
-            self.evidence.lenient_unique_ko_count - self.evidence.strict_unique_ko_count
+        if (
+            self.mapping_execution.selected_unique_ko_count
+            != self.evidence.accepted_unique_ko_count
         ):
-            raise ValueError("lenient-only count must match strict and lenient evidence counts")
-        if self.mapping_execution.selected_unique_ko_count != self.evidence.lenient_unique_ko_count:
-            raise ValueError("mapping execution must use the lenient unique-KO denominator")
+            raise ValueError("mapping execution must use the accepted unique-KO denominator")
         mapping_completed = (
             self.mapping_execution.status is AnnotationMappingExecutionStatus.COMPLETED
         )
-        without_counts = (
-            self.strict_without_any_audited_relationship_count,
-            self.lenient_without_any_audited_relationship_count,
-        )
-        if mapping_completed != all(value is not None for value in without_counts):
+        if mapping_completed != (
+            self.accepted_without_any_audited_relationship_count is not None
+        ):
             raise ValueError("no-relationship counts are available only after completed mapping")
         if self.warning_count < len(self.warning_preview):
             raise ValueError("warning_count cannot be smaller than warning_preview")
@@ -550,11 +514,10 @@ def audit_annotation_mapping(
     mapping_targets = _canonical_mapping_targets(mapping_targets)
     dataset = _resolve_dataset(source, result_store=result_store, scope_id=scope_id)
     evidence_view = build_ko_evidence_view(dataset)
-    strict_kos = select_ko_ids(evidence_view, EvidenceMode.STRICT)
-    lenient_kos = select_ko_ids(evidence_view, EvidenceMode.LENIENT)
+    accepted_kos = select_ko_ids(evidence_view)
     planned_request_count = sum(
         planned_relation_request_count(
-            lenient_kos,
+            accepted_kos,
             relationship=_RELATIONSHIPS[target],
             client=client,
         )
@@ -575,8 +538,7 @@ def audit_annotation_mapping(
     mappings: list[AnnotationTargetMappingAudit] = []
     completed_targets: list[AnnotationMappingTarget] = []
     all_batches: list[KeggBatchProvenance] = []
-    mapped_strict_any: set[str] = set()
-    mapped_lenient_any: set[str] = set()
+    mapped_accepted_any: set[str] = set()
     complete_rows: dict[str, list[dict[str, object]]] = {}
     remaining_rows = MAX_AUDIT_RELATIONSHIP_ROWS
     remaining_bytes = MAX_AUDIT_RESPONSE_BYTES
@@ -590,13 +552,13 @@ def audit_annotation_mapping(
         mapping_targets if mapping_status is AnnotationMappingExecutionStatus.COMPLETED else ()
     )
     for target_index, target in enumerate(targets_to_map):
-        if lenient_kos:
+        if accepted_kos:
             observed_target_batches: list[KeggBatchProvenance] = []
             consumed_rows = MAX_AUDIT_RELATIONSHIP_ROWS - remaining_rows
             consumed_bytes = MAX_AUDIT_RESPONSE_BYTES - remaining_bytes
             try:
                 mapped = bounded_relation_batches(
-                    lenient_kos,
+                    accepted_kos,
                     relationship=_RELATIONSHIPS[target],
                     client=client,
                     options=options,
@@ -643,7 +605,7 @@ def audit_annotation_mapping(
         serialized_rows: list[dict[str, object]] = []
         for row in rows:
             ko_id, _ = try_normalize_ko_id(row.source_id.rsplit(":", 1)[-1])
-            if ko_id is None or ko_id not in lenient_kos:
+            if ko_id is None or ko_id not in accepted_kos:
                 fail(
                     ErrorCode.KEGG_PARSE_FAILED,
                     "A KEGG audit relationship row has an unexpected source identifier.",
@@ -653,20 +615,12 @@ def audit_annotation_mapping(
             raw_rows_by_ko[ko_id] += 1
             serialized_rows.append(row.model_dump(mode="json"))
         complete_rows[target.value] = serialized_rows
-        mapped_lenient_any.update(targets_by_ko)
-        mapped_strict_any.update(set(strict_kos) & set(targets_by_ko))
+        mapped_accepted_any.update(targets_by_ko)
         mappings.append(
             AnnotationTargetMappingAudit(
                 target=target,
-                strict=_mode_mapping_audit(
-                    EvidenceMode.STRICT,
-                    strict_kos,
-                    targets_by_ko,
-                    raw_rows_by_ko,
-                ),
-                lenient=_mode_mapping_audit(
-                    EvidenceMode.LENIENT,
-                    lenient_kos,
+                mapping=_ko_mapping_audit(
+                    accepted_kos,
                     targets_by_ko,
                     raw_rows_by_ko,
                 ),
@@ -680,7 +634,7 @@ def audit_annotation_mapping(
         completed_targets=tuple(completed_targets),
         skipped_targets=skipped_targets,
         incomplete_target=incomplete_target,
-        selected_unique_ko_count=len(lenient_kos),
+        selected_unique_ko_count=len(accepted_kos),
         planned_request_count=(
             0
             if mapping_status is AnnotationMappingExecutionStatus.NOT_REQUESTED
@@ -697,17 +651,11 @@ def audit_annotation_mapping(
         tuple(all_batches),
         quality_context=quality_context,
     )
-    strict_without_any = (
-        tuple(sorted(set(strict_kos) - mapped_strict_any))
+    accepted_without_any = (
+        tuple(sorted(set(accepted_kos) - mapped_accepted_any))
         if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
         else ()
     )
-    lenient_without_any = (
-        tuple(sorted(set(lenient_kos) - mapped_lenient_any))
-        if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
-        else ()
-    )
-    lenient_only = tuple(sorted(set(lenient_kos) - set(strict_kos)))
     evidence = AnnotationEvidenceAudit(
         dataset_id=dataset.dataset_id,
         analysis_unit=dataset.analysis_unit,
@@ -716,8 +664,7 @@ def audit_annotation_mapping(
         skipped_rows=dataset.import_report.skipped_rows,
         records_with_valid_ko=sum(record.ko_id is not None for record in dataset.records),
         unique_valid_ko_count=len(evidence_view.records_by_ko),
-        strict_unique_ko_count=len(strict_kos),
-        lenient_unique_ko_count=len(lenient_kos),
+        accepted_unique_ko_count=len(accepted_kos),
         rejected_unique_ko_count=len(evidence_view.rejected_kos),
         duplicate_assignment_count=dataset.import_report.duplicate_count,
         conflicting_assignment_count=dataset.import_report.conflict_count,
@@ -730,22 +677,12 @@ def audit_annotation_mapping(
         evidence=evidence,
         mappings=tuple(mappings),
         mapping_execution=mapping_execution,
-        lenient_only_ko_count=len(lenient_only),
-        lenient_only_ko_preview=lenient_only[:MAX_AUDIT_UNMAPPED_PREVIEW],
-        strict_without_any_audited_relationship_count=(
-            len(strict_without_any)
+        accepted_without_any_audited_relationship_count=(
+            len(accepted_without_any)
             if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
             else None
         ),
-        strict_without_any_audited_relationship_preview=strict_without_any[
-            :MAX_AUDIT_UNMAPPED_PREVIEW
-        ],
-        lenient_without_any_audited_relationship_count=(
-            len(lenient_without_any)
-            if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
-            else None
-        ),
-        lenient_without_any_audited_relationship_preview=lenient_without_any[
+        accepted_without_any_audited_relationship_preview=accepted_without_any[
             :MAX_AUDIT_UNMAPPED_PREVIEW
         ],
         retrieval=retrieval,
@@ -758,10 +695,8 @@ def audit_annotation_mapping(
         {
             "detail": detail.model_dump(mode="json"),
             "complete_relationship_rows": complete_rows,
-            "strict_ko_ids": list(strict_kos),
-            "lenient_only_ko_ids": list(lenient_only),
-            "strict_without_any_audited_relationship": list(strict_without_any),
-            "lenient_without_any_audited_relationship": list(lenient_without_any),
+            "accepted_ko_ids": list(accepted_kos),
+            "accepted_without_any_audited_relationship": list(accepted_without_any),
             "provenance": [batch.model_dump(mode="json") for batch in batches],
         }
     )
@@ -792,14 +727,8 @@ def audit_annotation_mapping(
             evidence=evidence,
             mapping_execution=mapping_execution,
             mappings=tuple(_mapping_summary(mapping) for mapping in mappings),
-            lenient_only_ko_count=len(lenient_only),
-            strict_without_any_audited_relationship_count=(
-                len(strict_without_any)
-                if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
-                else None
-            ),
-            lenient_without_any_audited_relationship_count=(
-                len(lenient_without_any)
+            accepted_without_any_audited_relationship_count=(
+                len(accepted_without_any)
                 if mapping_status is AnnotationMappingExecutionStatus.COMPLETED
                 else None
             ),
@@ -820,8 +749,7 @@ def _mapping_summary(
 ) -> AnnotationTargetMappingAuditSummary:
     return AnnotationTargetMappingAuditSummary(
         target=mapping.target,
-        strict=_mode_mapping_summary(mapping.strict),
-        lenient=_mode_mapping_summary(mapping.lenient),
+        mapping=_ko_mapping_summary(mapping.mapping),
     )
 
 
@@ -833,11 +761,10 @@ def _record_audit_batches(
     destination.extend(batches)
 
 
-def _mode_mapping_summary(
-    mapping: EvidenceModeMappingAudit,
-) -> EvidenceModeMappingAuditSummary:
-    return EvidenceModeMappingAuditSummary(
-        evidence_mode=mapping.evidence_mode,
+def _ko_mapping_summary(
+    mapping: KoMappingAudit,
+) -> KoMappingAuditSummary:
+    return KoMappingAuditSummary(
         selected_unique_ko_count=mapping.selected_unique_ko_count,
         mapped_unique_ko_count=mapping.mapped_unique_ko_count,
         mapping_yield=mapping.mapping_yield,
@@ -860,12 +787,11 @@ def _warning_preview(
     )
 
 
-def _mode_mapping_audit(
-    mode: EvidenceMode,
+def _ko_mapping_audit(
     selected_kos: tuple[str, ...],
     targets_by_ko: dict[str, set[str]],
     raw_rows_by_ko: dict[str, int],
-) -> EvidenceModeMappingAudit:
+) -> KoMappingAudit:
     selected = set(selected_kos)
     mapped = selected & set(targets_by_ko)
     unmapped = tuple(sorted(selected - mapped))
@@ -873,8 +799,7 @@ def _mode_mapping_audit(
     degree_counts: dict[int, int] = defaultdict(int)
     for ko_id in mapped:
         degree_counts[len(targets_by_ko[ko_id])] += 1
-    return EvidenceModeMappingAudit(
-        evidence_mode=mode,
+    return KoMappingAudit(
         selected_unique_ko_count=len(selected),
         mapped_unique_ko_count=len(mapped),
         mapping_yield=(None if not selected else len(mapped) / len(selected)),
@@ -1101,9 +1026,9 @@ __all__ = [
     "AnnotationQualityContext",
     "AnnotationTargetMappingAudit",
     "AnnotationTargetMappingAuditSummary",
-    "EvidenceModeMappingAudit",
-    "EvidenceModeMappingAuditSummary",
     "GenomeType",
+    "KoMappingAudit",
+    "KoMappingAuditSummary",
     "MappingDegreeCount",
     "audit_annotation_mapping",
 ]

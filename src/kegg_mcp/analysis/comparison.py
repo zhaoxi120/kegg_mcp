@@ -5,7 +5,6 @@ from __future__ import annotations
 from kegg_mcp.analysis.comparison_contracts import (
     KO_COMPARISON_METHOD,
     KO_COMPARISON_VERSION,
-    ComparedKoClass,
     ComparisonDatasetInput,
     ComparisonDatasetProvenance,
     ComparisonLimits,
@@ -14,8 +13,8 @@ from kegg_mcp.analysis.comparison_contracts import (
     ComparisonWarningCode,
     DatasetSpecificKoPreview,
     DatasetSpecificKoSet,
-    KoClassComparisonSummary,
-    KoClassPartition,
+    KoMembershipComparisonSummary,
+    KoMembershipPartition,
     KoMembershipPattern,
     KoMembershipPatternPreview,
     KoPreview,
@@ -28,6 +27,7 @@ from kegg_mcp.domain.annotations import (
     DecisionPolicyReference,
     SourceProvenance,
     build_ko_evidence_view,
+    select_ko_ids,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 
@@ -37,7 +37,7 @@ def compare_ko_datasets(
     *,
     limits: ComparisonLimits | None = None,
 ) -> KoSetComparisonDetail:
-    """Partition accepted, uncertain, and lenient KOs across two or more datasets."""
+    """Partition selected unique accepted KOs across two or more datasets."""
     effective_limits = limits or ComparisonLimits()
     _validate_comparison_inputs(inputs, effective_limits)
 
@@ -66,28 +66,8 @@ def compare_ko_datasets(
             safe_details=safe_details,
         )
 
-    class_sets: dict[ComparedKoClass, tuple[frozenset[str], ...]] = {
-        ComparedKoClass.ACCEPTED: tuple(frozenset(view.accepted_kos) for view in views),
-        ComparedKoClass.UNCERTAIN_RECORD: tuple(frozenset(view.uncertain_kos) for view in views),
-    }
-    class_sets[ComparedKoClass.LENIENT_ADDITIONAL] = tuple(
-        uncertain - accepted
-        for accepted, uncertain in zip(
-            class_sets[ComparedKoClass.ACCEPTED],
-            class_sets[ComparedKoClass.UNCERTAIN_RECORD],
-            strict=True,
-        )
-    )
-    class_sets[ComparedKoClass.LENIENT] = tuple(
-        accepted | uncertain
-        for accepted, uncertain in zip(
-            class_sets[ComparedKoClass.ACCEPTED],
-            class_sets[ComparedKoClass.UNCERTAIN_RECORD],
-            strict=True,
-        )
-    )
-
-    for index, ko_ids in enumerate(class_sets[ComparedKoClass.LENIENT]):
+    selected_sets = tuple(frozenset(select_ko_ids(view)) for view in views)
+    for index, ko_ids in enumerate(selected_sets):
         if len(ko_ids) > effective_limits.max_unique_kos_per_set:
             fail(
                 ErrorCode.INPUT_LIMIT_EXCEEDED,
@@ -102,7 +82,7 @@ def compare_ko_datasets(
                     ),
                 ),
             )
-    membership_entries = sum(len(ko_ids) for sets in class_sets.values() for ko_ids in sets)
+    membership_entries = sum(len(ko_ids) for ko_ids in selected_sets)
     if membership_entries > effective_limits.max_total_membership_entries:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
@@ -118,16 +98,14 @@ def compare_ko_datasets(
         )
 
     labels = tuple(item.label for item in inputs)
-    partitions = tuple(
-        _partition_ko_class(ko_class, class_sets[ko_class], labels) for ko_class in ComparedKoClass
-    )
+    partition = _partition_selected_kos(selected_sets, labels)
     datasets = tuple(
-        _dataset_provenance(index, item, class_sets, views[index].policy)
+        _dataset_provenance(index, item, selected_sets, views[index].policy)
         for index, item in enumerate(inputs)
     )
     return KoSetComparisonDetail(
         datasets=datasets,
-        partitions=partitions,
+        partition=partition,
         calculation_method=CalculationMethodReference(
             name=KO_COMPARISON_METHOD,
             version=KO_COMPARISON_VERSION,
@@ -144,42 +122,39 @@ def summarize_ko_comparison(
 ) -> KoSetComparisonSummary:
     """Create a deterministic bounded preview without changing exact partition counts."""
     preview_limits = limits or ComparisonPreviewLimits()
-    summaries: list[KoClassComparisonSummary] = []
-    preview_truncated = False
-    for partition in detail.partitions:
-        shared = _ko_preview(partition.shared_by_all, preview_limits.max_ko_ids)
-        specifics = tuple(
-            DatasetSpecificKoPreview(
-                input_index=item.input_index,
-                label=item.label,
-                ko_set=_ko_preview(item.ko_ids, preview_limits.max_ko_ids),
-            )
-            for item in partition.set_specific
+    detail_partition = detail.partition
+    shared = _ko_preview(detail_partition.shared_by_all, preview_limits.max_ko_ids)
+    specifics = tuple(
+        DatasetSpecificKoPreview(
+            input_index=item.input_index,
+            label=item.label,
+            ko_set=_ko_preview(item.ko_ids, preview_limits.max_ko_ids),
         )
-        selected_patterns = partition.partially_shared[: preview_limits.max_membership_patterns]
-        patterns = tuple(
-            KoMembershipPatternPreview(
-                member_set_indexes=item.member_set_indexes,
-                member_labels=item.member_labels,
-                ko_set=_ko_preview(item.ko_ids, preview_limits.max_ko_ids),
-            )
-            for item in selected_patterns
+        for item in detail_partition.set_specific
+    )
+    selected_patterns = detail_partition.partially_shared[
+        : preview_limits.max_membership_patterns
+    ]
+    patterns = tuple(
+        KoMembershipPatternPreview(
+            member_set_indexes=item.member_set_indexes,
+            member_labels=item.member_labels,
+            ko_set=_ko_preview(item.ko_ids, preview_limits.max_ko_ids),
         )
-        patterns_truncated = len(selected_patterns) < len(partition.partially_shared)
-        preview_truncated = preview_truncated or shared.truncated or patterns_truncated
-        preview_truncated = preview_truncated or any(item.ko_set.truncated for item in specifics)
-        preview_truncated = preview_truncated or any(item.ko_set.truncated for item in patterns)
-        summaries.append(
-            KoClassComparisonSummary(
-                ko_class=partition.ko_class,
-                union_count=partition.union_count,
-                shared_by_all=shared,
-                set_specific=specifics,
-                partially_shared_pattern_count=len(partition.partially_shared),
-                partially_shared_patterns_preview=patterns,
-                partially_shared_patterns_truncated=patterns_truncated,
-            )
-        )
+        for item in selected_patterns
+    )
+    patterns_truncated = len(selected_patterns) < len(detail_partition.partially_shared)
+    preview_truncated = shared.truncated or patterns_truncated
+    preview_truncated = preview_truncated or any(item.ko_set.truncated for item in specifics)
+    preview_truncated = preview_truncated or any(item.ko_set.truncated for item in patterns)
+    summary_partition = KoMembershipComparisonSummary(
+        union_count=detail_partition.union_count,
+        shared_by_all=shared,
+        set_specific=specifics,
+        partially_shared_pattern_count=len(detail_partition.partially_shared),
+        partially_shared_patterns_preview=patterns,
+        partially_shared_patterns_truncated=patterns_truncated,
+    )
 
     warnings = detail.warnings
     if preview_truncated:
@@ -195,7 +170,7 @@ def summarize_ko_comparison(
         )
     return KoSetComparisonSummary(
         datasets=detail.datasets,
-        partitions=tuple(summaries),
+        partition=summary_partition,
         calculation_method=detail.calculation_method,
         warnings=warnings,
         detail_limits=detail.limits,
@@ -288,11 +263,10 @@ def _validate_comparison_inputs(
         )
 
 
-def _partition_ko_class(
-    ko_class: ComparedKoClass,
+def _partition_selected_kos(
     sets: tuple[frozenset[str], ...],
     labels: tuple[str, ...],
-) -> KoClassPartition:
+) -> KoMembershipPartition:
     memberships: dict[tuple[int, ...], list[str]] = {}
     union: set[str] = set()
     for ko_set in sets:
@@ -319,8 +293,7 @@ def _partition_ko_class(
         for members in sorted(memberships)
         if 1 < len(members) < len(sets)
     )
-    return KoClassPartition(
-        ko_class=ko_class,
+    return KoMembershipPartition(
         union_count=len(union),
         shared_by_all=shared,
         set_specific=specifics,
@@ -331,7 +304,7 @@ def _partition_ko_class(
 def _dataset_provenance(
     index: int,
     item: ComparisonDatasetInput,
-    class_sets: dict[ComparedKoClass, tuple[frozenset[str], ...]],
+    selected_sets: tuple[frozenset[str], ...],
     policy: DecisionPolicyReference,
 ) -> ComparisonDatasetProvenance:
     dataset = item.dataset
@@ -347,10 +320,7 @@ def _dataset_provenance(
         sample_labels=sample_labels,
         sources=dataset.sources,
         record_count=len(dataset.records),
-        accepted_ko_count=len(class_sets[ComparedKoClass.ACCEPTED][index]),
-        uncertain_record_ko_count=len(class_sets[ComparedKoClass.UNCERTAIN_RECORD][index]),
-        lenient_additional_ko_count=len(class_sets[ComparedKoClass.LENIENT_ADDITIONAL][index]),
-        lenient_ko_count=len(class_sets[ComparedKoClass.LENIENT][index]),
+        selected_unique_ko_count=len(selected_sets[index]),
     )
 
 

@@ -5,15 +5,20 @@ from __future__ import annotations
 import json
 import time
 
-from kegg_mcp.analysis import PairedModuleEvaluation, PathwayCoverageResult
+from kegg_mcp.analysis import ModuleEvaluationResult, PathwayCoverageResult
 from kegg_mcp.domain.annotations import (
     AnnotationDataset,
-    EvidenceMode,
     NormalizedStatus,
-    build_ko_evidence_view,
-    select_ko_ids,
 )
 from kegg_mcp.domain.errors import ErrorCode, fail
+from kegg_mcp.domain.projections import (
+    KoAnalysisEvidence,
+    analysis_accepted_ko_ids,
+    analysis_diagnostic_count,
+    analysis_diagnostic_preview,
+    analysis_input_rows,
+    analysis_status_counts,
+)
 from kegg_mcp.execution import ExecutionStage, StageMetric
 from kegg_mcp.importers import import_plain_ko
 from kegg_mcp.kegg import ResponseOrigin
@@ -81,11 +86,8 @@ def _elapsed_ms(started_ns: int) -> int:
     return max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)
 
 
-def _status_record_counts(dataset: AnnotationDataset) -> dict[NormalizedStatus, int]:
-    return {
-        status: sum(record.normalized_status is status for record in dataset.records)
-        for status in NormalizedStatus
-    }
+def _status_record_counts(evidence: KoAnalysisEvidence) -> dict[NormalizedStatus, int]:
+    return {item.status: item.count for item in analysis_status_counts(evidence)}
 
 
 def _execution_metrics(
@@ -121,14 +123,14 @@ def _execution_metrics(
 
 
 def _reference_provenance(
-    modules: tuple[PairedModuleEvaluation, ...],
+    modules: tuple[ModuleEvaluationResult, ...],
     pathways: tuple[PathwayCoverageResult, ...],
     *,
     additional: tuple[KeggBatchProvenance, ...] = (),
 ) -> tuple[KeggBatchProvenance, ...]:
     batches = list(additional)
     batches.extend(
-        batch for module in modules for batch in module.strict.reference_retrieval_provenance
+        batch for module in modules for batch in module.reference_retrieval_provenance
     )
     batches.extend(
         batch
@@ -156,14 +158,27 @@ def _reference_provenance(
 
 
 def _analysis_warnings(
-    dataset: AnnotationDataset,
-    modules: tuple[PairedModuleEvaluation, ...],
+    evidence: KoAnalysisEvidence,
+    modules: tuple[ModuleEvaluationResult, ...],
     pathways: tuple[PathwayCoverageResult, ...],
 ) -> tuple[str, ...]:
-    values = [diagnostic.message for diagnostic in dataset.import_report.diagnostics]
-    values.extend(warning.message for module in modules for warning in module.strict.warnings)
+    values = [diagnostic.message for diagnostic in analysis_diagnostic_preview(evidence)]
+    values.extend(warning.message for module in modules for warning in module.warnings)
     values.extend(warning.message for pathway in pathways for warning in pathway.warnings)
     return tuple(dict.fromkeys(values))
+
+
+def _analysis_warning_count(
+    evidence: KoAnalysisEvidence,
+    modules: tuple[ModuleEvaluationResult, ...],
+    pathways: tuple[PathwayCoverageResult, ...],
+) -> int:
+    """Count diagnostics exactly even when a lossy projection retains only a preview."""
+    return (
+        analysis_diagnostic_count(evidence)
+        + sum(len(module.warnings) for module in modules)
+        + sum(len(pathway.warnings) for pathway in pathways)
+    )
 
 
 def _json_bytes(value: object) -> bytes:
@@ -202,33 +217,35 @@ def _retain_json_detail(
 
 
 def _build_analysis_summary(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     *,
-    evidence_mode: EvidenceMode,
     metrics: tuple[StageMetric, ...],
     caveats: tuple[str, ...],
     warnings: tuple[str, ...] = (),
+    warning_count: int | None = None,
 ) -> AnalysisResultSummary:
     """Build the small count and message summary shared by analysis tools."""
-    status_counts = _status_record_counts(dataset)
-    selected_ko_ids = select_ko_ids(build_ko_evidence_view(dataset), evidence_mode)
+    status_counts = _status_record_counts(evidence)
+    selected_ko_ids = analysis_accepted_ko_ids(evidence)
     warning_preview = tuple(
         warning[:MAX_DIRECT_WARNING_CHARACTERS] for warning in warnings[:MAX_DIRECT_WARNINGS]
     )
+    effective_warning_count = len(warnings) if warning_count is None else warning_count
     return AnalysisResultSummary(
-        input_records=dataset.import_report.input_rows,
+        input_records=analysis_input_rows(evidence),
         accepted_records=status_counts[NormalizedStatus.ACCEPTED],
-        uncertain_records=status_counts[NormalizedStatus.UNCERTAIN],
         rejected_records=status_counts[NormalizedStatus.REJECTED],
+        unclassified_records=status_counts[NormalizedStatus.UNCLASSIFIED],
+        invalid_records=status_counts[NormalizedStatus.INVALID],
         selected_unique_ko_count=len(selected_ko_ids),
         kegg_request_count=sum(item.request_count for item in metrics),
         network_request_count=sum(item.network_request_count for item in metrics),
         cache_hit_count=sum(item.cache_hit_count for item in metrics),
         kegg_response_bytes=sum(item.response_bytes for item in metrics),
         caveats=caveats,
-        warning_count=len(warnings),
+        warning_count=effective_warning_count,
         warnings=warning_preview,
-        warnings_truncated=len(warning_preview) < len(warnings),
+        warnings_truncated=len(warning_preview) < effective_warning_count,
     )
 
 
@@ -266,6 +283,7 @@ def _validate_report_capacity(limits: ReportLimits, store: SQLiteResultStore) ->
 
 
 __all__ = [
+    "_analysis_warning_count",
     "_analysis_warnings",
     "_artifact_metadata",
     "_build_analysis_summary",

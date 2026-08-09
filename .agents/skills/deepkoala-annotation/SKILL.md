@@ -73,7 +73,9 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 - If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
   reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
   annotation job succeeds. Prefer the returned `annotations_path` and pass
-  `input_format="deepkoala_detailed"` and the `source` object unchanged.
+  `input_format="deepkoala_detailed"` and the `source` object unchanged. Omit
+  `annotation_retention` so this companion handoff keeps Core's full-record default; the companion
+  already caps its generated detailed CSV at 5,000,000 bytes.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
   continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project
@@ -104,7 +106,7 @@ policy check fails, or another MCP client must consume the output.
 
 - DeepKOALA output is computational annotation evidence, not experimental validation.
 - A rejected or below-threshold prediction is not evidence that a function is absent.
-- Do not alter thresholds, infer K numbers, compare scores across tools, or select strict/lenient
-  evidence here; those decisions belong to the independent `kegg-ko-analysis` stage.
+- Do not alter thresholds, infer K numbers, compare scores across tools, or select analysis K
+  numbers here; those decisions belong to the independent `kegg-ko-analysis` stage.
 - Do not launch subprocesses, inspect weights, parse output, or implement job control in the Skill.
   Use only declared `deepkoala-mcp` tools and their structured results.

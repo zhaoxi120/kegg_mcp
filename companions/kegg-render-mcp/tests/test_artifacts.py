@@ -284,7 +284,7 @@ async def test_pathway_asset_failure_adds_target_context_without_partial_result(
 
 
 @pytest.mark.asyncio
-async def test_opted_in_global_v4_handoff_renders_polyline_bundle_and_manifest(
+async def test_opted_in_global_v5_handoff_renders_polyline_bundle_and_manifest(
     runtime_config: RendererRuntimeConfig,
     allowed_root: Path,
 ) -> None:
@@ -316,7 +316,7 @@ async def test_opted_in_global_v4_handoff_renders_polyline_bundle_and_manifest(
         assert any("global or overview base map" in warning for warning in result.warnings)
         svg = service.store.read(result.render_id, "ko01100.svg").content
         assert b'<path d="M ' in svg
-        assert b'stroke-dasharray="8 4"' in svg
+        assert b'stroke-dasharray="8 4"' not in svg
         manifest = cast(
             dict[str, object],
             json.loads(service.store.read(result.render_id, "render_manifest.json").content),
@@ -417,7 +417,7 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         manifest_blob = service.store.read(result.render_id, "render_manifest.json")
         assert manifest_blob.content == (output / "render_manifest.json").read_bytes()
         manifest = cast(dict[str, object], json.loads(manifest_blob.content))
-        assert manifest["schema_version"] == "2"
+        assert manifest["schema_version"] == "3"
         assert "render_id" not in manifest
         assert "expires_at" not in manifest
         assert "resource_uri" not in manifest
@@ -428,8 +428,12 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         assert b'"analysis_unit":"unknown"' in manifest_blob.content
         assert str(runtime_config.state_root).encode() not in manifest_blob.content
         provenance = cast(dict[str, object], manifest["provenance"])
+        assert provenance["annotation_retention"] == "full_records"
+        assert provenance["record_level_evidence_retained"] is True
+        assert provenance["accepted_unique_ko_count"] == 2
         targets = cast(list[dict[str, object]], provenance["targets"])
         pathway = next(item for item in targets if item["target_id"] == "ko00010")
+        module = next(item for item in targets if item["target_id"] == "M00001")
         assert pathway["kgml_parser_name"] == "kegg_render_safe_kgml"
         assert pathway["kgml_parser_version"] == "1.3"
         assert pathway["retained_box_graphic_count"] == 2
@@ -437,6 +441,12 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         assert pathway["mapped_detected_ko_ids"] == ["K00001", "K00002"]
         assert pathway["box_overlay_count"] == 2
         assert pathway["polyline_overlay_count"] == 0
+        assert "evidence_mode" not in pathway
+        assert module["evaluation_status"] == "complete"
+        assert module["exact_completion"] is True
+        assert module["block_coverage"] == 1.0
+        assert "strict_exact_completion" not in module
+        assert "lenient_exact_completion" not in module
 
         artifact_records = cast(list[dict[str, object]], manifest["artifacts"])
         assert len(artifact_records) == 4

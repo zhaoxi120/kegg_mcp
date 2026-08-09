@@ -71,7 +71,7 @@ The complete FASTA-to-image workflow remains three separate processes:
 
 ```text
 deepkoala-mcp -> deepkoala_annotations.csv -> kegg-mcp
-kegg-mcp      -> render_input.json version 4 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 5 -> kegg-render-mcp
 ```
 
 Each process has its own runtime, state, input validation, and MCP entry point. The core never
@@ -88,8 +88,8 @@ For a direct, manually configured Core server, file handoff remains disabled unt
 `KEGG_MCP_ALLOWED_ROOTS` is configured; the complete manual environment belongs in
 [Manual component deployment](manual-component-deployment.md).
 
-`render_input.json` uses the renderer-specific version 4 contract and carries
-`AnalysisExecutionProvenance` version 3. Source KEGG PNG and KGML assets remain local and are not
+`render_input.json` uses the renderer-specific version 5 contract and carries
+`AnalysisExecutionProvenance` version 4. Source KEGG PNG and KGML assets remain local and are not
 included in tests, packages, or releases.
 
 ## Install the complete Codex suite
@@ -465,6 +465,17 @@ selection, not completion or enrichment. Exact MODULE completion is calculated s
 Pathway KO coverage is descriptive and does not establish pathway presence, completeness,
 expression, activity, flux, phenotype, or statistical significance.
 
+The ordinary handoff uses full-record retention. For an existing unusually large DeepKOALA
+detailed CSV, the Core high-level request may explicitly set
+`annotation_retention="unique_accepted_ko_projection"` together with
+`annotations.file_path` and `input_format="deepkoala_detailed"`. Core then streams at most 1 GiB,
+10 million rows, and 20 million expanded assignments into at most 100,000 sorted unique accepted K
+numbers. It retains aggregate counts, source and policy provenance, and a bounded diagnostic
+preview, but no record evidence, protein-to-KO mapping, or duplicate/conflict accounting. This is
+not an automatic fallback, and `normalize_ko_annotations` remains full-record only. The
+`deepkoala-mcp` companion still caps its own detailed CSV output at 5,000,000 bytes; this Core mode
+does not change the companion.
+
 See [MCP tools, resources, and configuration](mcp-server.md) for explicit target requests, generic
 annotation tables, result pagination, and complete schemas.
 
@@ -475,6 +486,7 @@ A core output directory may contain:
 ```text
 normalized_annotations.tsv
 protein_ko_mapping.tsv
+unique_accepted_kos.tsv
 module_ranking.tsv
 ko_module_relationships.tsv
 pathway_ranking.tsv
@@ -488,7 +500,9 @@ bundle_manifest.json
 
 The directory must be new or empty. Files are never overwritten, and the manifest is published
 last. Ranking and relationship tables remain local rather than being copied into every direct MCP
-response.
+response. `unique_accepted_kos.tsv` is present in every analysis bundle. The normalized-record and
+protein-mapping tables are present only with full-record retention; a projection bundle omits them
+and records the intentionally unavailable evidence in bundle schema version 4.
 
 Core can also write two other durable bundle families beneath the same allowed roots:
 

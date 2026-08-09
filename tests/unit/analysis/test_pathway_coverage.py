@@ -23,7 +23,7 @@ from kegg_mcp.analysis.pathway_coverage import (
     build_pathway_reference,
     evaluate_pathway_coverage,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -97,7 +97,7 @@ def _dataset(
             "sequence,ko,decision\n"
             "accepted-pathway,K00001,accepted\n"
             "accepted-outside,K00004,accepted\n"
-            "uncertain-pathway,K00002,uncertain\n"
+            "unclassified-pathway,K00002,unclassified\n"
             "rejected-pathway,K00003,rejected\n"
         ),
         dialect=TableDialect.CSV,
@@ -227,7 +227,7 @@ def _json_schema_property_names(node: object) -> set[str]:
     return set()
 
 
-def test_strict_ko_reference_uses_dataset_evidence_and_preserves_provenance() -> None:
+def test_accepted_ko_reference_uses_dataset_evidence_and_preserves_provenance() -> None:
     dataset = _dataset(
         analysis_unit=AnalysisUnit.ISOLATE_GENOME,
         taxon_id=9606,
@@ -237,7 +237,6 @@ def test_strict_ko_reference_uses_dataset_evidence_and_preserves_provenance() ->
 
     assert result.reference_namespace is PathwayReferenceNamespace.KO
     assert result.pathway_id == "ko00010"
-    assert result.evidence_mode is EvidenceMode.STRICT
     assert result.evaluation_status is PathwayCoverageStatus.EVALUATED
     assert result.input_record_count == len(dataset.records)
     assert result.input_unique_ko_count == 2
@@ -306,19 +305,15 @@ def test_result_json_schema_excludes_biological_and_statistical_claim_fields() -
     )
 
 
-def test_lenient_mode_adds_only_policy_defined_uncertain_kos() -> None:
-    result = evaluate_pathway_coverage(
-        _reference(),
-        _dataset(),
-        PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT),
-    )
+def test_nonaccepted_statuses_do_not_contribute_to_pathway_coverage() -> None:
+    result = evaluate_pathway_coverage(_reference(), _dataset())
 
-    assert result.input_unique_ko_count == 3
-    assert result.detected_unique_ko_count == 2
-    assert result.missing_unique_ko_count == 1
-    assert result.coverage_ratio == 2 / 3
-    assert result.detected_kos_preview == ("K00001", "K00002")
-    assert result.missing_kos_preview == ("K00003",)
+    assert result.input_unique_ko_count == 2
+    assert result.detected_unique_ko_count == 1
+    assert result.missing_unique_ko_count == 2
+    assert result.coverage_ratio == 1 / 3
+    assert result.detected_kos_preview == ("K00001",)
+    assert result.missing_kos_preview == ("K00002", "K00003")
 
 
 def test_input_context_cannot_override_dataset_analysis_unit() -> None:
@@ -736,19 +731,16 @@ def test_stale_excluded_community_result_has_bounded_previews_and_warnings() -> 
         max_missing_preview=1,
         max_exclusion_preview=1,
     )
-    parameters = PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT)
-
     result = evaluate_pathway_coverage(
         reference,
         _dataset(analysis_unit=AnalysisUnit.METAGENOMIC_COMMUNITY),
-        parameters,
-        limits,
+        limits=limits,
     )
 
-    assert result.detected_unique_ko_count == 3
-    assert result.missing_unique_ko_count == 2
+    assert result.detected_unique_ko_count == 2
+    assert result.missing_unique_ko_count == 3
     assert result.detected_kos_preview == ("K00001",)
-    assert result.missing_kos_preview == ("K00003",)
+    assert result.missing_kos_preview == ("K00002",)
     assert result.exclusions_preview == (exclusions[0],)
     assert result.reference_link_provenance[0].origin is ResponseOrigin.CACHE
     assert _warning_codes(result) == {

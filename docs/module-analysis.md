@@ -136,29 +136,21 @@ sets that would satisfy it:
 
 Supersets of another returned alternative are removed. Alternatives are sorted by set size and then
 lexicographically. Enumeration, set size, and output count are bounded before a Cartesian product
-can expand without limit. The combination budget applies to the complete evidence-mode evaluation,
+can expand without limit. The combination budget applies to the complete accepted-KO evaluation,
 not separately to each AST node. If early truncation prevents proof that an alternative is globally
 minimal, the evaluator returns no alternative for that expression and labels it truncated rather
 than making a false minimality claim. Not-evaluable expressions do not claim missing alternatives.
 
-## Strict and lenient evidence
+## Accepted-only evidence
 
-The paired dataset evaluator returns separate strict and lenient objects:
+The evaluator returns one `ModuleEvaluationResult` from the sorted unique accepted K numbers.
+Rejected, unclassified, and invalid records never enter MODULE evaluation. Full-record evidence can
+still retain those records for audit and reporting; the explicit large-file projection instead
+retains aggregate counts and bounded diagnostics without record-level evidence.
 
-- strict uses accepted K numbers only;
-- lenient uses accepted plus policy-defined uncertain K numbers; and
-- rejected, unclassified, and invalid records never enter either analysis.
-
-An uncertain K number that is also accepted is not treated as uncertain support because strict
-evidence already contains it. Uncertain support is reported only when it causes a required block to
-become complete under lenient evaluation. The support identifies the K number, the affected root
-block, and source record identifiers whose normalized status is exactly `uncertain`. Record and
-block previews are bounded and any truncation is explicit.
-
-Matched K-number lists, block-state previews, optional-component summaries, missing alternatives,
-newly completed block indexes, uncertain support items, and uncertain record identifiers all have
-serialized limits. Truncation is represented by typed flags and warnings rather than an omitted
-tail that appears complete.
+Matched K-number lists, block-state previews, optional-component summaries, and missing
+alternatives all have serialized limits. Truncation is represented by typed flags and warnings
+rather than an omitted tail that appears complete.
 
 A K-number assignment remains an annotation rather than experimental validation. A source-rejected
 prediction is not evidence that a biological function is absent. For a metagenomic community, a
@@ -167,10 +159,11 @@ organism, pathway activity, flux, or phenotype.
 
 ## Provenance and bounds
 
-Each analysis serializes the exact root and reachable definition text, sanitized retrieval
-provenance, evidence mode, dataset and decision-policy identity, parser and calculation versions,
-and the effective limits. Raw KEGG payloads, cache paths, endpoints, and credentials are not
-emitted by this layer.
+Each MODULE result serializes the exact root and reachable definition text, sanitized retrieval
+provenance, dataset and decision-policy identity, parser and calculation versions, and the
+effective limits. Service-level `AnalysisExecutionProvenance` separately records full-record or
+projection retention. Raw KEGG payloads, cache paths, endpoints, and credentials are not emitted by
+this layer.
 
 Definitions obtained from a cache retain retrieval time, endpoint class and label, database release
 when available, and stale status. A stale definition produces an explicit warning.
@@ -183,7 +176,7 @@ The stable interface is exported from `kegg_mcp.analysis`:
 from kegg_mcp.analysis import (
     ModuleDefinition,
     ModuleDefinitionCollection,
-    evaluate_module_pair,
+    evaluate_module,
     resolve_module_definitions,
 )
 
@@ -197,12 +190,12 @@ definitions = ModuleDefinitionCollection(
     ),
 )
 graph = resolve_module_definitions(definitions)
-paired_result = evaluate_module_pair(graph, annotation_dataset)
+result = evaluate_module(graph, annotation_dataset)
 ```
 
-`annotation_dataset` is an immutable `AnnotationDataset` produced by an importer or constructed
-against the annotation schema. Definition retrieval remains an explicit caller step; none of these
-functions performs network or filesystem I/O.
+The evidence argument may be an immutable `AnnotationDataset` or a `KoAnalysisProjection`; both
+expose the same sorted unique accepted-KO set to evaluation. Definition retrieval remains an
+explicit caller step; none of these functions performs network or filesystem I/O.
 
 ## Primary sources
 

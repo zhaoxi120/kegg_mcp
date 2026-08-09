@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -9,6 +10,8 @@ from typing import cast
 from pydantic import BaseModel
 
 from kegg_mcp import __version__
+from kegg_mcp.domain.projections import AnnotationRetention, KoAnalysisProjection
+from kegg_mcp.importers import ProjectionImportLimits, project_deepkoala_detailed
 from kegg_mcp.kegg import GetRequest
 from kegg_mcp.mcp.contracts import (
     AnalyzeKoAnnotationsInput,
@@ -30,7 +33,12 @@ from kegg_mcp.mcp.contracts import (
     TraceKeggRelationsInput,
     WriteKeggReferenceBundleInput,
 )
-from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
+from kegg_mcp.mcp.path_policy import (
+    bind_annotation_file_source,
+    materialize_annotation_file,
+    open_annotation_file_stream,
+    resolve_output_directory,
+)
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.services._atomic_bundle import preflight_text_bundle_output
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
@@ -79,10 +87,44 @@ ToolHandler = Callable[[ToolContext, BaseModel], ToolOutcome]
 def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeKoAnnotationsInput, model)
     runtime = context.runtime
+    analysis_projection: KoAnalysisProjection | None = None
+    projection_limits: ProjectionImportLimits | None = None
+    projection_import_elapsed_ms: int | None = None
     if request.annotations is not None:
-        normalization = materialize_annotation_file(
-            request.annotations.to_service_request(), runtime.allowed_roots
-        )
+        normalization = request.annotations.to_service_request()
+        if request.annotation_retention is AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION:
+            if normalization.file_path is None:  # pragma: no cover - input model guard
+                raise AssertionError("validated unique-KO projection omitted file_path")
+            projection_limits = ProjectionImportLimits()
+            projection_started = time.perf_counter_ns()
+            with open_annotation_file_stream(
+                normalization.file_path,
+                runtime.allowed_roots,
+                max_bytes=projection_limits.max_bytes,
+            ) as pinned:
+                source = bind_annotation_file_source(
+                    normalization.source,
+                    requested_path=normalization.file_path,
+                    resolved_path=pinned.path,
+                    allowed_roots=runtime.allowed_roots,
+                    default_source_name="deepkoala",
+                )
+                analysis_projection = project_deepkoala_detailed(
+                    pinned.stream,
+                    input_bytes=pinned.byte_size,
+                    limits=projection_limits,
+                    analysis_unit=normalization.analysis_unit,
+                    taxon_id=normalization.taxon_id,
+                    kegg_organism_code=normalization.kegg_organism_code,
+                    source=source,
+                )
+            projection_import_elapsed_ms = max(
+                0,
+                (time.perf_counter_ns() - projection_started) // 1_000_000,
+            )
+            normalization = normalization.model_copy(update={"source": source})
+        else:
+            normalization = materialize_annotation_file(normalization, runtime.allowed_roots)
     else:
         if request.ko_text is None:  # pragma: no cover - guarded by the input model
             raise AssertionError("validated analysis input omitted its annotation source")
@@ -104,15 +146,22 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
-        pathway_evidence_mode=request.pathway_evidence_mode,
         pathway_selection=request.pathway_selection,
         allow_global_or_overview=request.allow_global_or_overview,
+        analysis_projection=analysis_projection,
+        projection_import_limits=projection_limits,
+        annotation_import_elapsed_ms=projection_import_elapsed_ms,
         output_directory=resolved_output,
         remove_created_output_on_failure=requested_output is None and resolved_output is not None,
     )
     return ToolOutcome(
         result,
-        "KO annotations were normalized and the requested KEGG analyses completed.",
+        (
+            "A lossy accepted unique-KO projection was analyzed; record-level evidence and "
+            "protein mappings were not retained."
+            if analysis_projection is not None
+            else "KO annotations were normalized and the requested KEGG analyses completed."
+        ),
         result.result.result_id,
     )
 
@@ -395,7 +444,6 @@ def analyze_pathways(context: ToolContext, model: BaseModel) -> ToolOutcome:
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
-        evidence_mode=request.evidence_mode,
         allow_global_or_overview=request.allow_global_or_overview,
     )
     return ToolOutcome(

@@ -17,14 +17,23 @@ from kegg_mcp.analysis import (
     KoPathwayRelationship,
     ModuleRankingResult,
     ModuleRankingRow,
-    PairedModuleEvaluation,
+    ModuleEvaluationResult,
     PathwayCoverageResult,
     PathwayKoReference,
     PathwayRankingResult,
     PathwayRankingRow,
     ResolvedModuleGraph,
 )
-from kegg_mcp.domain.annotations import AnnotationDataset, FrozenModel
+from kegg_mcp.domain.annotations import (
+    AnnotationDataset,
+    FrozenModel,
+)
+from kegg_mcp.domain.projections import (
+    AnnotationRetention,
+    KoAnalysisEvidence,
+    KoAnalysisProjection,
+    analysis_accepted_ko_ids,
+)
 from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.services._atomic_bundle import write_text_bundle
 from kegg_mcp.services.render_contracts import (
@@ -35,7 +44,7 @@ from kegg_mcp.services.render_contracts import (
     serialize_render_input,
 )
 
-OUTPUT_BUNDLE_SCHEMA_VERSION = "3"
+OUTPUT_BUNDLE_SCHEMA_VERSION = "4"
 
 
 class ManifestPathMode(StrEnum):
@@ -49,8 +58,9 @@ class OutputBundle(FrozenModel):
     """Absolute paths for the stable files written by one analysis stage."""
 
     output_directory: str = Field(min_length=1, max_length=4_096)
-    normalized_annotations: str = Field(min_length=1, max_length=4_096)
-    protein_ko_mapping: str = Field(min_length=1, max_length=4_096)
+    normalized_annotations: str | None = Field(default=None, max_length=4_096)
+    protein_ko_mapping: str | None = Field(default=None, max_length=4_096)
+    unique_accepted_kos: str | None = Field(default=None, max_length=4_096)
     module_ranking: str | None = Field(default=None, max_length=4_096)
     ko_module_relationships: str | None = Field(default=None, max_length=4_096)
     pathway_ranking: str | None = Field(default=None, max_length=4_096)
@@ -62,7 +72,7 @@ class OutputBundle(FrozenModel):
     manifest: str = Field(min_length=1, max_length=4_096)
     artifacts: Annotated[
         tuple[OutputBundleArtifact, ...],
-        Field(min_length=3, max_length=11),
+        Field(min_length=3, max_length=12),
     ]
 
 
@@ -105,9 +115,9 @@ def write_normalization_bundle(
 
 
 def write_analysis_bundle(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     module_graphs: tuple[ResolvedModuleGraph, ...],
-    modules: tuple[PairedModuleEvaluation, ...],
+    modules: tuple[ModuleEvaluationResult, ...],
     pathway_references: tuple[PathwayKoReference, ...],
     pathways: tuple[PathwayCoverageResult, ...],
     *,
@@ -122,20 +132,29 @@ def write_analysis_bundle(
 ) -> OutputBundle:
     """Write canonical handoff tables, report, and renderer input as one stable bundle."""
     render_input = build_render_input(
-        dataset,
+        evidence,
         module_graphs,
         pathway_references,
         execution,
         limits=render_limits,
     )
-    files = {
-        "normalized_annotations.tsv": _normalized_annotations_tsv(dataset),
-        "protein_ko_mapping.tsv": _protein_ko_mapping_tsv(dataset),
-        "pathway_coverage.tsv": _pathway_coverage_tsv(pathways),
-        "module_completion.tsv": _module_completion_tsv(modules),
-        "analysis_report.md": analysis_report,
-        "render_input.json": serialize_render_input(render_input),
-    }
+    files: dict[str, str] = {}
+    if isinstance(evidence, AnnotationDataset):
+        files.update(
+            {
+                "normalized_annotations.tsv": _normalized_annotations_tsv(evidence),
+                "protein_ko_mapping.tsv": _protein_ko_mapping_tsv(evidence),
+            }
+        )
+    files.update(
+        {
+            "unique_accepted_kos.tsv": _unique_accepted_kos_tsv(evidence),
+            "pathway_coverage.tsv": _pathway_coverage_tsv(pathways),
+            "module_completion.tsv": _module_completion_tsv(modules),
+            "analysis_report.md": analysis_report,
+            "render_input.json": serialize_render_input(render_input),
+        }
+    )
     if pathway_ranking is not None:
         files["pathway_ranking.tsv"] = _pathway_ranking_tsv(pathway_ranking.rows)
         files["ko_pathway_relationships.tsv"] = _ko_pathway_relationships_tsv(
@@ -147,7 +166,7 @@ def write_analysis_bundle(
             module_ranking.relationships
         )
     files["bundle_manifest.json"] = _manifest(
-        dataset,
+        evidence,
         (*files, "bundle_manifest.json"),
         stage="analysis",
         manifest_path_mode=manifest_path_mode,
@@ -224,31 +243,29 @@ def _protein_ko_mapping_tsv(dataset: AnnotationDataset) -> str:
     )
 
 
-def _module_completion_tsv(modules: tuple[PairedModuleEvaluation, ...]) -> str:
-    rows: list[tuple[object, ...]] = []
-    for pair in modules:
-        selected = (
-            (pair.strict,) if not pair.strict_to_lenient_changed else (pair.strict, pair.lenient)
+def _unique_accepted_kos_tsv(evidence: KoAnalysisEvidence) -> str:
+    ko_ids = analysis_accepted_ko_ids(evidence)
+    return _tsv(("ko_id",), ((ko_id,) for ko_id in ko_ids))
+
+
+def _module_completion_tsv(modules: tuple[ModuleEvaluationResult, ...]) -> str:
+    rows = [
+        (
+            result.module_id,
+            result.module_name or "",
+            result.evaluation_status.value,
+            "" if result.is_complete is None else str(result.is_complete).lower(),
+            "" if result.block_coverage is None else result.block_coverage,
+            result.completed_required_blocks,
+            result.evaluable_required_blocks,
+            result.required_block_count,
         )
-        for result in selected:
-            rows.append(
-                (
-                    result.module_id,
-                    result.module_name or "",
-                    result.evidence_mode.value,
-                    result.evaluation_status.value,
-                    "" if result.is_complete is None else str(result.is_complete).lower(),
-                    "" if result.block_coverage is None else result.block_coverage,
-                    result.completed_required_blocks,
-                    result.evaluable_required_blocks,
-                    result.required_block_count,
-                )
-            )
+        for result in modules
+    ]
     return _tsv(
         (
             "module_id",
             "module_name",
-            "evidence_mode",
             "evaluation_status",
             "exact_completion",
             "block_coverage",
@@ -267,7 +284,6 @@ def _pathway_coverage_tsv(pathways: tuple[PathwayCoverageResult, ...]) -> str:
             result.pathway_name,
             result.pathway_id[-5:],
             result.reference_namespace.value,
-            result.evidence_mode.value,
             result.evaluation_status.value,
             result.detected_unique_ko_count,
             result.reference_unique_ko_count,
@@ -281,7 +297,6 @@ def _pathway_coverage_tsv(pathways: tuple[PathwayCoverageResult, ...]) -> str:
             "pathway_name",
             "pathway_number",
             "reference_namespace",
-            "evidence_mode",
             "evaluation_status",
             "detected_unique_ko_count",
             "reference_unique_ko_count",
@@ -386,7 +401,7 @@ def _ko_module_relationships_tsv(rows: tuple[KoModuleRelationship, ...]) -> str:
 
 
 def _manifest(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     files: tuple[str, ...],
     *,
     stage: str,
@@ -395,7 +410,7 @@ def _manifest(
     analysis_execution: AnalysisExecutionProvenance | None = None,
 ) -> str:
     input_paths = tuple(
-        sorted({source.input_path for source in dataset.sources if source.input_path is not None})
+        sorted({source.input_path for source in evidence.sources if source.input_path is not None})
     )
     manifest_paths = (
         input_paths
@@ -410,7 +425,19 @@ def _manifest(
             "source_count": len(input_paths),
             "values": manifest_paths,
         },
-        "analysis_unit": dataset.analysis_unit.value,
+        "analysis_unit": evidence.analysis_unit.value,
+        "annotation_retention": (
+            evidence.annotation_retention
+            if isinstance(evidence, KoAnalysisProjection)
+            else AnnotationRetention.FULL_RECORDS.value
+        ),
+        "record_level_evidence_retained": isinstance(evidence, AnnotationDataset),
+        "protein_ko_mapping_available": isinstance(evidence, AnnotationDataset),
+        "duplicate_conflict_accounting": (
+            evidence.duplicate_conflict_accounting
+            if isinstance(evidence, KoAnalysisProjection)
+            else "evaluated"
+        ),
         "files": list(files),
     }
     if render_input_schema is not None:
@@ -461,8 +488,21 @@ def _bundle_paths(
     directory = str(output_directory)
     return OutputBundle(
         output_directory=directory,
-        normalized_annotations=str(output_directory / "normalized_annotations.tsv"),
-        protein_ko_mapping=str(output_directory / "protein_ko_mapping.tsv"),
+        normalized_annotations=(
+            str(output_directory / "normalized_annotations.tsv")
+            if "normalized_annotations.tsv" in files
+            else None
+        ),
+        protein_ko_mapping=(
+            str(output_directory / "protein_ko_mapping.tsv")
+            if "protein_ko_mapping.tsv" in files
+            else None
+        ),
+        unique_accepted_kos=(
+            str(output_directory / "unique_accepted_kos.tsv")
+            if "unique_accepted_kos.tsv" in files
+            else None
+        ),
         module_ranking=(
             str(output_directory / "module_ranking.tsv") if include_module_ranking else None
         ),

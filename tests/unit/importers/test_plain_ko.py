@@ -9,7 +9,6 @@ from kegg_mcp.domain import (
     DiagnosticCode,
     ErrorCode,
     EvidenceField,
-    EvidenceMode,
     KeggMcpError,
     NormalizedStatus,
     build_ko_evidence_view,
@@ -51,8 +50,7 @@ def test_plain_import_preserves_raw_rows_and_reports_invalid_and_duplicates() ->
     assert dataset.import_report.duplicate_count == 1
     assert dataset.import_report.count_for(NormalizedStatus.INVALID) == 1
     assert view.accepted_kos == ("K00001", "K00002")
-    assert select_ko_ids(view, EvidenceMode.STRICT) == ("K00001", "K00002")
-    assert select_ko_ids(view, EvidenceMode.LENIENT) == ("K00001", "K00002")
+    assert select_ko_ids(view) == ("K00001", "K00002")
     assert dataset.analysis_unit is AnalysisUnit.ISOLATE_PROTEOME
 
 

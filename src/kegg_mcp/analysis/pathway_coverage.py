@@ -11,17 +11,19 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     AnalysisUnit,
-    AnnotationDataset,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     KNumber,
     SourceProvenance,
-    build_ko_evidence_view,
-    select_ko_ids,
     validate_utf8_text,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.domain.projections import (
+    KoAnalysisEvidence,
+    analysis_accepted_ko_ids,
+    analysis_assignment_count,
+    analysis_decision_policy,
+)
 from kegg_mcp.kegg.contracts import (
     GetResult,
     KeggBatchProvenance,
@@ -36,7 +38,7 @@ from kegg_mcp.kegg.contracts import (
 )
 
 PATHWAY_COVERAGE_METHOD = "unique_detected_kos_over_unique_reference_kos"
-PATHWAY_COVERAGE_VERSION = "2"
+PATHWAY_COVERAGE_VERSION = "3"
 
 _MAX_PROVENANCE_BATCHES = 64
 _MAX_DATASET_SOURCES = 128
@@ -193,7 +195,6 @@ class PathwayCoverageParameters(FrozenModel):
     """Serializable request parameters for one pathway coverage calculation."""
 
     reference_namespace: PathwayReferenceNamespace = PathwayReferenceNamespace.KO
-    evidence_mode: EvidenceMode = EvidenceMode.STRICT
     input_context: PathwayInputContext = Field(default_factory=PathwayInputContext)
     allow_global_or_overview: bool = False
 
@@ -201,7 +202,7 @@ class PathwayCoverageParameters(FrozenModel):
 class PathwayCoverageLimits(FrozenModel):
     """Hard input and output bounds for pathway reference construction and coverage."""
 
-    max_input_records: int = Field(default=500_000, strict=True, gt=0, le=1_000_000)
+    max_input_records: int = Field(default=20_000_000, strict=True, gt=0, le=20_000_000)
     max_input_kos: int = Field(default=100_000, strict=True, gt=0, le=1_000_000)
     max_reference_kos: int = Field(default=100_000, strict=True, gt=0, le=1_000_000)
     max_relationship_rows: int = Field(default=200_000, strict=True, gt=0, le=2_000_000)
@@ -313,7 +314,7 @@ class PathwayCoverageResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:pathway-coverage-result:2",
+            "$id": "urn:kegg-mcp:schema:pathway-coverage-result:3",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -334,7 +335,6 @@ class PathwayCoverageResult(FrozenModel):
     sources: Annotated[
         tuple[SourceProvenance, ...], Field(min_length=1, max_length=_MAX_DATASET_SOURCES)
     ]
-    evidence_mode: EvidenceMode
     evaluation_status: PathwayCoverageStatus
     input_record_count: NonNegativeCount
     input_unique_ko_count: NonNegativeCount
@@ -354,7 +354,7 @@ class PathwayCoverageResult(FrozenModel):
     reference_link_provenance: ReferenceProvenance
     reference_metadata_provenance: ReferenceProvenance
     calculation_method: Literal["unique_detected_kos_over_unique_reference_kos"]
-    calculation_version: Literal["2"]
+    calculation_version: Literal["3"]
     parameters: PathwayCoverageParameters
     limits: PathwayCoverageLimits
     warnings: Annotated[tuple[PathwayCoverageWarning, ...], Field(max_length=12)]
@@ -474,8 +474,6 @@ class PathwayCoverageResult(FrozenModel):
             raise ValueError("exclusion preview summary is inconsistent")
         if self.reference_namespace is not self.parameters.reference_namespace:
             raise ValueError("result namespace must match the recorded request")
-        if self.evidence_mode is not self.parameters.evidence_mode:
-            raise ValueError("result evidence mode must match the recorded request")
         if self.reference_namespace is PathwayReferenceNamespace.ORGANISM:
             gene_context = self.parameters.input_context.organism_gene_context
             if (
@@ -675,17 +673,16 @@ def build_pathway_reference(
 
 def evaluate_pathway_coverage(
     reference: PathwayKoReference,
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     parameters: PathwayCoverageParameters | None = None,
     limits: PathwayCoverageLimits | None = None,
 ) -> PathwayCoverageResult:
     """Calculate descriptive pathway KO coverage from immutable annotation evidence."""
     request = parameters or PathwayCoverageParameters()
     bounds = limits or PathwayCoverageLimits()
-    _validate_evaluation_request(reference, dataset, request, bounds)
+    _validate_evaluation_request(reference, evidence, request, bounds)
 
-    evidence = build_ko_evidence_view(dataset)
-    selected = tuple(select_ko_ids(evidence, request.evidence_mode))
+    selected = analysis_accepted_ko_ids(evidence)
     if len(selected) > bounds.max_input_kos:
         _fail_limit("selected_ko_count", len(selected), "max_input_kos", bounds.max_input_kos)
 
@@ -702,7 +699,7 @@ def evaluate_pathway_coverage(
         metadata_provenance=reference.metadata_provenance,
         exclusion_count=len(reference.exclusions),
         duplicate_count=reference.duplicate_relationship_count,
-        analysis_unit=dataset.analysis_unit,
+        analysis_unit=evidence.analysis_unit,
         detected_truncated=detected_truncated,
         missing_truncated=missing_truncated,
         exclusions_truncated=exclusions_truncated,
@@ -716,19 +713,18 @@ def evaluate_pathway_coverage(
         reference_namespace=reference.reference_namespace,
         reference_scope=reference.reference_scope,
         reference_kegg_organism_code=reference.kegg_organism_code,
-        dataset_id=dataset.dataset_id,
-        decision_policy=evidence.policy,
-        analysis_unit=dataset.analysis_unit,
-        taxon_id=dataset.taxon_id,
-        kegg_organism_code=dataset.kegg_organism_code,
-        sources=dataset.sources,
-        evidence_mode=request.evidence_mode,
+        dataset_id=evidence.dataset_id,
+        decision_policy=analysis_decision_policy(evidence),
+        analysis_unit=evidence.analysis_unit,
+        taxon_id=evidence.taxon_id,
+        kegg_organism_code=evidence.kegg_organism_code,
+        sources=evidence.sources,
         evaluation_status=(
             PathwayCoverageStatus.EVALUATED
             if denominator_count > 0
             else PathwayCoverageStatus.NOT_EVALUABLE
         ),
-        input_record_count=len(dataset.records),
+        input_record_count=analysis_assignment_count(evidence),
         input_unique_ko_count=len(selected),
         detected_unique_ko_count=len(detected),
         missing_unique_ko_count=len(missing),
@@ -956,7 +952,7 @@ def _broad_entry_scope_evidence(
 
 def _validate_evaluation_request(
     reference: PathwayKoReference,
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     parameters: PathwayCoverageParameters,
     limits: PathwayCoverageLimits,
 ) -> None:
@@ -970,10 +966,11 @@ def _validate_evaluation_request(
                 SafeDetail(name="reference_namespace", value=reference.reference_namespace.value),
             ),
         )
-    if len(dataset.records) > limits.max_input_records:
+    assignment_count = analysis_assignment_count(evidence)
+    if assignment_count > limits.max_input_records:
         _fail_limit(
             "input_record_count",
-            len(dataset.records),
+            assignment_count,
             "max_input_records",
             limits.max_input_records,
         )
@@ -998,10 +995,10 @@ def _validate_evaluation_request(
             "max_reference_exclusions",
             limits.max_reference_exclusions,
         )
-    if len(dataset.sources) > limits.max_dataset_sources:
+    if len(evidence.sources) > limits.max_dataset_sources:
         _fail_limit(
             "dataset_source_count",
-            len(dataset.sources),
+            len(evidence.sources),
             "max_dataset_sources",
             limits.max_dataset_sources,
         )
@@ -1032,12 +1029,12 @@ def _validate_evaluation_request(
             "Set allow_global_or_overview only after reviewing the broad-reference warning.",
         )
     if reference.reference_namespace is PathwayReferenceNamespace.ORGANISM:
-        _validate_organism_context(reference, dataset, parameters)
+        _validate_organism_context(reference, evidence, parameters)
 
 
 def _validate_organism_context(
     reference: PathwayKoReference,
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     parameters: PathwayCoverageParameters,
 ) -> None:
     context = parameters.input_context
@@ -1047,16 +1044,16 @@ def _validate_organism_context(
             "Organism pathway coverage requires bounded organism gene context.",
             "Provide an OrganismGeneContext for the exact KEGG organism code.",
         )
-    if dataset.analysis_unit not in _ORGANISM_ANALYSIS_UNITS:
+    if evidence.analysis_unit not in _ORGANISM_ANALYSIS_UNITS:
         _fail_configuration(
             "Organism pathway coverage is limited to isolate genome or isolate proteome data.",
             "Use a KO or map reference for pooled, MAG, mixed, or unknown analysis units.",
-            details=(SafeDetail(name="analysis_unit", value=dataset.analysis_unit.value),),
+            details=(SafeDetail(name="analysis_unit", value=evidence.analysis_unit.value),),
         )
     expected_code = reference.kegg_organism_code
     if (
         expected_code is None
-        or dataset.kegg_organism_code != expected_code
+        or evidence.kegg_organism_code != expected_code
         or gene_context.kegg_organism_code != expected_code
     ):
         _fail_configuration(

@@ -34,10 +34,9 @@ from kegg_mcp.analysis.contracts import (
     ModuleParseResult,
     ModuleToken,
     ModuleTokenKind,
-    PairedModuleEvaluation,
     SourceSpan,
 )
-from kegg_mcp.domain import DecisionPolicyReference, EvidenceMode
+from kegg_mcp.domain import DecisionPolicyReference
 from kegg_mcp.kegg.contracts import (
     PARSER_VERSION,
     PUBLIC_KEGG_ENDPOINT_LABEL,
@@ -97,7 +96,6 @@ def _ko(value: str, start: int = 0) -> ModuleExpression:
 
 def _evaluation(
     *,
-    mode: EvidenceMode,
     completed: int,
     evidence_ko_count: int,
 ) -> ModuleEvaluationResult:
@@ -123,7 +121,6 @@ def _evaluation(
         module_name=None,
         dataset_id="dataset-1",
         decision_policy=DecisionPolicyReference(name="test_policy", version="1"),
-        evidence_mode=mode,
         evidence_ko_count=evidence_ko_count,
         evaluation_status=(
             ModuleEvaluationStatus.COMPLETE if is_complete else ModuleEvaluationStatus.INCOMPLETE
@@ -137,7 +134,6 @@ def _evaluation(
         missing_blocks_preview=missing,
         not_evaluable_blocks_preview=(),
         optional_components=(),
-        uncertain_support=(),
         unresolved_references=(),
         calculation_method=CalculationMethodReference(
             name=MODULE_CALCULATION_METHOD,
@@ -283,7 +279,7 @@ def test_retrieved_definition_provenance_requires_sanitized_metadata() -> None:
 
 
 def test_evaluation_contract_rejects_partial_denominator_coverage() -> None:
-    complete = _evaluation(mode=EvidenceMode.STRICT, completed=1, evidence_ko_count=1)
+    complete = _evaluation(completed=1, evidence_ko_count=1)
     payload = complete.model_dump()
     payload.update(
         evaluation_status=ModuleEvaluationStatus.PARTIALLY_EVALUABLE,
@@ -298,34 +294,17 @@ def test_evaluation_contract_rejects_partial_denominator_coverage() -> None:
         ModuleEvaluationResult.model_validate(payload)
 
 
-def test_paired_contract_tracks_outcome_change_not_unused_uncertain_evidence() -> None:
-    strict = _evaluation(mode=EvidenceMode.STRICT, completed=0, evidence_ko_count=0)
-    unchanged_lenient = _evaluation(mode=EvidenceMode.LENIENT, completed=0, evidence_ko_count=1)
-    unchanged = PairedModuleEvaluation(
-        strict=strict,
-        lenient=unchanged_lenient,
-        strict_to_lenient_changed=False,
-        newly_completed_block_indexes=(),
-    )
+def test_evaluation_contract_records_one_accepted_unique_ko_evidence_count() -> None:
+    result = _evaluation(completed=1, evidence_ko_count=1)
 
-    changed_lenient = _evaluation(mode=EvidenceMode.LENIENT, completed=1, evidence_ko_count=1)
-    changed = PairedModuleEvaluation(
-        strict=strict,
-        lenient=changed_lenient,
-        strict_to_lenient_changed=True,
-        newly_completed_block_indexes=(1,),
-    )
-
-    assert not unchanged.strict_to_lenient_changed
-    assert changed.newly_completed_block_indexes == (1,)
+    assert result.evidence_ko_count == 1
 
 
 @pytest.mark.parametrize(
     ("model", "schema_id"),
     [
         (ModuleParseResult, "urn:kegg-mcp:schema:module-parse-result:1"),
-        (ModuleEvaluationResult, "urn:kegg-mcp:schema:module-evaluation-result:2"),
-        (PairedModuleEvaluation, "urn:kegg-mcp:schema:paired-module-evaluation:2"),
+        (ModuleEvaluationResult, "urn:kegg-mcp:schema:module-evaluation-result:3"),
     ],
 )
 def test_public_contract_schemas_are_versioned(model: type[object], schema_id: str) -> None:

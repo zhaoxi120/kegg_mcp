@@ -36,6 +36,11 @@ The `tests/skill/` suite verifies that:
 - a card result ID is used only in-session to create an explicit durable selected-reference bundle;
 - high-level annotation calls keep context in exactly one input branch, retained dataset calls use
   a result-ID-only source, and inline resource recovery never also supplies a file path;
+- every MODULE, pathway, ranking, comparison, and rendering route uses only sorted unique accepted
+  K numbers;
+- the explicit large-file retention route is selected only for
+  `analyze_ko_annotations` plus a DeepKOALA detailed `annotations.file_path`, reports its lossy
+  evidence boundary, and never implies that local projection capacity raises KEGG budgets;
 - a successful DeepKOALA handoff rejected by Core's typed allowed-root policy uses the companion's
   bounded resource fallback without rerunning annotation, copying the CSV, or weakening path policy;
 - Mapper/Syntax handoff never claims upload or execution;
@@ -86,6 +91,7 @@ candidate:
 | DeepKOALA path rejected by Core allowed-root policy | On `ANALYSIS_CONFIGURATION_INVALID` with `A local handoff path is outside the configured allowed roots.` and `safe_details` containing `field="file_path"`, keep the successful job and read its bounded `annotations_resource_uri`. Validate the versioned direct or paged envelope, reconstruct byte-identical strict UTF-8, and pass exactly `annotations.text` with unchanged format and source. The same message with `field="output_directory"` must not trigger this route. Do not also pass `file_path`, rerun annotation, copy the CSV, or alter allowed roots. |
 | Explicit GPU annotation request | Use `device=cuda` or `device=mps` only when status both allows that explicit backend and reports it available; otherwise stop instead of silently substituting CPU or automatic device selection. |
 | DeepKOALA detailed CSV | Use `kegg-ko-analysis` and preserve source evidence and model provenance. |
+| Existing large DeepKOALA detailed CSV requiring analysis but not record export | Use only `analyze_ko_annotations` with `annotations.file_path`, `input_format="deepkoala_detailed"`, and explicit `annotation_retention="unique_accepted_ko_projection"`. Report that only sorted unique accepted K numbers, aggregate counts, provenance, and bounded diagnostics are retained. Do not use the mode for inline/resource-fallback input or normalization. Existing KEGG budgets still apply; prefer explicit targets or independently meaningful analysis units when automatic mapping would exceed them. |
 | Plain K-number column | Normalize once, then run requested MODULE/pathway analysis through the core server. |
 | Two KO sets | Report deterministic set and shared-reference differences without statistical claims. |
 | Activity claim from one K number | Refuse the activity inference and explain the evidence boundary. |

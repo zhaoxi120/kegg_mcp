@@ -17,6 +17,15 @@ from kegg_mcp.domain.annotations import (
     validate_logical_input_uri,
     validate_utf8_text,
 )
+from kegg_mcp.domain.projections import (
+    MAX_PROJECTION_COLUMNS,
+    MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
+    MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
+    MAX_PROJECTION_FIELD_LENGTH,
+    MAX_PROJECTION_INPUT_BYTES,
+    MAX_PROJECTION_INPUT_ROWS,
+    MAX_PROJECTION_UNIQUE_KO_IDS,
+)
 
 MAX_IMPORT_LIMIT_VALUE = 2_147_483_647
 MAX_IMPORT_FIELD_LENGTH = MAX_EVIDENCE_STRING_CHARACTERS
@@ -51,6 +60,53 @@ class ImportLimits(FrozenModel):
     max_rows: ImportLimitValue
     max_columns: ImportLimitValue
     max_field_length: ImportFieldLength
+
+
+class ProjectionImportLimits(FrozenModel):
+    """Deployment-owned bounds for streaming unique-KO analysis projection."""
+
+    max_bytes: int = Field(
+        default=MAX_PROJECTION_INPUT_BYTES,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_INPUT_BYTES,
+    )
+    max_rows: int = Field(
+        default=MAX_PROJECTION_INPUT_ROWS,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_INPUT_ROWS,
+    )
+    max_expanded_assignments: int = Field(
+        default=MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_EXPANDED_ASSIGNMENTS,
+    )
+    max_unique_ko_ids: int = Field(
+        default=MAX_PROJECTION_UNIQUE_KO_IDS,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_UNIQUE_KO_IDS,
+    )
+    max_columns: int = Field(
+        default=MAX_PROJECTION_COLUMNS,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_COLUMNS,
+    )
+    max_field_length: int = Field(
+        default=MAX_PROJECTION_FIELD_LENGTH,
+        strict=True,
+        gt=0,
+        le=MAX_PROJECTION_FIELD_LENGTH,
+    )
+    max_diagnostic_preview: int = Field(
+        default=MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
+        strict=True,
+        ge=0,
+        le=MAX_PROJECTION_DIAGNOSTIC_PREVIEW,
+    )
 
 
 class SourceProvenanceInput(FrozenModel):

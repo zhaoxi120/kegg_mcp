@@ -162,6 +162,14 @@ class RendererService:
                 "taxon_id": source.document.dataset.taxon_id,
                 "kegg_organism_code": source.document.dataset.kegg_organism_code,
                 "decision_policy": source.document.decision_policy.model_dump(mode="json"),
+                "annotation_retention": (
+                    source.document.execution.analysis.annotation_retention.value
+                ),
+                "record_level_evidence_retained": (
+                    source.document.execution.analysis.annotation_retention.value
+                    == "full_records"
+                ),
+                "accepted_unique_ko_count": len(source.document.evidence.accepted_ko_ids),
                 "targets": target_provenance,
             },
             output_directory=output,
@@ -219,7 +227,6 @@ async def _render_pathway_target(
             "kind": "pathway",
             "reference_namespace": target.reference_namespace.value,
             "reference_scope": target.reference_scope.value,
-            "evidence_mode": target.evidence_mode.value,
             "coverage_numerator": target.coverage_numerator,
             "coverage_denominator": target.coverage_denominator,
             "coverage_ratio": target.coverage_ratio,
@@ -272,15 +279,13 @@ def _render_module_target(
         provenance={
             "target_id": target_id,
             "kind": "module",
-            "strict_exact_completion": scene.strict_exact_completion,
-            "strict_block_coverage": scene.strict_block_coverage,
-            "lenient_exact_completion": scene.lenient_exact_completion,
-            "lenient_block_coverage": scene.lenient_block_coverage,
+            "evaluation_status": scene.status,
+            "exact_completion": scene.exact_completion,
+            "block_coverage": scene.block_coverage,
             "parser_name": target.parser_name,
             "parser_version": target.parser_version,
             "resolver_version": target.resolver_version,
-            "strict_calculation_method": target.strict.calculation_method.model_dump(mode="json"),
-            "lenient_calculation_method": target.lenient.calculation_method.model_dump(mode="json"),
+            "calculation_method": target.completion.calculation_method.model_dump(mode="json"),
             "reference_retrieval_provenance": [
                 safe_batch_provenance(item) for item in target.reference_retrieval_provenance
             ],

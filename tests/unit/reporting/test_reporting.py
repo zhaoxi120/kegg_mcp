@@ -17,18 +17,24 @@ from kegg_mcp.analysis.functional_comparison import (
     compare_module_graphs,
     compare_pathway_references,
 )
-from kegg_mcp.analysis.module_evaluation import evaluate_module_pair
+from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
 from kegg_mcp.analysis.pathway_coverage import (
-    PathwayCoverageParameters,
     PathwayKoReference,
     PathwayReferenceNamespace,
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
 from kegg_mcp.analysis.pathway_ranking import PathwayRankingRow, PathwaySelection
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode, ScoreType
+from kegg_mcp.domain import (
+    CANONICAL_SOURCE_STATUS,
+    AnalysisUnit,
+    AnnotationRetention,
+    KoAnalysisProjection,
+    ScoreType,
+)
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
+from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
@@ -67,7 +73,7 @@ _IMPORT_LIMITS = ImportLimits(
 def _dataset(
     rows: tuple[tuple[str, str, str], ...] = (
         ("accepted-one", "K00001", "accepted"),
-        ("uncertain-two", "K00002", "uncertain"),
+        ("unclassified-two", "K00002", "unclassified"),
         ("rejected-three", "K00003", "rejected"),
     ),
     *,
@@ -112,6 +118,26 @@ def _graph(module_id: str, definition: str, *, name: str | None = None):
                 ),
             ),
         )
+    )
+
+
+def _projection() -> KoAnalysisProjection:
+    dataset = _dataset()
+    return KoAnalysisProjection(
+        dataset_id=dataset.dataset_id,
+        accepted_ko_ids=("K00001",),
+        input_bytes=200,
+        input_rows=dataset.import_report.input_rows,
+        expanded_assignments=dataset.import_report.emitted_records,
+        skipped_rows=dataset.import_report.skipped_rows,
+        source_columns=("name", "predict_label", "probability", "threshold", "annotate"),
+        status_counts=dataset.import_report.status_counts,
+        diagnostic_count=0,
+        decision_policy=dataset.import_report.decision_policy,
+        sources=dataset.sources,
+        analysis_unit=dataset.analysis_unit,
+        taxon_id=dataset.taxon_id,
+        kegg_organism_code=dataset.kegg_organism_code,
     )
 
 
@@ -160,18 +186,13 @@ def _complete_report_input() -> ReportInput:
     dataset = _dataset()
     module_graph = _graph("M00001", "K00001 K00002", name="Unicode module β")
     unresolved_graph = _graph("M00002", "M99999")
-    module_pairs = (
-        evaluate_module_pair(module_graph, dataset),
-        evaluate_module_pair(unresolved_graph, dataset),
+    module_results = (
+        evaluate_module(module_graph, dataset),
+        evaluate_module(unresolved_graph, dataset),
     )
     reference = _reference(stale=True)
     pathway_results = (
         evaluate_pathway_coverage(reference, dataset),
-        evaluate_pathway_coverage(
-            reference,
-            dataset,
-            PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT),
-        ),
         evaluate_pathway_coverage(_reference("ko00020", ko_ids=()), dataset),
     )
     second = _dataset(
@@ -184,7 +205,7 @@ def _complete_report_input() -> ReportInput:
     )
     return ReportInput(
         dataset=dataset,
-        module_evaluations=module_pairs,
+        module_evaluations=module_results,
         pathway_coverages=pathway_results,
         ko_comparison=summarize_ko_comparison(compare_ko_datasets(inputs)),
         module_comparison=compare_module_graphs(inputs, (module_graph,)),
@@ -244,7 +265,7 @@ def test_canonical_artifacts_round_trip_with_exact_sizes_and_provenance() -> Non
     assert structured.report == report
     assert structured.limits == first.limits
     assert structured.report.pathway_coverages[0].reference_link_provenance[0].is_stale
-    assert structured.report.module_evaluations[0].strict.module_id == "M00001"
+    assert structured.report.module_evaluations[0].module_id == "M00001"
     assert RenderedReport.model_validate_json(first.model_dump_json()) == first
 
 
@@ -288,15 +309,14 @@ def test_pathway_ranking_falls_back_to_requested_top_n_without_execution_provena
     assert "| 2 | `ko00020` | 1 | 1 | no |" in summary
 
 
-def test_markdown_distinguishes_evidence_modes_metrics_and_claim_boundaries() -> None:
+def test_markdown_distinguishes_metrics_and_claim_boundaries() -> None:
     summary = _artifact(render_report(_complete_report_input()), ReportSection.SUMMARY).content
     lower = summary.lower()
 
     assert "exact completion is boolean" in lower
     assert "project block coverage" in lower
     assert "not an official kegg completeness percentage" in lower
-    assert "strict" in lower
-    assert "lenient" in lower
+    assert "accepted-ko" in lower
     assert "not_evaluable" in lower
     assert "metagenomic_community" in lower
     assert "pooled encoded potential" in lower
@@ -352,7 +372,7 @@ def test_markdown_encodes_untrusted_html_links_images_and_backticks() -> None:
     report = ReportInput(
         dataset=dataset,
         module_evaluations=(
-            evaluate_module_pair(_graph("M00009", "K00001", name=module_name), dataset),
+            evaluate_module(_graph("M00009", "K00001", name=module_name), dataset),
         ),
         pathway_coverages=(
             evaluate_pathway_coverage(
@@ -466,6 +486,38 @@ def test_annotation_csv_preserves_order_nested_evidence_and_formula_safety() -> 
     assert csv_artifact.truncated is False
 
 
+def test_projection_report_retains_only_sorted_unique_accepted_kos() -> None:
+    projection = _projection()
+    rendered = render_report(ReportInput(dataset=projection))
+    rows = list(
+        csv.DictReader(
+            io.StringIO(_artifact(rendered, ReportSection.ANNOTATIONS).content, newline="")
+        )
+    )
+    structured = StructuredReport.model_validate_json(
+        _artifact(rendered, ReportSection.STRUCTURED).content
+    )
+    summary = _artifact(rendered, ReportSection.SUMMARY).content
+
+    assert rows == [{"ko_id": "K00001", "normalized_status": "accepted"}]
+    assert structured.report.dataset == projection
+    assert projection.record_level_evidence_retained is False
+    assert projection.protein_ko_mapping_available is False
+    assert projection.duplicate_conflict_accounting == "not_evaluated"
+    assert "Record-level evidence" in summary
+    assert "Normalized assignment counts" in summary
+    assert "Normalized record counts" not in summary
+
+
+def test_report_input_rejects_dataset_retention_mismatched_with_execution() -> None:
+    full_execution = AnalysisExecutionProvenance.model_construct(
+        annotation_retention=AnnotationRetention.FULL_RECORDS
+    )
+
+    with pytest.raises(ValidationError, match="dataset retention"):
+        ReportInput(dataset=_projection(), execution=full_execution)
+
+
 def test_csv_byte_limit_fails_instead_of_returning_a_lossy_prefix() -> None:
     report = ReportInput(dataset=_dataset())
 
@@ -503,7 +555,7 @@ def test_contracts_reject_output_paths_and_schemas_exclude_claim_fields() -> Non
     )
 
 
-def test_report_input_requires_primary_dataset_identity_and_unique_mode_targets() -> None:
+def test_report_input_requires_primary_dataset_identity_and_unique_targets() -> None:
     first = _dataset()
     second = _dataset((("other", "K00001", "accepted"),))
     reference = _reference()

@@ -26,13 +26,11 @@ def test_analysis_public_api_exports_milestone_four_workflows_and_contracts() ->
         "PathwayRankingResult",
         "PathwayRankingRow",
         "PathwaySelection",
-        "PairedModuleEvaluation",
         "build_pathway_reference",
         "compare_ko_datasets",
         "compare_module_graphs",
         "compare_pathway_references",
         "evaluate_module",
-        "evaluate_module_pair",
         "evaluate_pathway_coverage",
         "parse_module_definition",
         "rank_pathways",
@@ -48,26 +46,26 @@ def test_analysis_public_api_exports_milestone_four_workflows_and_contracts() ->
 
 def test_milestone_four_result_schemas_have_stable_identifiers() -> None:
     assert analysis.KoSetComparisonDetail.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:ko-set-comparison-detail:1"
+        "urn:kegg-mcp:schema:ko-set-comparison-detail:2"
     )
     assert analysis.ModuleComparisonResult.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:module-comparison-result:2"
+        "urn:kegg-mcp:schema:module-comparison-result:3"
     )
     assert analysis.PathwayCoverageResult.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:pathway-coverage-result:2"
+        "urn:kegg-mcp:schema:pathway-coverage-result:3"
     )
     assert analysis.PathwayComparisonResult.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:pathway-comparison-result:1"
+        "urn:kegg-mcp:schema:pathway-comparison-result:2"
     )
     assert analysis.PathwaySelection.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:pathway-selection:2"
     )
     assert analysis.PathwayRankingResult.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:pathway-ranking-result:1"
+        "urn:kegg-mcp:schema:pathway-ranking-result:2"
     )
     assert analysis.ModuleSelection.model_json_schema()["$id"] == (
         "urn:kegg-mcp:schema:module-selection:2"
     )
     assert analysis.ModuleRankingResult.model_json_schema()["$id"] == (
-        "urn:kegg-mcp:schema:module-ranking-result:1"
+        "urn:kegg-mcp:schema:module-ranking-result:2"
     )

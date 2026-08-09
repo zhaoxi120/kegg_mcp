@@ -9,7 +9,7 @@ from xml.etree import ElementTree
 
 import pytest
 from kegg_mcp.analysis import PathwayReferenceScope
-from kegg_mcp.domain import AnalysisUnit, EvidenceMode
+from kegg_mcp.domain import AnalysisUnit
 from kegg_mcp.services.render_contracts import PathwayRenderTarget, RenderabilityStatus
 from PIL import Image
 
@@ -19,23 +19,29 @@ from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
 from kegg_render_mcp.pathway_scene import construct_pathway_scene
 from kegg_render_mcp.raster import PNG_SIGNATURE, render_pathway_png, validate_png
 from kegg_render_mcp.render_input import load_render_input
-from kegg_render_mcp.svg import ACCEPTED_COLOR, UNCERTAIN_COLOR, render_pathway_svg
+from kegg_render_mcp.svg import ACCEPTED_COLOR, render_pathway_svg
 
 
 @pytest.mark.asyncio
-async def test_accepted_precedes_uncertain_on_multi_ko_graphic(
+async def test_unique_accepted_kos_overlay_each_matching_graphic_once(
     render_input_file: Path,
     runtime_config: RendererRuntimeConfig,
     synthetic_provider: SyntheticProvider,
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
+    target = loaded.pathway("ko00010")
+    assert target.coverage_numerator == 2
+    assert target.detected_ko_ids == ("K00001", "K00002")
     scene = await construct_pathway_scene(
         loaded,
-        loaded.pathway("ko00010"),
+        target,
         synthetic_provider,
         limits=runtime_config.limits,
     )
-    assert tuple(item.state for item in scene.overlays) == ("uncertain", "accepted")
+    assert tuple(item.ko_ids for item in scene.overlays) == (
+        ("K00001", "K00002"),
+        ("K00002",),
+    )
     assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
     assert "not pathway presence" in scene.caption
     assert "ko00010 - Synthetic pathway" in scene.caption
@@ -44,25 +50,6 @@ async def test_accepted_precedes_uncertain_on_multi_ko_graphic(
     assert scene.mapped_detected_ko_ids == ("K00001", "K00002")
     assert scene.box_overlay_count == 2
     assert scene.polyline_overlay_count == 0
-
-
-@pytest.mark.asyncio
-async def test_strict_pathway_does_not_color_uncertain_evidence(
-    render_input_file: Path,
-    runtime_config: RendererRuntimeConfig,
-    synthetic_provider: SyntheticProvider,
-) -> None:
-    loaded = load_render_input(str(render_input_file), runtime_config)
-    strict_target = loaded.pathway("ko00010").model_copy(
-        update={"evidence_mode": EvidenceMode.STRICT}
-    )
-    scene = await construct_pathway_scene(
-        loaded,
-        strict_target,
-        synthetic_provider,
-        limits=runtime_config.limits,
-    )
-    assert tuple(item.state for item in scene.overlays) == ("accepted",)
 
 
 @pytest.mark.asyncio
@@ -86,7 +73,9 @@ async def test_pathway_colors_only_authoritative_detected_evidence(
         limits=runtime_config.limits,
     )
 
-    assert tuple(item.state for item in scene.overlays) == ("accepted",)
+    assert tuple(item.ko_ids for item in scene.overlays) == (
+        ("K00001", "K00002"),
+    )
 
 
 @pytest.mark.asyncio
@@ -155,10 +144,8 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
     text = svg.content.decode()
     assert ACCEPTED_COLOR == "#FF0000"
     assert ACCEPTED_COLOR in text
-    assert UNCERTAIN_COLOR in text
     assert "#0057FF" not in text
     assert "Accepted annotation" in text
-    assert "Policy-defined uncertain annotation" in text
     assert "not evidence of biological absence" in text
     assert "<script" not in text.lower()
     assert "javascript:" not in text.lower()
@@ -231,8 +218,9 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     with Image.open(io.BytesIO(png.content)) as rendered:
         rgb = rendered.convert("RGB")
         assert rgb.getpixel((30, 50)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
-        assert rgb.getpixel((130, 78)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
-        assert rgb.getpixel((137, 78)) != tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
+        assert rgb.getpixel((130, 78)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((137, 78)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((137, 85)) != tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
         accepted_box = rgb.crop((34, 41, 86, 59))
         accepted_bytes = accepted_box.tobytes()
         assert any(
@@ -326,19 +314,12 @@ async def test_renderable_global_target_uses_tagged_polyline_overlays(
     )
 
     assert provider.calls == [("ko01100", "image"), ("ko01100", "kgml")]
-    assert tuple(overlay.geometry.kind for overlay in scene.overlays) == (
+    assert tuple(overlay.kind for overlay in scene.overlays) == (
         "polyline",
         "polyline",
         "polyline",
         "polyline",
         "polyline",
-    )
-    assert tuple(overlay.state for overlay in scene.overlays) == (
-        "uncertain",
-        "uncertain",
-        "uncertain",
-        "accepted",
-        "accepted",
     )
     assert scene.retained_box_graphic_count == 0
     assert scene.retained_polyline_graphic_count == 5
@@ -355,12 +336,11 @@ async def test_renderable_global_target_uses_tagged_polyline_overlays(
     legend_paths = [path for path in paths if path.attrib.get("stroke-width") == "4"]
     rectangles = [element for element in root.iter() if element.tag.rpartition("}")[2] == "rect"]
     assert len(overlay_paths) == 5
-    assert len(legend_paths) == 2
+    assert len(legend_paths) == 1
     assert len(rectangles) == 1
     assert all(path.attrib["d"].startswith("M ") for path in overlay_paths)
-    assert sum("stroke-dasharray" in path.attrib for path in overlay_paths) == 3
-    assert sum("stroke-dasharray" in path.attrib for path in legend_paths) == 1
-    assert overlay_paths[-1].attrib["stroke"] == ACCEPTED_COLOR
+    assert all("stroke-dasharray" not in path.attrib for path in overlay_paths)
+    assert all(path.attrib["stroke"] == ACCEPTED_COLOR for path in overlay_paths)
 
     png = render_pathway_png(
         scene,
@@ -370,9 +350,9 @@ async def test_renderable_global_target_uses_tagged_polyline_overlays(
     with Image.open(io.BytesIO(png.content)) as rendered:
         rgb = rendered.convert("RGB")
         assert rgb.getpixel((50, 10)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
-        assert rgb.getpixel((12, 130)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
-        assert rgb.getpixel((21, 130)) == (255, 255, 255)
-        assert rgb.getpixel((12, 30)) == tuple(bytes.fromhex(UNCERTAIN_COLOR.removeprefix("#")))
+        assert rgb.getpixel((12, 130)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((21, 130)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
+        assert rgb.getpixel((12, 30)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
         assert rgb.getpixel((60, 30)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
 
 

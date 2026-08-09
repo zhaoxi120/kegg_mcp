@@ -392,7 +392,7 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
             cast(dict[str, object], status.structuredContent["result"])["data"],  # type: ignore[index]
         )
         bounds = cast(dict[str, object], status_data["bounds"])
-        assert status_data["render_input_schema_version"] == "4"
+        assert status_data["render_input_schema_version"] == "5"
         assert "render_input_schema_version" in RendererStatus.model_json_schema()["required"]
         assert bounds["max_results"] == runtime_config.limits.max_results
         assert bounds["max_xml_depth"] == runtime_config.limits.max_xml_depth

@@ -4,7 +4,6 @@ import pytest
 
 from kegg_mcp.analysis.comparison import compare_ko_datasets, summarize_ko_comparison
 from kegg_mcp.analysis.comparison_contracts import (
-    ComparedKoClass,
     ComparisonDatasetInput,
     ComparisonLimits,
     ComparisonPreviewLimits,
@@ -71,9 +70,9 @@ def _three_inputs() -> tuple[ComparisonDatasetInput, ...]:
             ("a2", "K00002", "accepted"),
             ("a3", "K00003", "accepted"),
             ("a9", "K00009", "accepted"),
-            ("a4", "K00004", "uncertain"),
+            ("a4", "K00004", "unclassified"),
             ("a8a", "K00008", "accepted"),
-            ("a8u", "K00008", "uncertain"),
+            ("a8u", "K00008", "unclassified"),
             ("a-rejected", "K00010", "rejected"),
         )
     )
@@ -83,8 +82,8 @@ def _three_inputs() -> tuple[ComparisonDatasetInput, ...]:
             ("b3", "K00003", "accepted"),
             ("b5", "K00005", "accepted"),
             ("b9", "K00009", "accepted"),
-            ("b4", "K00004", "uncertain"),
-            ("b8", "K00008", "uncertain"),
+            ("b4", "K00004", "unclassified"),
+            ("b8", "K00008", "unclassified"),
         )
     )
     third = _dataset(
@@ -92,7 +91,7 @@ def _three_inputs() -> tuple[ComparisonDatasetInput, ...]:
             ("c2", "K00002", "accepted"),
             ("c3", "K00003", "accepted"),
             ("c7", "K00007", "accepted"),
-            ("c6", "K00006", "uncertain"),
+            ("c6", "K00006", "unclassified"),
         )
     )
     return (
@@ -102,34 +101,29 @@ def _three_inputs() -> tuple[ComparisonDatasetInput, ...]:
     )
 
 
-def _partition(detail: KoSetComparisonDetail, ko_class: ComparedKoClass):
-    return next(item for item in detail.partitions if item.ko_class is ko_class)
-
-
 def _warning_codes(detail: KoSetComparisonDetail) -> set[ComparisonWarningCode]:
     return {warning.code for warning in detail.warnings}
 
 
 def test_three_set_comparison_retains_shared_specific_and_partial_memberships() -> None:
     detail = compare_ko_datasets(_three_inputs())
-    accepted = _partition(detail, ComparedKoClass.ACCEPTED)
+    partition = detail.partition
 
-    assert accepted.union_count == 7
-    assert accepted.shared_by_all == ("K00002", "K00003")
-    assert [item.label for item in accepted.set_specific] == ["first", "second", "third"]
-    assert [item.ko_ids for item in accepted.set_specific] == [
+    assert partition.union_count == 7
+    assert partition.shared_by_all == ("K00002", "K00003")
+    assert [item.label for item in partition.set_specific] == ["first", "second", "third"]
+    assert [item.ko_ids for item in partition.set_specific] == [
         ("K00001", "K00008"),
         ("K00005",),
         ("K00007",),
     ]
-    assert len(accepted.partially_shared) == 1
-    assert accepted.partially_shared[0].member_set_indexes == (0, 1)
-    assert accepted.partially_shared[0].member_labels == ("first", "second")
-    assert accepted.partially_shared[0].ko_ids == ("K00009",)
+    assert len(partition.partially_shared) == 1
+    assert partition.partially_shared[0].member_set_indexes == (0, 1)
+    assert partition.partially_shared[0].member_labels == ("first", "second")
+    assert partition.partially_shared[0].ko_ids == ("K00009",)
     assert "K00010" not in {
         ko_id
-        for partition in detail.partitions
-        for item in partition.set_specific
+        for item in detail.partition.set_specific
         for ko_id in item.ko_ids
     }
 
@@ -141,19 +135,14 @@ def test_three_set_comparison_retains_shared_specific_and_partial_memberships() 
     assert KoSetComparisonDetail.model_validate_json(detail.model_dump_json()) == detail
 
 
-def test_uncertain_record_and_lenient_additional_classes_are_not_conflated() -> None:
+def test_nonaccepted_records_never_enter_the_unique_ko_partition() -> None:
     detail = compare_ko_datasets(_three_inputs())
-    uncertain = _partition(detail, ComparedKoClass.UNCERTAIN_RECORD)
-    additional = _partition(detail, ComparedKoClass.LENIENT_ADDITIONAL)
-    lenient = _partition(detail, ComparedKoClass.LENIENT)
 
-    assert "K00008" in uncertain.partially_shared[0].ko_ids
-    assert "K00008" not in additional.set_specific[0].ko_ids
-    assert "K00008" in additional.set_specific[1].ko_ids
-    assert detail.datasets[0].uncertain_record_ko_count == 2
-    assert detail.datasets[0].lenient_additional_ko_count == 1
-    assert detail.datasets[0].lenient_ko_count == detail.datasets[0].accepted_ko_count + 1
-    assert "K00008" in lenient.partially_shared[0].ko_ids
+    assert detail.datasets[0].selected_unique_ko_count == 5
+    assert detail.datasets[1].selected_unique_ko_count == 4
+    assert detail.datasets[2].selected_unique_ko_count == 3
+    assert "K00004" not in detail.partition.shared_by_all
+    assert all("K00006" not in item.ko_ids for item in detail.partition.set_specific)
 
 
 def test_summary_has_exact_counts_and_bounded_previews() -> None:
@@ -162,16 +151,14 @@ def test_summary_has_exact_counts_and_bounded_previews() -> None:
         detail,
         limits=ComparisonPreviewLimits(max_ko_ids=1, max_membership_patterns=1),
     )
-    accepted = next(
-        item for item in summary.partitions if item.ko_class is ComparedKoClass.ACCEPTED
-    )
+    partition = summary.partition
 
-    assert accepted.union_count == 7
-    assert accepted.shared_by_all.count == 2
-    assert accepted.shared_by_all.ko_ids == ("K00002",)
-    assert accepted.shared_by_all.truncated is True
-    assert accepted.set_specific[0].ko_set.count == 2
-    assert accepted.set_specific[0].ko_set.ko_ids == ("K00001",)
+    assert partition.union_count == 7
+    assert partition.shared_by_all.count == 2
+    assert partition.shared_by_all.ko_ids == ("K00002",)
+    assert partition.shared_by_all.truncated is True
+    assert partition.set_specific[0].ko_set.count == 2
+    assert partition.set_specific[0].ko_set.ko_ids == ("K00001",)
     assert ComparisonWarningCode.PREVIEW_TRUNCATED in {warning.code for warning in summary.warnings}
     assert summary == summarize_ko_comparison(
         detail,
@@ -288,8 +275,7 @@ def test_context_and_pipeline_differences_warn_without_changing_set_arithmetic()
     assert ComparisonWarningCode.ANALYSIS_UNIT_MISMATCH in codes
     assert ComparisonWarningCode.TAXONOMIC_CONTEXT_MISMATCH in codes
     assert ComparisonWarningCode.POOLED_COMMUNITY_POTENTIAL in codes
-    accepted = _partition(detail, ComparedKoClass.ACCEPTED)
-    assert [item.ko_ids for item in accepted.set_specific] == [
+    assert [item.ko_ids for item in detail.partition.set_specific] == [
         ("K00001",),
         ("K00002",),
     ]

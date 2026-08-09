@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
-from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 
 KNumber = Annotated[str, Field(pattern=r"^K[0-9]{5}$")]
@@ -115,7 +114,6 @@ class NormalizedStatus(StrEnum):
     """Decision status produced by a named normalization policy."""
 
     ACCEPTED = "accepted"
-    UNCERTAIN = "uncertain"
     REJECTED = "rejected"
     UNCLASSIFIED = "unclassified"
     INVALID = "invalid"
@@ -177,13 +175,6 @@ class AnalysisUnit(StrEnum):
     METAGENOMIC_COMMUNITY = "metagenomic_community"
     MIXED = "mixed"
     UNKNOWN = "unknown"
-
-
-class EvidenceMode(StrEnum):
-    """Evidence sets supported by downstream analyses."""
-
-    STRICT = "strict"
-    LENIENT = "lenient"
 
 
 class InputFormat(StrEnum):
@@ -342,7 +333,7 @@ class AnnotationRecord(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:annotation-record:1",
+            "$id": "urn:kegg-mcp:schema:annotation-record:2",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -401,7 +392,6 @@ class AnnotationRecord(FrozenModel):
         )
         status_needs_ko = self.normalized_status in {
             NormalizedStatus.ACCEPTED,
-            NormalizedStatus.UNCERTAIN,
             NormalizedStatus.REJECTED,
         }
         if status_needs_ko and self.ko_id is None:
@@ -472,7 +462,7 @@ class ImportReport(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:import-report:1",
+            "$id": "urn:kegg-mcp:schema:import-report:2",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -555,7 +545,7 @@ class AnnotationDataset(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:annotation-dataset:1",
+            "$id": "urn:kegg-mcp:schema:annotation-dataset:2",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -619,13 +609,12 @@ class KOEvidenceView(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:ko-evidence-view:1",
+            "$id": "urn:kegg-mcp:schema:ko-evidence-view:2",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
 
     accepted_kos: tuple[KNumber, ...]
-    uncertain_kos: tuple[KNumber, ...]
     rejected_kos: tuple[KNumber, ...]
     records_by_ko: tuple[KORecordIndexEntry, ...]
     records_by_sequence: tuple[SequenceRecordIndexEntry, ...]
@@ -636,7 +625,6 @@ class KOEvidenceView(FrozenModel):
     def validate_deterministic_view(self) -> Self:
         for field_name, ko_ids in (
             ("accepted_kos", self.accepted_kos),
-            ("uncertain_kos", self.uncertain_kos),
             ("rejected_kos", self.rejected_kos),
         ):
             if ko_ids != tuple(sorted(set(ko_ids))):
@@ -663,7 +651,7 @@ class KOEvidenceView(FrozenModel):
         )
         if len(sequence_record_ids) != len(set(sequence_record_ids)):
             raise ValueError("records_by_sequence must not index one record under multiple keys")
-        status_ko_ids = set(self.accepted_kos) | set(self.uncertain_kos) | set(self.rejected_kos)
+        status_ko_ids = set(self.accepted_kos) | set(self.rejected_kos)
         if not status_ko_ids.issubset(ko_keys):
             raise ValueError("status-specific KO sets must be represented in records_by_ko")
 
@@ -676,7 +664,6 @@ class KOEvidenceView(FrozenModel):
 def build_ko_evidence_view(dataset: AnnotationDataset) -> KOEvidenceView:
     """Build deterministic status sets and indexes without changing evidence."""
     accepted: set[str] = set()
-    uncertain: set[str] = set()
     rejected: set[str] = set()
     by_ko: dict[str, list[str]] = defaultdict(list)
     by_sequence: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -686,8 +673,6 @@ def build_ko_evidence_view(dataset: AnnotationDataset) -> KOEvidenceView:
             by_ko[record.ko_id].append(record.record_id)
             if record.normalized_status is NormalizedStatus.ACCEPTED:
                 accepted.add(record.ko_id)
-            elif record.normalized_status is NormalizedStatus.UNCERTAIN:
-                uncertain.add(record.ko_id)
             elif record.normalized_status is NormalizedStatus.REJECTED:
                 rejected.add(record.ko_id)
         if record.sequence_id is not None:
@@ -695,7 +680,6 @@ def build_ko_evidence_view(dataset: AnnotationDataset) -> KOEvidenceView:
 
     return KOEvidenceView(
         accepted_kos=tuple(sorted(accepted)),
-        uncertain_kos=tuple(sorted(uncertain)),
         rejected_kos=tuple(sorted(rejected)),
         records_by_ko=tuple(
             KORecordIndexEntry(ko_id=ko_id, record_ids=tuple(by_ko[ko_id]))
@@ -720,15 +704,6 @@ def build_ko_evidence_view(dataset: AnnotationDataset) -> KOEvidenceView:
     )
 
 
-def select_ko_ids(view: KOEvidenceView, mode: EvidenceMode) -> tuple[str, ...]:
-    """Select strict or policy-defined lenient K numbers."""
-    if mode is EvidenceMode.STRICT:
-        return tuple(sorted(set(view.accepted_kos)))
-    if mode is EvidenceMode.LENIENT:
-        return tuple(sorted(set(view.accepted_kos) | set(view.uncertain_kos)))
-    fail(
-        ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-        "The evidence mode is not supported.",
-        suggested_action="Use the strict or lenient evidence mode.",
-        safe_details=(SafeDetail(name="mode_type", value=type(mode).__name__),),
-    )
+def select_ko_ids(view: KOEvidenceView) -> tuple[str, ...]:
+    """Return the sorted unique accepted K numbers selected for analysis."""
+    return view.accepted_kos

@@ -13,7 +13,7 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
     ("prompt", "required"),
     [
         (
-            "Render this existing render_input.json version 4 bundle.",
+            "Render this existing render_input.json version 5 bundle.",
             ("Require readiness", "Let the renderer validate the handoff"),
         ),
         (
@@ -26,11 +26,11 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
         ),
         (
             "Render this schema-mismatched handoff.",
-            ("Accept only schema version 4", "Do not patch, repair, or reinterpret"),
+            ("Accept only schema version 5", "Do not patch, repair, or reinterpret"),
         ),
         (
-            "Show accepted and uncertain evidence.",
-            ("Use only the versioned legend", "policy-defined uncertain evidence"),
+            "Show every annotation decision status on the pathway.",
+            ("Use only the versioned legend", "Rejected, unclassified, and invalid"),
         ),
         (
             "One target failed; return the other images from this bundle.",

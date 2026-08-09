@@ -4,13 +4,12 @@ Use only the versioned legend and semantic states returned by the renderer. Do n
 precedence, line styles, or pixel values in the Skill.
 
 - **Accepted:** at least one accepted KO annotation supports the graphic state.
-- **Uncertain:** no accepted KO supports the state, but policy-defined uncertain evidence does.
-- **Not detected:** no selected accepted or uncertain evidence maps to the state; this is not
-  biological absence.
+- **Not detected:** no selected accepted evidence maps to the state; this is not biological
+  absence.
 - **Unsupported:** the renderer cannot map or display the content safely.
 
-Rejected, unclassified, and invalid predictions are excluded. Preserve renderer-provided
-non-color cues and deterministic accepted-over-uncertain precedence for boxes and line geometries
-that map multiple K numbers. Unmatched graphics remain unchanged. The source PNG's
+Rejected, unclassified, and invalid predictions are excluded. Multiple accepted K numbers mapped
+to one box or line do not create another visual state or line style. Unmatched graphics remain
+unchanged. The source PNG's
 pathway-category colors remain background context; neither unmatched state nor category color is
 evidence of presence or absence.

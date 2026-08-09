@@ -32,7 +32,8 @@ this Skill never calls an upstream or rendering MCP.
 ## Call only core `kegg-mcp`
 
 - Prefer `analyze_ko_annotations` for a complete normalization-to-MODULE/pathway workflow. It
-  normalizes evidence once and writes the stable bundle used by later stages.
+  normalizes full-record evidence once, or uses the workflow reference's explicit large-file
+  projection when eligible, and writes the stable bundle used by later stages.
 - When no MODULE or pathway target and no explicit selection are supplied, omit
   `pathway_selection`. Let the server independently select the Top-5 MODULEs and Top-5 canonical KO
   reference pathways by unique selected-KO overlap.
@@ -70,7 +71,7 @@ this Skill never calls an upstream or rendering MCP.
 ## Interpret and report
 
 1. Read [confidence-policy.md](references/confidence-policy.md) before discussing accepted,
-   uncertain, rejected, strict, or lenient evidence.
+   rejected, unclassified, invalid, full-record, or projected evidence.
 2. Read [module-interpretation.md](references/module-interpretation.md) for MODULE or pathway
    output. Treat automatic MODULE ranking only as target selection, never as completion or
    enrichment. Keep exact completion separate from block coverage and descriptive pathway coverage.

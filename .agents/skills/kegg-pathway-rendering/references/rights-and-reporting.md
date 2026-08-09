@@ -9,8 +9,8 @@ grant redistribution rights.
 
 ## Artifact summary
 
-Report the canonical target, static format, renderer-provided resource URI, accepted and uncertain
-evidence semantics, pathway denominator or separate MODULE completion metrics, retrieval/cache
+Report the canonical target, static format, renderer-provided resource URI, accepted-evidence
+semantics, pathway denominator or separate MODULE completion metrics, retrieval/cache
 provenance, parser/calculation versions, stale state, warnings, and output bounds.
 
 State that the graphic presents KO annotation evidence. It does not validate pathway activity,

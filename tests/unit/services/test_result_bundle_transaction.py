@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
+from kegg_mcp.importers import (
+    ProjectionImportLimits,
+    SourceProvenanceInput,
+    project_deepkoala_detailed,
+)
 from kegg_mcp.services import annotation_analysis
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
-from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.models import AnnotationInputFormat, NormalizeAnnotationsRequest
 from kegg_mcp.services.normalization import normalize_annotations
 from kegg_mcp.services.reference_budget import KeggPrimitiveClient
 from kegg_mcp.services.reference_loading import PathwaySpec
@@ -156,6 +162,43 @@ def test_analysis_result_create_failure_occurs_before_bundle_write(
 
     assert not bundle_called
     assert not output.exists()
+
+
+def test_analysis_rejects_projection_from_a_different_importer_version(
+    tmp_path: Path,
+) -> None:
+    payload = (
+        "name,predict_label,probability,threshold,annotate\n"
+        "p1,K00001,0.9,0.5,*\n"
+    ).encode()
+    input_path = str(tmp_path / "deepkoala.csv")
+    source = SourceProvenanceInput(source_name="deepkoala", input_path=input_path)
+    projection = project_deepkoala_detailed(
+        BytesIO(payload),
+        input_bytes=len(payload),
+        source=source,
+    )
+    forged_source = projection.sources[0].model_copy(
+        update={"importer_version": "stale"}
+    )
+    forged_projection = projection.model_copy(update={"sources": (forged_source,)})
+    request = NormalizeAnnotationsRequest(
+        file_path=input_path,
+        input_format=AnnotationInputFormat.DEEPKOALA_DETAILED,
+        source=source,
+    )
+
+    with pytest.raises(ValueError, match="projection source"):
+        analyze_annotation_targets(
+            request,
+            module_ids=(),
+            pathways=(),
+            client=cast(KeggPrimitiveClient, object()),
+            result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+            scope_id="scope",
+            analysis_projection=forged_projection,
+            projection_import_limits=ProjectionImportLimits(),
+        )
 
 
 def test_analysis_bundle_failure_compensates_the_retained_result(

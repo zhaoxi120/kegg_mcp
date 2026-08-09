@@ -341,7 +341,7 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
             "Render current kegg-mcp render_input.json version "
             f"{REQUIRED_RENDER_INPUT_SCHEMA_VERSION} handoffs as bounded static SVG and PNG "
             "artifacts. "
-            "Pathway graphics visualize accepted and policy-defined uncertain annotations; "
+            "Pathway graphics visualize unique accepted K-number annotations; "
             "MODULE diagrams preserve the authoritative core AST and completion results. "
             "Graphics do not prove biological activity or phenotype."
         ),

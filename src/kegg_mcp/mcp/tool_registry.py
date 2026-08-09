@@ -202,7 +202,7 @@ TOOL_SPECS = (
         "audit_annotation_mapping",
         "Audit annotation mapping",
         (
-            "Audit strict and lenient KO evidence and optional descriptive mapping yields for "
+            "Audit accepted KO evidence and optional descriptive mapping yields for "
             "selected KEGG pathway, MODULE, reaction, enzyme, and BRITE relationships."
         ),
         AuditAnnotationMappingInput,

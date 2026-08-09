@@ -128,7 +128,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.9.0"
+    assert project["version"] == "0.10.0"
     assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
@@ -192,7 +192,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.10,<0.11" in renderer_project["dependencies"]
     assert "Distribution boundary" in readiness
 
 
@@ -388,7 +388,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.10,<0.11" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -402,10 +402,10 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 4" in normalized
+        assert "version 5" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (installation, server_doc, readiness):
-        assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
+        assert "AnalysisExecutionProvenance` version 4" in re.sub(r"\s+", " ", document)
 
     renderer_job = _workflow_job(ci, "validate-renderer-companion")
     for command in (
@@ -471,9 +471,9 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert "uv sync --frozen" not in ci
     assert smoke_path.is_file()
     for distribution, version in (
-        ("kegg-mcp", "0.9.0"),
+        ("kegg-mcp", "0.10.0"),
         ("deepkoala-mcp", "0.5.0"),
-        ("kegg-render-mcp", "0.4.0"),
+        ("kegg-render-mcp", "0.5.0"),
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci

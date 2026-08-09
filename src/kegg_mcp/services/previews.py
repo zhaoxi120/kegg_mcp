@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from kegg_mcp.analysis import KoSetComparisonSummary, PairedModuleEvaluation, PathwayCoverageResult
+from kegg_mcp.analysis import KoSetComparisonSummary, ModuleEvaluationResult, PathwayCoverageResult
 from kegg_mcp.domain.annotations import AnnotationDataset, AnnotationRecord, SourceProvenance
 from kegg_mcp.services.contracts import ImportSummary, ModuleAnalysisPreview, PathwayAnalysisPreview
 from kegg_mcp.services.models import (
@@ -29,17 +29,13 @@ def _import_summary(dataset: AnnotationDataset) -> ImportSummary:
     )
 
 
-def _module_preview(item: PairedModuleEvaluation) -> ModuleAnalysisPreview:
+def _module_preview(item: ModuleEvaluationResult) -> ModuleAnalysisPreview:
     return ModuleAnalysisPreview(
-        module_id=item.strict.module_id,
-        module_name=item.strict.module_name,
-        strict_status=item.strict.evaluation_status,
-        strict_is_complete=item.strict.is_complete,
-        strict_block_coverage=item.strict.block_coverage,
-        lenient_status=item.lenient.evaluation_status,
-        lenient_is_complete=item.lenient.is_complete,
-        lenient_block_coverage=item.lenient.block_coverage,
-        strict_to_lenient_changed=item.strict_to_lenient_changed,
+        module_id=item.module_id,
+        module_name=item.module_name,
+        evaluation_status=item.evaluation_status,
+        is_complete=item.is_complete,
+        block_coverage=item.block_coverage,
     )
 
 
@@ -49,7 +45,6 @@ def _pathway_preview(item: PathwayCoverageResult) -> PathwayAnalysisPreview:
         pathway_name=item.pathway_name,
         reference_namespace=item.reference_namespace,
         reference_scope=item.reference_scope,
-        evidence_mode=item.evidence_mode,
         evaluation_status=item.evaluation_status,
         detected_unique_ko_count=item.detected_unique_ko_count,
         reference_unique_ko_count=item.reference_unique_ko_count,
@@ -129,15 +124,12 @@ def _comparison_preview(summary: KoSetComparisonSummary) -> KoSetComparisonPrevi
                 ),
                 sample_label_count=len(item.sample_labels),
                 record_count=item.record_count,
-                accepted_ko_count=item.accepted_ko_count,
-                uncertain_record_ko_count=item.uncertain_record_ko_count,
-                lenient_additional_ko_count=item.lenient_additional_ko_count,
-                lenient_ko_count=item.lenient_ko_count,
+                selected_unique_ko_count=item.selected_unique_ko_count,
             )
         )
     return KoSetComparisonPreview(
         datasets=tuple(datasets),
-        partitions=summary.partitions,
+        partition=summary.partition,
         calculation_method=summary.calculation_method,
         warnings=summary.warnings,
         detail_limits=summary.detail_limits,

@@ -29,8 +29,8 @@ def test_distribution_declares_compatible_core_without_annotation_or_browser_sta
     assert not any("Windows" in classifier for classifier in project["classifiers"])
     dependencies = " ".join(project["dependencies"]).lower()
     assert "anyio>=4.10,<5" in dependencies
-    assert "kegg-mcp>=0.9,<0.10" in dependencies
-    assert REQUIRED_RENDER_INPUT_SCHEMA_VERSION == RENDER_INPUT_SCHEMA_VERSION == "4"
+    assert "kegg-mcp>=0.10,<0.11" in dependencies
+    assert REQUIRED_RENDER_INPUT_SCHEMA_VERSION == RENDER_INPUT_SCHEMA_VERSION == "5"
     for forbidden in ("deepkoala", "torch", "selenium", "playwright", "cairosvg"):
         assert forbidden not in dependencies
 

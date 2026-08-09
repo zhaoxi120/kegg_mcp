@@ -14,7 +14,6 @@ from kegg_mcp.analysis.pathway_coverage import (
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
-    EvidenceMode,
     FrozenModel,
     ModuleId,
     NormalizedStatus,
@@ -61,13 +60,9 @@ class ModuleAnalysisPreview(FrozenModel):
 
     module_id: ModuleId
     module_name: str | None = Field(default=None, max_length=1_000)
-    strict_status: ModuleEvaluationStatus
-    strict_is_complete: bool | None
-    strict_block_coverage: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
-    lenient_status: ModuleEvaluationStatus
-    lenient_is_complete: bool | None
-    lenient_block_coverage: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
-    strict_to_lenient_changed: bool
+    evaluation_status: ModuleEvaluationStatus
+    is_complete: bool | None
+    block_coverage: float | None = Field(default=None, strict=True, ge=0.0, le=1.0)
 
 
 class PathwayAnalysisPreview(FrozenModel):
@@ -77,7 +72,6 @@ class PathwayAnalysisPreview(FrozenModel):
     pathway_name: str = Field(min_length=1, max_length=1_000)
     reference_namespace: PathwayReferenceNamespace
     reference_scope: PathwayReferenceScope
-    evidence_mode: EvidenceMode
     evaluation_status: PathwayCoverageStatus
     detected_unique_ko_count: NonNegativeCount
     reference_unique_ko_count: NonNegativeCount

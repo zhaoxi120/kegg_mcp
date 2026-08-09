@@ -103,7 +103,7 @@ class CanonicalSourceStatusPolicy:
 
     @property
     def reference(self) -> DecisionPolicyReference:
-        return DecisionPolicyReference(name="canonical_source_status", version="1")
+        return DecisionPolicyReference(name="canonical_source_status", version="2")
 
     @property
     def supported_formats(self) -> frozenset[InputFormat]:
@@ -125,10 +125,6 @@ class CanonicalSourceStatusPolicy:
             "accepted": DecisionOutcome(
                 status=NormalizedStatus.ACCEPTED,
                 reason="source_accepted",
-            ),
-            "uncertain": DecisionOutcome(
-                status=NormalizedStatus.UNCERTAIN,
-                reason="source_uncertain",
             ),
             "rejected": DecisionOutcome(
                 status=NormalizedStatus.REJECTED,

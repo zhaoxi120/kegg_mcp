@@ -18,8 +18,22 @@ from kegg_mcp.analysis.functional_comparison import (
 )
 from kegg_mcp.analysis.pathway_coverage import PathwayCoverageResult
 from kegg_mcp.analysis.pathway_ranking import PATHWAY_RANKING_METHOD
-from kegg_mcp.domain.annotations import AnalysisUnit, AnnotationRecord, NormalizedStatus
+from kegg_mcp.domain.annotations import (
+    AnalysisUnit,
+    AnnotationDataset,
+    AnnotationRecord,
+    NormalizedStatus,
+)
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.domain.projections import (
+    KoAnalysisProjection,
+    analysis_accepted_ko_ids,
+    analysis_assignment_count,
+    analysis_decision_policy,
+    analysis_diagnostic_preview,
+    analysis_input_rows,
+    analysis_status_counts,
+)
 from kegg_mcp.reporting.contracts import (
     REPORT_FORMAT_NAME,
     REPORT_FORMAT_VERSION,
@@ -54,6 +68,7 @@ _CSV_HEADER = (
     "evidence_json",
     "source_json",
 )
+_PROJECTION_CSV_HEADER = ("ko_id", "normalized_status")
 _MARKDOWN_TRUNCATION_NOTICE = (
     "> Markdown summary truncated at the recorded preview or UTF-8 byte limit. "
     "The structured JSON and annotation CSV artifacts remain complete within their hard limits."
@@ -107,10 +122,9 @@ def _source_entry_count(report: ReportInput) -> int:
 
 
 def _warning_entry_count(report: ReportInput) -> int:
-    count = len(report.dataset.import_report.diagnostics)
-    for pair in report.module_evaluations:
-        count += len(pair.strict.warnings) + len(pair.lenient.warnings)
-        count += len(pair.strict.unresolved_references) + len(pair.lenient.unresolved_references)
+    count = len(analysis_diagnostic_preview(report.dataset))
+    for result in report.module_evaluations:
+        count += len(result.warnings) + len(result.unresolved_references)
     for result in report.pathway_coverages:
         count += len(result.warnings)
     if report.ko_comparison is not None:
@@ -123,16 +137,19 @@ def _warning_entry_count(report: ReportInput) -> int:
     if report.pathway_comparison is not None:
         count += len(report.pathway_comparison.context_warnings)
         for target in report.pathway_comparison.targets:
-            count += sum(len(outcome.warnings) for outcome in target.strict.outcomes)
-            count += sum(len(outcome.warnings) for outcome in target.lenient.outcomes)
+            count += sum(len(outcome.warnings) for outcome in target.comparison.outcomes)
     return count
 
 
 def _preflight(report: ReportInput, limits: ReportLimits) -> None:
-    input_rows = report.dataset.import_report.input_rows
+    input_rows = analysis_input_rows(report.dataset)
     if input_rows > limits.max_input_rows:
         _limit_exceeded("input rows", input_rows, limits.max_input_rows)
-    record_count = len(report.dataset.records)
+    record_count = (
+        len(report.dataset.records)
+        if isinstance(report.dataset, AnnotationDataset)
+        else len(report.dataset.accepted_ko_ids)
+    )
     if record_count > limits.max_annotation_records:
         _limit_exceeded(
             "annotation records",
@@ -256,7 +273,16 @@ def _csv_line(values: Sequence[str]) -> str:
 def _render_annotation_csv(report: ReportInput, limits: ReportLimits) -> str:
     chunks: list[str] = []
     byte_count = 0
-    rows = chain((_CSV_HEADER,), (_record_csv_row(record) for record in report.dataset.records))
+    if isinstance(report.dataset, AnnotationDataset):
+        rows: Iterable[Sequence[str]] = chain(
+            (_CSV_HEADER,),
+            (_record_csv_row(record) for record in report.dataset.records),
+        )
+    else:
+        rows = chain(
+            (_PROJECTION_CSV_HEADER,),
+            ((ko_id, NormalizedStatus.ACCEPTED.value) for ko_id in report.dataset.accepted_ko_ids),
+        )
     for values in rows:
         line = _csv_line(values)
         byte_count += len(line.encode("utf-8"))
@@ -338,12 +364,11 @@ def _analysis_unit_caveat(unit: AnalysisUnit) -> str:
 
 def _warning_items(report: ReportInput) -> tuple[tuple[str, str], ...]:
     items: list[tuple[str, str]] = []
-    for diagnostic in report.dataset.import_report.diagnostics:
+    for diagnostic in analysis_diagnostic_preview(report.dataset):
         items.append((diagnostic.code.value, diagnostic.message))
-    for pair in report.module_evaluations:
-        for result in (pair.strict, pair.lenient):
-            items.extend((warning.code.value, warning.message) for warning in result.warnings)
-        for issue in pair.strict.unresolved_references:
+    for result in report.module_evaluations:
+        items.extend((warning.code.value, warning.message) for warning in result.warnings)
+        for issue in result.unresolved_references:
             items.append((f"MODULE_{issue.kind.value.upper()}", issue.message))
     for result in report.pathway_coverages:
         items.extend((warning.code.value, warning.message) for warning in result.warnings)
@@ -365,11 +390,8 @@ def _warning_items(report: ReportInput) -> tuple[tuple[str, str], ...]:
             for warning in report.pathway_comparison.context_warnings
         )
         for target in report.pathway_comparison.targets:
-            for mode in (target.strict, target.lenient):
-                for outcome in mode.outcomes:
-                    items.extend(
-                        (warning.code.value, warning.message) for warning in outcome.warnings
-                    )
+            for outcome in target.comparison.outcomes:
+                items.extend((warning.code.value, warning.message) for warning in outcome.warnings)
 
     unique: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -401,30 +423,27 @@ def _append_primary_modules(
         return False
     lines.extend(
         (
-            "| MODULE | Evidence mode | Evaluation status | Exact completion | "
-            "Project block coverage |",
-            "| --- | --- | --- | --- | --- |",
+            "| MODULE | Evaluation status | Exact completion | Project block coverage |",
+            "| --- | --- | --- | --- |",
         )
     )
     selected = report.module_evaluations[: limits.max_markdown_module_targets]
-    for pair in selected:
-        for result in (pair.strict, pair.lenient):
-            label = result.module_id
-            if result.module_name:
-                label = f"{label} — {result.module_name}"
-            lines.append(
-                "| "
-                + " | ".join(
-                    (
-                        _markdown_cell(label),
-                        result.evidence_mode.value,
-                        result.evaluation_status.value,
-                        _exact_completion(result),
-                        _block_coverage(result),
-                    )
+    for result in selected:
+        label = result.module_id
+        if result.module_name:
+            label = f"{label} — {result.module_name}"
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    _markdown_cell(label),
+                    result.evaluation_status.value,
+                    _exact_completion(result),
+                    _block_coverage(result),
                 )
-                + " |"
             )
+            + " |"
+        )
     truncated = len(selected) < len(report.module_evaluations)
     if truncated:
         lines.append(
@@ -463,8 +482,8 @@ def _append_primary_pathways(
         return False
     lines.extend(
         (
-            "| Pathway | Namespace | Evidence mode | Evaluation status | Detected/reference KOs |",
-            "| --- | --- | --- | --- | --- |",
+            "| Pathway | Namespace | Evaluation status | Detected/reference KOs |",
+            "| --- | --- | --- | --- |",
         )
     )
     selected = report.pathway_coverages[: limits.max_markdown_pathway_targets]
@@ -476,7 +495,6 @@ def _append_primary_pathways(
                 (
                     _markdown_cell(label),
                     result.reference_namespace.value,
-                    result.evidence_mode.value,
                     result.evaluation_status.value,
                     _pathway_coverage_text(result),
                 )
@@ -559,8 +577,8 @@ def _append_module_selection(lines: list[str], report: ReportInput) -> None:
     ranking = report.execution.module_ranking
     lines.extend(("", "## MODULE target selection", ""))
     lines.append(
-        f"Ranking method: `{ranking.method}` version `{ranking.method_version}` using "
-        f"`{ranking.evidence_mode.value}` evidence. Requested target count: "
+        f"Ranking method: `{ranking.method}` version `{ranking.method_version}` using accepted "
+        f"unique-KO evidence. Requested target count: "
         f"{ranking.selection.top_n}. Candidate MODULE count: {ranking.candidate_module_count}."
     )
     selected = ", ".join(f"`{module_id}`" for module_id in ranking.selected_module_ids)
@@ -576,8 +594,7 @@ def _append_module_selection(lines: list[str], report: ReportInput) -> None:
     )
 
 
-def _module_comparison_outcomes(target: ModuleTargetComparison, strict: bool) -> str:
-    mode = target.strict if strict else target.lenient
+def _module_comparison_outcomes(target: ModuleTargetComparison) -> str:
     return "; ".join(
         (
             f"{_markdown_cell(outcome.label)}={outcome.evaluation_status.value},"
@@ -585,19 +602,18 @@ def _module_comparison_outcomes(target: ModuleTargetComparison, strict: bool) ->
             f"{'unknown' if outcome.is_complete is None else str(outcome.is_complete).lower()},"
             f" blocks:{outcome.completed_required_blocks}/{outcome.required_block_count}"
         )
-        for outcome in mode.outcomes
+        for outcome in target.comparison.outcomes
     )
 
 
-def _pathway_comparison_outcomes(target: PathwayTargetComparison, strict: bool) -> str:
-    mode = target.strict if strict else target.lenient
+def _pathway_comparison_outcomes(target: PathwayTargetComparison) -> str:
     return "; ".join(
         (
             f"{_markdown_cell(outcome.label)}={outcome.evaluation_status.value},"
             f" {outcome.detected_reference_ko_count}/{outcome.reference_unique_ko_count}"
             f" ({_ratio(outcome.coverage_ratio)})"
         )
-        for outcome in mode.outcomes
+        for outcome in target.comparison.outcomes
     )
 
 
@@ -622,15 +638,15 @@ def _append_comparisons(
         lines.extend((f"Compared datasets, in caller order: {labels}.", ""))
         lines.extend(
             (
-                "| KO evidence class | Union count | Shared by all | Partial membership patterns |",
-                "| --- | ---: | ---: | ---: |",
+                "| Accepted-KO union count | Shared by all | Partial membership patterns |",
+                "| ---: | ---: | ---: |",
             )
         )
-        for partition in report.ko_comparison.partitions:
-            lines.append(
-                f"| {partition.ko_class.value} | {partition.union_count} | "
-                f"{partition.shared_by_all.count} | {partition.partially_shared_pattern_count} |"
-            )
+        partition = report.ko_comparison.partition
+        lines.append(
+            f"| {partition.union_count} | {partition.shared_by_all.count} | "
+            f"{partition.partially_shared_pattern_count} |"
+        )
         lines.append("")
 
     if report.module_comparison is not None:
@@ -638,17 +654,15 @@ def _append_comparisons(
             (
                 "### Shared-definition MODULE outcomes",
                 "",
-                "| MODULE | Evidence mode | Ordered outcomes |",
-                "| --- | --- | --- |",
+                "| MODULE | Ordered accepted-KO outcomes |",
+                "| --- | --- |",
             )
         )
         selected = report.module_comparison.targets[: limits.max_markdown_comparison_targets]
         for target in selected:
-            for strict in (True, False):
-                lines.append(
-                    f"| {target.module_id} | {'strict' if strict else 'lenient'} | "
-                    f"{_module_comparison_outcomes(target, strict)} |"
-                )
+            lines.append(
+                f"| {target.module_id} | {_module_comparison_outcomes(target)} |"
+            )
         if len(selected) < len(report.module_comparison.targets):
             truncated = True
             lines.append(
@@ -662,19 +676,17 @@ def _append_comparisons(
             (
                 "### Shared-denominator pathway outcomes",
                 "",
-                "| Pathway reference | Evidence mode | Ordered descriptive coverage outcomes |",
-                "| --- | --- | --- |",
+                "| Pathway reference | Ordered accepted-KO coverage outcomes |",
+                "| --- | --- |",
             )
         )
         selected = report.pathway_comparison.targets[: limits.max_markdown_comparison_targets]
         for target in selected:
-            for strict in (True, False):
-                lines.append(
-                    f"| {target.reference.pathway_id} "
-                    f"({target.reference.reference_namespace.value}) "
-                    f"| {'strict' if strict else 'lenient'} | "
-                    f"{_pathway_comparison_outcomes(target, strict)} |"
-                )
+            lines.append(
+                f"| {target.reference.pathway_id} "
+                f"({target.reference.reference_namespace.value}) | "
+                f"{_pathway_comparison_outcomes(target)} |"
+            )
         if len(selected) < len(report.pathway_comparison.targets):
             truncated = True
             lines.append(
@@ -723,7 +735,7 @@ def _append_warnings_and_provenance(
 
     lines.extend(("", "## Provenance", ""))
     lines.append(
-        f"Decision policy: `{report.dataset.import_report.decision_policy.identifier}`. "
+        f"Decision policy: `{analysis_decision_policy(report.dataset).identifier}`. "
         f"Taxon ID: "
         f"`{report.dataset.taxon_id if report.dataset.taxon_id is not None else 'unknown'}`. "
         f"KEGG organism code: "
@@ -792,9 +804,18 @@ def _bound_markdown(lines: Iterable[str], maximum_bytes: int) -> tuple[str, bool
 
 
 def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bool]:
-    counts = {
-        status.value: report.dataset.import_report.count_for(status) for status in NormalizedStatus
-    }
+    counts = {item.status.value: item.count for item in analysis_status_counts(report.dataset)}
+    if isinstance(report.dataset, KoAnalysisProjection):
+        normalized_count_label = "Normalized assignment counts"
+        intake_summary = (
+            f"Expanded assignments classified: {analysis_assignment_count(report.dataset)}. "
+            "Retained accepted unique K numbers: "
+            f"{len(analysis_accepted_ko_ids(report.dataset))}. Record-level evidence, "
+            "protein-to-KO mappings, and duplicate/conflict accounting were not retained."
+        )
+    else:
+        normalized_count_label = "Normalized record counts"
+        intake_summary = f"Emitted annotation records: {len(report.dataset.records)}."
     lines = [
         "# KEGG-aware KO annotation report",
         "",
@@ -815,10 +836,9 @@ def _render_markdown(report: ReportInput, limits: ReportLimits) -> tuple[str, bo
         "",
         f"Dataset: `{report.dataset.dataset_id}`. Analysis unit: "
         f"`{report.dataset.analysis_unit.value}`. Input rows: "
-        f"{report.dataset.import_report.input_rows}. Emitted annotation records: "
-        f"{len(report.dataset.records)}.",
+        f"{analysis_input_rows(report.dataset)}. {intake_summary}",
         "",
-        "Normalized record counts: "
+        f"{normalized_count_label}: "
         + ", ".join(f"{name}={count}" for name, count in counts.items())
         + ".",
         "",

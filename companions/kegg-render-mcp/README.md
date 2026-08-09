@@ -1,7 +1,7 @@
 # kegg-render-mcp
 
 `kegg-render-mcp` is the independently packaged local stdio renderer for KEGG annotation-evidence
-graphics. It consumes the complete `render_input.json` schema version 4 handoff produced by a
+graphics. It consumes the complete `render_input.json` schema version 5 handoff produced by a
 compatible `kegg-mcp` analysis. It never imports annotation tables, assigns K numbers, evaluates
 MODULE completion, or recomputes pathway coverage.
 
@@ -10,14 +10,14 @@ global/overview total-map line overlays from one matching KEGG PNG/KGML pair, an
 MODULE logic diagrams from the authoritative core AST. SVG is canonical, PNG is an optional bounded
 derivative, and artifacts are available through local directories and scoped MCP resources.
 
-Accepted evidence uses a solid vivid-red (`#FF0000`) overlay. Policy-defined uncertain evidence
-uses orange (`#E69F00`) plus a dashed outline or polyline, and accepted evidence retains precedence
-on shared graphics. Unmatched graphics remain unchanged. Original pathway-category colors in the
-source PNG are background context, not evidence of biological presence or absence.
+Unique accepted K numbers use a solid vivid-red (`#FF0000`) overlay. Duplicate annotation records
+do not create duplicate evidence or overlays. Rejected records are excluded, and unmatched graphics
+remain unchanged. Original pathway-category colors in the source PNG are background context, not
+evidence of biological presence or absence.
 
 Core continues to exclude Global, Overview, and higher-level Overview maps from automatic Top-N
 selection. An explicit broad target is renderable only when Core evaluated a canonical KO reference
-with `allow_global_or_overview=true` and emitted complete evidence in the version 4 handoff. The
+with `allow_global_or_overview=true` and emitted complete evidence in the version 5 handoff. The
 renderer follows bounded KGML line coordinates while preserving arrows already present in the
 source PNG; it does not reconstruct arrow direction or infer pathway direction, activity,
 completeness, flux, phenotype, or experimental validation. `map` and organism-specific targets
@@ -142,7 +142,7 @@ Example high-level input:
 ```
 
 Every render tool accepts exactly one handoff source: an allowed `render_input_path` or bounded
-`render_input_json`. Only schema version 4 is accepted. A schema mismatch returns an actionable
+`render_input_json`. Only schema version 5 is accepted. A schema mismatch returns an actionable
 incompatible-input error; the renderer never repairs or reinterprets the handoff.
 
 The fixed status resource is `kegg-render://status`. Result templates are:
@@ -156,7 +156,7 @@ kegg-render://results/{render_id}/{artifact}
 
 A successful call returns an opaque process-scoped `render_id`, the resolved output directory,
 bounded metadata, warnings, server-generated resource URIs, and stable artifact output paths. Image
-response metadata includes MIME type, byte size, and dimensions. The published schema-version-2
+response metadata includes MIME type, byte size, and dimensions. The published schema-version-3
 `render_manifest.json` records renderer, analysis, target, retrieval/cache, and artifact provenance
 without exposing private configuration. Each image entry records a controlled relative `path`, MIME
 type, byte size, width, and height. Process-scoped render IDs, expiry timestamps, and
@@ -181,12 +181,11 @@ graphic-to-KO associations, dimensions, pixels, SVG nodes, artifact bytes, retai
 storage, and cleanup are bounded. Geometry coordinates must be short ASCII non-negative integers;
 line-coordinate lists must also be non-degenerate and inside the matching PNG. The renderer
 reserves manifest capacity before generating a multi-target artifact set and fails the whole bundle
-before retention or export when the cumulative result budget is exceeded. The renderer accepts the single
-inert KEGG KGML v0.7.2
-HTTPS `SYSTEM` declaration observed on 2026-07-21, but never resolves or fetches its DTD. Other DTD
-declarations, entity declarations, external entity resolution, excessive depth, and mismatched
-identities are rejected. PNG structure, dimensions, decompression, and total pixels are validated
-before use.
+before retention or export when the cumulative result budget is exceeded. The renderer accepts the
+single inert KEGG KGML v0.7.2 HTTPS `SYSTEM` declaration observed on 2026-07-21, but never resolves
+or fetches its DTD. Other DTD declarations, entity declarations, external entity resolution,
+excessive depth, and mismatched identities are rejected. PNG structure, dimensions, decompression,
+and total pixels are validated before use.
 
 Generated SVG has no scripts, event handlers, active links, remote fonts, or external resources;
 the validated source PNG is embedded as static data. Artifact names derive only from canonical

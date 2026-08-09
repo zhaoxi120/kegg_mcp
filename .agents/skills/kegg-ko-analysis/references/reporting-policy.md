@@ -15,7 +15,7 @@ For a bounded query or local handoff, report:
 For KO evidence analysis, report:
 
 1. input and normalization summary;
-2. annotation evidence and evidence mode;
+2. annotation evidence and retention mode;
 3. KEGG mappings;
 4. exact module completion and project block coverage;
 5. descriptive pathway KO coverage;
@@ -34,6 +34,7 @@ For KO normalization or analysis, prefer the concise output bundle for durable d
 ```text
 normalized_annotations.tsv
 protein_ko_mapping.tsv
+unique_accepted_kos.tsv
 module_ranking.tsv
 ko_module_relationships.tsv
 pathway_ranking.tsv
@@ -44,6 +45,11 @@ analysis_report.md
 render_input.json
 bundle_manifest.json
 ```
+
+`unique_accepted_kos.tsv` is present in every analysis bundle. A projection bundle omits
+`normalized_annotations.tsv` and `protein_ko_mapping.tsv`; report those files as intentionally
+unavailable together with the missing record evidence and duplicate/conflict accounting. Do not
+call the projected accepted-KO CSV or TSV a record-level annotation table.
 
 The four ranking and relationship tables are present only when the corresponding automatic target
 selection runs. MODULE ranking reports selected-KO overlap for target selection; it is not a

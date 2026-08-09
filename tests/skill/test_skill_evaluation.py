@@ -220,7 +220,7 @@ def test_ko_analysis_preserves_scientific_and_process_boundaries() -> None:
         "database cross-reference",
         "descriptive unique supplied-entity counts",
         "skipped by the request limit",
-        "Use accepted K numbers only for strict analysis",
+        "Use only sorted unique accepted K numbers",
         "Source-rejected",
         "exact completion",
         "block coverage separately",

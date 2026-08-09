@@ -72,7 +72,6 @@ def import_generic_table(
     table = parse_table(decoded, delimiter=dialect.delimiter, limits=limits)
     require_columns(table.header, tuple(source_name for _, source_name in mapping.bindings()))
     provenance = build_source(
-        decoded,
         source,
         default_source_name="unknown",
         importer_name="generic_table",

@@ -14,14 +14,13 @@ from kegg_mcp.analysis import (
     ComparisonPreviewLimits,
     ComparisonWarning,
     ComparisonWarningCode,
-    KoClassComparisonSummary,
+    KoMembershipComparisonSummary,
     ModuleSelection,
     PathwaySelection,
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     ImportDiagnostic,
     ModuleId,
@@ -30,6 +29,7 @@ from kegg_mcp.domain.annotations import (
     ThresholdRule,
 )
 from kegg_mcp.domain.errors import ErrorCode
+from kegg_mcp.domain.projections import AnnotationRetention
 from kegg_mcp.importers import GenericColumnMapping, ImportLimits, SourceProvenanceInput
 from kegg_mcp.kegg import AccessMode, KeggGetDatabase
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, RetrievalEndpointClass
@@ -62,7 +62,7 @@ MAX_GET_PROVENANCE_BATCHES = 5
 MAX_DIRECT_WARNINGS = 25
 MAX_DIRECT_WARNING_CHARACTERS = 1_000
 MAX_DIRECT_ANALYSIS_TARGETS = 25
-MAX_DIRECT_CAVEATS = 3
+MAX_DIRECT_CAVEATS = 4
 MAX_DIRECT_REFERENCE_BATCHES = 100
 MAX_DIRECT_SOURCE_PREVIEWS = 8
 MAX_COMPARISON_INPUTS = 10
@@ -240,8 +240,9 @@ class AnalysisResultSummary(FrozenModel):
 
     input_records: int = Field(strict=True, ge=0)
     accepted_records: int = Field(strict=True, ge=0)
-    uncertain_records: int = Field(strict=True, ge=0)
     rejected_records: int = Field(strict=True, ge=0)
+    unclassified_records: int = Field(strict=True, ge=0)
+    invalid_records: int = Field(strict=True, ge=0)
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     kegg_request_count: int = Field(default=0, strict=True, ge=0)
     network_request_count: int = Field(default=0, strict=True, ge=0)
@@ -283,7 +284,6 @@ class AutomaticModuleSelectionSummary(FrozenModel):
     """Bounded direct summary of server-side Top-N MODULE selection."""
 
     parameters: ModuleSelection
-    evidence_mode: EvidenceMode
     candidate_module_count: int = Field(strict=True, ge=0)
     selected_modules: Annotated[
         tuple[SelectedModuleSummary, ...], Field(max_length=MAX_SELECTED_MODULE_SUMMARIES)
@@ -303,6 +303,10 @@ class AnalyzeKoAnnotationsResult(FrozenModel):
 
     result: ResultMetadata
     artifacts: Annotated[tuple[ResultArtifactMetadata, ...], Field(min_length=1, max_length=7)]
+    annotation_retention: AnnotationRetention
+    record_level_evidence_retained: bool
+    protein_ko_mapping_available: bool
+    duplicate_conflict_accounting: Literal["evaluated", "not_evaluated"]
     summary: AnalysisResultSummary
     module_target_count: int = Field(strict=True, ge=0, le=MAX_DIRECT_ANALYSIS_TARGETS)
     module_previews: Annotated[
@@ -318,6 +322,14 @@ class AnalyzeKoAnnotationsResult(FrozenModel):
 
     @model_validator(mode="after")
     def validate_direct_metadata(self) -> Self:
+        full_records = self.annotation_retention is AnnotationRetention.FULL_RECORDS
+        if (
+            self.record_level_evidence_retained is not full_records
+            or self.protein_ko_mapping_available is not full_records
+            or self.duplicate_conflict_accounting
+            != ("evaluated" if full_records else "not_evaluated")
+        ):
+            raise ValueError("analysis retention metadata is internally inconsistent")
         if self.result.artifact_count != len(self.artifacts):
             raise ValueError("result artifact_count must match direct artifact metadata")
         if self.module_target_count != len(self.module_previews):
@@ -474,10 +486,7 @@ class ComparisonDatasetSummary(FrozenModel):
     annotation: AnnotationProvenanceSummary
     sample_label_count: int = Field(strict=True, ge=0)
     record_count: int = Field(strict=True, ge=0)
-    accepted_ko_count: int = Field(strict=True, ge=0)
-    uncertain_record_ko_count: int = Field(strict=True, ge=0)
-    lenient_additional_ko_count: int = Field(strict=True, ge=0)
-    lenient_ko_count: int = Field(strict=True, ge=0)
+    selected_unique_ko_count: int = Field(strict=True, ge=0)
 
 
 class KoSetComparisonPreview(FrozenModel):
@@ -485,7 +494,7 @@ class KoSetComparisonPreview(FrozenModel):
         tuple[ComparisonDatasetSummary, ...],
         Field(min_length=2, max_length=MAX_COMPARISON_INPUTS),
     ]
-    partitions: Annotated[tuple[KoClassComparisonSummary, ...], Field(min_length=4, max_length=4)]
+    partition: KoMembershipComparisonSummary
     calculation_method: CalculationMethodReference
     warnings: Annotated[tuple[ComparisonWarning, ...], Field(max_length=MAX_COMPARISON_WARNINGS)]
     detail_limits: ComparisonLimits
@@ -494,17 +503,11 @@ class KoSetComparisonPreview(FrozenModel):
 
 class FunctionalComparisonSummary(FrozenModel):
     module_target_count: int = Field(strict=True, ge=0, le=25)
-    strict_module_differences: Annotated[
-        tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
-    ]
-    lenient_module_differences: Annotated[
+    module_differences: Annotated[
         tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
     pathway_target_count: int = Field(strict=True, ge=0, le=25)
-    strict_pathway_differences: Annotated[
-        tuple[PathwayIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
-    ]
-    lenient_pathway_differences: Annotated[
+    pathway_differences: Annotated[
         tuple[PathwayIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
 

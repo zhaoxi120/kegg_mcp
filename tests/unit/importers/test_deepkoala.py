@@ -7,7 +7,6 @@ import pytest
 from kegg_mcp.domain import (
     DiagnosticCode,
     ErrorCode,
-    EvidenceMode,
     KeggMcpError,
     NormalizedStatus,
     ScoreType,
@@ -50,10 +49,8 @@ def test_deepkoala_truth_table_and_multi_domain_contract() -> None:
     assert dataset.records[0].score_type is ScoreType.PROBABILITY
     assert dataset.records[0].threshold_rule is ThresholdRule.GTE
     assert dataset.records[0].evidence.get("note") == "marker wins"
-    assert view.uncertain_kos == ()
-    assert select_ko_ids(view, EvidenceMode.STRICT) == ("K00001", "K00002", "K00003")
-    assert select_ko_ids(view, EvidenceMode.LENIENT) == ("K00001", "K00002", "K00003")
-    assert "K00004" not in select_ko_ids(view, EvidenceMode.LENIENT)
+    assert select_ko_ids(view) == ("K00001", "K00002", "K00003")
+    assert "K00004" not in select_ko_ids(view)
     assert dataset.import_report.source_columns == (
         "name",
         "predict_label",
@@ -114,8 +111,7 @@ def test_deepkoala_composite_components_preserve_rejected_source_semantics() -> 
     assert {record.normalized_status for record in dataset.records} == {NormalizedStatus.REJECTED}
     assert {record.status_reason for record in dataset.records} == {"below_source_threshold"}
     assert view.rejected_kos == ("K01784", "K01785")
-    assert select_ko_ids(view, EvidenceMode.STRICT) == ()
-    assert select_ko_ids(view, EvidenceMode.LENIENT) == ()
+    assert select_ko_ids(view) == ()
 
 
 @pytest.mark.parametrize(

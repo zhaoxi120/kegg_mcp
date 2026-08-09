@@ -69,6 +69,11 @@ allowed-root policy from deployment topology. Only the exact typed `file_path` r
 route the same successful job through the companion's bounded resource. The Skill must not parse,
 transform, or validate CSV rows itself.
 
+The companion enforces a 5,000,000-byte cap on its generated detailed CSV. Pass its ordinary
+successful output to Core with full-record retention. Core's separate explicit large-file
+projection is for an existing allowed file and does not increase this companion cap. The controlled
+inline-resource fallback below is also ineligible for that file-only projection.
+
 Treat private job identifiers and resource URIs as process-scoped. Stable output-directory files,
 not a private identifier, are the cross-MCP handoff.
 

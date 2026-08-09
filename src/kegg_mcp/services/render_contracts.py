@@ -26,13 +26,11 @@ from kegg_mcp.analysis.contracts import (
     ModuleReferenceEdge,
     ModuleReferenceIssue,
     ModuleWarning,
-    ModuleWarningCode,
     OptionalComponentState,
-    PairedModuleEvaluation,
     ResolvedModuleDefinition,
     ResolvedModuleGraph,
 )
-from kegg_mcp.analysis.module_evaluation import evaluate_module_pair
+from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.pathway_coverage import (
     PathwayCoverageParameters,
     PathwayCoverageStatus,
@@ -46,25 +44,30 @@ from kegg_mcp.analysis.pathway_coverage import (
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     AnalysisUnit,
-    AnnotationDataset,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     KNumber,
     ModuleId,
     NormalizedStatus,
     SourceProvenance,
     StatusCount,
-    build_ko_evidence_view,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.domain.projections import (
+    AnnotationRetention,
+    KoAnalysisEvidence,
+    KoAnalysisProjection,
+    analysis_accepted_ko_ids,
+    analysis_decision_policy,
+    analysis_status_counts,
+)
 from kegg_mcp.execution import AnalysisExecutionProvenance
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggOperation
 
-RENDER_INPUT_SCHEMA_VERSION = "4"
-RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=4"
+RENDER_INPUT_SCHEMA_VERSION = "5"
+RENDER_INPUT_MIME_TYPE = "application/vnd.kegg-mcp.render-input+json;version=5"
 RENDER_INPUT_BUILDER_NAME = "kegg_render_handoff"
-RENDER_INPUT_BUILDER_VERSION = "2"
+RENDER_INPUT_BUILDER_VERSION = "3"
 MODULE_RENDER_MAX_CANVAS_DIMENSION = 20_000
 MODULE_RENDER_MAX_CANVAS_PIXELS = 20_000_000
 MODULE_RENDER_MAX_SVG_NODES = 4_096
@@ -138,11 +141,11 @@ def module_scene_fits_renderer(
 
 
 class RenderInputLimits(FrozenModel):
-    """Serialized renderer-handoff bounds recorded with every version 4 document."""
+    """Serialized renderer-handoff bounds recorded with every version 5 document."""
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:render-input-limits:1",
+            "$id": "urn:kegg-mcp:schema:render-input-limits:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -155,9 +158,6 @@ class RenderInputLimits(FrozenModel):
     max_module_required_blocks_per_target: int = Field(default=1_000, strict=True, gt=0, le=10_000)
     max_module_optional_components_per_target: int = Field(
         default=1_000, strict=True, gt=0, le=10_000
-    )
-    max_module_uncertain_support_per_target: int = Field(
-        default=10_000, strict=True, gt=0, le=10_000
     )
     max_pathway_detected_ko_ids_per_target: int = Field(
         default=100_000, strict=True, ge=0, le=1_000_000
@@ -183,10 +183,9 @@ class RenderDataset(FrozenModel):
 
 
 class VisualizationEvidence(FrozenModel):
-    """Only accepted and policy-defined uncertain K numbers eligible for coloring."""
+    """Unique accepted K numbers eligible for coloring."""
 
     accepted_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=1_000_000)]
-    uncertain_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=1_000_000)]
     status_counts: Annotated[
         tuple[StatusCount, ...],
         Field(min_length=len(NormalizedStatus), max_length=len(NormalizedStatus)),
@@ -194,17 +193,18 @@ class VisualizationEvidence(FrozenModel):
 
     @model_validator(mode="after")
     def validate_evidence(self) -> Self:
-        for name, values in (
-            ("accepted_ko_ids", self.accepted_ko_ids),
-            ("uncertain_ko_ids", self.uncertain_ko_ids),
-        ):
-            if values != tuple(sorted(set(values))):
-                raise ValueError(f"{name} must be sorted and unique")
+        if self.accepted_ko_ids != tuple(sorted(set(self.accepted_ko_ids))):
+            raise ValueError("accepted_ko_ids must be sorted and unique")
         statuses = tuple(item.status for item in self.status_counts)
         if statuses != tuple(NormalizedStatus):
             raise ValueError("status_counts must use canonical normalized-status order")
-        if not set(self.accepted_ko_ids).isdisjoint(self.uncertain_ko_ids):
-            raise ValueError("accepted and uncertain visualization evidence must be disjoint")
+        accepted_count = next(
+            item.count
+            for item in self.status_counts
+            if item.status is NormalizedStatus.ACCEPTED
+        )
+        if len(self.accepted_ko_ids) > accepted_count:
+            raise ValueError("unique accepted K numbers cannot exceed accepted assignments")
         return self
 
 
@@ -262,32 +262,18 @@ class ModuleCompletionRenderResult(FrozenModel):
 
 
 class ModuleRequiredBlockRenderState(FrozenModel):
-    """Complete strict and lenient state for one required root top-level block."""
+    """Complete state for one required root top-level block."""
 
     block_index: int = Field(strict=True, gt=0)
-    strict_state: ModuleBlockState
-    lenient_state: ModuleBlockState
-    uncertain_support_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=10_000)] = ()
-
-    @model_validator(mode="after")
-    def validate_support(self) -> Self:
-        if self.uncertain_support_ko_ids != tuple(sorted(set(self.uncertain_support_ko_ids))):
-            raise ValueError("uncertain block support must be sorted and unique")
-        if self.uncertain_support_ko_ids and not (
-            self.strict_state is not ModuleBlockState.COMPLETE
-            and self.lenient_state is ModuleBlockState.COMPLETE
-        ):
-            raise ValueError("uncertain block support must explain a lenient completion change")
-        return self
+    state: ModuleBlockState
 
 
 class ModuleOptionalComponentRenderState(FrozenModel):
-    """Complete strict and lenient presence state for one optional expression."""
+    """Complete presence state for one optional expression."""
 
     component_index: int = Field(strict=True, gt=0)
     source_module_id: ModuleId
-    strict_state: OptionalComponentState
-    lenient_state: OptionalComponentState
+    state: OptionalComponentState
 
 
 class ModuleRenderTarget(FrozenModel):
@@ -295,7 +281,7 @@ class ModuleRenderTarget(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:module-render-target:2",
+            "$id": "urn:kegg-mcp:schema:module-render-target:3",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -308,8 +294,7 @@ class ModuleRenderTarget(FrozenModel):
     definitions: Annotated[tuple[ResolvedModuleDefinition, ...], Field(max_length=10_000)]
     reference_edges: Annotated[tuple[ModuleReferenceEdge, ...], Field(max_length=100_000)]
     reference_issues: Annotated[tuple[ModuleReferenceIssue, ...], Field(max_length=100_000)]
-    strict: ModuleCompletionRenderResult
-    lenient: ModuleCompletionRenderResult
+    completion: ModuleCompletionRenderResult
     required_block_states_complete: bool
     required_block_states: Annotated[
         tuple[ModuleRequiredBlockRenderState, ...], Field(max_length=10_000)
@@ -332,10 +317,7 @@ class ModuleRenderTarget(FrozenModel):
             name=MODULE_CALCULATION_METHOD,
             version=MODULE_CALCULATION_VERSION,
         )
-        if (
-            self.strict.calculation_method != current_calculation
-            or self.lenient.calculation_method != current_calculation
-        ):
+        if self.completion.calculation_method != current_calculation:
             raise ValueError("MODULE calculation identity must match the current contract")
         if any(
             item.parse_result.parser_name != self.parser_name
@@ -348,8 +330,6 @@ class ModuleRenderTarget(FrozenModel):
             for batch in self.reference_retrieval_provenance
         ):
             raise ValueError("MODULE render targets require only GET retrieval provenance")
-        if self.strict.required_block_count != self.lenient.required_block_count:
-            raise ValueError("strict and lenient summaries must share the block denominator")
         definition_ids = tuple(item.definition.module_id for item in self.definitions)
         if definition_ids != tuple(sorted(set(definition_ids))):
             raise ValueError("MODULE definitions must use sorted unique identifiers")
@@ -367,22 +347,18 @@ class ModuleRenderTarget(FrozenModel):
             raise ValueError("an incomplete definition graph must not contain partial graph detail")
 
         block_indexes = tuple(item.block_index for item in self.required_block_states)
-        expected_indexes = tuple(range(1, self.strict.required_block_count + 1))
+        expected_indexes = tuple(range(1, self.completion.required_block_count + 1))
         if self.required_block_states_complete:
             if block_indexes != expected_indexes:
                 raise ValueError("complete block states must cover every block in order")
-            for summary, field_name in (
-                (self.strict, "strict_state"),
-                (self.lenient, "lenient_state"),
+            states = tuple(item.state for item in self.required_block_states)
+            completed = sum(state is ModuleBlockState.COMPLETE for state in states)
+            evaluable = sum(state is not ModuleBlockState.NOT_EVALUABLE for state in states)
+            if (
+                completed != self.completion.completed_required_blocks
+                or evaluable != self.completion.evaluable_required_blocks
             ):
-                states = tuple(getattr(item, field_name) for item in self.required_block_states)
-                completed = sum(state is ModuleBlockState.COMPLETE for state in states)
-                evaluable = sum(state is not ModuleBlockState.NOT_EVALUABLE for state in states)
-                if (
-                    completed != summary.completed_required_blocks
-                    or evaluable != summary.evaluable_required_blocks
-                ):
-                    raise ValueError("complete block states must match completion summaries")
+                raise ValueError("complete block states must match the completion summary")
         elif self.required_block_states:
             raise ValueError("incomplete block states must not contain a misleading prefix")
         optional_indexes = tuple(item.component_index for item in self.optional_component_states)
@@ -413,7 +389,7 @@ class PathwayRenderTarget(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:pathway-render-target:3",
+            "$id": "urn:kegg-mcp:schema:pathway-render-target:4",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -423,7 +399,6 @@ class PathwayRenderTarget(FrozenModel):
     pathway_class: Annotated[tuple[str, ...], Field(min_length=1, max_length=32)]
     reference_namespace: PathwayReferenceNamespace
     reference_scope: PathwayReferenceScope
-    evidence_mode: EvidenceMode
     evaluation_status: PathwayCoverageStatus
     coverage_numerator: NonNegativeCount
     coverage_denominator: NonNegativeCount
@@ -439,7 +414,7 @@ class PathwayRenderTarget(FrozenModel):
         tuple[KeggBatchProvenance, ...], Field(min_length=1, max_length=64)
     ]
     calculation_method: Literal["unique_detected_kos_over_unique_reference_kos"]
-    calculation_version: Literal["2"]
+    calculation_version: Literal["3"]
     warnings: Annotated[tuple[PathwayCoverageWarning, ...], Field(max_length=16)]
 
     @model_validator(mode="after")
@@ -493,7 +468,7 @@ class PathwayRenderTarget(FrozenModel):
             if not self.detected_ko_ids_complete:
                 raise ValueError("renderable pathway targets require complete detected evidence")
             if self.reference_namespace is not PathwayReferenceNamespace.KO:
-                raise ValueError("version 4 renders only KO-reference pathway targets")
+                raise ValueError("version 5 renders only KO-reference pathway targets")
             if self.evaluation_status is not PathwayCoverageStatus.EVALUATED:
                 raise ValueError("renderable pathway targets require an evaluated denominator")
         elif self.not_renderable_reason is None:
@@ -506,7 +481,7 @@ class RenderExecutionProvenance(FrozenModel):
 
     analysis: AnalysisExecutionProvenance
     handoff_builder_name: Literal["kegg_render_handoff"]
-    handoff_builder_version: Literal["2"]
+    handoff_builder_version: Literal["3"]
 
 
 class RenderInput(FrozenModel):
@@ -514,12 +489,12 @@ class RenderInput(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:render-input:4",
+            "$id": "urn:kegg-mcp:schema:render-input:5",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
-    schema_version: Literal["4"]
+    schema_version: Literal["5"]
     producer: RenderProducer
     dataset: RenderDataset
     decision_policy: DecisionPolicyReference
@@ -535,10 +510,7 @@ class RenderInput(FrozenModel):
             raise ValueError("MODULE targets exceed the recorded renderer limit")
         if len(self.pathways) > self.limits.max_pathway_targets:
             raise ValueError("pathway targets exceed the recorded renderer limit")
-        if (
-            len(self.evidence.accepted_ko_ids) + len(self.evidence.uncertain_ko_ids)
-            > self.limits.max_evidence_ko_ids
-        ):
+        if len(self.evidence.accepted_ko_ids) > self.limits.max_evidence_ko_ids:
             raise ValueError("visualization evidence exceeds the recorded renderer limit")
         module_ids = tuple(item.module_id for item in self.modules)
         pathway_ids = tuple(item.pathway_id for item in self.pathways)
@@ -547,7 +519,6 @@ class RenderInput(FrozenModel):
         if pathway_ids != tuple(sorted(set(pathway_ids))):
             raise ValueError("pathway targets must use sorted unique identifiers")
         accepted = set(self.evidence.accepted_ko_ids)
-        uncertain = set(self.evidence.uncertain_ko_ids)
         pathway_parameters = self.execution.analysis.pathway_parameters
         for target in self.modules:
             if len(target.definitions) > self.limits.max_module_definitions_per_target:
@@ -567,27 +538,11 @@ class RenderInput(FrozenModel):
                 > self.limits.max_module_optional_components_per_target
             ):
                 raise ValueError("MODULE optional components exceed the recorded renderer limit")
-            support = {
-                ko_id
-                for block in target.required_block_states
-                for ko_id in block.uncertain_support_ko_ids
-            }
-            if len(support) > self.limits.max_module_uncertain_support_per_target:
-                raise ValueError("MODULE uncertain support exceeds the recorded renderer limit")
-            if not support.issubset(uncertain):
-                raise ValueError(
-                    "MODULE uncertain support must use uncertain visualization evidence"
-                )
         for target in self.pathways:
             if len(target.detected_ko_ids) > self.limits.max_pathway_detected_ko_ids_per_target:
                 raise ValueError("pathway detected evidence exceeds the recorded renderer limit")
-            selected = (
-                accepted if target.evidence_mode is EvidenceMode.STRICT else accepted | uncertain
-            )
-            if not set(target.detected_ko_ids).issubset(selected):
-                raise ValueError("pathway detected evidence must use the selected evidence mode")
-            if target.evidence_mode is not pathway_parameters.evidence_mode:
-                raise ValueError("pathway evidence mode must match execution provenance")
+            if not set(target.detected_ko_ids).issubset(accepted):
+                raise ValueError("pathway detected evidence must use accepted K numbers")
             if (
                 target.reference_scope is PathwayReferenceScope.GLOBAL_OR_OVERVIEW
                 and not pathway_parameters.allow_global_or_overview
@@ -597,24 +552,29 @@ class RenderInput(FrozenModel):
 
 
 def build_render_input(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     module_graphs: tuple[ResolvedModuleGraph, ...],
     pathway_references: tuple[PathwayKoReference, ...],
     execution: AnalysisExecutionProvenance,
     *,
     limits: RenderInputLimits | None = None,
 ) -> RenderInput:
-    """Build one complete renderer handoff from authoritative analysis inputs."""
+    """Build one handoff from full records or a unique accepted-KO projection."""
     bounds = limits or RenderInputLimits()
+    expected_retention = (
+        AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+        if isinstance(evidence, KoAnalysisProjection)
+        else AnnotationRetention.FULL_RECORDS
+    )
+    if execution.annotation_retention is not expected_retention:
+        _fail_identity("analysis evidence retention does not match execution provenance")
     _validate_target_counts(module_graphs, pathway_references, bounds)
 
-    evidence_view = build_ko_evidence_view(dataset)
-    evidence = VisualizationEvidence(
-        accepted_ko_ids=evidence_view.accepted_kos,
-        uncertain_ko_ids=evidence_view.uncertain_kos,
-        status_counts=evidence_view.status_counts,
+    visualization_evidence = VisualizationEvidence(
+        accepted_ko_ids=analysis_accepted_ko_ids(evidence),
+        status_counts=analysis_status_counts(evidence),
     )
-    evidence_ko_count = len(evidence.accepted_ko_ids) + len(evidence.uncertain_ko_ids)
+    evidence_ko_count = len(visualization_evidence.accepted_ko_ids)
     if evidence_ko_count > bounds.max_evidence_ko_ids:
         _fail_output_limit(
             "evidence_ko_ids",
@@ -626,7 +586,7 @@ def build_render_input(
     graph_by_id = _unique_by_id(module_graphs, lambda item: item.root_module_id, "MODULE graph")
     module_targets = tuple(
         _module_target(
-            dataset,
+            evidence,
             graph_by_id[module_id],
             execution.module_analysis_limits,
             bounds,
@@ -639,28 +599,28 @@ def build_render_input(
     )
     pathway_targets = tuple(
         _pathway_target(
-            dataset,
+            evidence,
             reference_by_id[pathway_id],
             execution,
-            evidence,
+            visualization_evidence,
             bounds,
         )
         for pathway_id in sorted(reference_by_id)
     )
 
-    sources = tuple(sorted(dataset.sources, key=lambda item: item.model_dump_json()))
+    sources = tuple(sorted(evidence.sources, key=lambda item: item.model_dump_json()))
     document = RenderInput(
         schema_version=RENDER_INPUT_SCHEMA_VERSION,
         producer=RenderProducer(name="kegg-mcp", version=__version__),
         dataset=RenderDataset(
-            dataset_id=dataset.dataset_id,
-            analysis_unit=dataset.analysis_unit,
-            taxon_id=dataset.taxon_id,
-            kegg_organism_code=dataset.kegg_organism_code,
+            dataset_id=evidence.dataset_id,
+            analysis_unit=evidence.analysis_unit,
+            taxon_id=evidence.taxon_id,
+            kegg_organism_code=evidence.kegg_organism_code,
             sources=sources,
         ),
-        decision_policy=dataset.import_report.decision_policy,
-        evidence=evidence,
+        decision_policy=analysis_decision_policy(evidence),
+        evidence=visualization_evidence,
         modules=module_targets,
         pathways=pathway_targets,
         execution=RenderExecutionProvenance(
@@ -746,7 +706,7 @@ def _module_definition_scene_metrics(
 
 
 def _module_target(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     graph: ResolvedModuleGraph,
     analysis_limits: ModuleAnalysisLimits,
     bounds: RenderInputLimits,
@@ -755,7 +715,7 @@ def _module_target(
         item.parse_result.limits != analysis_limits.parsing for item in graph.modules
     ):
         _fail_identity("MODULE graph limits do not match analysis execution provenance")
-    pair = _complete_render_pair(graph, dataset, analysis_limits, bounds)
+    result = _complete_render_evaluation(graph, evidence, analysis_limits, bounds)
     root = next(item for item in graph.modules if item.definition.module_id == graph.root_module_id)
     definitions_fit = (
         len(graph.modules) <= bounds.max_module_definitions_per_target
@@ -768,8 +728,7 @@ def _module_target(
     )
     edges = tuple(sorted(graph.edges, key=_edge_sort_key)) if definitions_fit else ()
     issues = tuple(sorted(graph.issues, key=_issue_sort_key)) if definitions_fit else ()
-    strict_summary = _completion_summary(pair.strict)
-    lenient_summary = _completion_summary(pair.lenient)
+    completion = _completion_summary(result)
 
     renderability: RenderabilityStatus = RenderabilityStatus.RENDERABLE
     reason: str | None = None
@@ -796,15 +755,10 @@ def _module_target(
         renderability = RenderabilityStatus.NOT_RENDERABLE
         reason = "module_optional_component_limit_exceeded"
     else:
-        block_states, support_complete = _required_block_states(pair)
-        optional_states, optional_complete = _optional_states(pair, optional_count)
-        blocks_complete = len(block_states) == pair.strict.required_block_count
-        if not support_complete:
-            renderability = RenderabilityStatus.NOT_RENDERABLE
-            reason = "module_uncertain_support_limit_exceeded"
-            block_states = ()
-            blocks_complete = False
-        elif not optional_complete:
+        block_states = _required_block_states(result)
+        optional_states, optional_complete = _optional_states(result, optional_count)
+        blocks_complete = len(block_states) == result.required_block_count
+        if not optional_complete:
             renderability = RenderabilityStatus.NOT_RENDERABLE
             reason = "module_optional_component_limit_exceeded"
             optional_states = ()
@@ -821,23 +775,17 @@ def _module_target(
             optional_states = ()
             optional_complete = False
 
-    warnings_by_code: dict[ModuleWarningCode, ModuleWarning] = {
-        warning.code: warning for warning in (*pair.strict.warnings, *pair.lenient.warnings)
-    }
-    warnings = tuple(
-        warnings_by_code[code] for code in sorted(warnings_by_code, key=lambda item: item.value)
-    )
+    warnings = tuple(sorted(result.warnings, key=lambda item: item.code.value))
     return ModuleRenderTarget(
         module_id=graph.root_module_id,
-        module_name=pair.strict.module_name,
+        module_name=result.module_name,
         renderability=renderability,
         not_renderable_reason=reason,
         definition_graph_complete=definitions_fit,
         definitions=definitions,
         reference_edges=edges,
         reference_issues=issues,
-        strict=strict_summary,
-        lenient=lenient_summary,
+        completion=completion,
         required_block_states_complete=blocks_complete,
         required_block_states=block_states,
         optional_component_states_complete=optional_complete,
@@ -850,17 +798,16 @@ def _module_target(
     )
 
 
-def _complete_render_pair(
+def _complete_render_evaluation(
     graph: ResolvedModuleGraph,
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     original_limits: ModuleAnalysisLimits,
     bounds: RenderInputLimits,
-) -> PairedModuleEvaluation:
+) -> ModuleEvaluationResult:
     evaluation = original_limits.evaluation.model_copy(
         update={
             "max_block_previews": bounds.max_module_required_blocks_per_target,
             "max_optional_components": bounds.max_module_optional_components_per_target,
-            "max_uncertain_support_items": bounds.max_module_uncertain_support_per_target,
         }
     )
     limits = ModuleAnalysisLimits(
@@ -868,47 +815,20 @@ def _complete_render_pair(
         resolution=original_limits.resolution,
         evaluation=evaluation,
     )
-    return evaluate_module_pair(graph, dataset, limits)
+    return evaluate_module(graph, evidence, limits)
 
 
 def _required_block_states(
-    pair: PairedModuleEvaluation,
-) -> tuple[
-    tuple[ModuleRequiredBlockRenderState, ...],
-    bool,
-]:
-    strict_states = _block_state_map(pair.strict)
-    lenient_states = _block_state_map(pair.lenient)
-    support_by_ko: dict[str, tuple[int, ...]] = {}
-    complete = True
-    for item in pair.lenient.uncertain_support:
-        if item.required_block_indexes_truncated:
-            complete = False
-            continue
-        support_by_ko[item.ko_id] = item.required_block_indexes
-    changed = {
-        index
-        for index in range(1, pair.strict.required_block_count + 1)
-        if strict_states[index] is not ModuleBlockState.COMPLETE
-        and lenient_states[index] is ModuleBlockState.COMPLETE
-    }
-    support_by_block: dict[int, set[str]] = {index: set() for index in changed}
-    for ko_id, indexes in support_by_ko.items():
-        for index in indexes:
-            if index in support_by_block:
-                support_by_block[index].add(ko_id)
-    if any(not values for values in support_by_block.values()):
-        complete = False
-    states = tuple(
+    result: ModuleEvaluationResult,
+) -> tuple[ModuleRequiredBlockRenderState, ...]:
+    states = _block_state_map(result)
+    return tuple(
         ModuleRequiredBlockRenderState(
             block_index=index,
-            strict_state=strict_states[index],
-            lenient_state=lenient_states[index],
-            uncertain_support_ko_ids=tuple(sorted(support_by_block.get(index, set()))),
+            state=states[index],
         )
-        for index in range(1, pair.strict.required_block_count + 1)
+        for index in range(1, result.required_block_count + 1)
     )
-    return states, complete
 
 
 def _block_state_map(result: ModuleEvaluationResult) -> dict[int, ModuleBlockState]:
@@ -922,50 +842,43 @@ def _block_state_map(result: ModuleEvaluationResult) -> dict[int, ModuleBlockSta
 
 
 def _optional_states(
-    pair: PairedModuleEvaluation,
+    result: ModuleEvaluationResult,
     expected_count: int,
 ) -> tuple[tuple[ModuleOptionalComponentRenderState, ...], bool]:
-    strict = pair.strict.optional_components
-    lenient = pair.lenient.optional_components
-    if len(strict) != expected_count or len(lenient) != expected_count:
+    optional_components = result.optional_components
+    if len(optional_components) != expected_count:
         return (), False
-    values: list[ModuleOptionalComponentRenderState] = []
-    for strict_item, lenient_item in zip(strict, lenient, strict=True):
-        identity = ("component_index", "source_module_id", "source_span")
-        if any(getattr(strict_item, name) != getattr(lenient_item, name) for name in identity):
-            _fail_identity("strict and lenient optional-component identities do not match")
-        values.append(
+    return (
+        tuple(
             ModuleOptionalComponentRenderState(
-                component_index=strict_item.component_index,
-                source_module_id=strict_item.source_module_id,
-                strict_state=strict_item.state,
-                lenient_state=lenient_item.state,
+                component_index=item.component_index,
+                source_module_id=item.source_module_id,
+                state=item.state,
             )
-        )
-    return tuple(values), True
+            for item in optional_components
+        ),
+        True,
+    )
 
 
 def _pathway_target(
-    dataset: AnnotationDataset,
+    analysis_evidence: KoAnalysisEvidence,
     reference: PathwayKoReference,
     execution: AnalysisExecutionProvenance,
-    evidence: VisualizationEvidence,
+    visualization_evidence: VisualizationEvidence,
     bounds: RenderInputLimits,
 ) -> PathwayRenderTarget:
     pathway_parameters = execution.pathway_parameters
     result = evaluate_pathway_coverage(
         reference,
-        dataset,
+        analysis_evidence,
         PathwayCoverageParameters(
             reference_namespace=reference.reference_namespace,
-            evidence_mode=pathway_parameters.evidence_mode,
             allow_global_or_overview=pathway_parameters.allow_global_or_overview,
         ),
         execution.pathway_coverage_limits,
     )
-    selected = set(evidence.accepted_ko_ids)
-    if result.evidence_mode is EvidenceMode.LENIENT:
-        selected.update(evidence.uncertain_ko_ids)
+    selected = set(visualization_evidence.accepted_ko_ids)
     detected = tuple(sorted(set(reference.reference_kos).intersection(selected)))
     if len(detected) != result.detected_unique_ko_count:
         _fail_identity("pathway reference and coverage numerator do not match")
@@ -988,7 +901,6 @@ def _pathway_target(
         pathway_class=result.pathway_class,
         reference_namespace=result.reference_namespace,
         reference_scope=result.reference_scope,
-        evidence_mode=result.evidence_mode,
         evaluation_status=result.evaluation_status,
         coverage_numerator=result.detected_unique_ko_count,
         coverage_denominator=result.reference_unique_ko_count,

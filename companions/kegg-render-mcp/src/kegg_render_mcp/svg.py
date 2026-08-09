@@ -9,7 +9,6 @@ from xml.etree import ElementTree
 
 from kegg_render_mcp._presentation import (
     ACCEPTED_COLOR,
-    UNCERTAIN_COLOR,
     UNSUPPORTED_COLOR,
 )
 from kegg_render_mcp._presentation import (
@@ -27,7 +26,6 @@ from kegg_render_mcp.pathway_scene import PathwayScene
 
 TEXT_COLOR = "#1F2937"
 BACKGROUND_COLOR = "#FFFFFF"
-_UNCERTAIN_DASH_PATTERN = "8 4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,24 +54,20 @@ def render_pathway_svg(scene: PathwayScene, *, max_bytes: int, max_nodes: int) -
             f'href="data:image/png;base64,{encoded}"/>'
         ),
     ]
-    for overlay in scene.overlays:
-        geometry = overlay.geometry
-        color = ACCEPTED_COLOR if overlay.state == "accepted" else UNCERTAIN_COLOR
-        dash = (
-            "" if overlay.state == "accepted" else f' stroke-dasharray="{_UNCERTAIN_DASH_PATTERN}"'
-        )
+    for geometry in scene.overlays:
         if geometry.kind == "box":
             left = geometry.x - geometry.width / 2
             top = geometry.y - geometry.height / 2
             lines.append(
                 f'<rect x="{left:.2f}" y="{top:.2f}" width="{geometry.width:.2f}" '
-                f'height="{geometry.height:.2f}" rx="3" fill="{color}" fill-opacity="0.28" '
-                f'stroke="{color}" stroke-width="4"{dash}/>'
+                f'height="{geometry.height:.2f}" rx="3" fill="{ACCEPTED_COLOR}" '
+                f'fill-opacity="0.28" stroke="{ACCEPTED_COLOR}" stroke-width="4"/>'
             )
         else:
             lines.append(
-                f'<path d="{_polyline_path(geometry.points)}" fill="none" stroke="{color}" '
-                f'stroke-width="7" stroke-linecap="round" stroke-linejoin="round"{dash}/>'
+                f'<path d="{_polyline_path(geometry.points)}" fill="none" '
+                f'stroke="{ACCEPTED_COLOR}" stroke-width="7" stroke-linecap="round" '
+                'stroke-linejoin="round"/>'
             )
     footer_y = scene.height + 28
     lines.extend(
@@ -84,15 +78,6 @@ def render_pathway_svg(scene: PathwayScene, *, max_bytes: int, max_nodes: int) -
                 footer_y + 34,
                 ACCEPTED_COLOR,
                 "Accepted annotation",
-                dashed=False,
-                geometry_kinds=scene.retained_geometry_kinds,
-            ),
-            _legend(
-                280,
-                footer_y + 34,
-                UNCERTAIN_COLOR,
-                "Policy-defined uncertain annotation",
-                dashed=True,
                 geometry_kinds=scene.retained_geometry_kinds,
             ),
         ]
@@ -139,22 +124,13 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
         _text(
             30,
             70,
-            f"Strict exact: {_exact(scene.strict_exact_completion)} | "
-            f"Strict block coverage: {_ratio(scene.strict_block_coverage)} | "
-            f"Status: {scene.strict_status}",
+            f"Exact: {_exact(scene.exact_completion)} | "
+            f"Block coverage: {_ratio(scene.block_coverage)} | Status: {scene.status}",
             15,
         ),
         _text(
             30,
-            96,
-            f"Lenient exact: {_exact(scene.lenient_exact_completion)} | "
-            f"Lenient block coverage: {_ratio(scene.lenient_block_coverage)} | "
-            f"Status: {scene.lenient_status}",
-            15,
-        ),
-        _text(
-            30,
-            126,
+            100,
             (
                 "AND/space/+ = all required; OR/, = alternatives; "
                 "OPTIONAL/- = excluded from denominator."
@@ -186,12 +162,7 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
     lines.append(_text(panel_x, 164, "Required block states", 17, bold=True))
     for index, block in enumerate(scene.blocks):
         y = 190 + index * 34
-        color = _block_color(block.strict_state, block.lenient_state)
-        uncertain_note = (
-            " via " + ", ".join(block.uncertain_support_ko_ids)
-            if block.uncertain_support_ko_ids
-            else ""
-        )
+        color = _block_color(block.state)
         lines.extend(
             [
                 f'<rect x="{panel_x}" y="{y}" width="18" height="18" fill="{color}" '
@@ -199,8 +170,7 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
                 _text(
                     panel_x + 28,
                     y + 15,
-                    f"Block {block.block_index}: strict={block.strict_state}; "
-                    f"lenient={block.lenient_state}{uncertain_note}",
+                    f"Block {block.block_index}: {block.state}",
                     12,
                 ),
             ]
@@ -215,8 +185,7 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
                 _text(
                     panel_x,
                     panel_y,
-                    f"Optional {item.component_index} ({item.source_module_id}): "
-                    f"strict={item.strict_state}; lenient={item.lenient_state}",
+                    f"Optional {item.component_index} ({item.source_module_id}): {item.state}",
                     12,
                 )
             )
@@ -272,20 +241,18 @@ def _legend(
     color: str,
     label: str,
     *,
-    dashed: bool,
     geometry_kinds: frozenset[str],
 ) -> str:
-    dash = f' stroke-dasharray="{_UNCERTAIN_DASH_PATTERN}"' if dashed else ""
     parts: list[str] = []
     if "box" in geometry_kinds or not geometry_kinds:
         parts.append(
             f'<rect x="{x}" y="{y - 16}" width="26" height="18" fill="{color}" '
-            f'fill-opacity="0.28" stroke="{color}" stroke-width="3"{dash}/>'
+            f'fill-opacity="0.28" stroke="{color}" stroke-width="3"/>'
         )
     if "polyline" in geometry_kinds:
         parts.append(
             f'<path d="M {x} {y - 7} L {x + 26} {y - 7}" fill="none" stroke="{color}" '
-            f'stroke-width="4" stroke-linecap="round"{dash}/>'
+            f'stroke-width="4" stroke-linecap="round"/>'
         )
     parts.append(_text(x + 36, y, label, 13))
     return "".join(parts)

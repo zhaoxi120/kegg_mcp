@@ -18,18 +18,20 @@ from kegg_mcp.analysis import (
     PathwayRankingResult,
     PathwayRankingRow,
     PathwaySelection,
-    evaluate_module_pair,
+    evaluate_module,
     evaluate_pathway_coverage,
     rank_modules,
     rank_pathways,
 )
-from kegg_mcp.domain.annotations import (
-    AnnotationDataset,
-    EvidenceMode,
-    build_ko_evidence_view,
-    select_ko_ids,
-)
+from kegg_mcp.domain.decisions import DEEPKOALA_DETAILED
 from kegg_mcp.domain.errors import ErrorCode, fail
+from kegg_mcp.domain.projections import (
+    AnnotationRetention,
+    KoAnalysisEvidence,
+    KoAnalysisProjection,
+    analysis_accepted_ko_ids,
+    analysis_decision_policy,
+)
 from kegg_mcp.execution import (
     ANALYSIS_SERVICE_NAME,
     ANALYSIS_SERVICE_VERSION,
@@ -49,11 +51,14 @@ from kegg_mcp.kegg.contracts import (
     KeggBatchProvenance,
     KeggPairRow,
 )
+from kegg_mcp.importers import ProjectionImportLimits
+from kegg_mcp.importers._common import IMPORTER_VERSION
 from kegg_mcp.reporting import ReportInput, ReportLimits, render_report
 from kegg_mcp.services.kegg_relations import bounded_relation_batches
 from kegg_mcp.services.models import (
     MAX_DIRECT_ANALYSIS_TARGETS,
     AnalyzeKoAnnotationsResult,
+    AnnotationInputFormat,
     AutomaticModuleSelectionSummary,
     AutomaticPathwaySelectionSummary,
     NormalizeAnnotationsRequest,
@@ -77,6 +82,7 @@ from kegg_mcp.services.reference_loading import (
     load_pathway_references,
 )
 from kegg_mcp.services.result_builders import (
+    _analysis_warning_count,
     _analysis_warnings,
     _artifact_metadata,
     _build_analysis_summary,
@@ -124,7 +130,6 @@ def analyze_annotation_targets(
     client: KeggPrimitiveClient,
     result_store: SQLiteResultStore,
     scope_id: str,
-    pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT,
     pathway_selection: PathwaySelection | None = None,
     allow_global_or_overview: bool = False,
     options: KeggRequestOptions | None = None,
@@ -132,10 +137,13 @@ def analyze_annotation_targets(
     module_limits: ModuleAnalysisLimits | None = None,
     pathway_limits: PathwayCoverageLimits | None = None,
     report_limits: ReportLimits | None = None,
+    analysis_projection: KoAnalysisProjection | None = None,
+    projection_import_limits: ProjectionImportLimits | None = None,
+    annotation_import_elapsed_ms: int | None = None,
     output_directory: Path | None = None,
     remove_created_output_on_failure: bool = False,
 ) -> AnalyzeKoAnnotationsResult:
-    """Normalize any supported inline format and analyze all selected targets in one call."""
+    """Analyze full normalized evidence or one explicit unique accepted-KO projection."""
     effective_report_limits = report_limits or ReportLimits()
     effective_module_limits = module_limits or ModuleAnalysisLimits()
     effective_pathway_limits = pathway_limits or PathwayCoverageLimits()
@@ -143,8 +151,73 @@ def analyze_annotation_targets(
     result_store.list_results(scope_id, limit=1)
     stage_elapsed = {stage: 0 for stage in ExecutionStage}
     started = time.perf_counter_ns()
-    dataset = _import_dataset(request)
-    stage_elapsed[ExecutionStage.ANNOTATION_IMPORT] = _elapsed_ms(started)
+    if analysis_projection is None:
+        if projection_import_limits is not None or annotation_import_elapsed_ms is not None:
+            raise ValueError("projection intake metadata requires analysis_projection")
+        evidence: KoAnalysisEvidence = _import_dataset(request)
+    else:
+        if request.text is not None or request.file_path is None:
+            raise ValueError("analysis_projection requires the unchanged file-backed request")
+        if request.input_format is not AnnotationInputFormat.DEEPKOALA_DETAILED:
+            raise ValueError("analysis_projection requires DeepKOALA detailed input")
+        if projection_import_limits is None:
+            raise ValueError("analysis_projection requires its exact projection_import_limits")
+        if analysis_projection.decision_policy != DEEPKOALA_DETAILED.reference:
+            raise ValueError("analysis_projection requires the DeepKOALA decision policy")
+        projected_source = analysis_projection.sources[0]
+        request_source = request.source
+        if request_source is None or (
+            projected_source.source_name != request_source.source_name
+            or projected_source.source_version != request_source.source_version
+            or projected_source.model_name != request_source.model_name
+            or projected_source.model_version != request_source.model_version
+            or projected_source.annotation_date != request_source.annotation_date
+            or projected_source.input_uri != request_source.input_uri
+            or projected_source.input_path != request_source.input_path
+            or projected_source.source_metadata != request_source.source_metadata
+            or projected_source.importer_name != "deepkoala_unique_ko_projection"
+            or projected_source.importer_version != IMPORTER_VERSION
+        ):
+            raise ValueError("analysis_projection source must match the annotation request")
+        if any(
+            observed > maximum
+            for observed, maximum in (
+                (analysis_projection.input_bytes, projection_import_limits.max_bytes),
+                (analysis_projection.input_rows, projection_import_limits.max_rows),
+                (
+                    analysis_projection.expanded_assignments,
+                    projection_import_limits.max_expanded_assignments,
+                ),
+                (
+                    len(analysis_projection.accepted_ko_ids),
+                    projection_import_limits.max_unique_ko_ids,
+                ),
+                (len(analysis_projection.source_columns), projection_import_limits.max_columns),
+                (
+                    max(map(len, analysis_projection.source_columns)),
+                    projection_import_limits.max_field_length,
+                ),
+                (
+                    len(analysis_projection.diagnostic_preview),
+                    projection_import_limits.max_diagnostic_preview,
+                ),
+            )
+        ):
+            raise ValueError("analysis_projection exceeds its recorded projection_import_limits")
+        if (
+            analysis_projection.analysis_unit is not request.analysis_unit
+            or analysis_projection.taxon_id != request.taxon_id
+            or analysis_projection.kegg_organism_code != request.kegg_organism_code
+        ):
+            raise ValueError("analysis_projection context must match the annotation request")
+        if annotation_import_elapsed_ms is not None and annotation_import_elapsed_ms < 0:
+            raise ValueError("annotation_import_elapsed_ms must be non-negative")
+        evidence = analysis_projection
+    stage_elapsed[ExecutionStage.ANNOTATION_IMPORT] = (
+        _elapsed_ms(started)
+        if analysis_projection is None
+        else annotation_import_elapsed_ms or 0
+    )
     effective_options = options or KeggRequestOptions(refresh=False)
     effective_reference_limits = reference_limits or ReferenceLoadingLimits()
     budgeted_client = SharedReferenceBudgetClient(client, effective_reference_limits)
@@ -168,8 +241,7 @@ def analyze_annotation_targets(
             )
         started = time.perf_counter_ns()
         module_relationship_rows, module_mapping_provenance = _map_selected_ko_relationships(
-            dataset,
-            evidence_mode=pathway_evidence_mode,
+            evidence,
             relationship=KeggLinkRelationship.KO_TO_MODULE,
             client=budgeted_client,
             options=effective_options,
@@ -177,9 +249,8 @@ def analyze_annotation_targets(
         stage_elapsed[ExecutionStage.KO_TARGET_MAPPING] += _elapsed_ms(started)
         started = time.perf_counter_ns()
         module_ranking = rank_modules(
-            dataset,
+            evidence,
             module_relationship_rows,
-            pathway_evidence_mode,
         )
         stage_elapsed[ExecutionStage.TARGET_RANKING] += _elapsed_ms(started)
         selected_module_rows = module_ranking.rows[: module_selection.top_n]
@@ -187,7 +258,7 @@ def analyze_annotation_targets(
         module_ranking_execution = _module_ranking_execution(
             module_ranking,
             module_selection,
-            dataset=dataset,
+            evidence=evidence,
             mapping_provenance=module_mapping_provenance,
         )
     if pathway_selection is not None:
@@ -199,15 +270,14 @@ def analyze_annotation_targets(
             )
         started = time.perf_counter_ns()
         relationship_rows, pathway_mapping_provenance = _map_selected_ko_relationships(
-            dataset,
-            evidence_mode=pathway_evidence_mode,
+            evidence,
             relationship=KeggLinkRelationship.KO_TO_PATHWAY,
             client=budgeted_client,
             options=effective_options,
         )
         stage_elapsed[ExecutionStage.KO_TARGET_MAPPING] += _elapsed_ms(started)
         started = time.perf_counter_ns()
-        ranking = rank_pathways(dataset, relationship_rows, pathway_evidence_mode)
+        ranking = rank_pathways(evidence, relationship_rows)
         stage_elapsed[ExecutionStage.TARGET_RANKING] += _elapsed_ms(started)
         if not ranking.rows:
             fail(
@@ -229,7 +299,7 @@ def analyze_annotation_targets(
             ranking,
             pathway_selection,
             selected_rows=selected_pathway_rows,
-            dataset=dataset,
+            evidence=evidence,
             mapping_provenance=pathway_mapping_provenance,
         )
     started = time.perf_counter_ns()
@@ -255,15 +325,14 @@ def analyze_annotation_targets(
 
     started = time.perf_counter_ns()
     modules = tuple(
-        evaluate_module_pair(graph, dataset, effective_module_limits) for graph in graphs
+        evaluate_module(graph, evidence, effective_module_limits) for graph in graphs
     )
     coverages = tuple(
         evaluate_pathway_coverage(
             reference,
-            dataset,
+            evidence,
             PathwayCoverageParameters(
                 reference_namespace=reference.reference_namespace,
-                evidence_mode=pathway_evidence_mode,
                 allow_global_or_overview=allow_global_or_overview,
             ),
             effective_pathway_limits,
@@ -273,13 +342,20 @@ def analyze_annotation_targets(
     execution = AnalysisExecutionProvenance(
         service_name=ANALYSIS_SERVICE_NAME,
         service_version=ANALYSIS_SERVICE_VERSION,
-        import_limits=request.import_limits,
+        annotation_retention=(
+            AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+            if analysis_projection is not None
+            else AnnotationRetention.FULL_RECORDS
+        ),
+        import_limits=request.import_limits if analysis_projection is None else None,
+        projection_import_limits=(
+            projection_import_limits if analysis_projection is not None else None
+        ),
         kegg_request_options=effective_options,
         reference_loading_limits=effective_reference_limits,
         module_analysis_limits=effective_module_limits,
         module_ranking=module_ranking_execution,
         pathway_parameters=PathwayExecutionParameters(
-            evidence_mode=pathway_evidence_mode,
             allow_global_or_overview=allow_global_or_overview,
             ranking=ranking_execution,
         ),
@@ -300,7 +376,7 @@ def analyze_annotation_targets(
     )
     rendered = render_report(
         ReportInput(
-            dataset=dataset,
+            dataset=evidence,
             execution=execution,
             execution_metrics=metrics,
             mapping_provenance=mapping_provenance,
@@ -330,7 +406,7 @@ def analyze_annotation_targets(
     if ranking is not None:
         ranking_content = _json_bytes(
             {
-                "decision_policy": dataset.import_report.decision_policy.model_dump(mode="json"),
+                "decision_policy": analysis_decision_policy(evidence).model_dump(mode="json"),
                 "mapping_provenance": [
                     batch.model_dump(mode="json") for batch in pathway_mapping_provenance
                 ],
@@ -355,7 +431,7 @@ def analyze_annotation_targets(
     if module_ranking is not None:
         module_ranking_content = _json_bytes(
             {
-                "decision_policy": dataset.import_report.decision_policy.model_dump(mode="json"),
+                "decision_policy": analysis_decision_policy(evidence).model_dump(mode="json"),
                 "mapping_provenance": [
                     batch.model_dump(mode="json") for batch in module_mapping_provenance
                 ],
@@ -389,7 +465,7 @@ def analyze_annotation_targets(
                 artifact for artifact in rendered.artifacts if artifact.section.value == "summary"
             )
             output_bundle = write_analysis_bundle(
-                dataset,
+                evidence,
                 graphs,
                 modules,
                 references,
@@ -405,6 +481,11 @@ def analyze_annotation_targets(
     stage_elapsed[ExecutionStage.BUNDLE_WRITE] = _elapsed_ms(started)
     artifacts = tuple(artifact_metadata)
     caveats = ["K-number assignments are annotation evidence, not experimental validation."]
+    if analysis_projection is not None:
+        caveats.append(
+            "The analysis used a lossy unique accepted-KO projection; record-level evidence, "
+            "protein-to-KO mappings, and duplicate/conflict accounting were not retained."
+        )
     if modules:
         caveats.append(
             "Exact MODULE completion and project-defined required-block coverage are separate."
@@ -413,7 +494,7 @@ def analyze_annotation_targets(
         caveats.append(
             "Pathway KO coverage is descriptive and does not establish presence, activity, or flux."
         )
-    warnings = _analysis_warnings(dataset, modules, coverages)
+    warnings = _analysis_warnings(evidence, modules, coverages)
     final_metrics = _execution_metrics(
         stage_elapsed,
         mapping_provenance=mapping_provenance,
@@ -458,7 +539,6 @@ def analyze_annotation_targets(
     automatic_module_selection = (
         AutomaticModuleSelectionSummary(
             parameters=module_selection,
-            evidence_mode=module_ranking.evidence_mode,
             candidate_module_count=len(module_ranking.rows),
             selected_modules=selected_modules,
         )
@@ -468,12 +548,18 @@ def analyze_annotation_targets(
     return AnalyzeKoAnnotationsResult(
         result=result,
         artifacts=artifacts,
+        annotation_retention=execution.annotation_retention,
+        record_level_evidence_retained=analysis_projection is None,
+        protein_ko_mapping_available=analysis_projection is None,
+        duplicate_conflict_accounting=(
+            "not_evaluated" if analysis_projection is not None else "evaluated"
+        ),
         summary=_build_analysis_summary(
-            dataset,
-            evidence_mode=pathway_evidence_mode,
+            evidence,
             metrics=final_metrics,
             caveats=tuple(caveats),
             warnings=warnings,
+            warning_count=_analysis_warning_count(evidence, modules, coverages),
         ),
         module_target_count=len(modules),
         module_previews=tuple(_module_preview(item) for item in modules),
@@ -486,15 +572,14 @@ def analyze_annotation_targets(
 
 
 def _map_selected_ko_relationships(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     *,
-    evidence_mode: EvidenceMode,
     relationship: KeggLinkRelationship,
     client: SharedReferenceBudgetClient,
     options: KeggRequestOptions,
 ) -> tuple[tuple[KeggPairRow, ...], tuple[KeggBatchProvenance, ...]]:
     """Issue bounded KO-to-target calls and merge rows without changing their semantics."""
-    selected_ko_ids = select_ko_ids(build_ko_evidence_view(dataset), evidence_mode)
+    selected_ko_ids = analysis_accepted_ko_ids(evidence)
     if not selected_ko_ids:
         fail(
             ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
@@ -515,15 +600,14 @@ def _pathway_ranking_execution(
     selection: PathwaySelection,
     *,
     selected_rows: tuple[PathwayRankingRow, ...],
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     mapping_provenance: tuple[KeggBatchProvenance, ...],
 ) -> PathwayRankingExecution:
     return PathwayRankingExecution(
         method=PATHWAY_RANKING_METHOD,
         method_version=PATHWAY_RANKING_VERSION,
         selection=selection,
-        evidence_mode=ranking.evidence_mode,
-        decision_policy=dataset.import_report.decision_policy,
+        decision_policy=analysis_decision_policy(evidence),
         selected_unique_ko_count=len(ranking.selected_ko_ids),
         candidate_pathway_count=len(ranking.rows),
         selected_pathway_ids=tuple(row.pathway_id for row in selected_rows),
@@ -544,7 +628,7 @@ def _module_ranking_execution(
     ranking: ModuleRankingResult,
     selection: ModuleSelection,
     *,
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisEvidence,
     mapping_provenance: tuple[KeggBatchProvenance, ...],
 ) -> ModuleRankingExecution:
     selected_rows = ranking.rows[: selection.top_n]
@@ -552,8 +636,7 @@ def _module_ranking_execution(
         method=MODULE_RANKING_METHOD,
         method_version=MODULE_RANKING_VERSION,
         selection=selection,
-        evidence_mode=ranking.evidence_mode,
-        decision_policy=dataset.import_report.decision_policy,
+        decision_policy=analysis_decision_policy(evidence),
         selected_unique_ko_count=len(ranking.selected_ko_ids),
         candidate_module_count=len(ranking.rows),
         selected_module_ids=tuple(row.module_id for row in selected_rows),

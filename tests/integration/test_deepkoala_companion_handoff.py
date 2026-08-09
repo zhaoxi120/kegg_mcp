@@ -668,7 +668,7 @@ async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_r
                 list[dict[str, object]],
                 _wire_data(reused)["module_previews"],
             )[0]
-            assert module["strict_is_complete"] is True
+            assert module["is_complete"] is True
 
 
 @pytest.mark.asyncio

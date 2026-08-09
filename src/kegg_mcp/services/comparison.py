@@ -130,43 +130,25 @@ def compare_annotation_sets(
             module_target_count=(
                 0 if module_comparison is None else len(module_comparison.targets)
             ),
-            strict_module_differences=(
+            module_differences=(
                 ()
                 if module_comparison is None
                 else tuple(
                     target.module_id
                     for target in module_comparison.targets
-                    if target.strict.outcomes_differ
-                )
-            ),
-            lenient_module_differences=(
-                ()
-                if module_comparison is None
-                else tuple(
-                    target.module_id
-                    for target in module_comparison.targets
-                    if target.lenient.outcomes_differ
+                    if target.comparison.outcomes_differ
                 )
             ),
             pathway_target_count=(
                 0 if pathway_comparison is None else len(pathway_comparison.targets)
             ),
-            strict_pathway_differences=(
+            pathway_differences=(
                 ()
                 if pathway_comparison is None
                 else tuple(
                     target.reference.pathway_id
                     for target in pathway_comparison.targets
-                    if target.strict.outcomes_differ
-                )
-            ),
-            lenient_pathway_differences=(
-                ()
-                if pathway_comparison is None
-                else tuple(
-                    target.reference.pathway_id
-                    for target in pathway_comparison.targets
-                    if target.lenient.outcomes_differ
+                    if target.comparison.outcomes_differ
                 )
             ),
         ),

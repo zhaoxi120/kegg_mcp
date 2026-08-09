@@ -148,13 +148,13 @@ def test_ko_analysis_defaults_to_top_five_modules_and_pathways() -> None:
     assert "Top-5 MODULEs and Top-5 canonical KO" in corpus
 
 
-def test_ko_analysis_routes_explicit_ko01100_through_opted_in_v4_handoff() -> None:
+def test_ko_analysis_routes_explicit_ko01100_through_opted_in_v5_handoff() -> None:
     corpus = _corpus()
     for fragment in (
         "`ko01100`",
         "excludes them before Top-N target truncation",
         "`allow_global_or_overview=True`",
-        "renderable version 4 handoff",
+        "renderable version 5 handoff",
         "Do not substitute a `map` or organism reference",
         "request a model-native conceptual fallback",
     ):

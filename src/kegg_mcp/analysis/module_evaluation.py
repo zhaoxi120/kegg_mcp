@@ -26,21 +26,17 @@ from kegg_mcp.analysis.contracts import (
     ModuleWarningCode,
     OptionalComponentResult,
     OptionalComponentState,
-    PairedModuleEvaluation,
     ResolvedModuleDefinition,
     ResolvedModuleGraph,
     SourceSpan,
-    UncertainSupport,
 )
-from kegg_mcp.domain.annotations import (
-    AnnotationDataset,
-    EvidenceMode,
-    NormalizedStatus,
-    build_ko_evidence_view,
-    select_ko_ids,
+from kegg_mcp.domain.projections import (
+    KoAnalysisEvidence,
+    analysis_accepted_ko_ids,
+    analysis_decision_policy,
 )
 
-__all__ = ["evaluate_module", "evaluate_module_pair"]
+__all__ = ["evaluate_module"]
 
 
 class _Truth(Enum):
@@ -60,7 +56,6 @@ class _Missing:
 class _ExpressionResult:
     truth: _Truth
     matched: frozenset[str] = frozenset()
-    causal: frozenset[str] = frozenset()
     missing: _Missing | None = None
     required_component_count: int = 0
 
@@ -70,12 +65,6 @@ class _BlockEvaluation:
     block_index: int
     source_span: SourceSpan
     result: _ExpressionResult
-
-
-@dataclass(frozen=True, slots=True)
-class _EvaluationRun:
-    result: ModuleEvaluationResult
-    blocks: tuple[_BlockEvaluation, ...]
 
 
 @dataclass(slots=True)
@@ -136,9 +125,6 @@ _WARNING_MESSAGES = {
     ModuleWarningCode.OUTPUT_PREVIEW_TRUNCATED: (
         "One or more block or optional-component previews were truncated."
     ),
-    ModuleWarningCode.UNCERTAIN_SUPPORT_TRUNCATED: (
-        "Policy-defined uncertain support was truncated within the configured bounds."
-    ),
     ModuleWarningCode.STALE_DEFINITION: (
         "At least one evaluated MODULE definition was retrieved from a stale local cache entry."
     ),
@@ -147,91 +133,16 @@ _WARNING_MESSAGES = {
 
 def evaluate_module(
     graph: ResolvedModuleGraph,
-    dataset: AnnotationDataset,
-    evidence_mode: EvidenceMode,
+    evidence: KoAnalysisEvidence,
     limits: ModuleAnalysisLimits | ModuleEvaluationLimits | None = None,
 ) -> ModuleEvaluationResult:
-    """Evaluate one resolved MODULE graph against strict or lenient KO evidence.
-
-    Lenient mode contains accepted K numbers plus only records explicitly normalized as
-    uncertain by the dataset's named policy. Rejected and unclassified predictions are
-    never selected. When lenient evidence newly completes a block, the returned support
-    identifies the corresponding uncertain records.
-    """
+    """Evaluate one resolved MODULE graph against sorted unique accepted K numbers."""
     analysis_limits = _coerce_limits(graph, limits)
-    view = build_ko_evidence_view(dataset)
-    selected = frozenset(select_ko_ids(view, evidence_mode))
-    run = _evaluate_mode(graph, dataset, evidence_mode, selected, analysis_limits)
-    if evidence_mode is EvidenceMode.STRICT:
-        return run.result
-
-    strict_selected = frozenset(select_ko_ids(view, EvidenceMode.STRICT))
-    strict = _evaluate_mode(
+    return _evaluate(
         graph,
-        dataset,
-        EvidenceMode.STRICT,
-        strict_selected,
+        evidence,
+        frozenset(analysis_accepted_ko_ids(evidence)),
         analysis_limits,
-    )
-    return _attach_uncertain_support(
-        strict,
-        run,
-        dataset,
-        accepted_kos=frozenset(view.accepted_kos),
-        uncertain_kos=frozenset(view.uncertain_kos),
-    ).result
-
-
-def evaluate_module_pair(
-    graph: ResolvedModuleGraph,
-    dataset: AnnotationDataset,
-    limits: ModuleAnalysisLimits | ModuleEvaluationLimits | None = None,
-) -> PairedModuleEvaluation:
-    """Return separate strict and policy-defined lenient MODULE evaluations."""
-    analysis_limits = _coerce_limits(graph, limits)
-    view = build_ko_evidence_view(dataset)
-    strict = _evaluate_mode(
-        graph,
-        dataset,
-        EvidenceMode.STRICT,
-        frozenset(select_ko_ids(view, EvidenceMode.STRICT)),
-        analysis_limits,
-    )
-    lenient = _evaluate_mode(
-        graph,
-        dataset,
-        EvidenceMode.LENIENT,
-        frozenset(select_ko_ids(view, EvidenceMode.LENIENT)),
-        analysis_limits,
-    )
-    lenient = _attach_uncertain_support(
-        strict,
-        lenient,
-        dataset,
-        accepted_kos=frozenset(view.accepted_kos),
-        uncertain_kos=frozenset(view.uncertain_kos),
-    )
-
-    newly_completed = tuple(
-        block.block_index
-        for strict_block, block in zip(strict.blocks, lenient.blocks, strict=True)
-        if strict_block.result.truth is not _Truth.TRUE and block.result.truth is _Truth.TRUE
-    )
-    preview_limit = analysis_limits.evaluation.max_block_previews
-    newly_completed_preview = newly_completed[:preview_limit]
-    changed = (
-        lenient.result.completed_required_blocks > strict.result.completed_required_blocks
-        or any(
-            getattr(strict.result, field_name) != getattr(lenient.result, field_name)
-            for field_name in ("evaluation_status", "is_complete", "block_coverage")
-        )
-    )
-    return PairedModuleEvaluation(
-        strict=strict.result,
-        lenient=lenient.result,
-        strict_to_lenient_changed=changed,
-        newly_completed_block_indexes=newly_completed_preview,
-        newly_completed_blocks_truncated=len(newly_completed) > preview_limit,
     )
 
 
@@ -252,13 +163,12 @@ def _coerce_limits(
     )
 
 
-def _evaluate_mode(
+def _evaluate(
     graph: ResolvedModuleGraph,
-    dataset: AnnotationDataset,
-    evidence_mode: EvidenceMode,
+    evidence: KoAnalysisEvidence,
     ko_ids: frozenset[str],
     limits: ModuleAnalysisLimits,
-) -> _EvaluationRun:
+) -> ModuleEvaluationResult:
     root = _root_module(graph)
     context = _EvaluationContext(graph=graph, ko_ids=ko_ids, limits=limits.evaluation)
     ast = root.parse_result.ast
@@ -358,9 +268,8 @@ def _evaluate_mode(
     result = ModuleEvaluationResult(
         module_id=root.definition.module_id,
         module_name=root.definition.module_name,
-        dataset_id=dataset.dataset_id,
-        decision_policy=dataset.import_report.decision_policy,
-        evidence_mode=evidence_mode,
+        dataset_id=evidence.dataset_id,
+        decision_policy=analysis_decision_policy(evidence),
         evidence_ko_count=len(ko_ids),
         evaluation_status=status,
         is_complete=(
@@ -382,7 +291,6 @@ def _evaluate_mode(
         missing_blocks_preview=missing_blocks,
         not_evaluable_blocks_preview=unknown_blocks,
         optional_components=tuple(context.optional_results.values()),
-        uncertain_support=(),
         unresolved_references=graph.issues,
         calculation_method=CalculationMethodReference(
             name=MODULE_CALCULATION_METHOD,
@@ -399,7 +307,7 @@ def _evaluate_mode(
         ),
         limits=limits,
     )
-    return _EvaluationRun(result=result, blocks=tuple(blocks))
+    return result
 
 
 def _evaluate_expression(
@@ -417,7 +325,6 @@ def _evaluate_expression(
             return _ExpressionResult(
                 truth=_Truth.TRUE,
                 matched=present,
-                causal=present,
                 required_component_count=1,
             )
         return _ExpressionResult(
@@ -547,11 +454,9 @@ def _evaluate_and(
             matched=matched,
             required_component_count=required_count,
         )
-    causal = _union_ko_sets(child.causal for child in children)
     return _ExpressionResult(
         truth=_Truth.TRUE,
         matched=matched,
-        causal=causal,
         required_component_count=required_count,
     )
 
@@ -564,11 +469,9 @@ def _evaluate_or(
     required_count = sum(child.required_component_count for child in children)
     true_children = tuple(child for child in children if child.truth is _Truth.TRUE)
     if true_children:
-        causal = _union_ko_sets(child.causal for child in true_children)
         return _ExpressionResult(
             truth=_Truth.TRUE,
             matched=matched,
-            causal=causal,
             required_component_count=required_count,
         )
     if any(child.truth is _Truth.UNKNOWN for child in children):
@@ -742,68 +645,6 @@ def _collect_not_evaluable_optionals(context: _EvaluationContext) -> None:
                 state=OptionalComponentState.NOT_EVALUABLE,
                 matched_ko_ids=(),
             )
-
-
-def _attach_uncertain_support(
-    strict: _EvaluationRun,
-    lenient: _EvaluationRun,
-    dataset: AnnotationDataset,
-    *,
-    accepted_kos: frozenset[str],
-    uncertain_kos: frozenset[str],
-) -> _EvaluationRun:
-    causal_blocks: dict[str, set[int]] = defaultdict(set)
-    eligible_uncertain = uncertain_kos - accepted_kos
-    for strict_block, lenient_block in zip(strict.blocks, lenient.blocks, strict=True):
-        if (
-            strict_block.result.truth is _Truth.TRUE
-            or lenient_block.result.truth is not _Truth.TRUE
-        ):
-            continue
-        for ko_id in lenient_block.result.causal & eligible_uncertain:
-            causal_blocks[ko_id].add(lenient_block.block_index)
-
-    records_by_ko: dict[str, list[str]] = defaultdict(list)
-    for record in dataset.records:
-        if record.normalized_status is NormalizedStatus.UNCERTAIN and record.ko_id in causal_blocks:
-            records_by_ko[record.ko_id].append(record.record_id)
-
-    evaluation_limits = lenient.result.limits.evaluation
-    support: list[UncertainSupport] = []
-    support_truncated = False
-    for ko_id in sorted(causal_blocks):
-        if len(support) >= evaluation_limits.max_uncertain_support_items:
-            support_truncated = True
-            break
-        record_ids = tuple(sorted(set(records_by_ko[ko_id])))
-        if not record_ids:
-            continue
-        selected_records = record_ids[: evaluation_limits.max_uncertain_records_per_ko]
-        records_truncated = len(record_ids) > len(selected_records)
-        block_indexes = tuple(sorted(causal_blocks[ko_id]))
-        selected_block_indexes = block_indexes[: evaluation_limits.max_block_previews]
-        blocks_truncated = len(block_indexes) > len(selected_block_indexes)
-        support_truncated = support_truncated or records_truncated or blocks_truncated
-        support.append(
-            UncertainSupport(
-                ko_id=ko_id,
-                record_ids=selected_records,
-                required_block_indexes=selected_block_indexes,
-                record_ids_truncated=records_truncated,
-                required_block_indexes_truncated=blocks_truncated,
-            )
-        )
-
-    warning_codes = {warning.code for warning in lenient.result.warnings}
-    if support_truncated:
-        warning_codes.add(ModuleWarningCode.UNCERTAIN_SUPPORT_TRUNCATED)
-    updated = lenient.result.model_copy(
-        update={
-            "uncertain_support": tuple(support),
-            "warnings": _warnings(warning_codes),
-        }
-    )
-    return _EvaluationRun(result=updated, blocks=lenient.blocks)
 
 
 def _public_block(

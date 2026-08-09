@@ -17,8 +17,8 @@ from kegg_mcp.analysis import (
     ModuleDefinition,
     ModuleDefinitionCollection,
     ModuleEvaluationLimits,
+    ModuleEvaluationResult,
     ModuleSelection,
-    PairedModuleEvaluation,
     PathwayCoverageLimits,
     PathwayCoverageParameters,
     PathwayCoverageResult,
@@ -27,14 +27,15 @@ from kegg_mcp.analysis import (
     PathwayReferenceScope,
     PathwaySelection,
     ResolvedModuleGraph,
-    evaluate_module_pair,
+    evaluate_module,
     evaluate_pathway_coverage,
     resolve_module_definitions,
 )
 from kegg_mcp.domain import (
+    AnnotationRetention,
     CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
-    EvidenceMode,
+    KoAnalysisProjection,
     NormalizedStatus,
 )
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
@@ -50,6 +51,7 @@ from kegg_mcp.execution import (
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
+    ProjectionImportLimits,
     TableDialect,
     import_generic_table,
 )
@@ -93,7 +95,7 @@ def _dataset() -> AnnotationDataset:
     return import_generic_table(
         "sequence,ko,status\n"
         "accepted,K00001,accepted\n"
-        "uncertain,K00002,uncertain\n"
+        "unclassified-source,K00002,unclassified\n"
         "rejected,K00003,rejected\n"
         "unclassified,K00004,other\n"
         "invalid,not-a-ko,accepted\n",
@@ -110,7 +112,7 @@ def _dataset() -> AnnotationDataset:
 
 def _module_values(
     dataset: AnnotationDataset,
-) -> tuple[ResolvedModuleGraph, PairedModuleEvaluation]:
+) -> tuple[ResolvedModuleGraph, ModuleEvaluationResult]:
     graph = resolve_module_definitions(
         ModuleDefinitionCollection(
             root_module_id="M00001",
@@ -124,7 +126,26 @@ def _module_values(
         ),
         _MODULE_LIMITS,
     )
-    return graph, evaluate_module_pair(graph, dataset, _MODULE_LIMITS)
+    return graph, evaluate_module(graph, dataset, _MODULE_LIMITS)
+
+
+def _projection(dataset: AnnotationDataset) -> KoAnalysisProjection:
+    return KoAnalysisProjection(
+        dataset_id=dataset.dataset_id,
+        accepted_ko_ids=("K00001",),
+        input_bytes=500,
+        input_rows=dataset.import_report.input_rows,
+        expanded_assignments=dataset.import_report.emitted_records,
+        skipped_rows=dataset.import_report.skipped_rows,
+        source_columns=("name", "predict_label", "probability", "threshold", "annotate"),
+        status_counts=dataset.import_report.status_counts,
+        diagnostic_count=0,
+        decision_policy=dataset.import_report.decision_policy,
+        sources=dataset.sources,
+        analysis_unit=dataset.analysis_unit,
+        taxon_id=dataset.taxon_id,
+        kegg_organism_code=dataset.kegg_organism_code,
+    )
 
 
 def _provenance(operation: KeggOperation) -> KeggBatchProvenance:
@@ -164,10 +185,10 @@ def _pathway_values(
     result = evaluate_pathway_coverage(
         reference,
         dataset,
-        PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT),
+        PathwayCoverageParameters(),
         _PATHWAY_LIMITS,
     )
-    assert result.detected_preview_truncated is True
+    assert result.detected_preview_truncated is False
     return reference, result
 
 
@@ -175,6 +196,7 @@ def _execution(
     *,
     allow_global_or_overview: bool = False,
     ranking_dataset: AnnotationDataset | None = None,
+    annotation_retention: AnnotationRetention = AnnotationRetention.FULL_RECORDS,
 ) -> AnalysisExecutionProvenance:
     module_ranking: ModuleRankingExecution | None = None
     pathway_ranking: PathwayRankingExecution | None = None
@@ -184,9 +206,8 @@ def _execution(
             method=MODULE_RANKING_METHOD,
             method_version=MODULE_RANKING_VERSION,
             selection=ModuleSelection(top_n=1),
-            evidence_mode=EvidenceMode.LENIENT,
             decision_policy=decision_policy,
-            selected_unique_ko_count=2,
+            selected_unique_ko_count=1,
             candidate_module_count=1,
             selected_module_ids=("M00001",),
             mapping_request_count=1,
@@ -198,9 +219,8 @@ def _execution(
             method=PATHWAY_RANKING_METHOD,
             method_version=PATHWAY_RANKING_VERSION,
             selection=PathwaySelection(top_n=1),
-            evidence_mode=EvidenceMode.LENIENT,
             decision_policy=decision_policy,
-            selected_unique_ko_count=2,
+            selected_unique_ko_count=1,
             candidate_pathway_count=1,
             selected_pathway_ids=("ko00010",),
             mapping_request_count=1,
@@ -211,13 +231,22 @@ def _execution(
     return AnalysisExecutionProvenance(
         service_name=ANALYSIS_SERVICE_NAME,
         service_version=ANALYSIS_SERVICE_VERSION,
-        import_limits=_IMPORT_LIMITS,
+        annotation_retention=annotation_retention,
+        import_limits=(
+            _IMPORT_LIMITS
+            if annotation_retention is AnnotationRetention.FULL_RECORDS
+            else None
+        ),
+        projection_import_limits=(
+            ProjectionImportLimits()
+            if annotation_retention is AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+            else None
+        ),
         kegg_request_options=KeggRequestOptions(),
         reference_loading_limits=ReferenceLoadingLimits(),
         module_analysis_limits=_MODULE_LIMITS,
         module_ranking=module_ranking,
         pathway_parameters=PathwayExecutionParameters(
-            evidence_mode=EvidenceMode.LENIENT,
             allow_global_or_overview=allow_global_or_overview,
             ranking=pathway_ranking,
         ),
@@ -234,6 +263,24 @@ def test_execution_provenance_requires_the_current_service_identity() -> None:
     assert execution.service_name == "kegg_mcp_annotation_analysis"
     with pytest.raises(ValidationError):
         AnalysisExecutionProvenance.model_validate(payload)
+
+
+def test_execution_provenance_requires_limits_for_exactly_one_retention_mode() -> None:
+    full = _execution()
+    assert full.annotation_retention is AnnotationRetention.FULL_RECORDS
+    assert full.import_limits == _IMPORT_LIMITS
+    assert full.projection_import_limits is None
+
+    projection = _execution(
+        annotation_retention=AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+    )
+    assert projection.import_limits is None
+    assert projection.projection_import_limits == ProjectionImportLimits()
+
+    mismatched = full.model_dump(mode="json")
+    mismatched["annotation_retention"] = "unique_accepted_ko_projection"
+    with pytest.raises(ValidationError, match="projection_import_limits"):
+        AnalysisExecutionProvenance.model_validate(mismatched)
 
 
 def _render_input(
@@ -253,25 +300,25 @@ def _render_input(
     )
 
 
-def test_version_4_schema_and_canonical_json_round_trip() -> None:
+def test_version_5_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
     schema = RenderInput.model_json_schema()
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:4"
+    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:5"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["$defs"]["PathwayRenderTarget"]["$id"] == (
-        "urn:kegg-mcp:schema:pathway-render-target:3"
+        "urn:kegg-mcp:schema:pathway-render-target:4"
     )
     assert "workflow_digest" not in json.dumps(schema)
-    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "4"
-    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "2"
+    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "5"
+    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "3"
     assert RenderInput.model_validate_json(serialized, strict=True) == value
     assert (
         serialize_render_input(RenderInput.model_validate_json(serialized, strict=True))
         == serialized
     )
-    assert RENDER_INPUT_MIME_TYPE.endswith("version=4")
+    assert RENDER_INPUT_MIME_TYPE.endswith("version=5")
 
     assert "schema_version" in schema["required"]
     assert "name" in schema["$defs"]["RenderProducer"]["required"]
@@ -281,9 +328,31 @@ def test_version_4_schema_and_canonical_json_round_trip() -> None:
     )
 
 
-def test_current_render_input_rejects_unsupported_or_missing_wire_versions() -> None:
+def test_version_5_handoff_accepts_explicit_unique_accepted_ko_projection() -> None:
+    dataset = _dataset()
+    graph, _ = _module_values(dataset)
+    reference, _ = _pathway_values(dataset)
+    projection = _projection(dataset)
+    value = build_render_input(
+        projection,
+        (graph,),
+        (reference,),
+        _execution(
+            annotation_retention=AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+        ),
+    )
+
+    assert value.evidence.accepted_ko_ids == ("K00001",)
+    assert value.execution.analysis.annotation_retention is (
+        AnnotationRetention.UNIQUE_ACCEPTED_KO_PROJECTION
+    )
+    assert value.modules[0].completion.block_coverage == 1 / 3
+    assert value.pathways[0].detected_ko_ids == ("K00001",)
+
+
+def test_current_render_input_rejects_version_4_or_missing_wire_versions() -> None:
     payload = json.loads(serialize_render_input(_render_input()))
-    payload["schema_version"] = "unsupported"
+    payload["schema_version"] = "4"
     with pytest.raises(ValidationError):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -310,7 +379,7 @@ def test_current_render_input_requires_builder_identity_fields() -> None:
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
     payload = json.loads(serialize_render_input(_render_input()))
-    payload["execution"]["handoff_builder_version"] = "unsupported"
+    payload["execution"]["handoff_builder_version"] = "2"
     with pytest.raises(ValidationError):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -341,7 +410,7 @@ def test_current_render_targets_reject_fabricated_analysis_identity() -> None:
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
     payload = json.loads(serialize_render_input(_render_input()))
-    payload["modules"][0]["strict"]["calculation_method"]["name"] = "fabricated_method"
+    payload["modules"][0]["completion"]["calculation_method"]["name"] = "fabricated_method"
     with pytest.raises(ValidationError, match="calculation identity"):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -413,7 +482,7 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
     assert target.renderability is RenderabilityStatus.RENDERABLE
     assert target.not_renderable_reason is None
     assert target.detected_ko_ids_complete is True
-    assert target.detected_ko_ids == ("K00001", "K00002")
+    assert target.detected_ko_ids == ("K00001",)
 
     payload = value.model_dump(mode="json")
     payload["execution"]["analysis"]["pathway_parameters"]["allow_global_or_overview"] = False
@@ -450,42 +519,34 @@ def test_unevaluable_global_or_overview_ko_pathway_remains_summary_only() -> Non
     assert target.not_renderable_reason == "pathway_not_evaluable"
 
 
-def test_evidence_classes_and_complete_renderer_targets_exclude_other_statuses() -> None:
+def test_accepted_evidence_and_complete_renderer_targets_exclude_other_statuses() -> None:
     value = _render_input()
 
     assert value.evidence.accepted_ko_ids == ("K00001",)
-    assert value.evidence.uncertain_ko_ids == ("K00002",)
     assert tuple(item.status for item in value.evidence.status_counts) == tuple(NormalizedStatus)
-    assert value.evidence.status_counts[2].count == 1
+    assert value.evidence.status_counts[1].count == 1
+    assert value.evidence.status_counts[2].count == 2
     assert value.evidence.status_counts[3].count == 1
-    assert value.evidence.status_counts[4].count == 1
 
     module = value.modules[0]
     assert module.renderability is RenderabilityStatus.RENDERABLE
     assert module.required_block_states_complete is True
     assert tuple(item.block_index for item in module.required_block_states) == (1, 2, 3)
-    assert tuple(item.strict_state for item in module.required_block_states) == (
+    assert tuple(item.state for item in module.required_block_states) == (
         ModuleBlockState.COMPLETE,
         ModuleBlockState.INCOMPLETE,
         ModuleBlockState.INCOMPLETE,
     )
-    assert tuple(item.lenient_state for item in module.required_block_states) == (
-        ModuleBlockState.COMPLETE,
-        ModuleBlockState.COMPLETE,
-        ModuleBlockState.INCOMPLETE,
-    )
-    assert module.required_block_states[1].uncertain_support_ko_ids == ("K00002",)
-    assert module.strict.block_coverage == 1 / 3
-    assert module.lenient.block_coverage == 2 / 3
+    assert module.completion.block_coverage == 1 / 3
     assert module.optional_component_states_complete is True
     assert len(module.optional_component_states) == 1
 
     pathway = value.pathways[0]
     assert pathway.renderability is RenderabilityStatus.RENDERABLE
-    assert pathway.coverage_numerator == 2
+    assert pathway.coverage_numerator == 1
     assert pathway.coverage_denominator == 3
     assert pathway.detected_ko_ids_complete is True
-    assert pathway.detected_ko_ids == ("K00001", "K00002")
+    assert pathway.detected_ko_ids == ("K00001",)
     assert "K00003" not in pathway.detected_ko_ids
 
 
@@ -508,7 +569,7 @@ def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> No
     assert pathway.not_renderable_reason == "pathway_detected_ko_limit_exceeded"
     assert pathway.detected_ko_ids_complete is False
     assert pathway.detected_ko_ids == ()
-    assert pathway.coverage_numerator == 2
+    assert pathway.coverage_numerator == 1
 
 
 def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -> None:
@@ -576,10 +637,17 @@ def test_execution_provenance_must_match_module_graph_limits() -> None:
     assert raised.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
 
 
-def test_visualization_evidence_classes_must_be_disjoint() -> None:
+def test_visualization_accepted_evidence_must_be_sorted_and_unique() -> None:
     payload = _render_input().model_dump(mode="json")
-    payload["evidence"]["uncertain_ko_ids"] = ["K00001", "K00002"]
-    with pytest.raises(ValidationError, match="must be disjoint"):
+    payload["evidence"]["accepted_ko_ids"] = ["K00001", "K00001"]
+    with pytest.raises(ValidationError, match="sorted and unique"):
+        RenderInput.model_validate_json(json.dumps(payload), strict=True)
+
+
+def test_visualization_unique_accepted_kos_cannot_exceed_accepted_assignments() -> None:
+    payload = _render_input().model_dump(mode="json")
+    payload["evidence"]["accepted_ko_ids"] = ["K00001", "K00002"]
+    with pytest.raises(ValidationError, match="cannot exceed accepted assignments"):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
 
@@ -605,7 +673,7 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
 
 def test_analysis_bundle_limit_failure_writes_no_partial_directory(tmp_path: Path) -> None:
     dataset = _dataset()
-    graph, pair = _module_values(dataset)
+    graph, evaluation = _module_values(dataset)
     reference, coverage = _pathway_values(dataset)
     output_directory = tmp_path / "bounded-analysis"
 
@@ -613,7 +681,7 @@ def test_analysis_bundle_limit_failure_writes_no_partial_directory(tmp_path: Pat
         write_analysis_bundle(
             dataset,
             (graph,),
-            (pair,),
+            (evaluation,),
             (reference,),
             (coverage,),
             execution=_execution(),
