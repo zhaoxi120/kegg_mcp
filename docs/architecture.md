@@ -45,12 +45,10 @@ protein FASTA
   -> bounded static SVG or PNG artifacts
 ```
 
-Core initialization instructions fail closed when the only biological input is protein FASTA:
-they do not call a core analysis tool. A user-selected annotator takes precedence; otherwise Codex
-prefers `deepkoala-annotation`. If that Skill or `deepkoala-mcp` is unavailable, the task stops and
-asks once for explicit permission to install or repair the complete suite. After the required
-action succeeds, discovery and continuation occur in a new Codex task. If permission is declined,
-the core remains stopped until a selected route supplies supported KO evidence.
+Core initialization instructions describe only Core capabilities and boundaries. They reject raw
+protein FASTA as analysis input, require supported KO evidence from an independently configured
+annotator, and leave annotator selection, deployment recovery, and cross-Skill continuation to the
+repository Skills and installation guidance.
 
 The current product does not provide:
 
@@ -413,9 +411,13 @@ The companion owns allowed-root FASTA validation, one deployment-wide runner lea
 subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the configured checkout's CLI
 and device-resolver contract plus its target interpreter platform, bounded polling and cleanup, and
 stable `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves
-detailed source evidence and resolved model provenance; it never normalizes K numbers. The
-companion continues to cap its generated detailed CSV at 5,000,000 bytes. Core can stream a larger
-existing allowed file without changing that companion output limit.
+detailed source evidence and resolved model provenance; it never normalizes K numbers. Before a
+version 2 handoff is published, private in-memory FASTA IDs are compared with every output row:
+single-domain output requires exactly `topk` rows per input ID, while multi-domain output requires at
+least one row per input ID and permits additional domain or top-k rows. Only aggregate coverage
+counts enter the handoff and report. The companion continues to cap its generated detailed CSV at
+5,000,000 bytes. Core can stream a larger existing allowed file without changing that companion
+output limit.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The
@@ -518,7 +520,8 @@ on 2026-07-31:
 - [KEGG Mapper](https://www.kegg.jp/kegg/mapper/) and
   [KEGG Syntax KO sequence](https://www.kegg.jp/kegg/syntax/synteny.html)
 
-DeepKOALA behavior and detailed-output fields were reviewed again on 2026-08-01. The explicit
+DeepKOALA behavior, detailed-output fields, and per-input output cardinality were reviewed again on
+2026-08-09. The explicit
 CPU/CUDA/MPS device choices, Apple Silicon instructions, optional multi-domain CLI, HMMER invocation
 boundary, and short-sequence output were reviewed against official commit
 `bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
@@ -527,15 +530,20 @@ boundary, and short-sequence output were reviewed against official commit
   [official repository](https://github.com/zhaoxi120/deepkoala)
 - [official CLI](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/cli.py) and
   [device resolver](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/utils.py) and
+  [single-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer.py) and
   [multi-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer_multi.py)
 
 The official `frag` versus `full` usage descriptions were reviewed again on 2026-07-22 against the
 [official repository README](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/README.md).
 
-MCP tool and resource contracts were reviewed on 2026-07-16 against the 2025-06-18 specification:
+MCP tool and resource contracts were reviewed again on 2026-08-09 against the 2025-11-25
+specification:
 
-- [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) and
-  [resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
+- [MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) and
+  [resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
+
+CI interpreter selection was reviewed on 2026-08-09 against the official
+[setup-uv action](https://github.com/astral-sh/setup-uv) documentation.
 
 Codex Skill, repository-guidance, and generated-plugin behavior was reviewed again on 2026-07-23:
 

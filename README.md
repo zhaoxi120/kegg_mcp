@@ -1,7 +1,5 @@
 # KEGG MCP
 
-**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
-
 **Ask Codex to turn protein FASTA or KO evidence into traceable KEGG reports and optional
 graphics—locally.**
 
@@ -91,10 +89,25 @@ prompts can focus on the research task.
 > evidence, summarize selected MODULE results and descriptive pathway KO coverage, and render
 > selected results as SVG. Report the resolved DeepKOALA model version.
 
+Expected files include `deepkoala_annotations.csv`, `deepkoala_run_report.md`,
+`unique_accepted_kos.tsv`, `analysis_report.md`, `render_input.json`, selected SVG files, and
+`render_manifest.json`. Exact target files depend on the selected MODULEs and pathways.
+
 ### Existing KO evidence
 
 > Analyze `/absolute/project/inputs/mag-ko.tsv` as a MAG. Use accepted K numbers only, and explain
 > exact MODULE completion separately from pathway KO coverage.
+
+Expected Core bundle files include `unique_accepted_kos.tsv`, `analysis_report.md`, and
+`render_input.json`; full record evidence is available only from the separate normalization or
+audit workflow.
+
+### Existing render handoff
+
+> Render the selected targets from `/absolute/project/results/render_input.json` as SVG. Preserve
+> the Core evidence and calculations unchanged.
+
+Expected renderer files are the selected static SVG artifacts plus `render_manifest.json`.
 
 ### KEGG candidate search
 

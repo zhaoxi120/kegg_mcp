@@ -14,10 +14,6 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PUBLISHED_LOCALIZED_READMES = (
-    PROJECT_ROOT / "README.zh-CN.md",
-    PROJECT_ROOT / "README.ja.md",
-)
 OWNED_RELEASE_DOCUMENTS = tuple(
     sorted(
         {
@@ -77,7 +73,6 @@ FORBIDDEN_ARCHIVE_PARTS = {
     "results",
 }
 CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
-ROOT_README_NAVIGATION = "**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)"
 PYTHON_REQUIRES = ">=3.11,<3.12"
 VERSION_SUFFIXED_IDENTIFIER = re.compile(r"(?:V[0-9]+|_v[0-9]+)\Z")
 
@@ -247,32 +242,18 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
 
     for path in OWNED_RELEASE_FILES:
         content = path.read_text(encoding="utf-8")
-        if path == PROJECT_ROOT / "README.md":
-            content = content.replace(ROOT_README_NAVIGATION, "", 1)
         assert not CJK_CHARACTER.search(content), path
         assert path.stat().st_size <= 128 * 1024, path
         assert "SQLite format 3" not in content
 
 
-def test_published_localized_readmes_are_bounded_and_linked() -> None:
-    assert all(path.is_file() for path in PUBLISHED_LOCALIZED_READMES)
-
-    for path in PUBLISHED_LOCALIZED_READMES:
-        content = path.read_text(encoding="utf-8")
-        assert path.stat().st_size <= 128 * 1024, path
-        assert "SQLite format 3" not in content
-
-    navigation = {
-        PROJECT_ROOT / "README.md": ROOT_README_NAVIGATION,
-        PROJECT_ROOT / "README.zh-CN.md": (
-            "[English](README.md) | **简体中文** | [日本語](README.ja.md)"
-        ),
-        PROJECT_ROOT / "README.ja.md": (
-            "[English](README.md) | [简体中文](README.zh-CN.md) | **日本語**"
-        ),
-    }
-    for path, expected in navigation.items():
-        assert expected in path.read_text(encoding="utf-8")
+def test_localized_readmes_remain_untracked_and_unpublished() -> None:
+    release_paths = {path.relative_to(PROJECT_ROOT) for path in _release_files()}
+    assert Path("README.zh-CN.md") not in release_paths
+    assert Path("README.ja.md") not in release_paths
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "README.zh-CN.md" not in readme
+    assert "README.ja.md" not in readme
 
 
 def test_access_examples_record_rights_and_use_no_secrets() -> None:
@@ -329,11 +310,10 @@ def test_release_tree_contains_no_tracked_release_blocking_binary() -> None:
     assert "*.png" in ignore
     assert "render_input.json" in ignore
     assert "render_manifest.json" in ignore
-    assert "!/README.zh-CN.md" in ignore
     release_zh_cn_files = {
         path.relative_to(PROJECT_ROOT) for path in release_files if path.name.endswith(".zh-CN.md")
     }
-    assert release_zh_cn_files == {Path("README.zh-CN.md")}
+    assert not release_zh_cn_files
 
 
 def test_orchestration_hotspots_remain_bounded() -> None:
@@ -477,18 +457,21 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci
-    for job_name in (
-        "validate",
-        "validate-deepkoala-companion",
-        "validate-renderer-companion",
-        "validate-macos-core",
-        "validate-macos-deepkoala-companion",
-        "validate-macos-renderer",
-        "validate-windows-unsupported",
-    ):
+    smoke_jobs = {
+        "validate": 1,
+        "validate-deepkoala-companion": 1,
+        "validate-renderer-companion": 1,
+        "validate-macos-core": 1,
+        "validate-macos-deepkoala-companion": 1,
+        "validate-macos-renderer": 1,
+        "validate-windows-unsupported": 2,
+    }
+    for job_name, expected_smoke_count in smoke_jobs.items():
         job = _workflow_job(ci, job_name)
         assert "Smoke-test installed" in job
         assert "tests/release/smoke_wheel.py" in job
+        assert job.count("uv run --frozen python") == expected_smoke_count
+    assert ci.count("uv run --frozen python") == 8
     assert "uv build --no-sources --wheel" in ci
     for isolation_marker in (
         '"-I"',
@@ -496,6 +479,8 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
         "environment.pop(name, None)",
         "cwd=root",
         'environment_root / "Scripts" / "python.exe"',
+        'sys.implementation.name != "cpython"',
+        "sys.version_info[:2] != (3, 11)",
     ):
         assert isolation_marker in smoke
 
