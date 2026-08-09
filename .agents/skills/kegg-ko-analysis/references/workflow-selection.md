@@ -199,14 +199,6 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 
 ### Compact high-level analysis view
 
-- Every `analyze_ko_annotations` input produces the same sorted unique accepted-KO analysis view.
-  Do not supply or look for an annotation-retention selector, and never change analysis semantics
-  because a file is large or small.
-- State when relevant that the view retains aggregate intake/status counts, source and
-  decision-policy provenance, and bounded diagnostics. It does not retain record evidence,
-  sequence/protein-to-KO mappings, raw per-record score or threshold evidence, or
-  duplicate/conflict accounting. Use `normalize_ko_annotations` or the audit workflow when the
-  user needs those records.
 - For an allowed DeepKOALA detailed `annotations.file_path`, let Core stream the source under its
   fixed maxima: 1 GiB, 10,000,000 source rows, 20,000,000 expanded assignments, 100,000 unique
   accepted K numbers, 64 columns, 16,384 characters per field, and 100 retained diagnostics. Do
@@ -221,14 +213,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 ## Automatic cross-Skill continuation
 
 - When the immediately preceding `deepkoala-annotation` stage produced the evidence,
-  consume its stable CSV handoff directly when Core can read it. Use the returned
-  `annotations_path`, `input_format`, and `source` object unchanged;
+  follow annotation-table step 6 above and consume its stable CSV handoff directly when Core can
+  read it, using the returned `annotations_path`, `input_format`, and `source` object unchanged;
   do not ask the user to restate the path, copy it, repeat the request, or confirm a KEGG-analysis
-  stage already present in the original request. If the typed allowed-root error described above
-  occurs, use the canonical resource fallback and then the mutually exclusive `annotations.text`
-  branch only for an output no larger than 5,000,000 bytes. A larger output must remain a stable
-  file and requires the shared-root deployment repair described above. Do not page it into the
-  prompt. Do not rerun annotation or rewrite the CSV.
+  stage already present in the original request. Do not rerun annotation or rewrite the CSV.
 - When the original request also asks to render, visualize, draw, or export graphics, first require
   a successfully written, compatible `render_input.json`, then automatically continue with the installed
   `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path while

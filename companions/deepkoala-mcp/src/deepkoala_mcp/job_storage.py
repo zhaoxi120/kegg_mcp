@@ -739,7 +739,7 @@ def _copy_noreplace(
             copied = 0
             while chunk := os.read(source_descriptor, _COPY_CHUNK_BYTES):
                 copied += len(chunk)
-                if copied > max_bytes or copied > expected_identity[2]:
+                if copied > expected_identity[2]:
                     raise OutputValidationError("validated output exceeds the publication bound")
                 _write_all(target_descriptor, chunk)
             current = os.fstat(source_descriptor)

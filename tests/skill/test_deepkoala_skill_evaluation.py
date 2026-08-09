@@ -150,7 +150,6 @@ def test_large_output_uses_the_shared_file_handoff() -> None:
         "up to 1 GiB",
         "bounded-memory validation and publication",
         "requires Core's allowed roots to cover every DeepKOALA input and output root",
-        "must never be reconstructed inline",
         "resume from the same stable CSV",
     ):
         assert fragment in normalized

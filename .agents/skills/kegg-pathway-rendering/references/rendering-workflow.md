@@ -72,13 +72,9 @@ Skill, or pass a private result identifier between MCP processes.
 ## Unavailable renderer and lifecycle
 
 If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
-diagnostic and suggested operator action. An unavailable renderer tool immediately after successful
-installation is `task_reload_required`, not evidence that repair is needed; stop before rendering
-and use one new task. In a fresh task, a complete exact plugin/MCP inventory is
-`plugin_discovery_stale`: restart Codex once and retry in one new task without reinstalling.
-Request explicit repair permission only for incomplete deployment inventory or a concrete renderer
-failure. The Skill itself does not install software, download assets, or invoke an unrelated image
-tool. Preserve the requested formats and target scope.
+diagnostic and suggested operator action, then stop before rendering. The Skill itself does not
+install software, download assets, or invoke an unrelated image tool. Preserve the requested
+formats and target scope.
 
 Return only renderer-provided `kegg-render://results/{render_id}` and
 `kegg-render://results/{render_id}/{artifact}` resource URIs; never construct one from an ID.

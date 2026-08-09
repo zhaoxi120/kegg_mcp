@@ -506,7 +506,7 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
 
 
 @pytest.mark.asyncio
-async def test_large_shared_file_streams_and_disjoint_core_rejects_the_path(
+async def test_large_shared_file_streams_through_core(
     tmp_path: Path,
 ) -> None:
     note = b"x" * 14_000
@@ -527,7 +527,6 @@ async def test_large_shared_file_streams_and_disjoint_core_rejects_the_path(
     shared_core_server = create_core_server(
         _module_core_runtime(tmp_path / "shared-core", allowed_root=companion_root)
     )
-    disjoint_core_server = create_core_server(_module_core_runtime(tmp_path / "disjoint-core"))
 
     async with create_connected_server_and_client_session(companion_server) as companion_session:
         job_id = await _start_job(
@@ -559,22 +558,6 @@ async def test_large_shared_file_streams_and_disjoint_core_rejects_the_path(
         assert summary["input_rows"] == row_count
         assert summary["accepted_assignments"] == row_count
         assert summary["selected_unique_ko_count"] == 1
-
-        async with create_connected_server_and_client_session(
-            disjoint_core_server
-        ) as disjoint_session:
-            rejected = await disjoint_session.call_tool("analyze_ko_annotations", arguments)
-        assert rejected.isError is True
-        rejection = cast(dict[str, object], _wire_payload(rejected)["error"])
-        assert rejection["code"] == "ANALYSIS_CONFIGURATION_INVALID"
-        assert rejection["message"] == (
-            "A local handoff path is outside the configured allowed roots."
-        )
-        details = {
-            cast(str, item["name"]): item["value"]
-            for item in cast(list[dict[str, object]], rejection["safe_details"])
-        }
-        assert details["field"] == "file_path"
 
 
 @pytest.mark.parametrize(

@@ -41,10 +41,6 @@ The `tests/skill/` suite verifies that:
   K numbers;
 - every `analyze_ko_annotations` input uses the same compact sorted unique accepted-KO view,
   reports its evidence boundary, and never implies that local intake capacity raises KEGG budgets;
-- a successful DeepKOALA handoff rejected by Core's typed allowed-root policy uses the companion's
-  bounded resource fallback only up to 5,000,000 bytes without rerunning annotation, copying the
-  CSV, or weakening path policy; a larger handoff reports that Core must cover both returned input
-  and output paths through the shared-root deployment repair;
 - Mapper/Syntax handoff never claims upload or execution;
 - absent explicit output paths, each server allocates a fresh directory beneath its configured
   project output root, while explicit user paths win;

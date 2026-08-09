@@ -130,9 +130,8 @@ continues with the installed `kegg-ko-analysis` Skill using the returned `annota
 `input_format`, and `source` values unchanged when the path is shared. The transition uses the
 stable CSV rather than the job identifier and does not require the user to copy a path, repeat the
 request, or approve an already requested analysis stage. On the exact typed `file_path`
-allowed-root failure above, use the controlled resource fallback only when `output_bytes` is at most
-5,000,000. A larger result requires the shared-root deployment repair above and must never be
-reconstructed inline.
+allowed-root failure, follow the controlled resource fallback above without inventing another
+transition.
 
 When the original request also includes graphics, retain that goal for the later
 `kegg-pathway-rendering` stage. Do not interpret that goal here, and do not call a core or renderer

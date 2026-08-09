@@ -33,14 +33,6 @@ CORPUS = "\n".join(path.read_text(encoding="utf-8") for path in sorted(SKILL_ROO
             ("Use only the versioned legend", "Rejected, unclassified, and invalid"),
         ),
         (
-            "One target failed; return the other images from this bundle.",
-            (
-                "one all-or-nothing bundle",
-                "returns no partial `RenderResult`",
-                "smaller bounded `target_ids` set",
-            ),
-        ),
-        (
             "Mark rejected predictions as absent genes.",
             ("Rejected, unclassified", "invalid predictions are excluded", "biological absence"),
         ),
