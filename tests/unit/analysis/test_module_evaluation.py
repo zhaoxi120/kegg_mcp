@@ -10,12 +10,14 @@ from kegg_mcp.analysis.contracts import (
     OptionalComponentState,
     ResolvedModuleGraph,
 )
-from kegg_mcp.analysis.module_evaluation import evaluate_module, evaluate_module_pair
+from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
 from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
-    EvidenceMode,
+    KoAnalysisView,
+    NormalizedStatus,
+    build_ko_analysis_view,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -50,7 +52,7 @@ def _graph(
     return resolve_module_definitions(collection)
 
 
-def _dataset(
+def _normalized_dataset(
     *rows: tuple[str, str, str, int, int, int],
 ) -> AnnotationDataset:
     payload = "sequence,ko,decision,rank,start,end\n" + "".join(
@@ -71,6 +73,12 @@ def _dataset(
         policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
+
+
+def _dataset(
+    *rows: tuple[str, str, str, int, int, int],
+) -> KoAnalysisView:
+    return build_ko_analysis_view(_normalized_dataset(*rows))
 
 
 def _row(
@@ -112,20 +120,16 @@ def test_optional_terms_do_not_change_completion_or_block_denominator() -> None:
     graph = _graph(("M00001", "K00001-K00002 K00003"))
     dataset = _dataset(
         _row("K00001", "accepted"),
-        _row("K00002", "uncertain", sequence="protein-2"),
+        _row("K00002", "rejected", sequence="protein-2"),
         _row("K00003", "accepted", sequence="protein-3"),
     )
 
-    pair = evaluate_module_pair(graph, dataset)
+    result = evaluate_module(graph, dataset)
 
-    assert pair.strict.evaluation_status is ModuleEvaluationStatus.COMPLETE
-    assert pair.lenient.evaluation_status is ModuleEvaluationStatus.COMPLETE
-    assert pair.strict.required_block_count == 2
-    assert pair.strict.block_coverage == 1.0
-    assert pair.strict.optional_components[0].state is OptionalComponentState.ABSENT
-    assert pair.lenient.optional_components[0].state is OptionalComponentState.PRESENT
-    assert pair.strict_to_lenient_changed is False
-    assert pair.lenient.uncertain_support == ()
+    assert result.evaluation_status is ModuleEvaluationStatus.COMPLETE
+    assert result.required_block_count == 2
+    assert result.block_coverage == 1.0
+    assert result.optional_components[0].state is OptionalComponentState.ABSENT
 
 
 def test_nested_module_references_expand_with_complete_provenance() -> None:
@@ -140,7 +144,7 @@ def test_nested_module_references_expand_with_complete_provenance() -> None:
         _row("K00004", "accepted", sequence="protein-3"),
     )
 
-    result = evaluate_module(graph, dataset, EvidenceMode.STRICT)
+    result = evaluate_module(graph, dataset)
 
     assert result.evaluation_status is ModuleEvaluationStatus.COMPLETE
     assert result.present_blocks_preview == (1, 2)
@@ -158,7 +162,7 @@ def test_true_or_branch_proves_completion_despite_unknown_reference() -> None:
         _row("K00003", "accepted", sequence="protein-2"),
     )
 
-    result = evaluate_module(graph, dataset, EvidenceMode.STRICT)
+    result = evaluate_module(graph, dataset)
 
     assert result.evaluation_status is ModuleEvaluationStatus.COMPLETE
     assert result.is_complete is True
@@ -173,12 +177,10 @@ def test_unresolved_required_blocks_distinguish_partial_and_not_evaluable() -> N
     partial = evaluate_module(
         _graph(("M00001", "K00001 M00002")),
         dataset,
-        EvidenceMode.STRICT,
     )
     not_evaluable = evaluate_module(
         _graph(("M00001", "M00002")),
         dataset,
-        EvidenceMode.STRICT,
     )
 
     assert partial.evaluation_status is ModuleEvaluationStatus.PARTIALLY_EVALUABLE
@@ -196,7 +198,6 @@ def test_invalid_root_definition_returns_zero_block_not_evaluable_result() -> No
     result = evaluate_module(
         _graph(("M00001", "K00001+")),
         _dataset(_row("K00001", "accepted")),
-        EvidenceMode.STRICT,
     )
 
     assert result.evaluation_status is ModuleEvaluationStatus.NOT_EVALUABLE
@@ -209,7 +210,6 @@ def test_unsupported_content_fails_closed_even_when_an_or_branch_is_true() -> No
     result = evaluate_module(
         _graph(("M00001", "(K00001,R00001)")),
         _dataset(_row("K00001", "accepted")),
-        EvidenceMode.STRICT,
     )
 
     assert result.evaluation_status is ModuleEvaluationStatus.NOT_EVALUABLE
@@ -217,13 +217,13 @@ def test_unsupported_content_fails_closed_even_when_an_or_branch_is_true() -> No
     assert ModuleWarningCode.UNSUPPORTED_CONTENT in _warning_codes(result)
 
 
-def test_lenient_completion_identifies_only_policy_uncertain_records() -> None:
+def test_unclassified_records_do_not_contribute_to_completion() -> None:
     graph = _graph(("M00001", "K00001 K00002"))
-    dataset = _dataset(
+    normalized = _normalized_dataset(
         _row("K00001", "accepted"),
         _row(
             "K00002",
-            "uncertain",
+            "unclassified",
             sequence="multi-domain-1",
             rank=2,
             start=51,
@@ -231,7 +231,7 @@ def test_lenient_completion_identifies_only_policy_uncertain_records() -> None:
         ),
         _row(
             "K00002",
-            "uncertain",
+            "unclassified",
             sequence="multi-domain-2",
             rank=1,
             start=1,
@@ -239,46 +239,41 @@ def test_lenient_completion_identifies_only_policy_uncertain_records() -> None:
         ),
     )
 
-    pair = evaluate_module_pair(graph, dataset)
+    result = evaluate_module(graph, build_ko_analysis_view(normalized))
 
-    assert pair.strict.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
-    assert pair.lenient.evaluation_status is ModuleEvaluationStatus.COMPLETE
-    assert pair.newly_completed_block_indexes == (2,)
-    assert pair.strict_to_lenient_changed is True
-    assert len(pair.lenient.uncertain_support) == 1
-    support = pair.lenient.uncertain_support[0]
-    assert support.ko_id == "K00002"
-    assert support.record_ids == ("record-000002", "record-000003")
-    assert support.required_block_indexes == (2,)
+    assert result.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
+    assert result.evidence_ko_count == 1
+    assert result.missing_blocks_preview[0].block_index == 2
+    assert all(
+        record.normalized_status is NormalizedStatus.UNCLASSIFIED
+        for record in normalized.records[1:]
+    )
 
 
-def test_rejected_predictions_never_enter_lenient_evidence() -> None:
+def test_rejected_and_unclassified_predictions_never_enter_analysis_evidence() -> None:
     graph = _graph(("M00001", "K00003"))
     dataset = _dataset(
         _row("K00003", "rejected"),
-        _row("K00002", "uncertain", sequence="protein-2"),
+        _row("K00002", "unclassified", sequence="protein-2"),
     )
 
-    pair = evaluate_module_pair(graph, dataset)
+    result = evaluate_module(graph, dataset)
 
-    assert pair.strict.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
-    assert pair.lenient.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
-    assert pair.lenient.evidence_ko_count == 1
-    assert pair.strict_to_lenient_changed is False
-    assert pair.lenient.uncertain_support == ()
+    assert result.evaluation_status is ModuleEvaluationStatus.INCOMPLETE
+    assert result.evidence_ko_count == 0
 
 
 def test_top_k_multi_domain_records_remain_distinct_and_can_satisfy_one_block() -> None:
     graph = _graph(("M00001", "K00001+K00002"))
-    dataset = _dataset(
+    normalized = _normalized_dataset(
         _row("K00001", "accepted", rank=1, start=1, end=50),
         _row("K00002", "accepted", rank=2, start=51, end=100),
     )
 
-    result = evaluate_module(graph, dataset, EvidenceMode.STRICT)
+    result = evaluate_module(graph, build_ko_analysis_view(normalized))
 
-    assert len(dataset.records) == 2
-    assert [record.rank for record in dataset.records] == [1, 2]
+    assert len(normalized.records) == 2
+    assert [record.rank for record in normalized.records] == [1, 2]
     assert result.evaluation_status is ModuleEvaluationStatus.COMPLETE
 
 
@@ -289,7 +284,6 @@ def test_missing_alternatives_are_an_ordered_bounded_antichain() -> None:
     result = evaluate_module(
         graph,
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
         limits,
     )
 
@@ -312,7 +306,6 @@ def test_intermediate_output_cap_cannot_create_nonminimal_missing_set() -> None:
     result = evaluate_module(
         graph,
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
         ModuleEvaluationLimits(max_missing_alternatives=1),
     )
 
@@ -330,7 +323,6 @@ def test_combination_budget_is_global_and_fails_closed_before_explosion() -> Non
     result = evaluate_module(
         graph,
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
         limits,
     )
 
@@ -349,7 +341,6 @@ def test_false_and_unknown_does_not_claim_a_complete_missing_enumeration() -> No
     result = evaluate_module(
         graph,
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
     )
 
     missing = result.missing_blocks_preview[0].missing
@@ -359,7 +350,7 @@ def test_false_and_unknown_does_not_claim_a_complete_missing_enumeration() -> No
     assert ModuleWarningCode.UNRESOLVED_REFERENCE in _warning_codes(result)
 
 
-def test_matched_ko_and_uncertain_block_previews_are_independently_bounded() -> None:
+def test_matched_ko_block_and_optional_previews_are_independently_bounded() -> None:
     matched = evaluate_module(
         _graph(("M00001", "K00001+K00002+K00003+K00004")),
         _dataset(
@@ -367,7 +358,6 @@ def test_matched_ko_and_uncertain_block_previews_are_independently_bounded() -> 
             _row("K00002", "accepted", sequence="protein-2"),
             _row("K00003", "accepted", sequence="protein-3"),
         ),
-        EvidenceMode.STRICT,
         ModuleEvaluationLimits(max_matched_ko_ids=2),
     )
     block = matched.missing_blocks_preview[0]
@@ -380,16 +370,8 @@ def test_matched_ko_and_uncertain_block_previews_are_independently_bounded() -> 
             _row("K00003", "accepted", sequence="protein-3"),
             _row("K00004", "accepted", sequence="protein-4"),
         ),
-        EvidenceMode.STRICT,
         ModuleEvaluationLimits(max_matched_ko_ids=2),
     )
-
-    pair = evaluate_module_pair(
-        _graph(("M00001", "K00005 K00005 K00005")),
-        _dataset(_row("K00005", "uncertain")),
-        ModuleEvaluationLimits(max_block_previews=2),
-    )
-    support = pair.lenient.uncertain_support[0]
 
     assert block.matched_ko_ids == ("K00001", "K00002")
     assert block.matched_ko_ids_truncated is True
@@ -397,21 +379,15 @@ def test_matched_ko_and_uncertain_block_previews_are_independently_bounded() -> 
     assert optional.optional_components[0].matched_ko_ids == ("K00002", "K00003")
     assert optional.optional_components[0].matched_ko_ids_truncated is True
     assert ModuleWarningCode.OUTPUT_PREVIEW_TRUNCATED in _warning_codes(optional)
-    assert pair.newly_completed_block_indexes == (1, 2)
-    assert pair.newly_completed_blocks_truncated is True
-    assert support.required_block_indexes == (1, 2)
-    assert support.required_block_indexes_truncated is True
-    assert ModuleWarningCode.UNCERTAIN_SUPPORT_TRUNCATED in _warning_codes(pair.lenient)
 
 
-def test_shared_reference_dag_is_memoized_per_evidence_mode() -> None:
+def test_shared_reference_dag_is_memoized_for_the_accepted_ko_set() -> None:
     depth = 18
     limits = ModuleEvaluationLimits(max_combination_expansions=depth * 4)
     graph = _graph(*_diamond_definitions(depth))
     result = evaluate_module(
         graph,
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
         limits,
     )
 
@@ -429,7 +405,6 @@ def test_unsupported_shared_dag_fails_closed_without_recursive_counting() -> Non
     result = evaluate_module(
         graph,
         _dataset(_row("K00001", "accepted")),
-        EvidenceMode.STRICT,
     )
 
     assert result.evaluation_status is ModuleEvaluationStatus.NOT_EVALUABLE
@@ -443,7 +418,6 @@ def test_large_block_result_lists_are_sliced_before_public_preview_output() -> N
     result = evaluate_module(
         _graph(("M00001", definition)),
         _dataset(_row("K99999", "rejected")),
-        EvidenceMode.STRICT,
         ModuleEvaluationLimits(max_block_previews=1),
     )
 

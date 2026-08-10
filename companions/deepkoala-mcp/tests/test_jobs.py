@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import stat
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
+import deepkoala_mcp._job_types as job_types_module
 import deepkoala_mcp.fasta as fasta_module
+import deepkoala_mcp.job_storage as storage_module
 import deepkoala_mcp.jobs as jobs_module
 from conftest import DETAILED_CSV, ready_probe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
@@ -21,12 +23,13 @@ from deepkoala_mcp.contracts import (
     DeepKoalaMcpError,
     ErrorCode,
     JobState,
+    JobSummary,
     RunDeepKoalaInput,
     RunDeepKoalaResult,
 )
 from deepkoala_mcp.fasta import StagedFasta
 from deepkoala_mcp.installation import RuntimeProbeResult
-from deepkoala_mcp.job_storage import OutputValidationError
+from deepkoala_mcp.job_storage import ControlledOutputDirectory, OutputValidationError
 from deepkoala_mcp.jobs import DeepKoalaJobManager
 from deepkoala_mcp.runner import ProcessOutcome, RunnerPlan, RunnerTimedOutError
 
@@ -159,7 +162,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     runner = SuccessfulRunner()
-    request = _request(runtime_config, model="frag", model_date="202401", topk=2)
+    request = _request(runtime_config, model="frag", model_date="202401")
     async with _manager(runtime_config, runner) as manager:
         started = await manager.run(request)
         assert started.job.state is JobState.RUNNING
@@ -178,14 +181,27 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         report_text = report.read_text(encoding="utf-8")
         assert str(Path(request.fasta_path).resolve()) in report_text
         assert "- Device policy: `cpu`" in report_text
+        assert "- Input sequence count: `1`" in report_text
+        assert "- Output row count: `1`" in report_text
+        assert "- Missing input sequence count: `0`" in report_text
+        assert "- Unexpected output sequence count: `0`" in report_text
         assert stat.S_IMODE(annotations.stat().st_mode) == 0o600
-        assert handoff.schema_version == "1"
+        assert handoff.schema_version == "2"
         assert handoff.tool_version == "0.5.0"
+        assert handoff.output_coverage.input_sequence_count == 1
+        assert handoff.output_coverage.output_row_count == 1
+        assert handoff.output_coverage.distinct_output_sequence_count == 1
+        assert handoff.output_coverage.missing_input_sequence_count == 0
+        assert handoff.output_coverage.unexpected_output_sequence_count == 0
+        assert "sequence_ids" not in handoff.model_dump_json()
         assert handoff.input_path == request.fasta_path
         assert handoff.source.input_path == request.fasta_path
         assert handoff.source.model_name == "frag"
         assert handoff.source.model_version == "202401"
         assert handoff.source.annotation_date.utcoffset() is not None
+        assert result.job.completed_at == handoff.source.annotation_date
+        completion_text = handoff.source.annotation_date.isoformat().replace("+00:00", "Z")
+        assert f"- Completed at: `{completion_text}`" in report_text
         metadata = {field.name: field.value for field in handoff.source.source_metadata}
         assert metadata["device_requested"] == "cpu"
         assert metadata["cuda_available_at_preflight"] is False
@@ -193,12 +209,46 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert "sha" not in handoff.model_dump_json().lower()
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        (b"name,predict_label,probability,threshold,annotate\nprotein-1,K00001,0.95,0.50,*\n"),
+        (
+            b"name,predict_label,probability,threshold,annotate\n"
+            b"protein-1,K00001,0.95,0.50,*\n"
+            b"unexpected,K00002,0.95,0.50,*\n"
+        ),
+    ],
+    ids=["missing-input-id", "unexpected-output-id"],
+)
+@pytest.mark.asyncio
+async def test_job_does_not_publish_a_handoff_for_incomplete_identity_coverage(
+    runtime_config: DeepKoalaRuntimeConfig,
+    payload: bytes,
+) -> None:
+    request = _request(
+        runtime_config,
+        name="invalid-coverage",
+        fasta=">protein-1\nMPEPTIDE\n>protein-2\nMPEPTIDE\n",
+    )
+    async with _manager(runtime_config, SuccessfulRunner(payload)) as manager:
+        started = await manager.run(request)
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.FAILED
+        result = await manager.get_job(started.job.job_id)
+
+    assert result.handoff is None
+    assert not _explicit_output_path(request).exists()
+
+
 @pytest.mark.asyncio
 async def test_run_accepts_large_valid_fasta_within_sequence_limits(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:
     fasta = "".join(f">protein-{index}\n{'M' * 100_000}\n" for index in range(51))
-    runner = SuccessfulRunner()
+    payload = b"name,predict_label,probability,threshold,annotate\n" + b"".join(
+        f"protein-{index},K00001,0.95,0.50,*\n".encode("ascii") for index in range(51)
+    )
+    runner = SuccessfulRunner(payload)
     request = _request(runtime_config, name="large-fasta", fasta=fasta)
 
     async with _manager(runtime_config, runner) as manager:
@@ -208,6 +258,55 @@ async def test_run_accepts_large_valid_fasta_within_sequence_limits(
         assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
 
     assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_blocking_publication_stays_off_loop_and_cancellation_joins_worker(
+    runtime_config: DeepKoalaRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication_started = threading.Event()
+    release_publication = threading.Event()
+    real_publish = job_types_module.publish_artifacts
+
+    def blocking_publish(
+        *,
+        validated_output: storage_module._ValidatedDetailedCsv,  # pyright: ignore[reportPrivateUsage]
+        output_directory: ControlledOutputDirectory,
+        report_builder: Callable[[], str],
+        max_output_bytes: int,
+    ) -> tuple[Path, Path, int]:
+        publication_started.set()
+        if not release_publication.wait(timeout=5):
+            raise TimeoutError("test publication release timed out")
+        return real_publish(
+            validated_output=validated_output,
+            output_directory=output_directory,
+            report_builder=report_builder,
+            max_output_bytes=max_output_bytes,
+        )
+
+    monkeypatch.setattr(job_types_module, "publish_artifacts", blocking_publish)
+    request = _request(runtime_config, name="cancelled-publication")
+    cancel_task: asyncio.Task[JobSummary] | None = None
+    async with _manager(runtime_config, SuccessfulRunner()) as manager:
+        started = await manager.run(request)
+        try:
+            assert await asyncio.to_thread(publication_started.wait, 2)
+            current = await asyncio.wait_for(manager.get_job(started.job.job_id), timeout=0.5)
+            assert current.job.state is JobState.RUNNING
+
+            cancel_task = asyncio.create_task(manager.cancel(started.job.job_id))
+            await asyncio.sleep(0.05)
+            assert not cancel_task.done()
+            assert _explicit_output_path(request).is_dir()
+        finally:
+            release_publication.set()
+
+        assert cancel_task is not None
+        cancelled = await asyncio.wait_for(cancel_task, timeout=5)
+        assert cancelled.state is JobState.CANCELLED
+        assert not _explicit_output_path(request).exists()
 
 
 @pytest.mark.asyncio
@@ -588,7 +687,7 @@ async def test_omitted_output_directory_allocates_a_fresh_configured_child(
         update={"output_roots": (*runtime_config.output_roots, default_output_root)}
     )
     input_path = runtime_config.input_roots[0] / "allocated.faa"
-    input_path.write_text(">protein\nMPEPTIDE\n", encoding="ascii")
+    input_path.write_text(">protein-1\nMPEPTIDE\n", encoding="ascii")
     request = RunDeepKoalaInput(fasta_path=str(input_path))
 
     async with _manager(config, SuccessfulRunner()) as manager:
@@ -726,6 +825,7 @@ async def test_status_is_redacted_and_reports_runtime_and_policy(
         assert status.issue is None
         assert status.max_input_bytes is None
         assert status.max_sequences == runtime_config.max_sequences
+        assert status.max_output_bytes == runtime_config.max_output_bytes == 1 << 30
         serialized = status.model_dump_json()
         assert str(runtime_config.checkout) not in serialized
         assert str(runtime_config.state_root) not in serialized

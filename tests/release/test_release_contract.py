@@ -14,10 +14,6 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PUBLISHED_LOCALIZED_READMES = (
-    PROJECT_ROOT / "README.zh-CN.md",
-    PROJECT_ROOT / "README.ja.md",
-)
 OWNED_RELEASE_DOCUMENTS = tuple(
     sorted(
         {
@@ -77,7 +73,6 @@ FORBIDDEN_ARCHIVE_PARTS = {
     "results",
 }
 CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
-ROOT_README_NAVIGATION = "**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)"
 PYTHON_REQUIRES = ">=3.11,<3.12"
 VERSION_SUFFIXED_IDENTIFIER = re.compile(r"(?:V[0-9]+|_v[0-9]+)\Z")
 
@@ -128,7 +123,7 @@ def test_project_metadata_declares_buildable_stdio_package() -> None:
     scripts = cast(dict[str, str], project["scripts"])
 
     assert project["name"] == "kegg-mcp"
-    assert project["version"] == "0.9.0"
+    assert project["version"] == "0.10.0"
     assert project["readme"] == "docs/core-package.md"
     assert project["requires-python"] == PYTHON_REQUIRES
     assert project["license"] == "MIT"
@@ -192,7 +187,7 @@ def test_distribution_versions_and_compatibility_are_consistent() -> None:
         assert "Linux" in document
         assert "Python 3.11.x" in document
 
-    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.10,<0.11" in renderer_project["dependencies"]
     assert "Distribution boundary" in readiness
 
 
@@ -247,32 +242,18 @@ def test_release_documents_and_synthetic_examples_are_english_and_bounded() -> N
 
     for path in OWNED_RELEASE_FILES:
         content = path.read_text(encoding="utf-8")
-        if path == PROJECT_ROOT / "README.md":
-            content = content.replace(ROOT_README_NAVIGATION, "", 1)
         assert not CJK_CHARACTER.search(content), path
         assert path.stat().st_size <= 128 * 1024, path
         assert "SQLite format 3" not in content
 
 
-def test_published_localized_readmes_are_bounded_and_linked() -> None:
-    assert all(path.is_file() for path in PUBLISHED_LOCALIZED_READMES)
-
-    for path in PUBLISHED_LOCALIZED_READMES:
-        content = path.read_text(encoding="utf-8")
-        assert path.stat().st_size <= 128 * 1024, path
-        assert "SQLite format 3" not in content
-
-    navigation = {
-        PROJECT_ROOT / "README.md": ROOT_README_NAVIGATION,
-        PROJECT_ROOT / "README.zh-CN.md": (
-            "[English](README.md) | **简体中文** | [日本語](README.ja.md)"
-        ),
-        PROJECT_ROOT / "README.ja.md": (
-            "[English](README.md) | [简体中文](README.zh-CN.md) | **日本語**"
-        ),
-    }
-    for path, expected in navigation.items():
-        assert expected in path.read_text(encoding="utf-8")
+def test_localized_readmes_remain_untracked_and_unpublished() -> None:
+    release_paths = {path.relative_to(PROJECT_ROOT) for path in _release_files()}
+    assert Path("README.zh-CN.md") not in release_paths
+    assert Path("README.ja.md") not in release_paths
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "README.zh-CN.md" not in readme
+    assert "README.ja.md" not in readme
 
 
 def test_access_examples_record_rights_and_use_no_secrets() -> None:
@@ -329,11 +310,10 @@ def test_release_tree_contains_no_tracked_release_blocking_binary() -> None:
     assert "*.png" in ignore
     assert "render_input.json" in ignore
     assert "render_manifest.json" in ignore
-    assert "!/README.zh-CN.md" in ignore
     release_zh_cn_files = {
         path.relative_to(PROJECT_ROOT) for path in release_files if path.name.endswith(".zh-CN.md")
     }
-    assert release_zh_cn_files == {Path("README.zh-CN.md")}
+    assert not release_zh_cn_files
 
 
 def test_orchestration_hotspots_remain_bounded() -> None:
@@ -388,7 +368,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     assert renderer_lock.is_file()
     renderer_project = tomllib.loads(renderer_project_path.read_text(encoding="utf-8"))["project"]
     assert renderer_project["name"] == "kegg-render-mcp"
-    assert "kegg-mcp>=0.9,<0.10" in renderer_project["dependencies"]
+    assert "kegg-mcp>=0.10,<0.11" in renderer_project["dependencies"]
     assert renderer_project["scripts"] == {"kegg-render-mcp": "kegg_render_mcp.server:main"}
     lock_document = tomllib.loads(renderer_lock.read_text(encoding="utf-8"))
     locked_packages = cast(list[dict[str, object]], lock_document["package"])
@@ -402,10 +382,10 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 4" in normalized
+        assert "version 6" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (installation, server_doc, readiness):
-        assert "AnalysisExecutionProvenance` version 3" in re.sub(r"\s+", " ", document)
+        assert "AnalysisExecutionProvenance` version 5" in re.sub(r"\s+", " ", document)
 
     renderer_job = _workflow_job(ci, "validate-renderer-companion")
     for command in (
@@ -471,24 +451,27 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert "uv sync --frozen" not in ci
     assert smoke_path.is_file()
     for distribution, version in (
-        ("kegg-mcp", "0.9.0"),
+        ("kegg-mcp", "0.10.0"),
         ("deepkoala-mcp", "0.5.0"),
-        ("kegg-render-mcp", "0.4.0"),
+        ("kegg-render-mcp", "0.5.0"),
     ):
         assert f"--distribution {distribution}" in ci
         assert f"--expected-version {version}" in ci
-    for job_name in (
-        "validate",
-        "validate-deepkoala-companion",
-        "validate-renderer-companion",
-        "validate-macos-core",
-        "validate-macos-deepkoala-companion",
-        "validate-macos-renderer",
-        "validate-windows-unsupported",
-    ):
+    smoke_jobs = {
+        "validate": 1,
+        "validate-deepkoala-companion": 1,
+        "validate-renderer-companion": 1,
+        "validate-macos-core": 1,
+        "validate-macos-deepkoala-companion": 1,
+        "validate-macos-renderer": 1,
+        "validate-windows-unsupported": 2,
+    }
+    for job_name, expected_smoke_count in smoke_jobs.items():
         job = _workflow_job(ci, job_name)
         assert "Smoke-test installed" in job
         assert "tests/release/smoke_wheel.py" in job
+        assert job.count("uv run --frozen python") == expected_smoke_count
+    assert ci.count("uv run --frozen python") == 8
     assert "uv build --no-sources --wheel" in ci
     for isolation_marker in (
         '"-I"',
@@ -496,6 +479,8 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
         "environment.pop(name, None)",
         "cwd=root",
         'environment_root / "Scripts" / "python.exe"',
+        'sys.implementation.name != "cpython"',
+        "sys.version_info[:2] != (3, 11)",
     ):
         assert isolation_marker in smoke
 
@@ -521,10 +506,18 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "runs-on: macos-14" in macos_core
     assert "platform.machine() == 'arm64'" in macos_core
     assert "KEGG_MCP_ACCESS_MODE: offline_cache" in macos_core
-    assert "tests/unit" in macos_core
-    assert "tests/contract" in macos_core
-    assert "tests/integration" in macos_core
-    assert "--ignore=tests/integration/test_deepkoala_companion_handoff.py" in macos_core
+    assert (
+        "tests/unit/kegg/test_cache.py::test_darwin_read_only_descriptor_connection_primitive"
+    ) in macos_core
+    for selector in (
+        "test_host_platform_profiles_cover_linux_and_native_apple_silicon",
+        "test_deployment_environment_emits_platform_specific_deepkoala_devices",
+        "test_runtime_verification_accepts_cpu_only_local_ready_for_each_platform",
+        "test_python_preflight_requires_a_native_runtime_matching_the_host_profile",
+    ):
+        assert f"tests/release/test_suite_installation.py::{selector}" in macos_core
+    assert "tests/contract" not in macos_core
+    assert "tests/integration" not in macos_core
     assert "--distribution kegg-mcp" in macos_core
     assert "--console kegg-mcp" in macos_core
 
@@ -533,6 +526,13 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "working-directory: companions/kegg-render-mcp" in macos_renderer
     assert "uv sync --locked --all-groups" in macos_renderer
     assert "uv run --frozen pytest" in macos_renderer
+    for selector in (
+        "tests/test_platform.py::test_supported_posix_host_satisfies_renderer_capability_gate",
+        "tests/test_artifacts.py::test_parent_open_and_close_preserves_a_live_spawned_scope",
+        "tests/test_synthetic_pipeline.py::"
+        "test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output",
+    ):
+        assert selector in macos_renderer
     assert "--distribution kegg-render-mcp" in macos_renderer
 
     assert "runs-on: macos-14" in macos_deepkoala
@@ -540,14 +540,26 @@ def test_ci_has_bounded_apple_silicon_evidence_and_native_windows_diagnostics() 
     assert "platform.machine() == 'arm64'" in macos_deepkoala
     for command in (
         "uv sync --locked",
-        "uv run --frozen ruff check .",
-        "uv run --frozen ruff format --check .",
-        "uv run --frozen pyright",
         "uv run --frozen pytest",
         "uv build --no-sources",
         "--distribution deepkoala-mcp",
     ):
         assert command in macos_deepkoala
+    for selector in (
+        "tests/test_runner.py::test_runner_times_out_and_reaps_process_group",
+        "tests/test_runner.py::test_parent_sigkill_terminates_deepkoala_child",
+        "tests/test_job_storage.py::"
+        "test_shared_state_root_coordinates_runner_lock_across_spawned_processes",
+    ):
+        assert selector in macos_deepkoala
+    for duplicate_command in (
+        "uv run --frozen ruff check .",
+        "uv run --frozen ruff format --check .",
+        "uv run --frozen pyright",
+    ):
+        assert duplicate_command not in macos_core
+        assert duplicate_command not in macos_deepkoala
+        assert duplicate_command not in macos_renderer
 
     assert "validate-macos-intel-components:" not in ci
     assert "macos-15-intel" not in ci

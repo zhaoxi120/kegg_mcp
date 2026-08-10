@@ -7,11 +7,11 @@ import secrets
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import NoReturn
 
 from deepkoala_mcp import __version__
+from deepkoala_mcp._job_types import ArtifactName, Runner, RuntimeProbe
 from deepkoala_mcp._job_types import JobRecord as _JobRecord
-from deepkoala_mcp._job_types import Runner, RuntimeProbe
 from deepkoala_mcp.config import DeepKoalaRuntimeConfig
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
@@ -62,21 +62,19 @@ from deepkoala_mcp.job_storage import (
     close_state_session,
     create_output_directory,
     open_state_session,
-    publish_artifacts,
     read_artifact_slice,
     release_runner_lock,
     remove_job_directory,
     try_acquire_runner_lock,
     validate_delivered_artifacts,
 )
-from deepkoala_mcp.reporting import build_handoff, build_run_report
+from deepkoala_mcp.reporting import build_handoff
 from deepkoala_mcp.runner import (
     DeepKoalaProcessRunner,
     RunnerPlan,
     RunnerTimedOutError,
 )
 
-ArtifactName = Literal["annotations", "report"]
 _TERMINAL = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED, JobState.TIMED_OUT})
 
 
@@ -226,6 +224,7 @@ class DeepKoalaJobManager:
                     source_version=installation.source_version,
                     plan=plan,
                     fasta=staged.summary,
+                    input_sequence_ids=staged.sequence_ids,
                     started_at=_now(),
                     runner_lock_fd=runner_lock_fd,
                 )
@@ -499,30 +498,23 @@ class DeepKoalaJobManager:
                     reason = "DeepKOALA exited without a successful detailed result."
                 else:
                     stage = "artifact_publication"
-                    completed_at = _now()
-                    annotations, report, output_bytes = publish_artifacts(
-                        raw_output=record.directory / "output.csv",
-                        output_directory=record.output_directory,
-                        report=build_run_report(
-                            input_path=record.input_path,
-                            source_version=record.source_version,
-                            plan=record.plan,
-                            fasta=record.fasta,
-                            started_at=record.started_at,
-                            completed_at=completed_at,
-                            runtime=runtime,
-                        ),
+                    published = await record.publish_output_in_worker(
                         max_output_bytes=self.config.max_output_bytes,
+                        runtime=runtime,
+                        completion_clock=_now,
                     )
+                    completed_at = published.completed_at
+                    output_bytes = published.output_bytes
                     handoff = build_handoff(
                         job_id=record.job_id,
                         input_path=record.input_path,
                         source_version=record.source_version,
                         plan=record.plan,
-                        annotations_path=annotations,
-                        report_path=report,
+                        annotations_path=published.annotations_path,
+                        report_path=published.report_path,
                         completed_at=completed_at,
                         runtime=runtime,
+                        output_coverage=published.coverage,
                     )
                     state = JobState.SUCCEEDED
                     reason = None
@@ -557,6 +549,7 @@ class DeepKoalaJobManager:
                 state = JobState.FAILED
                 handoff = None
                 output_bytes = None
+                completed_at = None
                 if record.correlation_id is None:
                     reason, record.correlation_id = _record_background_failure(
                         "private_job_cleanup", error
@@ -566,6 +559,7 @@ class DeepKoalaJobManager:
             completed_at = completed_at or _now()
             self._release_record_runner(record)
             async with self._lock:
+                record.input_sequence_ids = frozenset()
                 record.state = state
                 record.failure_reason = reason
                 record.output_bytes = output_bytes if state is JobState.SUCCEEDED else None

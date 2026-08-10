@@ -184,7 +184,7 @@ def _normalized_result(store: SQLiteResultStore, scope_id: str) -> str:
     payload = (
         "sequence,ko,decision,rank\n"
         "p1,K00001,accepted,1\n"
-        "p2,K00002,uncertain,1\n"
+        "p2,K00002,unclassified,1\n"
         "p3,K00003,rejected,1\n"
         "p4,not-a-ko,accepted,1\n"
         "p5,K00004,mystery,1\n"
@@ -211,7 +211,7 @@ def _normalized_result(store: SQLiteResultStore, scope_id: str) -> str:
     return normalized.result.result_id
 
 
-def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
+def test_audit_reuses_one_accepted_mapping_union_per_target_and_reports_losses(
     tmp_path: Path,
 ) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
@@ -234,25 +234,23 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
         ),
     )
 
-    assert result.evidence.strict_unique_ko_count == 3
-    assert result.evidence.lenient_unique_ko_count == 4
+    assert result.evidence.accepted_unique_ko_count == 3
+    assert result.evidence.unique_valid_ko_count == 6
     assert result.evidence.rejected_unique_ko_count == 1
     assert result.evidence.duplicate_assignment_count == 1
     assert result.evidence.conflicting_assignment_count == 1
     assert tuple(item.target for item in result.mappings) == tuple(AnnotationMappingTarget)
     pathway = result.mappings[0]
-    assert pathway.strict.mapped_unique_ko_count == 2
-    assert pathway.strict.one_to_many_ko_count == 1
-    assert pathway.lenient.unmapped_ko_count == 2
-    assert result.lenient_only_ko_count == 1
-    assert result.strict_without_any_audited_relationship_count == 1
-    assert result.lenient_without_any_audited_relationship_count == 2
+    assert pathway.mapping.mapped_unique_ko_count == 2
+    assert pathway.mapping.one_to_many_ko_count == 1
+    assert pathway.mapping.unmapped_ko_count == 1
+    assert result.accepted_without_any_audited_relationship_count == 1
     assert result.retrieval.batch_count == 10
     assert len(result.model_dump_json().encode("utf-8")) <= query_support.MAX_QUERY_DIRECT_BYTES
     assert len(client.requests) == 10
     assert {request.relationship for request in client.requests} == set(_TARGET_IDS)
     assert all(
-        set(request.source_identifiers) <= {"K00001", "K00002", "K00005", "K00006"}
+        set(request.source_identifiers) <= {"K00001", "K00005", "K00006"}
         for request in client.requests
     )
     artifact = store.read_artifact(
@@ -264,15 +262,10 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
     )
     retained = json.loads(artifact.content)
     detail = retained["detail"]
-    assert detail["lenient_only_ko_preview"] == ["K00002"]
-    assert detail["strict_without_any_audited_relationship_preview"] == ["K00006"]
-    assert detail["lenient_without_any_audited_relationship_preview"] == [
-        "K00002",
-        "K00006",
-    ]
+    assert detail["accepted_without_any_audited_relationship_preview"] == ["K00006"]
     assert [
         (item["target_count"], item["ko_count"])
-        for item in detail["mappings"][0]["strict"]["target_degree_distribution"]
+        for item in detail["mappings"][0]["mapping"]["target_degree_distribution"]
     ] == [(1, 1), (2, 1)]
     warning_codes = {warning["code"] for warning in detail["warnings"]}
     assert AnnotationAuditWarningCode.MISSING_SOURCE_VERSION in warning_codes
@@ -280,8 +273,8 @@ def test_audit_reuses_one_lenient_mapping_union_per_target_and_reports_losses(
     assert AnnotationAuditWarningCode.INCOMPLETE_ASSEMBLY_CONTEXT in warning_codes
     assert AnnotationAuditWarningCode.CONTAMINATION_CONTEXT in warning_codes
     assert detail["quality_context"]["genome_type"] == GenomeType.MAG
-    assert retained["strict_ko_ids"] == ["K00001", "K00005", "K00006"]
-    assert retained["lenient_only_ko_ids"] == ["K00002"]
+    assert retained["accepted_ko_ids"] == ["K00001", "K00005", "K00006"]
+    assert retained["accepted_without_any_audited_relationship"] == ["K00006"]
     assert len(retained["provenance"]) == 10
     assert retained["provenance"][0]["request_key"] == "synthetic:1"
     assert retained["complete_relationship_rows"]["pathway"][0]["batch_index"] == 0
@@ -374,10 +367,10 @@ def test_audit_preserves_evidence_when_planned_mapping_exceeds_request_bound(
         scope_id="audit-limit-scope",
     )
 
-    assert result.evidence.lenient_unique_ko_count == 501
+    assert result.evidence.accepted_unique_ko_count == 501
     assert result.mapping_execution.status is AnnotationMappingExecutionStatus.SKIPPED_REQUEST_LIMIT
     assert result.mappings == ()
-    assert result.strict_without_any_audited_relationship_count is None
+    assert result.accepted_without_any_audited_relationship_count is None
     assert client.requests == []
 
 
@@ -430,9 +423,9 @@ def test_audit_can_run_evidence_only_without_kegg_mapping(
     )
 
     assert result.mapping_execution.status is AnnotationMappingExecutionStatus.NOT_REQUESTED
-    assert result.evidence.strict_unique_ko_count == 2
+    assert result.evidence.accepted_unique_ko_count == 2
     assert result.mappings == ()
-    assert result.strict_without_any_audited_relationship_count is None
+    assert result.accepted_without_any_audited_relationship_count is None
     assert client.requests == []
 
 
@@ -500,7 +493,7 @@ def test_audit_preserves_evidence_and_completed_targets_at_row_limit(
     )
 
     execution = result.mapping_execution
-    assert result.evidence.lenient_unique_ko_count == 1
+    assert result.evidence.accepted_unique_ko_count == 1
     assert execution.status is AnnotationMappingExecutionStatus.INCOMPLETE_ROW_LIMIT
     assert execution.completed_targets == (AnnotationMappingTarget.PATHWAY,)
     assert execution.incomplete_target is AnnotationMappingTarget.MODULE
@@ -509,7 +502,7 @@ def test_audit_preserves_evidence_and_completed_targets_at_row_limit(
     assert execution.limit_observed == 2
     assert execution.limit_value == 1
     assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
-    assert result.strict_without_any_audited_relationship_count is None
+    assert result.accepted_without_any_audited_relationship_count is None
     assert len(client.requests) == 2
     retained = json.loads(
         store.read_artifact(
@@ -596,7 +589,7 @@ def test_audit_preserves_evidence_and_completed_targets_at_response_limit(
     assert tuple(item.target for item in result.mappings) == (AnnotationMappingTarget.PATHWAY,)
     assert result.retrieval.batch_count == 2
     assert result.retrieval.network_request_count == 2
-    assert result.strict_without_any_audited_relationship_count is None
+    assert result.accepted_without_any_audited_relationship_count is None
 
 
 def test_audit_direct_result_cap_compensates_the_retained_result(

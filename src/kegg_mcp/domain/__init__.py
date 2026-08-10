@@ -1,5 +1,6 @@
 """Stable domain contracts for KO annotation evidence."""
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     AnnotationDataset,
@@ -8,7 +9,6 @@ from kegg_mcp.domain.annotations import (
     DecisionPolicyReference,
     DiagnosticCode,
     EvidenceField,
-    EvidenceMode,
     ImportDiagnostic,
     ImportReport,
     InputFormat,
@@ -51,13 +51,13 @@ __all__ = [
     "ErrorCode",
     "ErrorDetail",
     "EvidenceField",
-    "EvidenceMode",
     "ImportDiagnostic",
     "ImportReport",
     "InputFormat",
     "KOEvidenceView",
     "KORecordIndexEntry",
     "KeggMcpError",
+    "KoAnalysisView",
     "NormalizedStatus",
     "RowEvidence",
     "ScoreType",
@@ -65,6 +65,7 @@ __all__ = [
     "SourceProvenance",
     "StatusCount",
     "ThresholdRule",
+    "build_ko_analysis_view",
     "build_ko_evidence_view",
     "normalize_ko_id",
     "select_ko_ids",

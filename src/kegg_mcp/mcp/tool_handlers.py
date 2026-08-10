@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -9,6 +10,8 @@ from typing import cast
 from pydantic import BaseModel
 
 from kegg_mcp import __version__
+from kegg_mcp.domain.analysis_view import KoAnalysisView
+from kegg_mcp.importers import AnalysisViewImportLimits, stream_deepkoala_analysis_view
 from kegg_mcp.kegg import GetRequest
 from kegg_mcp.mcp.contracts import (
     AnalyzeKoAnnotationsInput,
@@ -30,7 +33,12 @@ from kegg_mcp.mcp.contracts import (
     TraceKeggRelationsInput,
     WriteKeggReferenceBundleInput,
 )
-from kegg_mcp.mcp.path_policy import materialize_annotation_file, resolve_output_directory
+from kegg_mcp.mcp.path_policy import (
+    bind_annotation_file_source,
+    materialize_annotation_file,
+    open_annotation_file_stream,
+    resolve_output_directory,
+)
 from kegg_mcp.mcp.runtime import McpRuntime
 from kegg_mcp.services._atomic_bundle import preflight_text_bundle_output
 from kegg_mcp.services.annotation_analysis import analyze_annotation_targets
@@ -44,9 +52,9 @@ from kegg_mcp.services.entity_resolution import resolve_kegg_entities
 from kegg_mcp.services.external_handoff import prepare_external_handoff
 from kegg_mcp.services.kegg_entries import retrieve_kegg_entries
 from kegg_mcp.services.kegg_search import search_kegg_entries
-from kegg_mcp.services.models import NormalizeAnnotationsRequest
+from kegg_mcp.services.models import AnnotationInputFormat, NormalizeAnnotationsRequest
 from kegg_mcp.services.module_analysis import analyze_module_targets
-from kegg_mcp.services.normalization import normalize_annotations
+from kegg_mcp.services.normalization import build_analysis_view, normalize_annotations
 from kegg_mcp.services.operational import (
     delete_analysis_result,
     get_server_status_service,
@@ -79,10 +87,39 @@ ToolHandler = Callable[[ToolContext, BaseModel], ToolOutcome]
 def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(AnalyzeKoAnnotationsInput, model)
     runtime = context.runtime
+    analysis_view: KoAnalysisView | None = None
+    stream_limits: AnalysisViewImportLimits | None = None
+    import_started = time.perf_counter_ns()
     if request.annotations is not None:
-        normalization = materialize_annotation_file(
-            request.annotations.to_service_request(), runtime.allowed_roots
-        )
+        normalization = request.annotations.to_service_request()
+        if (
+            normalization.file_path is not None
+            and normalization.input_format is AnnotationInputFormat.DEEPKOALA_DETAILED
+        ):
+            stream_limits = AnalysisViewImportLimits()
+            with open_annotation_file_stream(
+                normalization.file_path,
+                runtime.allowed_roots,
+                max_bytes=stream_limits.max_bytes,
+            ) as pinned:
+                source = bind_annotation_file_source(
+                    normalization.source,
+                    requested_path=normalization.file_path,
+                    resolved_path=pinned.path,
+                    default_source_name="deepkoala",
+                )
+                analysis_view = stream_deepkoala_analysis_view(
+                    pinned.stream,
+                    input_bytes=pinned.byte_size,
+                    limits=stream_limits,
+                    analysis_unit=normalization.analysis_unit,
+                    taxon_id=normalization.taxon_id,
+                    kegg_organism_code=normalization.kegg_organism_code,
+                    source=source,
+                )
+            normalization = normalization.model_copy(update={"source": source})
+        else:
+            normalization = materialize_annotation_file(normalization, runtime.allowed_roots)
     else:
         if request.ko_text is None:  # pragma: no cover - guarded by the input model
             raise AssertionError("validated analysis input omitted its annotation source")
@@ -91,6 +128,14 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
             analysis_unit=request.analysis_unit,
             sample_id=request.sample_id,
         )
+    if analysis_view is None:
+        if normalization.text is None:  # pragma: no cover - materialization invariant
+            raise AssertionError("bounded analysis input was not materialized")
+        analysis_view = build_analysis_view(normalization)
+    annotation_import_elapsed_ms = max(
+        0,
+        (time.perf_counter_ns() - import_started) // 1_000_000,
+    )
     requested_output = request.output_directory or normalization.output_directory
     resolved_output = resolve_output_directory(
         requested_output,
@@ -104,15 +149,18 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
-        pathway_evidence_mode=request.pathway_evidence_mode,
         pathway_selection=request.pathway_selection,
         allow_global_or_overview=request.allow_global_or_overview,
+        analysis_view=analysis_view,
+        stream_import_limits=stream_limits,
+        annotation_import_elapsed_ms=annotation_import_elapsed_ms,
         output_directory=resolved_output,
         remove_created_output_on_failure=requested_output is None and resolved_output is not None,
     )
     return ToolOutcome(
         result,
-        "KO annotations were normalized and the requested KEGG analyses completed.",
+        "A compact sorted unique accepted-KO view was analyzed; record-level evidence and "
+        "protein mappings were not retained by this workflow.",
         result.result.result_id,
     )
 
@@ -395,7 +443,6 @@ def analyze_pathways(context: ToolContext, model: BaseModel) -> ToolOutcome:
         client=runtime.client,
         result_store=runtime.result_store,
         scope_id=runtime.scope_id,
-        evidence_mode=request.evidence_mode,
         allow_global_or_overview=request.allow_global_or_overview,
     )
     return ToolOutcome(

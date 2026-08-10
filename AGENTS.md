@@ -73,8 +73,16 @@ schema, parser, fixture, or acceptance test.
   do not call them enrichment, dominant function, validation, presence, or absence.
 - A K-number assignment is annotation evidence, not experimental validation. A source-rejected
   prediction is not evidence that the function is absent.
-- Strict analysis uses accepted K numbers only. Lenient analysis adds only records explicitly
-  classified as `uncertain` by a named, versioned policy.
+- Every MODULE, pathway, ranking, comparison, and rendering workflow uses the sorted unique set of
+  accepted K numbers. Rejected, unclassified, and invalid records remain evidence or intake
+  outcomes and never enter analysis.
+- Full normalization preserves record-level evidence, protein-to-KO mappings, duplicate/conflict
+  accounting, and provenance. The high-level `analyze_ko_annotations` workflow always derives a
+  compact analysis view containing sorted unique accepted K numbers, aggregate intake/status
+  counts, source and policy provenance, and bounded diagnostics. It does not retain record-level
+  evidence, protein-to-KO mappings, or duplicate/conflict accounting. Use
+  `normalize_ko_annotations` or the audit workflow when those records are required; file size never
+  changes analysis semantics.
 - Do not compare scores or thresholds across annotation systems unless their semantics are known to
   be comparable.
 - Report exact MODULE completion separately from project block coverage. Follow KEGG MODULE logic:

@@ -4,7 +4,8 @@ import csv
 import io
 import math
 import uuid
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
 
@@ -26,7 +27,11 @@ from kegg_mcp.domain.annotations import (
     normalize_identifier_label,
 )
 from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
-from kegg_mcp.importers.contracts import ImportLimits, SourceProvenanceInput
+from kegg_mcp.importers.contracts import (
+    AnalysisViewImportLimits,
+    ImportLimits,
+    SourceProvenanceInput,
+)
 
 IMPORTER_VERSION = "2"
 MAX_EVIDENCE_FIELD_NAME_LENGTH = 256
@@ -107,7 +112,7 @@ def decode_payload(payload: object, limits: ImportLimits) -> DecodedInput:
 def validate_auxiliary_evidence(
     metadata: Sequence[EvidenceField],
     source_input: SourceProvenanceInput | None,
-    limits: ImportLimits,
+    limits: ImportLimits | AnalysisViewImportLimits,
 ) -> None:
     """Apply caller-selected field and byte bounds to non-payload metadata."""
     if len(metadata) > MAX_AUXILIARY_METADATA_FIELDS:
@@ -184,7 +189,6 @@ def validate_auxiliary_evidence(
 
 
 def build_source(
-    decoded: DecodedInput,
     source_input: SourceProvenanceInput | None,
     *,
     default_source_name: str,
@@ -213,6 +217,15 @@ def parse_table(
     limits: ImportLimits,
 ) -> ParsedTable:
     """Parse a table while coordinating Python's process-wide CSV field limit."""
+    with configured_csv_field_limit(limits):
+        return _parse_table(decoded, delimiter=delimiter, limits=limits)
+
+
+@contextmanager
+def configured_csv_field_limit(
+    limits: ImportLimits | AnalysisViewImportLimits,
+) -> Generator[None, None, None]:
+    """Temporarily coordinate Python's process-wide CSV field-size setting."""
     with _CSV_FIELD_SIZE_LOCK:
         previous_limit = csv.field_size_limit()
         configured_limit = max(
@@ -221,7 +234,7 @@ def parse_table(
         )
         csv.field_size_limit(configured_limit)
         try:
-            return _parse_table(decoded, delimiter=delimiter, limits=limits)
+            yield
         finally:
             csv.field_size_limit(previous_limit)
 
@@ -235,41 +248,7 @@ def _parse_table(
     """Parse a bounded CSV/TSV payload with exact header semantics."""
     try:
         reader = csv.reader(io.StringIO(decoded.text, newline=""), delimiter=delimiter, strict=True)
-        raw_header = next(reader, None)
-        if raw_header is None:
-            fail(
-                ErrorCode.INVALID_ANNOTATION_TABLE,
-                "The annotation table has no header row.",
-                suggested_action="Provide a table with an explicit header row.",
-            )
-        _check_columns(raw_header, limits)
-        header = tuple(raw_header)
-        if any(not name for name in header):
-            fail(
-                ErrorCode.INVALID_ANNOTATION_TABLE,
-                "The annotation table contains an empty column name.",
-                suggested_action="Give every source column a unique non-empty name.",
-            )
-        if any(len(name) > MAX_EVIDENCE_FIELD_NAME_LENGTH for name in header):
-            fail(
-                ErrorCode.INVALID_ANNOTATION_TABLE,
-                "The annotation table contains an oversized column name.",
-                suggested_action=(
-                    f"Shorten column names to {MAX_EVIDENCE_FIELD_NAME_LENGTH} characters or fewer."
-                ),
-                safe_details=(
-                    SafeDetail(
-                        name="max_column_name_length",
-                        value=str(MAX_EVIDENCE_FIELD_NAME_LENGTH),
-                    ),
-                ),
-            )
-        if len(header) != len(set(header)):
-            fail(
-                ErrorCode.INVALID_ANNOTATION_TABLE,
-                "The annotation table contains duplicate column names.",
-                suggested_action="Rename duplicate columns before importing the table.",
-            )
+        header = read_table_header(reader, limits)
 
         rows: list[RowEvidence] = []
         unparsed: list[RowEvidence] = []
@@ -286,9 +265,9 @@ def _parse_table(
                     suggested_action="Reduce the row count or use an explicitly larger safe limit.",
                     safe_details=(SafeDetail(name="max_rows", value=str(limits.max_rows)),),
                 )
-            _check_columns(cells, limits)
+            check_table_columns(cells, limits)
             row_number = reader.line_num
-            evidence = _row_evidence(header, cells, row_number)
+            evidence = build_row_evidence(header, cells, row_number)
             if len(cells) != len(header):
                 unparsed.append(evidence)
                 diagnostics.append(
@@ -319,6 +298,49 @@ def _parse_table(
         diagnostics=tuple(diagnostics),
         input_rows=input_rows,
     )
+
+
+def read_table_header(
+    reader: Iterator[list[str]],
+    limits: ImportLimits | AnalysisViewImportLimits,
+) -> tuple[str, ...]:
+    """Read and validate one exact delimited-table header without retaining payload rows."""
+    raw_header = next(reader, None)
+    if raw_header is None:
+        fail(
+            ErrorCode.INVALID_ANNOTATION_TABLE,
+            "The annotation table has no header row.",
+            suggested_action="Provide a table with an explicit header row.",
+        )
+    check_table_columns(raw_header, limits)
+    header = tuple(raw_header)
+    if any(not name for name in header):
+        fail(
+            ErrorCode.INVALID_ANNOTATION_TABLE,
+            "The annotation table contains an empty column name.",
+            suggested_action="Give every source column a unique non-empty name.",
+        )
+    if any(len(name) > MAX_EVIDENCE_FIELD_NAME_LENGTH for name in header):
+        fail(
+            ErrorCode.INVALID_ANNOTATION_TABLE,
+            "The annotation table contains an oversized column name.",
+            suggested_action=(
+                f"Shorten column names to {MAX_EVIDENCE_FIELD_NAME_LENGTH} characters or fewer."
+            ),
+            safe_details=(
+                SafeDetail(
+                    name="max_column_name_length",
+                    value=str(MAX_EVIDENCE_FIELD_NAME_LENGTH),
+                ),
+            ),
+        )
+    if len(header) != len(set(header)):
+        fail(
+            ErrorCode.INVALID_ANNOTATION_TABLE,
+            "The annotation table contains duplicate column names.",
+            suggested_action="Rename duplicate columns before importing the table.",
+        )
+    return header
 
 
 def require_columns(header: Sequence[str], required: Sequence[str]) -> None:
@@ -694,7 +716,11 @@ def sequence_or_domain_assignment_slot(record: AnnotationRecord) -> tuple[object
     return (record.sample_id, record.sequence_id, "sequence")
 
 
-def _check_columns(cells: Sequence[str], limits: ImportLimits) -> None:
+def check_table_columns(
+    cells: Sequence[str],
+    limits: ImportLimits | AnalysisViewImportLimits,
+) -> None:
+    """Enforce common column, field-length, and text-safety limits."""
     if len(cells) > limits.max_columns:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
@@ -709,9 +735,20 @@ def _check_columns(cells: Sequence[str], limits: ImportLimits) -> None:
             suggested_action="Shorten oversized fields or use a larger safe limit.",
             safe_details=(SafeDetail(name="max_field_length", value=str(limits.max_field_length)),),
         )
+    if any("\x00" in cell for cell in cells):
+        fail(
+            ErrorCode.UNSUPPORTED_INPUT_FORMAT,
+            "The annotation input contains NUL characters.",
+            suggested_action="Provide plain UTF-8 text without binary content.",
+        )
 
 
-def _row_evidence(header: Sequence[str], cells: Sequence[str], row_number: int) -> RowEvidence:
+def build_row_evidence(
+    header: Sequence[str],
+    cells: Sequence[str],
+    row_number: int,
+) -> RowEvidence:
+    """Build one immutable logical-row value for immediate classification or retention."""
     fields: list[EvidenceField] = []
     used_names = set(header)
     for index, value in enumerate(cells):

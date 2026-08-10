@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import os
 import secrets
 import stat
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
+
+from typing_extensions import Buffer
 
 from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.importers import SourceProvenanceInput
@@ -25,6 +31,52 @@ class _InputFileLimit(Exception):
         self.actual_bytes = actual_bytes
 
 
+@dataclass(frozen=True, slots=True)
+class PinnedAnnotationFile:
+    """One regular file held by an unchanged no-follow descriptor walk."""
+
+    path: Path
+    stream: io.BufferedIOBase
+    byte_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedDescriptor:
+    descriptor: int
+    path: Path
+    byte_size: int
+
+
+class _BoundedDescriptorReader(io.RawIOBase):
+    """Read a pinned descriptor without taking ownership or exceeding the byte limit."""
+
+    def __init__(self, descriptor: int, max_bytes: int) -> None:
+        super().__init__()
+        self._descriptor = descriptor
+        self._max_bytes = max_bytes
+        self._bytes_read = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Buffer, /) -> int:
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+        view = memoryview(buffer)
+        remaining_with_sentinel = self._max_bytes + 1 - self._bytes_read
+        if remaining_with_sentinel <= 0:
+            raise _InputFileLimit(self._bytes_read)
+        requested = min(len(view), 65_536, remaining_with_sentinel)
+        chunk = os.read(self._descriptor, requested)
+        if not chunk:
+            return 0
+        self._bytes_read += len(chunk)
+        if self._bytes_read > self._max_bytes:
+            raise _InputFileLimit(self._bytes_read)
+        view[: len(chunk)] = chunk
+        return len(chunk)
+
+
 def materialize_annotation_file(
     request: NormalizeAnnotationsRequest,
     allowed_roots: tuple[str, ...],
@@ -39,29 +91,9 @@ def materialize_annotation_file(
             max_bytes=request.import_limits.max_bytes,
         )
     except _InputFileLimit as error:
-        raise KeggMcpError(
-            ErrorDetail(
-                code=ErrorCode.INPUT_LIMIT_EXCEEDED,
-                message="The annotation file exceeds the configured input size limit.",
-                recoverable=True,
-                suggested_action="Provide a smaller annotation file.",
-                safe_details=(
-                    SafeDetail(name="max_bytes", value=str(request.import_limits.max_bytes)),
-                    SafeDetail(name="actual_bytes", value=str(error.actual_bytes)),
-                ),
-            )
-        ) from None
+        _raise_annotation_file_limit(error, request.import_limits.max_bytes)
     except (OSError, _UnsafeInputFile):
-        raise KeggMcpError(
-            ErrorDetail(
-                code=ErrorCode.INVALID_ANNOTATION_TABLE,
-                message="The configured annotation file could not be read safely.",
-                recoverable=True,
-                suggested_action=(
-                    "Use an unchanged direct regular file beneath a configured allowed root."
-                ),
-            )
-        ) from None
+        _raise_unsafe_annotation_file()
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -73,33 +105,66 @@ def materialize_annotation_file(
                 suggested_action="Convert the file to UTF-8 and retry.",
             )
         ) from None
-    source = request.source or SourceProvenanceInput(
-        source_name="file_handoff",
-        input_path=str(path),
+    source = bind_annotation_file_source(
+        request.source,
+        requested_path=request.file_path,
+        resolved_path=path,
+        default_source_name="file_handoff",
     )
-    source_path: str | None = None
-    if source.input_path is not None:
-        source_path = (
-            str(path)
-            if Path(source.input_path) == Path(request.file_path)
-            else str(resolve_existing_file(source.input_path, allowed_roots))
-        )
     return request.model_copy(
         update={
             "text": text,
             "file_path": None,
-            "source": source.model_copy(update={"input_path": source_path}),
+            "source": source,
         }
     )
 
 
-def resolve_existing_file(value: str, allowed_roots: tuple[str, ...]) -> Path:
-    """Validate one direct regular file without reading its payload."""
+@contextmanager
+def open_annotation_file_stream(
+    value: str,
+    allowed_roots: tuple[str, ...],
+    *,
+    max_bytes: int,
+) -> Generator[PinnedAnnotationFile, None, None]:
+    """Yield a bounded stream while retaining and revalidating the opened file descriptor."""
     try:
-        _, path = _access_allowed_file(value, allowed_roots, max_bytes=None)
-        return path
+        with _open_allowed_file_descriptor(
+            value,
+            allowed_roots,
+            max_bytes=max_bytes,
+        ) as pinned:
+            raw_stream = _BoundedDescriptorReader(pinned.descriptor, max_bytes)
+            buffered_stream = io.BufferedReader(raw_stream, buffer_size=65_536)
+            try:
+                yield PinnedAnnotationFile(
+                    path=pinned.path,
+                    stream=buffered_stream,
+                    byte_size=pinned.byte_size,
+                )
+            finally:
+                buffered_stream.close()
+    except _InputFileLimit as error:
+        _raise_annotation_file_limit(error, max_bytes)
     except (OSError, _UnsafeInputFile):
-        _raise_disallowed_path("file_path")
+        _raise_unsafe_annotation_file()
+
+
+def bind_annotation_file_source(
+    source: SourceProvenanceInput | None,
+    *,
+    requested_path: str,
+    resolved_path: Path,
+    default_source_name: str,
+) -> SourceProvenanceInput:
+    """Bind annotation-file provenance without accessing an independent source path."""
+    bound = source or SourceProvenanceInput(
+        source_name=default_source_name,
+        input_path=str(resolved_path),
+    )
+    if bound.input_path is not None and Path(bound.input_path) == Path(requested_path):
+        return bound.model_copy(update={"input_path": str(resolved_path)})
+    return bound
 
 
 def resolve_output_directory(
@@ -140,18 +205,42 @@ def _read_allowed_file(
     *,
     max_bytes: int,
 ) -> tuple[bytes, Path]:
-    content, path = _access_allowed_file(value, allowed_roots, max_bytes=max_bytes)
-    if content is None:
-        raise AssertionError("bounded file intake returned no content")
-    return content, path
+    return _access_allowed_file(value, allowed_roots, max_bytes=max_bytes)
 
 
 def _access_allowed_file(
     value: str,
     allowed_roots: tuple[str, ...],
     *,
-    max_bytes: int | None,
-) -> tuple[bytes | None, Path]:
+    max_bytes: int,
+) -> tuple[bytes, Path]:
+    with _open_allowed_file_descriptor(
+        value,
+        allowed_roots,
+        max_bytes=max_bytes,
+    ) as pinned:
+        buffered = bytearray()
+        while len(buffered) <= max_bytes:
+            chunk = os.read(
+                pinned.descriptor,
+                min(65_536, max_bytes + 1 - len(buffered)),
+            )
+            if not chunk:
+                break
+            buffered.extend(chunk)
+        if len(buffered) > max_bytes:
+            raise _InputFileLimit(len(buffered))
+        return bytes(buffered), pinned.path
+
+
+@contextmanager
+def _open_allowed_file_descriptor(
+    value: str,
+    allowed_roots: tuple[str, ...],
+    *,
+    max_bytes: int,
+) -> Generator[_PinnedDescriptor, None, None]:
+    """Open and finally revalidate one regular file through no-follow directory descriptors."""
     candidate = Path(value)
     root = _select_allowed_root(candidate, allowed_roots, field="file_path")
     parts = candidate.relative_to(root).parts
@@ -179,27 +268,22 @@ def _access_allowed_file(
             named_before
         ):
             raise _UnsafeInputFile
-        if max_bytes is None:
-            content: bytes | None = None
-        else:
-            if opened_before.st_size > max_bytes:
-                raise _InputFileLimit(opened_before.st_size)
-            buffered = bytearray()
-            while len(buffered) <= max_bytes:
-                chunk = os.read(descriptor, min(65_536, max_bytes + 1 - len(buffered)))
-                if not chunk:
-                    break
-                buffered.extend(chunk)
-            if len(buffered) > max_bytes:
-                raise _InputFileLimit(len(buffered))
-            content = bytes(buffered)
-        opened_after = os.fstat(descriptor)
-        named_after = os.stat(filename, dir_fd=current_fd, follow_symlinks=False)
-        if _file_state(opened_before) != _file_state(opened_after) or _file_state(
-            opened_before
-        ) != _file_state(named_after):
-            raise _UnsafeInputFile
-        return content, root.joinpath(*parts)
+        if opened_before.st_size > max_bytes:
+            raise _InputFileLimit(opened_before.st_size)
+        try:
+            yield _PinnedDescriptor(
+                descriptor=descriptor,
+                path=root.joinpath(*parts),
+                byte_size=opened_before.st_size,
+            )
+        finally:
+            _validate_pinned_directory_walk(root, parts, directories)
+            opened_after = os.fstat(descriptor)
+            named_after = os.stat(filename, dir_fd=current_fd, follow_symlinks=False)
+            if _file_state(opened_before) != _file_state(opened_after) or _file_state(
+                opened_before
+            ) != _file_state(named_after):
+                raise _UnsafeInputFile
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -291,6 +375,64 @@ def _file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def _validate_pinned_directory_walk(
+    root: Path,
+    parts: tuple[str, ...],
+    directories: list[int],
+) -> None:
+    root_named = root.lstat()
+    root_opened = os.fstat(directories[0])
+    if (
+        stat.S_ISLNK(root_named.st_mode)
+        or not stat.S_ISDIR(root_named.st_mode)
+        or not stat.S_ISDIR(root_opened.st_mode)
+        or _file_identity(root_named) != _file_identity(root_opened)
+    ):
+        raise _UnsafeInputFile
+    for index, component in enumerate(parts[:-1]):
+        named = os.stat(component, dir_fd=directories[index], follow_symlinks=False)
+        opened = os.fstat(directories[index + 1])
+        if (
+            stat.S_ISLNK(named.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or not stat.S_ISDIR(opened.st_mode)
+            or _file_identity(named) != _file_identity(opened)
+        ):
+            raise _UnsafeInputFile
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
+def _raise_annotation_file_limit(error: _InputFileLimit, max_bytes: int) -> NoReturn:
+    raise KeggMcpError(
+        ErrorDetail(
+            code=ErrorCode.INPUT_LIMIT_EXCEEDED,
+            message="The annotation file exceeds the configured input size limit.",
+            recoverable=True,
+            suggested_action="Provide a smaller annotation file.",
+            safe_details=(
+                SafeDetail(name="max_bytes", value=str(max_bytes)),
+                SafeDetail(name="actual_bytes", value=str(error.actual_bytes)),
+            ),
+        )
+    ) from None
+
+
+def _raise_unsafe_annotation_file() -> NoReturn:
+    raise KeggMcpError(
+        ErrorDetail(
+            code=ErrorCode.INVALID_ANNOTATION_TABLE,
+            message="The configured annotation file could not be read safely.",
+            recoverable=True,
+            suggested_action=(
+                "Use an unchanged direct regular file beneath a configured allowed root."
+            ),
+        )
+    ) from None
+
+
 def _raise_disallowed_path(field: str) -> NoReturn:
     raise KeggMcpError(
         ErrorDetail(
@@ -303,4 +445,10 @@ def _raise_disallowed_path(field: str) -> NoReturn:
     )
 
 
-__all__ = ["materialize_annotation_file", "resolve_existing_file", "resolve_output_directory"]
+__all__ = [
+    "PinnedAnnotationFile",
+    "bind_annotation_file_source",
+    "materialize_annotation_file",
+    "open_annotation_file_stream",
+    "resolve_output_directory",
+]

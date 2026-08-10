@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
-from kegg_mcp.importers import ImportLimits
+from kegg_mcp.importers import ImportLimits, SourceProvenanceInput
 from kegg_mcp.mcp import path_policy
 from kegg_mcp.services.models import NormalizeAnnotationsRequest
 
@@ -38,6 +38,34 @@ def test_direct_regular_file_at_exact_limit_is_materialized(tmp_path: Path) -> N
     assert materialized.file_path is None
     assert materialized.source is not None
     assert materialized.source.input_path == str(source)
+
+
+def test_distinct_source_provenance_path_is_not_reopened_under_annotation_roots(
+    tmp_path: Path,
+) -> None:
+    annotation_root = tmp_path / "annotations"
+    annotation_root.mkdir()
+    annotations = annotation_root / "deepkoala.csv"
+    annotations.write_bytes(b"K00001\n")
+    original_fasta = tmp_path / "deepkoala-inputs" / "proteins.faa"
+    request = _request(annotations, max_bytes=7).model_copy(
+        update={
+            "source": SourceProvenanceInput(
+                source_name="deepkoala",
+                input_path=str(original_fasta),
+            )
+        }
+    )
+
+    materialized = path_policy.materialize_annotation_file(
+        request,
+        (str(annotation_root.resolve()),),
+    )
+
+    assert materialized.text == "K00001\n"
+    assert materialized.source is not None
+    assert materialized.source.input_path == str(original_fasta)
+    assert not original_fasta.exists()
 
 
 def test_file_one_byte_over_limit_is_rejected_without_path_disclosure(tmp_path: Path) -> None:

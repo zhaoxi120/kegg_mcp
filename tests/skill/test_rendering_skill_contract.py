@@ -116,14 +116,14 @@ def test_rendering_skill_treats_multi_target_bundle_as_atomic() -> None:
         assert fragment in corpus
 
 
-def test_rendering_skill_requires_authoritative_v4_total_map_handoff() -> None:
+def test_rendering_skill_requires_authoritative_v6_total_map_handoff() -> None:
     corpus = _corpus()
     for fragment in (
-        "version 4 handoff",
+        "version 6 handoff",
         "`allow_global_or_overview=True`",
         "bounded KGML `line` coordinates",
-        "Accepted evidence has deterministic precedence",
-        "uncertain evidence retains the renderer's dashed non-color cue",
+        "overlay highlights accepted KO annotation",
+        "do not create another visual state or line style",
         "pathway-category colors remain background context",
         "Arrows already present in the validated PNG remain background context",
         "does not reconstruct arrow direction",

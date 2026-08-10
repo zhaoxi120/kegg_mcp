@@ -1,16 +1,10 @@
-"""Offline integration tests from imported evidence to deterministic KO sets."""
-
-from typing import cast
-
-import pytest
+"""Offline integration tests from imported evidence to accepted unique KO sets."""
 
 from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
     AnnotationDataset,
-    ErrorCode,
-    EvidenceMode,
-    KeggMcpError,
     KOEvidenceView,
+    NormalizedStatus,
     build_ko_evidence_view,
     select_ko_ids,
 )
@@ -22,7 +16,7 @@ from kegg_mcp.importers import (
 )
 
 
-def test_generic_import_to_strict_and_lenient_view_is_stable_and_lossless() -> None:
+def test_generic_import_to_accepted_unique_view_is_stable_and_lossless() -> None:
     limits = ImportLimits(
         max_bytes=10_000,
         max_rows=100,
@@ -33,7 +27,7 @@ def test_generic_import_to_strict_and_lenient_view_is_stable_and_lossless() -> N
         "sequence,ko,decision\n"
         "p1,K00006,rejected\n"
         "p1,K00006,accepted\n"
-        "p2,K00002,uncertain\n"
+        "p2,K00002,unclassified\n"
         "p3,K00003,rejected\n"
     )
     dataset = import_generic_table(
@@ -55,14 +49,16 @@ def test_generic_import_to_strict_and_lenient_view_is_stable_and_lossless() -> N
     assert first == second
     assert first.accepted_kos == ("K00006",)
     assert first.rejected_kos == ("K00003", "K00006")
-    assert select_ko_ids(first, EvidenceMode.STRICT) == ("K00006",)
-    assert select_ko_ids(first, EvidenceMode.LENIENT) == ("K00002", "K00006")
+    assert select_ko_ids(first) == ("K00006",)
+    assert (
+        next(
+            item.count
+            for item in first.status_counts
+            if item.status is NormalizedStatus.UNCLASSIFIED
+        )
+        == 1
+    )
     assert dataset.model_dump_json() == before
     assert AnnotationDataset.model_validate_json(before) == dataset
     assert KOEvidenceView.model_validate_json(first.model_dump_json()) == first
     assert first.records_by_sequence[0].record_ids == ("record-000001", "record-000002")
-
-    with pytest.raises(KeggMcpError) as error:
-        select_ko_ids(first, cast(EvidenceMode, "strict"))
-
-    assert error.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID

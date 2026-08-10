@@ -17,17 +17,22 @@ from kegg_mcp.analysis.functional_comparison import (
     compare_module_graphs,
     compare_pathway_references,
 )
-from kegg_mcp.analysis.module_evaluation import evaluate_module_pair
+from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.module_resolution import resolve_module_definitions
 from kegg_mcp.analysis.pathway_coverage import (
-    PathwayCoverageParameters,
     PathwayKoReference,
     PathwayReferenceNamespace,
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
 from kegg_mcp.analysis.pathway_ranking import PathwayRankingRow, PathwaySelection
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, AnalysisUnit, EvidenceMode, ScoreType
+from kegg_mcp.domain import (
+    CANONICAL_SOURCE_STATUS,
+    AnalysisUnit,
+    AnnotationDataset,
+    KoAnalysisView,
+    build_ko_analysis_view,
+)
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -67,7 +72,7 @@ _IMPORT_LIMITS = ImportLimits(
 def _dataset(
     rows: tuple[tuple[str, str, str], ...] = (
         ("accepted-one", "K00001", "accepted"),
-        ("uncertain-two", "K00002", "uncertain"),
+        ("unclassified-two", "K00002", "unclassified"),
         ("rejected-three", "K00003", "rejected"),
     ),
     *,
@@ -115,6 +120,13 @@ def _graph(module_id: str, definition: str, *, name: str | None = None):
     )
 
 
+def _view(dataset: AnnotationDataset | None = None) -> KoAnalysisView:
+    return build_ko_analysis_view(
+        dataset if dataset is not None else _dataset(),
+        input_bytes=200,
+    )
+
+
 def _provenance(operation: KeggOperation, *, stale: bool = False) -> KeggBatchProvenance:
     expires_at = _NOW + timedelta(days=1)
     return KeggBatchProvenance(
@@ -158,21 +170,17 @@ def _reference(
 
 def _complete_report_input() -> ReportInput:
     dataset = _dataset()
+    view = _view(dataset)
     module_graph = _graph("M00001", "K00001 K00002", name="Unicode module β")
     unresolved_graph = _graph("M00002", "M99999")
-    module_pairs = (
-        evaluate_module_pair(module_graph, dataset),
-        evaluate_module_pair(unresolved_graph, dataset),
+    module_results = (
+        evaluate_module(module_graph, view),
+        evaluate_module(unresolved_graph, view),
     )
     reference = _reference(stale=True)
     pathway_results = (
-        evaluate_pathway_coverage(reference, dataset),
-        evaluate_pathway_coverage(
-            reference,
-            dataset,
-            PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT),
-        ),
-        evaluate_pathway_coverage(_reference("ko00020", ko_ids=()), dataset),
+        evaluate_pathway_coverage(reference, view),
+        evaluate_pathway_coverage(_reference("ko00020", ko_ids=()), view),
     )
     second = _dataset(
         (("second-one", "K00001", "accepted"),),
@@ -183,8 +191,8 @@ def _complete_report_input() -> ReportInput:
         ComparisonDatasetInput(label="second", dataset=second),
     )
     return ReportInput(
-        dataset=dataset,
-        module_evaluations=module_pairs,
+        dataset=view,
+        module_evaluations=module_results,
         pathway_coverages=pathway_results,
         ko_comparison=summarize_ko_comparison(compare_ko_datasets(inputs)),
         module_comparison=compare_module_graphs(inputs, (module_graph,)),
@@ -244,7 +252,7 @@ def test_canonical_artifacts_round_trip_with_exact_sizes_and_provenance() -> Non
     assert structured.report == report
     assert structured.limits == first.limits
     assert structured.report.pathway_coverages[0].reference_link_provenance[0].is_stale
-    assert structured.report.module_evaluations[0].strict.module_id == "M00001"
+    assert structured.report.module_evaluations[0].module_id == "M00001"
     assert RenderedReport.model_validate_json(first.model_dump_json()) == first
 
 
@@ -274,7 +282,7 @@ def test_rendered_report_requires_current_renderer_identity(missing_field: str) 
 
 def test_pathway_ranking_falls_back_to_requested_top_n_without_execution_provenance() -> None:
     report = ReportInput(
-        dataset=_dataset(),
+        dataset=_view(),
         pathway_selection=PathwaySelection(top_n=1),
         pathway_ranking=(
             _pathway_ranking_row("ko00010", 1),
@@ -288,15 +296,14 @@ def test_pathway_ranking_falls_back_to_requested_top_n_without_execution_provena
     assert "| 2 | `ko00020` | 1 | 1 | no |" in summary
 
 
-def test_markdown_distinguishes_evidence_modes_metrics_and_claim_boundaries() -> None:
+def test_markdown_distinguishes_metrics_and_claim_boundaries() -> None:
     summary = _artifact(render_report(_complete_report_input()), ReportSection.SUMMARY).content
     lower = summary.lower()
 
     assert "exact completion is boolean" in lower
     assert "project block coverage" in lower
     assert "not an official kegg completeness percentage" in lower
-    assert "strict" in lower
-    assert "lenient" in lower
+    assert "accepted-ko" in lower
     assert "not_evaluable" in lower
     assert "metagenomic_community" in lower
     assert "pooled encoded potential" in lower
@@ -335,7 +342,7 @@ def test_markdown_previews_and_utf8_bytes_are_bounded_without_cutting_artifacts(
     assert summary.utf8_byte_size <= limits.max_markdown_bytes
     assert "Markdown summary truncated" in summary.content
     assert _artifact(rendered, ReportSection.STRUCTURED).truncated is False
-    assert _artifact(rendered, ReportSection.ANNOTATIONS).truncated is False
+    assert _artifact(rendered, ReportSection.ACCEPTED_KOS).truncated is False
 
 
 def test_markdown_encodes_untrusted_html_links_images_and_backticks() -> None:
@@ -349,15 +356,14 @@ def test_markdown_encodes_untrusted_html_links_images_and_backticks() -> None:
         source_version=source_version,
         model_name=model_name,
     )
+    view = _view(dataset)
     report = ReportInput(
-        dataset=dataset,
-        module_evaluations=(
-            evaluate_module_pair(_graph("M00009", "K00001", name=module_name), dataset),
-        ),
+        dataset=view,
+        module_evaluations=(evaluate_module(_graph("M00009", "K00001", name=module_name), view),),
         pathway_coverages=(
             evaluate_pathway_coverage(
                 _reference("ko00090", pathway_name=pathway_name),
-                dataset,
+                view,
             ),
         ),
     )
@@ -420,16 +426,14 @@ def test_hard_limits_fail_with_safe_input_limit_error(
     assert details["limit_name"] == expected_limit_name
 
 
-def test_annotation_csv_preserves_order_nested_evidence_and_formula_safety() -> None:
+def test_accepted_ko_csv_contains_only_sorted_unique_accepted_kos() -> None:
     payload = (
         "sequence,ko,status\n"
-        'seq1,"=1+1",accepted\n'
-        'seq2,"+1",accepted\n'
-        'seq3,"-1",accepted\n'
-        'seq4,"@cmd",accepted\n'
-        'seq5,"\tK00001",accepted\n'
-        'seq6,"\rK00002",accepted\n'
-        'seq7,K00003,"=accepted"\n'
+        "seq1,K00002,accepted\n"
+        "seq2,K00001,accepted\n"
+        "seq3,K00002,accepted\n"
+        "seq4,K00003,rejected\n"
+        "seq5,BAD,accepted\n"
     )
     dataset = import_generic_table(
         payload,
@@ -444,42 +448,53 @@ def test_annotation_csv_preserves_order_nested_evidence_and_formula_safety() -> 
         source=SourceProvenanceInput(source_name="formula_safety"),
     )
     csv_artifact = _artifact(
-        render_report(ReportInput(dataset=dataset)),
-        ReportSection.ANNOTATIONS,
+        render_report(ReportInput(dataset=_view(dataset))),
+        ReportSection.ACCEPTED_KOS,
     )
     rows = list(csv.DictReader(io.StringIO(csv_artifact.content, newline="")))
 
-    assert [row["record_id"] for row in rows] == [record.record_id for record in dataset.records]
-    assert [row["raw_ko"] for row in rows[:6]] == [
-        "'=1+1",
-        "'+1",
-        "'-1",
-        "'@cmd",
-        "'\tK00001",
-        "'\rK00002",
+    assert rows == [
+        {"ko_id": "K00001", "normalized_status": "accepted"},
+        {"ko_id": "K00002", "normalized_status": "accepted"},
     ]
-    assert rows[6]["raw_decision"] == "'=accepted"
-    for row, record in zip(rows, dataset.records, strict=True):
-        assert json.loads(row["evidence_json"]) == record.evidence.model_dump(mode="json")
-        assert json.loads(row["source_json"]) == record.source.model_dump(mode="json")
     assert csv_artifact.content.endswith("\n")
     assert csv_artifact.truncated is False
 
 
+def test_compact_report_retains_only_sorted_unique_accepted_kos() -> None:
+    view = _view()
+    rendered = render_report(ReportInput(dataset=view))
+    rows = list(
+        csv.DictReader(
+            io.StringIO(_artifact(rendered, ReportSection.ACCEPTED_KOS).content, newline="")
+        )
+    )
+    structured = StructuredReport.model_validate_json(
+        _artifact(rendered, ReportSection.STRUCTURED).content
+    )
+    summary = _artifact(rendered, ReportSection.SUMMARY).content
+
+    assert rows == [{"ko_id": "K00001", "normalized_status": "accepted"}]
+    assert structured.report.dataset == view
+    assert "Record-level evidence" in summary
+    assert "Normalized assignment counts" in summary
+    assert "Normalized record counts" not in summary
+
+
 def test_csv_byte_limit_fails_instead_of_returning_a_lossy_prefix() -> None:
-    report = ReportInput(dataset=_dataset())
+    report = ReportInput(dataset=_view())
 
     with pytest.raises(KeggMcpError) as caught:
-        render_report(report, limits=ReportLimits(max_annotation_csv_bytes=100))
+        render_report(report, limits=ReportLimits(max_accepted_ko_csv_bytes=1))
 
     assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
     assert {item.name: item.value for item in caught.value.detail.safe_details}["limit_name"] == (
-        "annotation CSV bytes"
+        "accepted-KO CSV bytes"
     )
 
 
 def test_contracts_reject_output_paths_and_schemas_exclude_claim_fields() -> None:
-    dataset = _dataset()
+    dataset = _view()
     with pytest.raises(ValidationError):
         ReportInput.model_validate({"dataset": dataset, "output_path": "/tmp/report.json"})
 
@@ -503,41 +518,17 @@ def test_contracts_reject_output_paths_and_schemas_exclude_claim_fields() -> Non
     )
 
 
-def test_report_input_requires_primary_dataset_identity_and_unique_mode_targets() -> None:
+def test_report_input_requires_primary_dataset_identity_and_unique_targets() -> None:
     first = _dataset()
     second = _dataset((("other", "K00001", "accepted"),))
+    first_view = _view(first)
+    second_view = _view(second)
     reference = _reference()
-    second_pathway = evaluate_pathway_coverage(reference, second)
+    second_pathway = evaluate_pathway_coverage(reference, second_view)
 
     with pytest.raises(ValidationError):
-        ReportInput(dataset=first, pathway_coverages=(second_pathway,))
+        ReportInput(dataset=first_view, pathway_coverages=(second_pathway,))
 
-    first_pathway = evaluate_pathway_coverage(reference, first)
+    first_pathway = evaluate_pathway_coverage(reference, first_view)
     with pytest.raises(ValidationError):
-        ReportInput(dataset=first, pathway_coverages=(first_pathway, first_pathway))
-
-
-def test_score_type_enum_remains_flat_and_no_unavailable_csv_value_is_invented() -> None:
-    dataset = import_generic_table(
-        "sequence,ko,status,score\nseq,K00001,accepted,-2.5\n",
-        dialect=TableDialect.CSV,
-        mapping=GenericColumnMapping(
-            sequence_id="sequence",
-            ko_id="ko",
-            raw_decision="status",
-            score="score",
-            score_type=ScoreType.SOURCE_SPECIFIC,
-        ),
-        policy=CANONICAL_SOURCE_STATUS,
-        limits=_IMPORT_LIMITS,
-    )
-    artifact = _artifact(
-        render_report(ReportInput(dataset=dataset)),
-        ReportSection.ANNOTATIONS,
-    )
-    row = next(csv.DictReader(io.StringIO(artifact.content)))
-
-    assert row["score"] == "'-2.5"
-    assert row["score_type"] == "source_specific"
-    assert row["threshold"] == ""
-    assert row["threshold_rule"] == ""
+        ReportInput(dataset=first_view, pathway_coverages=(first_pathway, first_pathway))

@@ -54,7 +54,7 @@ def _forbid_network(*_: object, **__: object) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
+async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
     tmp_path: Path,
     allowed_root: Path,
     runtime_config: RendererRuntimeConfig,
@@ -110,7 +110,6 @@ async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
                 },
                 "module_ids": ["M00001"],
                 "pathways": [{"pathway_id": "ko00010"}],
-                "pathway_evidence_mode": "lenient",
                 "output_directory": str(analysis_output),
             },
         )
@@ -123,7 +122,8 @@ async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
         render_input_path.read_text(encoding="utf-8"),
         strict=True,
     )
-    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "4"
+    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "6"
+    assert render_input.evidence.accepted_ko_ids == ("K00001",)
     assert [item.module_id for item in render_input.modules] == ["M00001"]
     assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
     assert reference_client.call_log == [
@@ -175,6 +175,11 @@ async def test_fasta_handoff_flows_through_core_into_safe_renderer_output(
         assert (render_output / name).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
     manifest_text = (render_output / "render_manifest.json").read_text(encoding="utf-8")
-    json.loads(manifest_text)
+    manifest = cast(dict[str, object], json.loads(manifest_text))
+    provenance = cast(dict[str, object], manifest["provenance"])
+    assert manifest["schema_version"] == "4"
+    assert provenance["accepted_unique_ko_count"] == 1
+    assert "annotation_retention" not in provenance
+    assert "record_level_evidence_retained" not in provenance
     assert str(runtime_config.state_root) not in manifest_text
     assert str(render_input_path) not in manifest_text

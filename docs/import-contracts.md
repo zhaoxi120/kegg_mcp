@@ -1,10 +1,10 @@
 # Annotation Evidence and Import Contracts
 
 This document records the current annotation-import contract. It covers immutable
-annotation evidence, exact K-number normalization, three inline import formats, versioned decision
-policies, import diagnostics, and derived strict/lenient KO views. It does not cover KEGG access,
-module or pathway analysis, reporting services, MCP transport, or the repository-scoped Codex
-Skill.
+annotation evidence, exact K-number normalization, three full-record import formats, versioned
+decision policies, import diagnostics, the accepted-KO analysis view, and streaming DeepKOALA
+analysis intake. It does not cover KEGG access, module or pathway analysis, reporting
+services, MCP transport, or the repository-scoped Codex Skill.
 
 ## Public modules
 
@@ -18,10 +18,13 @@ The importer entry points are:
 import_plain_ko(...)
 import_generic_table(...)
 import_deepkoala_detailed(...)
+stream_deepkoala_analysis_view(...)
 ```
 
-All low-level importers accept only inline `str` or `bytes` payloads. The service/MCP layer owns
-allowed-root path resolution before passing bounded content to these functions.
+The three full-record importers accept only inline `str` or `bytes` payloads. The streaming analysis
+entry point consumes a pinned binary stream plus its exact byte count. The service/MCP layer owns
+allowed-root path resolution, descriptor pinning, and final file-identity verification before and
+after streaming intake.
 
 ## Input limits
 
@@ -50,6 +53,25 @@ portable signed 32-bit parser range. Field length has a separate hard ceiling of
 characters, aligned with the immutable retained-evidence string contract; callers should normally
 select a substantially lower application limit.
 
+The separate `AnalysisViewImportLimits` contract applies to streaming DeepKOALA detailed-file
+analysis intake. Its hard maxima are:
+
+| Bound | Maximum |
+| --- | ---: |
+| Input bytes | 1 GiB |
+| Source rows | 10,000,000 |
+| Expanded assignments | 20,000,000 |
+| Unique accepted K numbers | 100,000 |
+| Columns | 64 |
+| Field characters | 16,384 |
+| Retained diagnostic preview | 100 |
+
+The streaming parser counts every diagnostic but retains only the bounded leading preview. It
+streams from the pinned descriptor, checks the observed byte count, and the MCP path boundary
+verifies that the same file identity remains selected throughout intake. These bounds do not
+change the 5,000,000-byte full-record import limit used by normalization and bounded inline or
+other table intake.
+
 ## K-number normalization
 
 `normalize_ko_id(raw)` accepts only:
@@ -64,8 +86,8 @@ the complete source label unchanged. The normalizer does not extract identifiers
 does not convert a lowercase `k` identifier to uppercase.
 
 An invalid value remains an `AnnotationRecord` with `ko_id=None` and
-`normalized_status="invalid"`; it is also reported by the import report and never enters a strict
-or lenient KO set.
+`normalized_status="invalid"`; it is also reported by the import report and never enters the
+accepted-KO analysis set.
 
 ## Canonical evidence
 
@@ -86,14 +108,18 @@ The primary models are:
 - `AnnotationDataset`
 - `KOEvidenceView`
 
+`KoAnalysisView` is a separate, compact analysis contract. It is not an `AnnotationDataset` and
+must not be presented as normalized record evidence.
+
 `AnnotationDataset.sources` retains source provenance even when an input is empty or every logical
 row is structurally skipped. Every emitted record source must also appear in this tuple.
 
 Nullable provenance fields remain `None` when the source did not provide them. Importers never
 infer a tool version, model name, model/database version, annotation date, organism, or domain
-coordinate. Workflow digests are not part of source provenance. A caller may provide a controlled
-absolute `input_path`; the MCP boundary validates it against deployment allowed roots before the
-importer sees the content.
+coordinate. Workflow digests are not part of source provenance. A caller may provide an absolute
+`input_path` as provenance. The MCP boundary does not open a distinct provenance path or validate it
+against deployment allowed roots; allowed-root file policy applies to the actual annotation
+`file_path`.
 
 `SourceProvenance.input_uri` is a sanitized logical identifier and remains distinct from
 `input_path`. It accepts a simple basename or the `inline`, `mcp`, `resource`, and `urn` schemes.
@@ -129,12 +155,9 @@ This describes input handling. It does not claim experimental validation.
 
 ### `canonical_source_status`
 
-Available to the generic table importer. It recognizes only the explicit source values
-`accepted`, `uncertain`, `rejected`, and `unclassified` after trimming and case normalization.
-Unknown or absent decisions become `unclassified`. The policy never compares a generic score with a
-threshold.
-
-This is the only built-in policy that can currently create `uncertain` evidence.
+Available to the generic table importer. Version 2 recognizes only the explicit source values
+`accepted`, `rejected`, and `unclassified` after trimming and case normalization. Unknown or absent
+decisions become `unclassified`. The policy never compares a generic score with a threshold.
 
 ### `deepkoala_detailed`
 
@@ -151,13 +174,13 @@ Used only by the DeepKOALA detailed importer:
 7. Missing or malformed decision numbers produce `unclassified` unless the exact marker supplies
    an accepted source decision.
 
-The policy never creates `uncertain` evidence. A source marker that disagrees with the numeric
-comparison is preserved and reported as `SOURCE_DECISION_CONFLICT`.
+A source marker that disagrees with the numeric comparison is preserved and reported as
+`SOURCE_DECISION_CONFLICT`.
 
 ## Plain KO import
 
 ```python
-from kegg_mcp.domain import AnalysisUnit, EvidenceMode, build_ko_evidence_view, select_ko_ids
+from kegg_mcp.domain import AnalysisUnit, build_ko_evidence_view, select_ko_ids
 from kegg_mcp.importers import ImportLimits, import_plain_ko
 
 limits = ImportLimits(
@@ -172,7 +195,7 @@ dataset = import_plain_ko(
     analysis_unit=AnalysisUnit.ISOLATE_PROTEOME,
 )
 view = build_ko_evidence_view(dataset)
-strict_kos = select_ko_ids(view, EvidenceMode.STRICT)
+accepted_kos = select_ko_ids(view)
 ```
 
 Blank lines are ignored. Every non-empty line
@@ -270,26 +293,64 @@ No importer removes duplicate or conflicting evidence.
   assignments from different source rows to that sequence are reported as a conflict. Components
   expanded from the same source row are not conflicts. Different explicit domains remain valid.
 
-The derived KO view de-duplicates only its status-specific KO tuples. The record indexes retain all
-source record identifiers. Accepted, uncertain, and rejected KO tuples may overlap when different
-source records support different statuses for the same KO.
+The derived KO view de-duplicates its status-specific KO tuples. The record indexes retain all
+source record identifiers. Accepted and rejected KO tuples may overlap when different source
+records support different statuses for the same KO.
 
 For table inputs, `ImportReport.source_columns` preserves every original header in order, including
 unmapped headers when the input has no data rows. Logical cells from emitted and skipped rows remain
 available through record evidence or `unparsed_rows`. Parsers and schemas, rather than content
 digests, determine whether imported content is usable.
 
-## Strict and lenient evidence
+## Accepted-only analysis evidence
 
 `build_ko_evidence_view(dataset)` creates sorted, deterministic tuples and sample-scoped record
 indexes without mutating the dataset.
 
-- Strict mode is the set of accepted K numbers.
-- Lenient mode is accepted plus policy-defined uncertain K numbers.
-- Rejected, unclassified, and invalid records never enter lenient mode.
+- `select_ko_ids(view)` returns the sorted unique accepted K numbers.
+- Rejected, unclassified, and invalid records never enter MODULE, pathway, ranking, comparison, or
+  rendering analysis.
+- Status-specific record indexes remain available in a full `AnnotationDataset` for audit and
+  reporting; selecting K numbers for analysis does not mutate or discard that evidence.
 
-These are annotation-evidence views, not statements that a biological function is experimentally
-present or absent.
+This accepted-KO set is an annotation-evidence view, not a statement that a biological function is
+experimentally present or absent.
+
+## Compact accepted-KO analysis view
+
+The high-level `analyze_ko_annotations` tool always produces a `KoAnalysisView`; callers do not
+select a retention mode. Inline `annotations.text`, `ko_text`, generic tables, plain KO input, and
+DeepKOALA detailed files all expose the same sorted unique accepted-KO analysis semantics.
+`normalize_ko_annotations` remains the separate full-record operation.
+
+`stream_deepkoala_analysis_view` applies the same decision and composite-label parsing rules as full
+normalization while streaming. `build_ko_analysis_view` immediately reduces other bounded imported
+datasets. The resulting `KoAnalysisView` retains:
+
+- sorted unique accepted K numbers;
+- exact input-byte, source-row, expanded-assignment, skipped-row, and normalized-status counts;
+- source columns, decision-policy identity, source provenance, analysis unit, taxonomic context,
+  and bounded metadata; and
+- the exact diagnostic count plus at most the first 100 diagnostics and an explicit truncation
+  flag.
+
+It intentionally does not retain source rows, annotation records, sequence-to-KO or protein-to-KO
+mappings, raw score/threshold evidence, record identifiers, or duplicate/conflict indexes.
+Downstream analysis consumes this one accepted-KO abstraction. Reports and manifests do not expose
+a large-file/small-file retention selector or claim that omitted evidence was retained.
+
+The separate `deepkoala-mcp` companion enforces a deployment-selected detailed-output limit no
+greater than 1 GiB and validates and publishes generated files with bounded memory. The supported
+suite installer requires Core's allowed roots to cover every DeepKOALA output root so Core can
+validate and stream the stable companion file directly. A distinct original FASTA path remains
+unchanged provenance and is not reopened under Core's annotation-file path policy. This does not
+expand the separate 5,000,000-byte full-record normalization or bounded-inline contracts.
+
+Compact intake does not change KEGG request, relationship-row, reference-loading, ranking, or
+output budgets. A view that fits the local limits may still contain too many accepted K numbers for
+automatic KO-to-target mapping. Higher layers must use bounded explicit targets or separate
+biologically meaningful analysis units rather than treating local intake capacity as an unbounded
+KEGG workflow.
 
 ## Errors and JSON Schema
 

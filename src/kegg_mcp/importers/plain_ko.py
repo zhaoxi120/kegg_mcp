@@ -40,7 +40,6 @@ def import_plain_ko(
     validate_auxiliary_evidence(metadata, source, limits)
     decoded = decode_payload(payload, limits)
     provenance = build_source(
-        decoded,
         source,
         default_source_name="manual",
         importer_name="plain_ko",

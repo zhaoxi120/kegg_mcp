@@ -209,7 +209,7 @@ def test_sequence_id_can_be_null_only_for_plain_ko_records() -> None:
 def test_dataset_schema_is_versioned_draft_2020_12_and_forbids_extra_fields() -> None:
     schema = AnnotationDataset.model_json_schema(mode="serialization")
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:annotation-dataset:1"
+    assert schema["$id"] == "urn:kegg-mcp:schema:annotation-dataset:2"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["additionalProperties"] is False
     assert "analysis_unit" in schema["required"]
@@ -220,9 +220,9 @@ def test_dataset_schema_is_versioned_draft_2020_12_and_forbids_extra_fields() ->
     ("model", "schema_id"),
     [
         (SourceProvenance, "urn:kegg-mcp:schema:source-provenance:1"),
-        (AnnotationRecord, "urn:kegg-mcp:schema:annotation-record:1"),
-        (ImportReport, "urn:kegg-mcp:schema:import-report:1"),
-        (KOEvidenceView, "urn:kegg-mcp:schema:ko-evidence-view:1"),
+        (AnnotationRecord, "urn:kegg-mcp:schema:annotation-record:2"),
+        (ImportReport, "urn:kegg-mcp:schema:import-report:2"),
+        (KOEvidenceView, "urn:kegg-mcp:schema:ko-evidence-view:2"),
     ],
 )
 def test_top_level_contract_schemas_have_stable_ids(

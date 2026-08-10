@@ -62,12 +62,15 @@ def test_deepkoala_skill_uses_only_companion_tools_and_stable_files() -> None:
     assert "Omit `model_date` for the default call" in corpus
     assert "resolved model name and model version" in corpus
     assert "not a private identifier" in corpus
+    assert 'handoff `schema_version="2"`' in corpus
+    assert "`output_coverage`" in corpus
+    assert "all and only the unique input FASTA IDs" in corpus
 
 
 def test_deepkoala_skill_allows_stable_cross_skill_continuation() -> None:
     corpus = _corpus()
     for fragment in (
-        "original request also asks for KEGG",
+        "original request also asks for KO analysis",
         "automatically continue with the installed `kegg-ko-analysis` Skill",
         "Do not ask the user to copy",
         "source` object unchanged",

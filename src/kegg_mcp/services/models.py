@@ -14,14 +14,13 @@ from kegg_mcp.analysis import (
     ComparisonPreviewLimits,
     ComparisonWarning,
     ComparisonWarningCode,
-    KoClassComparisonSummary,
+    KoMembershipComparisonSummary,
     ModuleSelection,
     PathwaySelection,
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     ImportDiagnostic,
     ModuleId,
@@ -62,7 +61,7 @@ MAX_GET_PROVENANCE_BATCHES = 5
 MAX_DIRECT_WARNINGS = 25
 MAX_DIRECT_WARNING_CHARACTERS = 1_000
 MAX_DIRECT_ANALYSIS_TARGETS = 25
-MAX_DIRECT_CAVEATS = 3
+MAX_DIRECT_CAVEATS = 4
 MAX_DIRECT_REFERENCE_BATCHES = 100
 MAX_DIRECT_SOURCE_PREVIEWS = 8
 MAX_COMPARISON_INPUTS = 10
@@ -238,10 +237,13 @@ class DatasetSource(FrozenModel):
 class AnalysisResultSummary(FrozenModel):
     """Small shared counts and messages returned by every analysis tool."""
 
-    input_records: int = Field(strict=True, ge=0)
-    accepted_records: int = Field(strict=True, ge=0)
-    uncertain_records: int = Field(strict=True, ge=0)
-    rejected_records: int = Field(strict=True, ge=0)
+    input_rows: int = Field(strict=True, ge=0)
+    skipped_rows: int = Field(strict=True, ge=0)
+    assignment_count: int = Field(strict=True, ge=0)
+    accepted_assignments: int = Field(strict=True, ge=0)
+    rejected_assignments: int = Field(strict=True, ge=0)
+    unclassified_assignments: int = Field(strict=True, ge=0)
+    invalid_assignments: int = Field(strict=True, ge=0)
     selected_unique_ko_count: int = Field(strict=True, ge=0)
     kegg_request_count: int = Field(default=0, strict=True, ge=0)
     network_request_count: int = Field(default=0, strict=True, ge=0)
@@ -254,6 +256,18 @@ class AnalysisResultSummary(FrozenModel):
 
     @model_validator(mode="after")
     def validate_warning_summary(self) -> Self:
+        if self.skipped_rows > self.input_rows:
+            raise ValueError("skipped_rows cannot exceed input_rows")
+        if (
+            self.accepted_assignments
+            + self.rejected_assignments
+            + self.unclassified_assignments
+            + self.invalid_assignments
+            != self.assignment_count
+        ):
+            raise ValueError("normalized assignment counts must sum to assignment_count")
+        if self.selected_unique_ko_count > self.accepted_assignments:
+            raise ValueError("selected unique K numbers cannot exceed accepted assignments")
         if self.warning_count < len(self.warnings):
             raise ValueError("warning_count cannot be smaller than the direct warning preview")
         if self.warnings_truncated != (self.warning_count > len(self.warnings)):
@@ -283,7 +297,6 @@ class AutomaticModuleSelectionSummary(FrozenModel):
     """Bounded direct summary of server-side Top-N MODULE selection."""
 
     parameters: ModuleSelection
-    evidence_mode: EvidenceMode
     candidate_module_count: int = Field(strict=True, ge=0)
     selected_modules: Annotated[
         tuple[SelectedModuleSummary, ...], Field(max_length=MAX_SELECTED_MODULE_SUMMARIES)
@@ -474,10 +487,7 @@ class ComparisonDatasetSummary(FrozenModel):
     annotation: AnnotationProvenanceSummary
     sample_label_count: int = Field(strict=True, ge=0)
     record_count: int = Field(strict=True, ge=0)
-    accepted_ko_count: int = Field(strict=True, ge=0)
-    uncertain_record_ko_count: int = Field(strict=True, ge=0)
-    lenient_additional_ko_count: int = Field(strict=True, ge=0)
-    lenient_ko_count: int = Field(strict=True, ge=0)
+    selected_unique_ko_count: int = Field(strict=True, ge=0)
 
 
 class KoSetComparisonPreview(FrozenModel):
@@ -485,7 +495,7 @@ class KoSetComparisonPreview(FrozenModel):
         tuple[ComparisonDatasetSummary, ...],
         Field(min_length=2, max_length=MAX_COMPARISON_INPUTS),
     ]
-    partitions: Annotated[tuple[KoClassComparisonSummary, ...], Field(min_length=4, max_length=4)]
+    partition: KoMembershipComparisonSummary
     calculation_method: CalculationMethodReference
     warnings: Annotated[tuple[ComparisonWarning, ...], Field(max_length=MAX_COMPARISON_WARNINGS)]
     detail_limits: ComparisonLimits
@@ -494,17 +504,11 @@ class KoSetComparisonPreview(FrozenModel):
 
 class FunctionalComparisonSummary(FrozenModel):
     module_target_count: int = Field(strict=True, ge=0, le=25)
-    strict_module_differences: Annotated[
-        tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
-    ]
-    lenient_module_differences: Annotated[
+    module_differences: Annotated[
         tuple[ModuleId, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
     pathway_target_count: int = Field(strict=True, ge=0, le=25)
-    strict_pathway_differences: Annotated[
-        tuple[PathwayIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
-    ]
-    lenient_pathway_differences: Annotated[
+    pathway_differences: Annotated[
         tuple[PathwayIdentifier, ...], Field(max_length=MAX_DIRECT_ANALYSIS_TARGETS)
     ]
 

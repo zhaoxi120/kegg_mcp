@@ -212,7 +212,13 @@ def _probe_native_windows(
     )
 
 
+def _require_cpython_311() -> None:
+    if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 11):
+        raise SystemExit("the isolated wheel smoke test requires CPython 3.11")
+
+
 def main() -> None:
+    _require_cpython_311()
     arguments = _parser().parse_args()
     wheels = tuple(path.resolve(strict=True) for path in arguments.wheel)
     if len(wheels) != len(set(wheels)) or any(path.suffix != ".whl" for path in wheels):

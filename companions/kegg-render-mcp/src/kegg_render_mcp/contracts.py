@@ -18,7 +18,7 @@ MAX_SAFE_DETAILS = 8
 MAX_INLINE_INPUT_CHARACTERS = 50_000_000
 RENDER_ID_PATTERN = r"render_[A-Za-z0-9_-]{32}"
 ARTIFACT_NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
-REQUIRED_RENDER_INPUT_SCHEMA_VERSION: Literal["4"] = "4"
+REQUIRED_RENDER_INPUT_SCHEMA_VERSION: Literal["6"] = "6"
 
 _RenderTargetId = Annotated[str, Field(pattern=r"^(?:ko[0-9]{5}|M[0-9]{5})$")]
 _RenderId = Annotated[str, Field(pattern=rf"^{RENDER_ID_PATTERN}$")]
@@ -209,7 +209,7 @@ class RendererStatus(_Model):
     server_name: Literal["kegg-render-mcp"] = "kegg-render-mcp"
     server_version: str = Field(min_length=1, max_length=32)
     ready: bool
-    render_input_schema_version: Literal["4"]
+    render_input_schema_version: Literal["6"]
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
     access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]

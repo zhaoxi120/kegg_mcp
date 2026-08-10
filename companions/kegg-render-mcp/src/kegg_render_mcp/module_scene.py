@@ -29,17 +29,14 @@ class ModuleNode:
 @dataclass(frozen=True, slots=True)
 class ModuleBlockPanel:
     block_index: int
-    strict_state: str
-    lenient_state: str
-    uncertain_support_ko_ids: tuple[str, ...]
+    state: str
 
 
 @dataclass(frozen=True, slots=True)
 class ModuleOptionalPanel:
     component_index: int
     source_module_id: str
-    strict_state: str
-    lenient_state: str
+    state: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +56,9 @@ class ModuleScene:
     blocks: tuple[ModuleBlockPanel, ...]
     optional_components: tuple[ModuleOptionalPanel, ...]
     reference_edges: tuple[ModuleReferencePanel, ...]
-    strict_status: str
-    strict_exact_completion: bool | None
-    strict_block_coverage: float | None
-    lenient_status: str
-    lenient_exact_completion: bool | None
-    lenient_block_coverage: float | None
+    status: str
+    exact_completion: bool | None
+    block_coverage: float | None
     caption: str
     warnings: tuple[str, ...]
 
@@ -101,9 +95,7 @@ def construct_module_scene(
         else tuple(
             ModuleBlockPanel(
                 block_index=item.block_index,
-                strict_state=item.strict_state.value,
-                lenient_state=item.lenient_state.value,
-                uncertain_support_ko_ids=item.uncertain_support_ko_ids,
+                state=item.state.value,
             )
             for item in target.required_block_states
         )
@@ -115,8 +107,7 @@ def construct_module_scene(
             ModuleOptionalPanel(
                 component_index=item.component_index,
                 source_module_id=item.source_module_id,
-                strict_state=item.strict_state.value,
-                lenient_state=item.lenient_state.value,
+                state=item.state.value,
             )
             for item in target.optional_component_states
         )
@@ -132,14 +123,10 @@ def construct_module_scene(
             for edge in target.reference_edges
         )
     )
-    strict = target.strict
-    lenient = target.lenient
-    strict_status = strict.evaluation_status.value
-    lenient_status = lenient.evaluation_status.value
-    strict_complete = strict.is_complete
-    lenient_complete = lenient.is_complete
-    strict_coverage = strict.block_coverage
-    lenient_coverage = lenient.block_coverage
+    completion = target.completion
+    status = completion.evaluation_status.value
+    exact_completion = completion.is_complete
+    block_coverage = completion.block_coverage
     title = target.module_name or module_id
     issue_warnings = tuple(
         f"{issue.kind.value}: {issue.message[:600]}" for issue in target.reference_issues
@@ -179,11 +166,9 @@ def construct_module_scene(
         else ""
     )
     caption = (
-        f"{module_id} {diagram_kind}. Strict exact completion: "
-        f"{_display_optional(strict_complete)}; strict project block coverage: "
-        f"{_display_ratio(strict_coverage)}. Lenient exact completion: "
-        f"{_display_optional(lenient_complete)}; lenient project block coverage: "
-        f"{_display_ratio(lenient_coverage)}. Optional components are excluded from the required "
+        f"{module_id} {diagram_kind}. Exact completion: "
+        f"{_display_optional(exact_completion)}; project block coverage: "
+        f"{_display_ratio(block_coverage)}. Optional components are excluded from the required "
         f"denominator. Analysis unit: {analysis_unit.value}.{community_limit} "
         "This is an annotation-evidence diagram, not biochemical topology or proof "
         "of pathway activity."
@@ -198,12 +183,9 @@ def construct_module_scene(
         blocks=blocks,
         optional_components=optional_components,
         reference_edges=reference_edges,
-        strict_status=strict_status,
-        strict_exact_completion=strict_complete,
-        strict_block_coverage=strict_coverage,
-        lenient_status=lenient_status,
-        lenient_exact_completion=lenient_complete,
-        lenient_block_coverage=lenient_coverage,
+        status=status,
+        exact_completion=exact_completion,
+        block_coverage=block_coverage,
         caption=caption,
         warnings=warnings,
     )

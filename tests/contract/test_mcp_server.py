@@ -583,6 +583,8 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         analysis_schema = _tool_by_name(tools, "analyze_ko_annotations").inputSchema
         analysis_properties = analysis_schema["properties"]
         assert "pathway_selection" in analysis_properties
+        assert "pathway_evidence_mode" not in analysis_properties
+        assert "annotation_retention" not in analysis_properties
         assert analysis_properties["pathway_selection"]["type"] == "object"
         selection_schema = analysis_properties["pathway_selection"]["properties"]
         assert selection_schema["top_n"]["minimum"] == 1
@@ -599,6 +601,8 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert pathway_items["properties"]["pathway_id"]["examples"] == ["ko00010"]
         assert "hsa" not in pathway_items["properties"]["pathway_id"]["description"]
         assert "pathway objects" in analysis_properties["pathways"]["description"]
+        for tool_name in ("analyze_modules", "analyze_pathways", "compare_ko_sets"):
+            assert "evidence_mode" not in _tool_by_name(tools, tool_name).inputSchema["properties"]
         delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
         assert set(delete_schema["properties"]) == {"result_id"}
         list_schema = _tool_by_name(tools, "list_analysis_results").inputSchema
@@ -659,8 +663,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert normalize_output is not None
         normalize_output_defs = normalize_output["$defs"]
         status_counts_schema = normalize_output_defs["ImportSummary"]["properties"]["status_counts"]
-        assert status_counts_schema["minItems"] == 5
-        assert status_counts_schema["maxItems"] == 5
+        assert status_counts_schema["minItems"] == 4
+        assert status_counts_schema["maxItems"] == 4
+        assert set(normalize_output_defs["NormalizedStatus"]["enum"]) == {
+            "accepted",
+            "rejected",
+            "unclassified",
+            "invalid",
+        }
         error_properties = normalize_output_defs["ErrorDetail"]["properties"]
         assert error_properties["safe_details"]["maxItems"] == 32
 
@@ -689,6 +699,12 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         high_level_properties = high_level_output["$defs"]["AnalyzeKoAnnotationsResult"][
             "properties"
         ]
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(high_level_properties)
         assert high_level_properties["module_previews"]["maxItems"] == 25
         assert high_level_properties["pathway_previews"]["maxItems"] == 25
         selection_properties = high_level_output["$defs"]["AutomaticPathwaySelectionSummary"][
@@ -701,7 +717,25 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert module_selection_properties["selected_modules"]["maxItems"] == 25
 
         summary_properties = high_level_output["$defs"]["AnalysisResultSummary"]["properties"]
-        assert summary_properties["caveats"]["maxItems"] == 3
+        assert {
+            "input_rows",
+            "skipped_rows",
+            "assignment_count",
+            "accepted_assignments",
+            "rejected_assignments",
+            "unclassified_assignments",
+            "invalid_assignments",
+            "selected_unique_ko_count",
+        }.issubset(summary_properties)
+        assert {
+            "input_records",
+            "accepted_records",
+            "rejected_records",
+            "uncertain_records",
+            "unclassified_records",
+            "invalid_records",
+        }.isdisjoint(summary_properties)
+        assert summary_properties["caveats"]["maxItems"] == 4
         assert summary_properties["warnings"]["maxItems"] == 25
 
         module_output = _tool_by_name(tools, "analyze_modules").outputSchema
@@ -709,12 +743,20 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         module_properties = module_output["$defs"]["AnalyzeModulesResult"]["properties"]
         assert module_properties["module_previews"]["maxItems"] == 25
         assert "pathway_previews" not in module_properties
+        module_preview_properties = module_output["$defs"]["ModuleAnalysisPreview"]["properties"]
+        assert {"evaluation_status", "is_complete", "block_coverage"}.issubset(
+            module_preview_properties
+        )
+        assert "strict_is_complete" not in module_preview_properties
+        assert "lenient_is_complete" not in module_preview_properties
 
         pathway_output = _tool_by_name(tools, "analyze_pathways").outputSchema
         assert pathway_output is not None
         pathway_properties = pathway_output["$defs"]["AnalyzePathwaysResult"]["properties"]
         assert pathway_properties["pathway_previews"]["maxItems"] == 25
         assert "module_previews" not in pathway_properties
+        pathway_preview_properties = pathway_output["$defs"]["PathwayAnalysisPreview"]["properties"]
+        assert "evidence_mode" not in pathway_preview_properties
 
         search_output = _tool_by_name(tools, "search_kegg_entries").outputSchema
         assert search_output is not None
@@ -778,11 +820,9 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert "detail" not in audit_properties
         assert audit_properties["mappings"]["maxItems"] == 5
         assert audit_properties["warning_preview"]["maxItems"] == 5
-        audit_mode_properties = audit_output["$defs"]["EvidenceModeMappingAuditSummary"][
-            "properties"
-        ]
-        assert "target_degree_distribution" not in audit_mode_properties
-        assert "unmapped_ko_preview" not in audit_mode_properties
+        audit_mapping_properties = audit_output["$defs"]["KoMappingAuditSummary"]["properties"]
+        assert "target_degree_distribution" not in audit_mapping_properties
+        assert "unmapped_ko_preview" not in audit_mapping_properties
         audit_retrieval_properties = audit_output["$defs"]["QueryRetrievalSummary"]["properties"]
         assert "provenance_preview" not in audit_retrieval_properties
         execution_properties = audit_output["$defs"]["AnnotationMappingExecution"]["properties"]
@@ -810,9 +850,9 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert comparison_output is not None
         comparison_output_defs = comparison_output["$defs"]
         assert comparison_output_defs["KoPreview"]["properties"]["ko_ids"]["maxItems"] == 100
-        class_properties = comparison_output_defs["KoClassComparisonSummary"]["properties"]
-        assert class_properties["set_specific"]["maxItems"] == 10
-        assert class_properties["partially_shared_patterns_preview"]["maxItems"] == 256
+        partition_properties = comparison_output_defs["KoMembershipComparisonSummary"]["properties"]
+        assert partition_properties["set_specific"]["maxItems"] == 10
+        assert partition_properties["partially_shared_patterns_preview"]["maxItems"] == 256
         membership_properties = comparison_output_defs["KoMembershipPatternPreview"]["properties"]
         assert membership_properties["member_set_indexes"]["maxItems"] == 10
         assert membership_properties["member_labels"]["maxItems"] == 10
@@ -918,8 +958,9 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         deleted_data = deleted.structuredContent["result"]["data"]
         assert deleted_data["result_id"] == data["result"]["result_id"]
         assert deleted_data["deleted_artifacts"] == 1
-        with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
+        with pytest.raises(McpError, match="RESULT_NOT_FOUND") as missing:
             await session.read_resource(AnyUrl(uri))
+        assert missing.value.error.code == -32002
 
         empty_page = await session.call_tool("list_analysis_results", {})
         assert empty_page.structuredContent is not None
@@ -1321,6 +1362,195 @@ async def test_high_level_schema_accepts_table_input_and_rejects_organism_contex
 
 
 @pytest.mark.asyncio
+async def test_high_level_analysis_rejects_the_removed_retention_selector(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {"ko_text": "K00001", "annotation_retention": "full_records"},
+        )
+
+    assert result.isError is True
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_high_level_analysis_streams_an_allowed_deepkoala_file(
+    tmp_path: Path,
+) -> None:
+    annotations = tmp_path / "deepkoala-detailed.csv"
+    output = tmp_path / "compact-analysis"
+    annotations.write_text(
+        "name,predict_label,probability,threshold,annotate\n"
+        "p1,K00001,0.90,0.50,*\n"
+        "p2,K00001,0.80,0.50,*\n"
+        "p3,K00002,0.10,0.50,\n",
+        encoding="utf-8",
+    )
+    runtime = _fake_runtime(tmp_path, scope_id="compact-view-contract")
+    server = create_server(runtime)
+
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "file_path": str(annotations),
+                    "input_format": "deepkoala_detailed",
+                    "source": {"source_name": "deepkoala"},
+                },
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010"}],
+                "output_directory": str(output),
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    data = result.structuredContent["result"]["data"]
+    assert {
+        "annotation_retention",
+        "record_level_evidence_retained",
+        "protein_ko_mapping_available",
+        "duplicate_conflict_accounting",
+    }.isdisjoint(data)
+    assert data["summary"]["input_rows"] == 3
+    assert data["summary"]["skipped_rows"] == 0
+    assert data["summary"]["assignment_count"] == 3
+    assert data["summary"]["accepted_assignments"] == 2
+    assert data["summary"]["rejected_assignments"] == 1
+    assert data["summary"]["selected_unique_ko_count"] == 1
+
+    bundle = data["output_bundle"]
+    assert bundle["normalized_annotations"] is None
+    assert bundle["protein_ko_mapping"] is None
+    assert Path(bundle["unique_accepted_kos"]).read_text(encoding="utf-8") == ("ko_id\nK00001\n")
+    manifest = json.loads(Path(bundle["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "5"
+    assert {
+        "annotation_retention",
+        "record_level_evidence_retained",
+        "protein_ko_mapping_available",
+        "duplicate_conflict_accounting",
+    }.isdisjoint(manifest)
+
+    render_input = RenderInput.model_validate_json(
+        Path(bundle["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    assert render_input.evidence.accepted_ko_ids == ("K00001",)
+    assert render_input.execution.analysis.import_limits is None
+    assert render_input.execution.analysis.stream_import_limits is not None
+
+
+@pytest.mark.asyncio
+async def test_high_level_analysis_preserves_deleted_out_of_root_source_provenance(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "handoff"
+    allowed_root.mkdir()
+    annotations = allowed_root / "deepkoala-detailed.csv"
+    output = allowed_root / "compact-analysis"
+    original_fasta = tmp_path / "original-proteins.faa"
+    original_fasta.write_text(">p1\nM\n", encoding="utf-8")
+    annotations.write_text(
+        "name,predict_label,probability,threshold,annotate\np1,K00001,0.90,0.50,*\n",
+        encoding="utf-8",
+    )
+    original_fasta.unlink()
+    runtime = _fake_runtime(
+        allowed_root,
+        scope_id="deleted-source-provenance-contract",
+    )
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "file_path": str(annotations),
+                    "input_format": "deepkoala_detailed",
+                    "source": {
+                        "source_name": "deepkoala",
+                        "input_path": str(original_fasta),
+                    },
+                },
+                "module_ids": ["M00001"],
+                "output_directory": str(output),
+            },
+        )
+
+    assert original_fasta.is_relative_to(allowed_root) is False
+    assert original_fasta.exists() is False
+    assert result.isError is False
+    assert result.structuredContent is not None
+    data = result.structuredContent["result"]["data"]
+    assert data["summary"]["selected_unique_ko_count"] == 1
+    render_input = RenderInput.model_validate_json(
+        Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    assert render_input.dataset.sources[0].input_path == str(original_fasta)
+
+
+@pytest.mark.asyncio
+async def test_high_level_summary_distinguishes_rows_from_expanded_assignments(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "expanded-assignment-analysis"
+    runtime = _fake_runtime(tmp_path, scope_id="expanded-assignment-contract")
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "text": (
+                        "name,predict_label,probability,threshold,annotate\n"
+                        "p1,K00001+K00002,0.90,0.50,*\n"
+                    ),
+                    "input_format": "deepkoala_detailed",
+                    "source": {"source_name": "deepkoala"},
+                },
+                "module_ids": ["M00001"],
+                "output_directory": str(output),
+            },
+        )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    summary = result.structuredContent["result"]["data"]["summary"]
+    count_fields = {
+        key: summary[key]
+        for key in (
+            "input_rows",
+            "skipped_rows",
+            "assignment_count",
+            "accepted_assignments",
+            "rejected_assignments",
+            "unclassified_assignments",
+            "invalid_assignments",
+            "selected_unique_ko_count",
+        )
+    }
+    assert count_fields == {
+        "input_rows": 1,
+        "skipped_rows": 0,
+        "assignment_count": 2,
+        "accepted_assignments": 2,
+        "rejected_assignments": 0,
+        "unclassified_assignments": 0,
+        "invalid_assignments": 0,
+        "selected_unique_ko_count": 2,
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("annotation_date", ["2026-07-15T10:20:30Z", "2026-07-15T19:20:30+09:00"])
 async def test_file_handoff_json_round_trip_and_normalization_bundle(
     tmp_path: Path,
@@ -1374,7 +1604,13 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         manifest_path = Path(bundle["manifest"])
         manifest_text = manifest_path.read_text(encoding="utf-8")
         manifest = json.loads(manifest_text)
-        assert manifest["schema_version"] == "3"
+        assert manifest["schema_version"] == "5"
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(manifest)
         assert manifest["input_path_provenance"] == {
             "mode": "redacted",
             "source_count": 1,
@@ -1643,7 +1879,6 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
                         "input_path": str(fasta),
                     },
                 },
-                "pathway_evidence_mode": "lenient",
                 "output_directory": str(output),
             },
         )
@@ -1672,15 +1907,19 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
         assert render_input.modules[0].module_id == "M00001"
         assert render_input.pathways[0].detected_ko_ids == ("K00001",)
         pathway_parameters = render_input.execution.analysis.pathway_parameters
-        assert pathway_parameters.evidence_mode.value == "lenient"
         assert pathway_parameters.ranking is not None
         assert pathway_parameters.ranking.selection.top_n == 5
         module_ranking = render_input.execution.analysis.module_ranking
         assert module_ranking is not None
         assert module_ranking.selection.top_n == 5
-        assert module_ranking.evidence_mode.value == "lenient"
         manifest = json.loads(Path(data["output_bundle"]["manifest"]).read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == "3"
+        assert manifest["schema_version"] == "5"
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(manifest)
         assert manifest["render_input"] == {
             "schema_version": RENDER_INPUT_SCHEMA_VERSION,
             "mime_type": RENDER_INPUT_MIME_TYPE,
@@ -1688,9 +1927,11 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
         assert manifest["module_selection"]["selection"]["top_n"] == 5
         assert manifest["pathway_selection"]["selection"]["top_n"] == 5
         assert data["automatic_module_selection"]["parameters"]["top_n"] == 5
-        assert data["automatic_module_selection"]["evidence_mode"] == "lenient"
         assert data["automatic_pathway_selection"]["parameters"]["top_n"] == 5
         bundle = data["output_bundle"]
+        assert Path(bundle["unique_accepted_kos"]).read_text(encoding="utf-8") == (
+            "ko_id\nK00001\n"
+        )
         assert Path(bundle["module_ranking"]).is_file()
         assert Path(bundle["ko_module_relationships"]).is_file()
         assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
@@ -1709,6 +1950,130 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
         assert repeated.structuredContent is not None
         assert repeated.structuredContent["error"]["code"] == "OUTPUT_ALREADY_EXISTS"
         assert runtime.result_store.list_results(runtime.scope_id).total_items == 1
+
+
+@pytest.mark.asyncio
+async def test_high_level_analysis_accepts_an_empty_accepted_ko_set(
+    tmp_path: Path,
+) -> None:
+    runtime = _fake_runtime(tmp_path)
+    client = cast(_FakeReferenceClient, runtime.client)
+    server = create_server(runtime)
+    output = tmp_path / "empty-accepted-kos"
+
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "text": "sequence,ko,status\np1,K00001,rejected\n",
+                    "input_format": "generic_csv",
+                    "column_mapping": {
+                        "sequence_id": "sequence",
+                        "ko_id": "ko",
+                        "raw_decision": "status",
+                    },
+                    "decision_policy": "canonical_source_status",
+                },
+                "output_directory": str(output),
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    data = result.structuredContent["result"]["data"]
+    assert data["summary"]["selected_unique_ko_count"] == 0
+    assert data["summary"]["accepted_assignments"] == 0
+    assert data["summary"]["rejected_assignments"] == 1
+    assert data["summary"]["kegg_request_count"] == 0
+    assert data["summary"]["network_request_count"] == 0
+    assert data["module_target_count"] == 0
+    assert data["module_previews"] == []
+    assert data["automatic_module_selection"] is None
+    assert data["pathway_target_count"] == 0
+    assert data["pathway_previews"] == []
+    assert data["automatic_pathway_selection"] is None
+    assert any(
+        "No accepted K numbers were selected, so automatic target selection was skipped." in caveat
+        for caveat in data["summary"]["caveats"]
+    )
+    assert client.call_log == []
+    assert Path(data["output_bundle"]["unique_accepted_kos"]).read_text(encoding="utf-8") == (
+        "ko_id\n"
+    )
+    render_input = RenderInput.model_validate_json(
+        Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    assert render_input.evidence.accepted_ko_ids == ()
+    assert render_input.modules == ()
+    assert render_input.pathways == ()
+
+
+@pytest.mark.asyncio
+async def test_high_level_analysis_evaluates_explicit_targets_against_an_empty_accepted_ko_set(
+    tmp_path: Path,
+) -> None:
+    runtime = _fake_runtime(tmp_path)
+    client = cast(_FakeReferenceClient, runtime.client)
+    server = create_server(runtime)
+
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool(
+            "analyze_ko_annotations",
+            {
+                "annotations": {
+                    "text": "sequence,ko,status\np1,K00001,rejected\n",
+                    "input_format": "generic_csv",
+                    "column_mapping": {
+                        "sequence_id": "sequence",
+                        "ko_id": "ko",
+                        "raw_decision": "status",
+                    },
+                    "decision_policy": "canonical_source_status",
+                },
+                "module_ids": ["M00001"],
+                "pathways": [{"pathway_id": "ko00010"}],
+            },
+        )
+        _validate_result(_tool_by_name(tools, "analyze_ko_annotations"), result)
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    data = result.structuredContent["result"]["data"]
+    assert data["summary"]["selected_unique_ko_count"] == 0
+    assert data["module_target_count"] == 1
+    assert data["module_previews"] == [
+        {
+            "module_id": "M00001",
+            "module_name": "Synthetic module",
+            "evaluation_status": "incomplete",
+            "is_complete": False,
+            "block_coverage": 0.0,
+        }
+    ]
+    assert data["automatic_module_selection"] is None
+    assert data["pathway_target_count"] == 1
+    assert data["pathway_previews"][0]["pathway_id"] == "ko00010"
+    assert data["pathway_previews"][0]["detected_unique_ko_count"] == 0
+    assert data["pathway_previews"][0]["coverage_ratio"] == 0.0
+    assert data["automatic_pathway_selection"] is None
+    assert any(
+        "Any explicit MODULE or pathway targets were evaluated against the empty accepted-KO set."
+        in caveat
+        for caveat in data["summary"]["caveats"]
+    )
+    assert ("link", "ko_to_module") not in client.call_log
+    assert ("link", "ko_to_pathway") not in client.call_log
+    render_input = RenderInput.model_validate_json(
+        Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
+        strict=True,
+    )
+    assert render_input.evidence.accepted_ko_ids == ()
+    assert render_input.pathways[0].detected_ko_ids == ()
 
 
 @pytest.mark.asyncio
@@ -1782,8 +2147,9 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         assert result.structuredContent is not None
         data = result.structuredContent["result"]["data"]
         summary = data["summary"]
-        assert summary["input_records"] == 73
-        assert summary["accepted_records"] == 73
+        assert summary["input_rows"] == 73
+        assert summary["assignment_count"] == 73
+        assert summary["accepted_assignments"] == 73
         assert summary["selected_unique_ko_count"] == 73
         selection = data["automatic_pathway_selection"]
         assert selection["candidate_pathway_count"] == 115
@@ -1818,7 +2184,7 @@ async def test_top_one_selection_ranks_large_mapping_before_loading_references(
         assert tuple(item["section"] for item in data["artifacts"]) == (
             "structured",
             "summary",
-            "annotations",
+            "accepted_kos",
             "pathway_ranking",
             "ko_pathway_relationships",
         )
@@ -2023,9 +2389,16 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert tuple(item["section"] for item in high_data["artifacts"]) == (
             "structured",
             "summary",
-            "annotations",
+            "accepted_kos",
         )
-        assert high_data["summary"]["input_records"] == 2
+        assert high_data["summary"]["input_rows"] == 2
+        assert high_data["summary"]["assignment_count"] == 2
+        assert {
+            "annotation_retention",
+            "record_level_evidence_retained",
+            "protein_ko_mapping_available",
+            "duplicate_conflict_accounting",
+        }.isdisjoint(high_data)
         assert "import_summary" not in high_data
         assert "execution" not in high_data
         assert "reference_provenance" not in high_data
@@ -2037,13 +2410,12 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
                 limit=1_000_000,
             ).content
         )["report"]
-        assert retained_high["dataset"]["import_report"]["input_rows"] == 2
+        assert retained_high["dataset"]["input_rows"] == 2
+        assert retained_high["dataset"]["accepted_ko_ids"] == ["K00001", "K00002"]
+        assert "records" not in retained_high["dataset"]
         assert retained_high["execution"]["service_name"] == "kegg_mcp_annotation_analysis"
         assert len(retained_high["execution_metrics"]) == 6
-        assert (
-            len(retained_high["module_evaluations"][0]["strict"]["reference_retrieval_provenance"])
-            == 1
-        )
+        assert len(retained_high["module_evaluations"][0]["reference_retrieval_provenance"]) == 1
         assert len(retained_high["pathway_coverages"][0]["reference_link_provenance"]) == 1
         assert len(retained_high["pathway_coverages"][0]["reference_metadata_provenance"]) == 1
 
@@ -2069,7 +2441,7 @@ async def test_fake_reference_client_exercises_all_live_dependent_success_output
         assert modules.isError is False
         assert modules.structuredContent is not None
         module_data = modules.structuredContent["result"]["data"]
-        assert module_data["module_previews"][0]["strict_is_complete"] is True
+        assert module_data["module_previews"][0]["is_complete"] is True
         assert "pathway_previews" not in module_data
         module_detail = json.loads(
             runtime.result_store.read_artifact(
@@ -2140,9 +2512,9 @@ async def test_functional_compare_uses_shared_references_and_bounded_differences
         assert compared.structuredContent is not None
         functional = compared.structuredContent["result"]["data"]["functional_summary"]
         assert functional["module_target_count"] == 1
-        assert functional["strict_module_differences"] == ["M00001"]
+        assert functional["module_differences"] == ["M00001"]
         assert functional["pathway_target_count"] == 1
-        assert functional["strict_pathway_differences"] == ["ko00010"]
+        assert functional["pathway_differences"] == ["ko00010"]
 
 
 @pytest.mark.asyncio
@@ -2185,11 +2557,9 @@ async def test_compare_supports_reusable_dataset_and_bounded_functional_summary(
         summary = compared.structuredContent["result"]["data"]["functional_summary"]
         assert summary == {
             "module_target_count": 0,
-            "strict_module_differences": [],
-            "lenient_module_differences": [],
+            "module_differences": [],
             "pathway_target_count": 0,
-            "strict_pathway_differences": [],
-            "lenient_pathway_differences": [],
+            "pathway_differences": [],
         }
 
 
@@ -2323,6 +2693,21 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         parser_version=PARSER_VERSION,
         database_release="cached-contract-release",
     )
+    malformed_request = GetRequest(
+        entries=(KeggEntryRef(database=KeggGetDatabase.KO, identifier="K00002"),)
+    )
+    malformed_prepared = prepare_get(malformed_request, config.limits)[0]
+    SQLiteKeggCache(cache_path).write(
+        KeggOperation.GET,
+        malformed_prepared.normalized_request_key,
+        RetrievalEndpointClass.PUBLIC_ACADEMIC,
+        PUBLIC_KEGG_ENDPOINT_FINGERPRINT,
+        body=b"\xff",
+        retrieved_at=_NOW,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        parser_version=PARSER_VERSION,
+        database_release="cached-contract-release",
+    )
     runtime = McpRuntime(
         client=KeggClient(config),
         result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
@@ -2345,6 +2730,12 @@ async def test_cached_entry_resource_is_offline_only_and_does_not_consume_result
         assert gene_value["returned_count"] == 1
         assert gene_value["previews"][0]["database"] == "gene"
         assert gene_value["previews"][0]["identifier"] == "10458"
+        with pytest.raises(McpError, match="CACHE_ENTRY_NOT_FOUND") as missing:
+            await session.read_resource(AnyUrl("kegg-cache://entries/ko/K99999"))
+        assert missing.value.error.code == -32002
+        with pytest.raises(McpError, match="CACHE_FAILED") as corrupted:
+            await session.read_resource(AnyUrl("kegg-cache://entries/ko/K00002"))
+        assert corrupted.value.error.code == types.INTERNAL_ERROR
 
         cache_info = await session.read_resource(AnyUrl("ko-analysis://cache/info"))
         info_content = cache_info.contents[0]
@@ -2376,8 +2767,9 @@ async def test_resource_validation_scoping_and_protocol_errors(tmp_path: Path) -
         assert cross_scope_delete.isError is True
         assert cross_scope_delete.structuredContent is not None
         assert cross_scope_delete.structuredContent["error"]["code"] == "RESULT_NOT_FOUND"
-        with pytest.raises(McpError, match="RESULT_NOT_FOUND"):
+        with pytest.raises(McpError, match="RESULT_NOT_FOUND") as missing:
             await session.read_resource(AnyUrl(f"ko-analysis://results/{metadata.result_id}"))
+        assert missing.value.error.code == -32002
         invalid_uris = (
             "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail%2Fpart",
             "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail?offset=0",
@@ -2388,8 +2780,9 @@ async def test_resource_validation_scoping_and_protocol_errors(tmp_path: Path) -
             "ko-analysis://results/res_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/detail/0/99999",
         )
         for uri in invalid_uris:
-            with pytest.raises(McpError, match="INVALID_RESOURCE_URI"):
+            with pytest.raises(McpError, match="INVALID_RESOURCE_URI") as invalid:
                 await session.read_resource(AnyUrl(uri))
+            assert invalid.value.error.code == types.INVALID_PARAMS
         with pytest.raises(McpError, match="Unknown MCP tool name"):
             await session.call_tool("not_a_tool", {})
 
@@ -2414,6 +2807,7 @@ async def test_expired_resource_is_not_found_without_leaking_store_details(tmp_p
         with pytest.raises(McpError, match="RESULT_NOT_FOUND") as error:
             await session.read_resource(AnyUrl(f"ko-analysis://results/{expired.result_id}/detail"))
 
+    assert error.value.error.code == -32002
     serialized = str(error.value)
     assert str(store_path) not in serialized
     assert "expired" not in serialized

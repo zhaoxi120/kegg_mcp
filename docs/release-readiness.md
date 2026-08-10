@@ -11,9 +11,9 @@ discovery before creating the next tag. Record the final evidence in the release
 
 | Distribution | Source version | Supported platform | Contract |
 | --- | --- | --- | --- |
-| `kegg-mcp` | `0.9.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and KO-analysis server; `RenderInput` producer |
+| `kegg-mcp` | `0.10.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and accepted unique-KO analysis server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
-| `kegg-render-mcp` | `0.4.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.9,<0.10` |
+| `kegg-render-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.10,<0.11` and `RenderInput` v6 |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
 processes. The suite installer provisions all three together on Linux or Apple Silicon macOS and
@@ -24,9 +24,10 @@ The core Python wheel does not install either companion or any repository-scoped
 installer is the supported complete-suite Codex installation path on Linux and Apple Silicon
 macOS. Other MCP clients register independently installed stdio servers manually.
 
-The core produces `render_input.json` version 4 and preserves
-`AnalysisExecutionProvenance` version 3 in output-bundle schema version 3. The renderer consumes
-that authoritative handoff without normalizing evidence or recomputing analysis.
+The core produces `render_input.json` version 6 and preserves
+`AnalysisExecutionProvenance` version 5 in output-bundle schema version 5. The renderer consumes
+that authoritative handoff and publishes render-manifest schema version 4 without normalizing
+evidence or recomputing analysis.
 
 ## Release identity
 
@@ -87,11 +88,15 @@ bounds without committing a KEGG payload.
 
 ### Platform evidence
 
-- [ ] Run the full Core profile and installed-wheel smoke on both Linux and Apple Silicon macOS.
-- [ ] Run the full Renderer profile, synthetic pipeline, and installed-wheel smoke on both Linux
-      and Apple Silicon macOS.
-- [ ] Run the full DeepKOALA companion profile, process-lifecycle tests, and installed-wheel smoke
-      on both Linux and Apple Silicon macOS.
+- [ ] Run the full Core profile and installed-wheel smoke on Linux. On Apple Silicon macOS, run
+      the targeted Darwin cache primitive, suite-installer platform-profile tests, build, and
+      installed-wheel smoke instead of repeating the complete platform-independent suite.
+- [ ] Run the full Renderer profile and synthetic pipeline on Linux. On Apple Silicon macOS, run
+      the targeted POSIX capability, spawned-scope, and accepted-KO synthetic-pipeline tests,
+      build, and installed-wheel smoke.
+- [ ] Run the full DeepKOALA companion profile and process-lifecycle tests on Linux. On Apple
+      Silicon macOS, run the targeted timeout/process-group, parent-death, and cross-process runner
+      lock tests, build, and installed-wheel smoke.
 - [ ] On real Apple Silicon hardware with MPS visible, verify `torch.backends.mps.is_available()`,
       run a small private FASTA through the bundled `202502` `full` and `frag` models with explicit
       `device=mps`, and compare the high-confidence classifications with CPU output.
@@ -221,7 +226,29 @@ advice.
 - [ ] Status, logs, and errors redact credentials, endpoints, environment values, and local paths.
 - [ ] Offline Core and Renderer paths perform no HTTP request or cache write.
 - [ ] Renderer XML, images, SVG, and resources remain static and free of active external content.
-- [ ] Raw evidence, ambiguity, multiple assignments, and provenance remain available.
+- [ ] Full normalization and audit retain raw evidence, ambiguity, multiple assignments, and
+      provenance. High-level analysis never claims that omitted record evidence remains available.
+- [ ] Every `analyze_ko_annotations` input produces the same compact sorted unique accepted-KO
+      analysis view. `normalize_ko_annotations` remains the full-record operation.
+- [ ] Streaming DeepKOALA detailed-file analysis enforces 1 GiB, 10,000,000-row,
+      20,000,000-expanded-assignment,
+      100,000-unique-KO, 64-column, 16,384-field-character, and 100-diagnostic-preview bounds,
+      verifies pinned file identity, and retains sorted unique accepted K numbers plus exact
+      aggregate counts and provenance.
+- [ ] High-level reports state that record evidence, protein-to-KO mapping, and
+      duplicate/conflict accounting are unavailable; they do not fabricate an
+      `AnnotationDataset`. Full normalization remains unchanged.
+- [ ] The DeepKOALA companion validates and publishes generated detailed CSV files with bounded
+      memory under a deployment-selected limit no greater than 1 GiB, 10,000,000 rows, 20,000,000
+      expanded assignments, 64 columns, 256 characters per non-empty column name, and 16,384
+      characters per NUL-free field. Publication remains no-replace and race-safe.
+- [ ] Suite installation requires Core's allowed roots to cover every DeepKOALA output root. A
+      distinct original FASTA path remains provenance without Core reopening it. The manual
+      output-disjoint resource-to-inline recovery route is limited to 5,000,000 bytes and larger
+      results fail before resource paging with a shared-root repair action.
+- [ ] DeepKOALA handoff schema version 2 proves exact input/output sequence-ID coverage before
+      publication. Single-domain output has exactly `topk` rows per input; multi-domain output has
+      at least one row per input. Only bounded aggregate counts enter the handoff and run report.
 - [ ] Core advertises exactly eighteen tools with self-contained schemas, including deterministic
       card/citation projection, local current-scope reference comparison, selected-reference
       export, and local KEGG Mapper/Syntax handoff preparation.
@@ -255,7 +282,10 @@ advice.
       local evidence audit, discards incomplete-target rows, and reports no partial-target yield.
 - [ ] KEGG-returned text is preserved as untrusted database data and is never treated as an
       instruction to the LLM, MCP client, parser, or service.
-- [ ] Only accepted plus policy-defined uncertain evidence may enter lenient analysis.
+- [ ] Only sorted unique accepted K numbers enter MODULE, pathway, ranking, comparison, and
+      rendering analysis; rejected, unclassified, and invalid records never enter those results.
+- [ ] Renderer handoff schema version 6 and render-manifest schema version 4 expose one accepted
+      visual state and one MODULE evaluation per target.
 - [ ] Exact MODULE completion and block coverage remain separate.
 - [ ] Unsupported MODULE syntax is preserved; a required block whose truth cannot be established
       safely because of it is not evaluable and retains a reason. The aggregate is

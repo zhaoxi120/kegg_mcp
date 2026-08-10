@@ -21,11 +21,10 @@ licensed_use_confirmed = false
 rate_limit_root = "/absolute/private/path/to/kegg-suite/rate-limit"
 
 [core]
-# The result database remains private. Core must allow every shared root used by
-# the DeepKOALA companion or Renderer.
+# The result database remains private. Core must allow every stable handoff root
+# produced by the DeepKOALA companion or consumed by Renderer.
 result_store_path = "/absolute/private/path/to/kegg-suite/core/results.sqlite3"
 allowed_roots = [
-  "/absolute/shared/path/to/kegg-suite/inputs",
   "/absolute/shared/path/to/kegg-suite/analysis",
 ]
 

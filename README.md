@@ -1,14 +1,12 @@
 # KEGG MCP
 
-**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
-
 **Ask Codex to turn protein FASTA or KO evidence into traceable KEGG reports and optional
 graphics—locally.**
 
 KEGG MCP helps researchers annotate protein sequences, inspect existing KEGG Orthology (KO)
-evidence, and explore selected KEGG references through natural-language requests. It keeps the
-evidence, decisions, provenance, and generated files together so results can be reviewed instead
-of treated as a black box.
+evidence, and explore selected KEGG references through natural-language requests. Normalization and
+audit workflows can preserve annotation evidence, decisions, and provenance for review, while
+high-level analysis deliberately uses a compact sorted unique accepted-KO view.
 
 MCP stands for Model Context Protocol: it is the local interface that lets Codex call the tools in
 this suite. KEGG MCP is not a website or hosted analysis service.
@@ -69,7 +67,8 @@ step is skipped. Rendering is always optional.
 
 - You have protein FASTA, KO identifiers, or annotation tables.
 - You want Codex to coordinate a reproducible KEGG-oriented workflow.
-- You need ambiguity, multiple assignments, thresholds, and provenance to remain visible.
+- You need normalization or audit to preserve ambiguity, multiple assignments, thresholds, and
+  provenance.
 - You prefer local files and explicit network access over a hosted multi-user service.
 
 ### Not designed for
@@ -91,10 +90,25 @@ prompts can focus on the research task.
 > evidence, summarize selected MODULE results and descriptive pathway KO coverage, and render
 > selected results as SVG. Report the resolved DeepKOALA model version.
 
+Expected files include `deepkoala_annotations.csv`, `deepkoala_run_report.md`,
+`unique_accepted_kos.tsv`, `analysis_report.md`, `render_input.json`, selected SVG files, and
+`render_manifest.json`. Exact target files depend on the selected MODULEs and pathways.
+
 ### Existing KO evidence
 
-> Analyze `/absolute/project/inputs/mag-ko.tsv` as a MAG. Keep accepted and uncertain evidence
-> separate, and explain exact MODULE completion separately from pathway KO coverage.
+> Analyze `/absolute/project/inputs/mag-ko.tsv` as a MAG. Use accepted K numbers only, and explain
+> exact MODULE completion separately from pathway KO coverage.
+
+Expected Core bundle files include `unique_accepted_kos.tsv`, `analysis_report.md`, and
+`render_input.json`; full record evidence is available only from the separate normalization or
+audit workflow.
+
+### Existing render handoff
+
+> Render the selected targets from `/absolute/project/results/render_input.json` as SVG. Preserve
+> the Core evidence and calculations unchanged.
+
+Expected renderer files are the selected static SVG artifacts plus `render_manifest.json`.
 
 ### KEGG candidate search
 
@@ -161,9 +175,28 @@ see [manual deployment](docs/manual-component-deployment.md).
 - A search result is a candidate, not an automatically confirmed identity.
 - An unmapped identifier or cache miss is not evidence that a biological entity is absent.
 
-Reports keep accepted, uncertain, rejected, duplicated, and conflicting evidence distinct where
-the source and policy support those decisions. Community and pangenome results describe pooled
-encoded potential rather than one isolate.
+Full normalization keeps accepted, rejected, unclassified, invalid, duplicated, and conflicting
+evidence distinct where the source and policy support those decisions. Every high-level analysis,
+MODULE, pathway, ranking, comparison, and rendering result uses only sorted unique accepted K
+numbers. High-level analysis intentionally omits record evidence, protein-to-KO mappings, and
+duplicate/conflict accounting; use normalization or audit when those records are required.
+Community and pangenome results describe pooled encoded potential rather than one isolate.
+
+The high-level Core workflow applies the same compact analysis semantics to small and large
+inputs. An allowed DeepKOALA detailed file is streamed under fixed maxima of 1 GiB, 10 million
+source rows, 20 million expanded assignments, and 100,000 unique accepted K numbers. Bounded inline
+and other supported inputs produce the same accepted-KO view under their applicable importer
+limits. The DeepKOALA companion can validate and publish a detailed CSV up to the same 1 GiB file
+ceiling without loading the complete output into memory. Suite installations require Core's
+allowed roots to cover every DeepKOALA output root. Core validates the stable annotation CSV while
+retaining the original FASTA path as provenance without reopening it. The resource-to-inline
+recovery route remains limited to 5,000,000 bytes for manual deployments whose output roots are
+disjoint.
+
+Compact local intake does not raise KEGG request, relationship, reference-loading, ranking, or
+output budgets. Very large accepted-KO sets may therefore require explicit MODULE/pathway targets
+or division into scientifically independent analysis units instead of automatic Top-N target
+mapping.
 
 ## Local data and KEGG access
 

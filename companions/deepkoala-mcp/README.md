@@ -49,7 +49,7 @@ separator (`:` on Linux and macOS).
 | `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu`, Linux `cpu,cuda`, or macOS `cpu,mps`; defaults to the matching platform pair |
 | `DEEPKOALA_MCP_CPU_THREADS` | no | 1 through 4; default 2 |
 | `DEEPKOALA_MCP_MAX_SEQUENCES` | no | Sequence cap up to 100,000 |
-| `DEEPKOALA_MCP_MAX_OUTPUT_BYTES` | no | Detailed CSV cap up to 5,000,000 bytes |
+| `DEEPKOALA_MCP_MAX_OUTPUT_BYTES` | no | Detailed CSV cap up to 1,073,741,824 bytes (1 GiB; default 1 GiB) |
 | `DEEPKOALA_MCP_MAX_TIMEOUT_SECONDS` | no | Job cap up to 86,400 seconds; default 3,600 |
 | `DEEPKOALA_MCP_ALLOW_MULTI` | no | Exact `true` or `false`; default `false` |
 | `DEEPKOALA_MCP_PROFILES_DIR` | with multi | Direct directory of installed `Kxxxxx.hmm` profiles |
@@ -85,9 +85,9 @@ The five public tools are `get_deepkoala_runner_status`, `run_deepkoala_job`,
 
 Protein FASTA intake has no aggregate file-byte limit. The companion streams validation into its
 private canonical staging file and continues to enforce the reported sequence-count limit, a
-100,000-residue limit per sequence, a 1,024-byte header limit, and controlled-path checks. Status
-therefore reports `max_input_bytes=null`; the detailed CSV output and resource pages retain their
-independent byte limits.
+100,000-residue limit per sequence, a 256-character sequence-identifier limit, a 1,024-byte full
+header limit, and controlled-path checks. Status therefore reports `max_input_bytes=null`; the
+detailed CSV output and resource pages retain their independent byte limits.
 
 `run_deepkoala_job` validates policy, runtime readiness, FASTA content, private staging, the output
 directory, and process startup in one call. The only required field is:
@@ -144,20 +144,37 @@ Extra columns are preserved. `start` and `end` must occur together. A fully empt
 probability, threshold, annotation marker, and coordinate tuple is retained as an unclassified
 multi-domain row; partially empty or malformed evidence is rejected. The companion validates the
 shape and score evidence but does not normalize K numbers or decide which rows enter KEGG analysis.
+Validation and no-replace publication stream this file in bounded chunks; the companion does not
+retain a whole large CSV in memory. Generated output is limited to 10,000,000 data rows, 20,000,000
+exact composite-expanded assignments, and 64 columns. Column names must be non-empty and no longer
+than 256 Unicode characters; every decoded field must be NUL-free and no longer than 16,384
+characters. These bounds apply in addition to the deployment's byte cap.
+
+The companion also verifies output identity coverage against the staged FASTA before publication.
+Successful single-domain output contains exactly the requested `topk` rows for every input ID;
+successful multi-domain output contains at least one row per input ID and may contain additional
+domain or top-k rows. Missing or unexpected IDs fail the job without publishing a handoff. The
+complete input ID set remains private process memory and is not returned or hashed.
 
 The Markdown report records the original FASTA path, companion and DeepKOALA versions, resolved model
-name and date, fixed parameters, sequence count, readiness, and timezone-aware timestamps. The
-successful job response returns handoff schema version `1`, absolute input, annotation, and report
-paths, `input_format="deepkoala_detailed"`, and source provenance accepted by the core importer.
+name and date, fixed parameters, readiness, timezone-aware timestamps, and bounded aggregate output
+coverage counts. The successful job response returns handoff schema version `2`, the same aggregate
+coverage, absolute input, annotation, and report paths, `input_format="deepkoala_detailed"`, and
+source provenance accepted by the core importer. Resource-pagination envelopes retain their
+independent schema version `1`.
 
 Stable files are the cross-MCP contract. The job ID is process-scoped. Deleting a terminal job
 forgets only its record; delivered files remain after deletion and server exit. Failed, cancelled,
 and timed-out jobs remove controlled incomplete output when safe. Private staged input and raw runner
 output are removed for every terminal outcome.
 
-Clients without a shared allowed filesystem may use the bounded process-scoped resources under
-`deepkoala://jobs/{job_id}/...`. Stable files remain the default handoff; resource IDs must not be
-passed to another server as result identity.
+The status field `resource_fallback_enabled=true` and bounded process-scoped resources under
+`deepkoala://jobs/{job_id}/...` describe companion artifact access only. Stable files remain the
+default handoff, and resource IDs must not be passed to another server as result identity. Core's
+inline recovery remains limited to 5,000,000 bytes; an annotation CSV above that size therefore
+requires a stable output path allowed by both components. Core retains the unchanged FASTA input
+path as provenance without reopening it under annotation-file path policy, so supported deployments
+need to share DeepKOALA output roots with Core but not DeepKOALA input roots.
 
 ## Process and filesystem safety
 

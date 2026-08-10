@@ -27,7 +27,7 @@ Protein FASTA
     -> deepkoala-mcp
     -> deepkoala_annotations.csv plus source provenance
     -> kegg-mcp
-    -> render_input.json schema version 4
+    -> render_input.json schema version 6
     -> kegg-render-mcp
     -> static SVG, optional PNG, and render_manifest.json
 ```
@@ -38,9 +38,9 @@ valid stable handoff already exists.
 
 The supported scope covers regular canonical `koNNNNN` reference-pathway box overlays, explicitly
 opted-in canonical KO global/overview total-map line overlays from one matching KEGG PNG/KGML pair,
-and project-owned MODULE logic diagrams from the core AST and evaluation states. Accepted and
-policy-defined uncertain evidence remain separate. SVG is canonical, PNG is a bounded derivative,
-and artifacts are available through local output directories and scoped MCP resources.
+and project-owned MODULE logic diagrams from the core AST and evaluation states. Only sorted unique
+accepted K numbers enter visualization. SVG is canonical, PNG is a bounded derivative, and
+artifacts are available through local output directories and scoped MCP resources.
 
 The following remain unsupported:
 
@@ -88,17 +88,17 @@ automatic Top-N truncation. Explicit broad-map analysis requires
 MODULE completion and project block coverage are calculated separately after reference loading.
 
 The core exposes transport-independent Pydantic models in `kegg_mcp.services.render_contracts`.
-`RenderInput` schema version 4 contains producer and dataset identity, analysis unit, taxonomic and
-source provenance, decision-policy identity, disjoint accepted and uncertain KO sets, bounded MODULE
-and pathway targets, and serializable parameters, limits, ranking provenance, and calculation
-versions.
+`RenderInput` schema version 6 contains producer and dataset identity, analysis unit, taxonomic and
+source provenance, decision-policy identity, sorted unique accepted K numbers, bounded MODULE and
+pathway targets, and serializable parameters, intake limits, ranking provenance, and
+calculation versions.
 
 Rejected, unclassified, and invalid records remain available in analysis summaries but never enter
 renderer evidence. Every tuple is deterministically ordered, and total serialized size is bounded.
 No workflow or artifact digest is required.
 
 A pathway render target carries the canonical identifier, namespace, scope, name, bounded
-classification evidence, evidence mode, evaluation status, supplied coverage numerator and
+classification evidence, evaluation status, supplied coverage numerator and
 denominator, detected KOs when complete within the render limit, retrieval/cache provenance,
 calculation version, warnings, and renderability state. Classification evidence retains `CLASS`
 lines when present; current broad entries that omit `CLASS` use an exact source-tagged `ENTRY`
@@ -107,14 +107,14 @@ is a canonical KO reference with an evaluated denominator and complete detected 
 Non-`ko` references and unevaluable or incomplete targets remain summary-only or not-renderable.
 
 A MODULE render target carries the root and reachable definitions, authoritative AST, reference
-edges and issues, strict and lenient completion, project block coverage, complete bounded block and
-optional-component states, uncertain support, unsupported content, and parser/evaluator provenance.
+edges and issues, accepted-evidence completion, project block coverage, complete bounded block and
+optional-component states, unsupported content, and parser/evaluator provenance.
 Oversized content is marked `not_renderable`; a truncated preview is never relabeled as complete
 renderer evidence.
 
-The output-bundle manifest records renderer schema version 4 and its MIME type independently from
+The output-bundle manifest records renderer schema version 6 and its MIME type independently from
 the output-bundle schema. Graph, reference, result, target-count, and byte-limit validation completes
-before publication. The bundle manifest is published last. Only schema version 4 is accepted. A
+before publication. The bundle manifest is published last. Only schema version 6 is accepted. A
 schema-mismatched handoff is rejected with an action to rerun core analysis; it is not repaired or
 reinterpreted.
 
@@ -139,7 +139,7 @@ core MCP tool, and the renderer does not implement a second network client.
 ### `kegg-render-mcp`
 
 The renderer is an independently packaged local stdio MCP server requiring a compatible core
-library. It validates exactly one version-4 handoff supplied as an allowed absolute path or bounded
+library. It validates exactly one version-5 handoff supplied as an allowed absolute path or bounded
 inline JSON document.
 
 Status is redacted and closed-world. A connectivity probe performs one explicit `INFO` request in a
@@ -147,7 +147,7 @@ live access mode and zero requests in `offline_cache` or `unconfigured` mode. MO
 closed-world when its handoff is complete. Pathway rendering is open-world when it retrieves KEGG
 assets. Tool annotations reflect these effects.
 
-Successful operations produce bounded static artifacts and a schema-version-2
+Successful operations produce bounded static artifacts and a schema-version-3
 `render_manifest.json` in a new or empty durable output directory. Its image records contain only a
 controlled relative path, MIME type, byte size, width, and height. Opaque render IDs,
 expiry timestamps, and resource URIs remain process-scoped result metadata; they are excluded from
@@ -182,15 +182,14 @@ them. Every geometry coordinate must be a short ASCII non-negative integer withi
 Polylines additionally enforce per-line points, total points, total Euclidean length, and bounded
 graphic-to-KO associations. Degenerate or malformed coordinate lists are rejected.
 
-Accepted evidence uses a solid vivid-red (`#FF0000`) overlay and has precedence when one graphic
-maps to both accepted and uncertain KOs. Policy-defined uncertain evidence uses orange (`#E69F00`)
-and a dashed non-color cue for both boxes and polylines. Graphics that are not selected as
-visualization evidence remain unchanged and are never described as biologically absent. Original
-pathway-category colors and arrows in the validated PNG remain background context rather than
-evidence states.
+Accepted evidence uses a solid vivid-red (`#FF0000`) overlay. Duplicate records or several accepted
+K numbers mapped to one graphic do not create another visual state. Graphics that are not selected
+as visualization evidence remain unchanged and are never described as biologically absent.
+Original pathway-category colors and arrows in the validated PNG remain background context rather
+than evidence states.
 
-The displayed coverage numerator, denominator, ratio, namespace, and evidence mode come from the
-core target. KGML graphics do not replace or recompute the core denominator. Coverage is
+The displayed coverage numerator, denominator, ratio, and namespace come from the core target.
+KGML graphics do not replace or recompute the core denominator. Coverage is
 descriptive and does not establish pathway presence, completeness, expression, activity, flux,
 phenotype, or statistical significance.
 
@@ -213,11 +212,10 @@ claims. They preserve the authoritative core syntax and state:
 - unsupported, unresolved, and cyclic content remains visible; and
 - optional components stay outside the required completion denominator.
 
-The graphic displays strict and lenient exact completion separately from project block coverage.
-Uncertain support that changes lenient results remains visible. Partially evaluable, not evaluable,
-summary-only, and not-renderable states include their reasons. Minimal missing alternatives are
-bounded requirements under one evaluated definition, not proof that adding genes activates a
-biological process.
+The graphic displays one accepted-evidence exact-completion result separately from project block
+coverage. Partially evaluable, not evaluable, summary-only, and not-renderable states include their
+reasons. Minimal missing alternatives are bounded requirements under one evaluated definition, not
+proof that adding genes activates a biological process.
 
 ## Security and operational contract
 
@@ -296,7 +294,7 @@ configuration and lifecycle; generic clients use
 
 The visualization implementation is covered by:
 
-- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 4
+- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 6
   and typed pathway assets;
 - renderer schema, pathway, MODULE, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
   and distribution tests using only synthetic assets;

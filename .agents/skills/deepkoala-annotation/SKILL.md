@@ -58,10 +58,11 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 7. Poll `get_deepkoala_job` at bounded intervals until a terminal state. Call
    `cancel_deepkoala_job` only for a user cancellation, an agreed deadline, or safe recovery from
    a lost client operation.
-8. On success, return the companion-provided absolute `deepkoala_annotations.csv` and
-   `deepkoala_run_report.md` paths, schema/tool versions, original FASTA path, model parameters,
-   timing, and caveats. Explicitly state the resolved model name and model version reported by the
-   service, plus the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
+8. On success, require handoff `schema_version="2"` and return the companion-provided absolute
+   `deepkoala_annotations.csv` and `deepkoala_run_report.md` paths, schema/tool versions, original
+   FASTA path, model parameters, timing, caveats, and the bounded `output_coverage` aggregate
+   counts. Explicitly state the resolved model name and model version reported by the service, plus
+   the actual reported `multi` value. Never parse or normalize the CSV in this Skill.
 9. Keep the stable handoff files for the next independent stage. Use `delete_deepkoala_job` only
    when the user requests cleanup; job deletion must not be presented as deletion of already
    committed output-directory files.
@@ -70,10 +71,18 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 
 - If the original request ends at protein annotation, return the stable CSV, run report, and
   source provenance, then stop.
-- If the original request also asks for KEGG KO, MODULE, pathway, metabolic-reconstruction, or
-  reporting work, automatically continue with the installed `kegg-ko-analysis` Skill after the
-  annotation job succeeds. Prefer the returned `annotations_path` and pass
-  `input_format="deepkoala_detailed"` and the `source` object unchanged.
+- If the original request also asks for KO analysis, MODULE evaluation, descriptive pathway KO
+  coverage, deterministic KO-set comparison, or reporting work,
+  automatically continue with the installed `kegg-ko-analysis` Skill after the annotation job
+  succeeds. Prefer the returned
+  `annotations_path` and pass
+  `input_format="deepkoala_detailed"` and the `source` object unchanged. Core derives its compact
+  sorted unique accepted-KO analysis view from this handoff; request full normalization separately
+  only when record-level evidence is needed and the file fits that operation's separate intake
+  limits. The companion can publish a generated detailed CSV up to 1 GiB with bounded-memory
+  validation and publication. The supported suite installer requires Core's allowed roots to cover
+  every DeepKOALA output root so Core can validate the stable annotation file. The original FASTA
+  `input_path` remains unchanged provenance and need not be accessible beneath a Core allowed root.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
   continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project
@@ -81,12 +90,17 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
 - If Core rejects that successful path handoff with `ANALYSIS_CONFIGURATION_INVALID`, the typed
   message `A local handoff path is outside the configured allowed roots.`, and a `safe_details`
   entry of `field="file_path"`, do not rerun DeepKOALA,
-  copy the CSV, weaken either server's allowed roots, or retry the same path. While the job remains
-  retained, read the returned `annotations_resource_uri` through the controlled resource fallback
-  defined in the handoff guide, reconstruct the byte-identical strict UTF-8 payload, and resume
-  `kegg-ko-analysis` with nested `annotations.text` rather than `annotations.file_path`. Pass the
-  original `input_format` and `source` unchanged, never send both payload selectors, and keep
-  annotation context only inside the nested `annotations` object.
+  copy the CSV, change either server's running path policy, or retry the same path. Inspect the
+  successful job's `output_bytes` before reading its resource. Only when `output_bytes` is at most
+  5,000,000 may the retained job use the controlled resource fallback defined in the handoff guide:
+  reconstruct the byte-identical strict UTF-8 payload and resume `kegg-ko-analysis` with nested
+  `annotations.text` rather than `annotations.file_path`. Pass the original `input_format` and
+  `source` unchanged, never send both payload selectors, and keep annotation context only inside
+  the nested `annotations` object. If `output_bytes` is larger, do not read resource pages or place
+  the file in a prompt or inline MCP argument. Stop and report that the deployment must be repaired
+  with Core allowed roots covering the returned DeepKOALA output path, preferably through the
+  complete suite installer;
+  resume from the same stable CSV after the repaired suite is available in a new task.
   The same message with `field="output_directory"` is an output-location error and must not trigger
   this annotation-resource fallback.
 - If the original request also asks for graphics, preserve its requested formats and target scope
@@ -104,7 +118,7 @@ policy check fails, or another MCP client must consume the output.
 
 - DeepKOALA output is computational annotation evidence, not experimental validation.
 - A rejected or below-threshold prediction is not evidence that a function is absent.
-- Do not alter thresholds, infer K numbers, compare scores across tools, or select strict/lenient
-  evidence here; those decisions belong to the independent `kegg-ko-analysis` stage.
+- Do not alter thresholds, infer K numbers, compare scores across tools, or select analysis K
+  numbers here; those decisions belong to the independent `kegg-ko-analysis` stage.
 - Do not launch subprocesses, inspect weights, parse output, or implement job control in the Skill.
   Use only declared `deepkoala-mcp` tools and their structured results.

@@ -102,16 +102,16 @@ def _inputs() -> tuple[ComparisonDatasetInput, ...]:
             ("complete-two", "K00002", "accepted"),
         )
     )
-    uncertain = _dataset(
+    filtered = _dataset(
         (
-            ("uncertain-one", "K00001", "accepted"),
-            ("uncertain-two", "K00002", "uncertain"),
+            ("filtered-one", "K00001", "accepted"),
+            ("filtered-two", "K00002", "unclassified"),
         )
     )
     incomplete = _dataset((("incomplete-one", "K00001", "accepted"),))
     return (
         ComparisonDatasetInput(label="complete", dataset=complete),
-        ComparisonDatasetInput(label="uncertain", dataset=uncertain),
+        ComparisonDatasetInput(label="filtered", dataset=filtered),
         ComparisonDatasetInput(label="incomplete", dataset=incomplete),
     )
 
@@ -173,28 +173,25 @@ def _json_schema_property_names(node: object) -> set[str]:
     return set()
 
 
-def test_pathway_comparison_recomputes_strict_and_lenient_under_one_reference() -> None:
+def test_pathway_comparison_recomputes_accepted_only_outcomes_under_one_reference() -> None:
     reference = _reference()
     result = compare_pathway_references(_inputs(), (reference,))
     target = result.targets[0]
 
     assert target.reference == reference
     assert target.reference.reference_kos
-    assert [item.label for item in target.strict.outcomes] == [
+    assert [item.label for item in target.comparison.outcomes] == [
         "complete",
-        "uncertain",
+        "filtered",
         "incomplete",
     ]
-    assert [item.detected_reference_ko_count for item in target.strict.outcomes] == [2, 1, 1]
-    assert [item.coverage_ratio for item in target.strict.outcomes] == [1.0, 0.5, 0.5]
-    assert target.strict.outcomes_differ is True
-    assert [item.detected_reference_ko_count for item in target.lenient.outcomes] == [2, 2, 1]
-    assert [item.coverage_ratio for item in target.lenient.outcomes] == [1.0, 1.0, 0.5]
-    assert target.lenient.outcomes_differ is True
-    assert all(item.reference_unique_ko_count == 2 for item in target.strict.outcomes)
+    assert [item.detected_reference_ko_count for item in target.comparison.outcomes] == [2, 1, 1]
+    assert [item.coverage_ratio for item in target.comparison.outcomes] == [1.0, 0.5, 0.5]
+    assert target.comparison.outcomes_differ is True
+    assert all(item.reference_unique_ko_count == 2 for item in target.comparison.outcomes)
     assert all(
         PathwayCoverageWarningCode.DESCRIPTIVE_RATIO in {warning.code for warning in item.warnings}
-        for item in target.strict.outcomes
+        for item in target.comparison.outcomes
     )
     assert PathwayComparisonResult.model_validate_json(result.model_dump_json()) == result
 
@@ -203,17 +200,17 @@ def test_empty_shared_denominator_is_not_evaluable_without_a_ratio() -> None:
     result = compare_pathway_references(_inputs(), (_reference(ko_ids=()),))
     target = result.targets[0]
 
-    for mode in (target.strict, target.lenient):
-        assert mode.evaluated_in_set_indexes == ()
-        assert mode.not_evaluable_in_set_indexes == (0, 1, 2)
-        assert mode.outcomes_differ is False
-        assert all(
-            item.evaluation_status is PathwayCoverageStatus.NOT_EVALUABLE
-            and item.reference_unique_ko_count == 0
-            and item.detected_reference_ko_count == 0
-            and item.coverage_ratio is None
-            for item in mode.outcomes
-        )
+    comparison = target.comparison
+    assert comparison.evaluated_in_set_indexes == ()
+    assert comparison.not_evaluable_in_set_indexes == (0, 1, 2)
+    assert comparison.outcomes_differ is False
+    assert all(
+        item.evaluation_status is PathwayCoverageStatus.NOT_EVALUABLE
+        and item.reference_unique_ko_count == 0
+        and item.detected_reference_ko_count == 0
+        and item.coverage_ratio is None
+        for item in comparison.outcomes
+    )
 
 
 def test_multiple_pathway_targets_preserve_reference_and_caller_order() -> None:
@@ -226,8 +223,8 @@ def test_multiple_pathway_targets_preserve_reference_and_caller_order() -> None:
     result = compare_pathway_references(_inputs(), (second, first))
 
     assert [item.reference.pathway_id for item in result.targets] == ["map00020", "ko00010"]
-    assert result.targets[0].strict.outcomes_differ is False
-    assert all(item.coverage_ratio == 1.0 for item in result.targets[0].strict.outcomes)
+    assert result.targets[0].comparison.outcomes_differ is False
+    assert all(item.coverage_ratio == 1.0 for item in result.targets[0].comparison.outcomes)
     assert result.targets[0].reference.link_provenance == second.link_provenance
     assert result.targets[1].reference.metadata_provenance == first.metadata_provenance
 
@@ -249,7 +246,7 @@ def test_global_or_overview_reference_requires_comparison_wide_opt_in() -> None:
     assert all(
         PathwayCoverageWarningCode.GLOBAL_OR_OVERVIEW_REFERENCE
         in {warning.code for warning in item.warnings}
-        for item in result.targets[0].strict.outcomes
+        for item in result.targets[0].comparison.outcomes
     )
 
 

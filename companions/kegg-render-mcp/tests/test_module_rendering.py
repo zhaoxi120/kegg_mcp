@@ -25,7 +25,7 @@ from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
 from kegg_render_mcp.module_scene import construct_module_scene
 from kegg_render_mcp.raster import PNG_SIGNATURE, render_module_png
 from kegg_render_mcp.render_input import load_render_input
-from kegg_render_mcp.svg import ACCEPTED_COLOR, UNCERTAIN_COLOR, render_module_svg
+from kegg_render_mcp.svg import ACCEPTED_COLOR, render_module_svg
 
 
 def test_module_scene_preserves_and_or_grouping_and_authoritative_state(
@@ -37,16 +37,13 @@ def test_module_scene_preserves_and_or_grouping_and_authoritative_state(
     )
     kinds = {node.kind for node in scene.nodes}
     assert {"module_definition", "and", "or", "group", "ko"} <= kinds
-    assert scene.strict_exact_completion is False
-    assert scene.lenient_exact_completion is True
-    assert scene.strict_block_coverage != scene.lenient_block_coverage
-    assert tuple(
-        block.uncertain_support_ko_ids for block in scene.blocks if block.uncertain_support_ko_ids
-    ) == (("K00002",),)
-    assert tuple(
-        (item.source_module_id, item.strict_state, item.lenient_state)
-        for item in scene.optional_components
-    ) == (("M00001", "absent", "absent"),)
+    assert scene.status == "complete"
+    assert scene.exact_completion is True
+    assert scene.block_coverage == 1.0
+    assert {block.state for block in scene.blocks} == {"complete"}
+    assert tuple((item.source_module_id, item.state) for item in scene.optional_components) == (
+        ("M00001", "absent"),
+    )
     assert tuple(
         (item.source_module_id, item.target_module_id) for item in scene.reference_edges
     ) == (("M00001", "M00002"),)
@@ -64,15 +61,14 @@ def test_module_svg_uses_neutral_ast_and_evidence_colors_only_for_blocks(
     )
     svg = render_module_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
     text = svg.content.decode()
-    assert "Strict exact:" in text
-    assert "Strict block coverage:" in text
+    assert "Exact: complete" in text
+    assert "Block coverage: 100.0%" in text
     assert "AND (plus)" in text
     assert "OR (,)" in text
     assert "Optional 1 (M00001)" in text
     assert "M00001 -&gt; M00002" in text
     assert "#4B5563" in text
     assert ACCEPTED_COLOR in text
-    assert UNCERTAIN_COLOR in text
     assert "biochemical topology" in text
     assert "Analysis unit: unknown" in text
 
@@ -105,8 +101,7 @@ def test_summary_only_module_retains_not_evaluable_reason_in_graphic() -> None:
         required_block_states=(),
         optional_component_states=(),
         reference_edges=(),
-        strict=completion,
-        lenient=completion,
+        completion=completion,
         reference_issues=(),
         warnings=(SimpleNamespace(message="Unsupported token remains visible."),),
     )
@@ -151,8 +146,7 @@ def test_unresolved_cycle_and_unsupported_nodes_remain_visible() -> None:
         required_block_states=(),
         optional_component_states=(),
         reference_edges=(),
-        strict=completion,
-        lenient=completion,
+        completion=completion,
         reference_issues=(issue,),
         warnings=(),
     )
@@ -200,8 +194,7 @@ def test_canvas_dimensions_fail_instead_of_clipping_nodes() -> None:
         required_block_states=(),
         optional_component_states=(),
         reference_edges=(),
-        strict=completion,
-        lenient=completion,
+        completion=completion,
         reference_issues=(),
         warnings=(),
     )

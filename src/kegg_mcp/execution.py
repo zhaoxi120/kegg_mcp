@@ -14,16 +14,15 @@ from kegg_mcp.analysis.pathway_ranking import (
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     ModuleId,
 )
-from kegg_mcp.importers.contracts import ImportLimits
+from kegg_mcp.importers.contracts import AnalysisViewImportLimits, ImportLimits
 from kegg_mcp.kegg.contracts import KeggRequestOptions
 from kegg_mcp.report_limits import ReportLimits
 
 ANALYSIS_SERVICE_NAME = "kegg_mcp_annotation_analysis"
-ANALYSIS_SERVICE_VERSION = "3"
+ANALYSIS_SERVICE_VERSION = "5"
 
 
 class ExecutionStage(StrEnum):
@@ -52,9 +51,8 @@ class PathwayRankingExecution(FrozenModel):
     """Compact, reproducible provenance for one automatic pathway selection."""
 
     method: Literal["selected_unique_ko_count"]
-    method_version: Literal["1"]
+    method_version: Literal["2"]
     selection: PathwaySelection
-    evidence_mode: EvidenceMode
     decision_policy: DecisionPolicyReference
     selected_unique_ko_count: int = Field(strict=True, gt=0)
     candidate_pathway_count: int = Field(strict=True, gt=0)
@@ -82,9 +80,8 @@ class ModuleRankingExecution(FrozenModel):
     """Compact, reproducible provenance for one automatic MODULE selection."""
 
     method: Literal["selected_unique_ko_count"]
-    method_version: Literal["1"]
+    method_version: Literal["2"]
     selection: ModuleSelection
-    evidence_mode: EvidenceMode
     decision_policy: DecisionPolicyReference
     selected_unique_ko_count: int = Field(strict=True, gt=0)
     candidate_module_count: int = Field(strict=True, ge=0)
@@ -171,7 +168,6 @@ class AnalysisServiceLimits(FrozenModel):
 class PathwayExecutionParameters(FrozenModel):
     """Pathway semantics and optional deterministic target-ranking provenance."""
 
-    evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
     ranking: PathwayRankingExecution | None = Field(
         default=None,
@@ -184,14 +180,21 @@ class AnalysisExecutionProvenance(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:3",
+            "$id": "urn:kegg-mcp:schema:analysis-execution-provenance:5",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     service_name: Literal["kegg_mcp_annotation_analysis"]
-    service_version: Literal["3"]
-    import_limits: ImportLimits
+    service_version: Literal["5"]
+    import_limits: ImportLimits | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    stream_import_limits: AnalysisViewImportLimits | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     kegg_request_options: KeggRequestOptions
     reference_loading_limits: ReferenceLoadingLimits
     module_analysis_limits: ModuleAnalysisLimits = Field(default_factory=ModuleAnalysisLimits)
@@ -205,6 +208,12 @@ class AnalysisExecutionProvenance(FrozenModel):
     pathway_coverage_limits: PathwayCoverageLimits = Field(default_factory=PathwayCoverageLimits)
     report_limits: ReportLimits = Field(default_factory=ReportLimits)
     direct_result_limits: AnalysisServiceLimits
+
+    @model_validator(mode="after")
+    def validate_intake_limits(self) -> Self:
+        if (self.import_limits is None) == (self.stream_import_limits is None):
+            raise ValueError("analysis execution requires exactly one intake-limit contract")
+        return self
 
 
 __all__ = [

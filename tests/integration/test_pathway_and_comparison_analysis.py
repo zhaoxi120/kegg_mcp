@@ -3,13 +3,11 @@
 from datetime import UTC, datetime, timedelta
 
 from kegg_mcp.analysis import (
-    ComparedKoClass,
     ComparisonDatasetInput,
     ModuleDefinition,
     ModuleDefinitionCollection,
     ModuleEvaluationStatus,
     PathwayComparisonResult,
-    PathwayCoverageParameters,
     PathwayCoverageStatus,
     PathwayReferenceNamespace,
     build_pathway_reference,
@@ -23,7 +21,7 @@ from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
     AnalysisUnit,
     AnnotationDataset,
-    EvidenceMode,
+    build_ko_analysis_view,
 )
 from kegg_mcp.importers import (
     GenericColumnMapping,
@@ -106,11 +104,11 @@ def _datasets() -> tuple[AnnotationDataset, AnnotationDataset, AnnotationDataset
             ("complete-specific", "K00005", "accepted"),
         )
     )
-    uncertain = _dataset(
+    filtered = _dataset(
         (
-            ("uncertain-one", "K00001", "accepted"),
-            ("uncertain-two", "K00002", "uncertain"),
-            ("uncertain-specific", "K00003", "accepted"),
+            ("filtered-one", "K00001", "accepted"),
+            ("filtered-two", "K00002", "unclassified"),
+            ("filtered-specific", "K00003", "accepted"),
         )
     )
     incomplete = _dataset(
@@ -120,19 +118,16 @@ def _datasets() -> tuple[AnnotationDataset, AnnotationDataset, AnnotationDataset
             ("incomplete-specific", "K00004", "accepted"),
         )
     )
-    return complete, uncertain, incomplete
+    return complete, filtered, incomplete
 
 
 def _comparison_inputs(
     datasets: tuple[AnnotationDataset, AnnotationDataset, AnnotationDataset],
 ) -> tuple[ComparisonDatasetInput, ...]:
+    labels = ("complete", "filtered", "incomplete")
     return tuple(
-        ComparisonDatasetInput(label=label, dataset=dataset)
-        for label, dataset in zip(
-            ("complete", "uncertain", "incomplete"),
-            datasets,
-            strict=True,
-        )
+        ComparisonDatasetInput(label=labels[index], dataset=dataset)
+        for index, dataset in enumerate(datasets)
     )
 
 
@@ -210,10 +205,9 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
     inputs = _comparison_inputs(datasets)
     reference = _pathway_reference()
 
-    strict_results = tuple(evaluate_pathway_coverage(reference, dataset) for dataset in datasets)
-    lenient_parameters = PathwayCoverageParameters(evidence_mode=EvidenceMode.LENIENT)
-    lenient_results = tuple(
-        evaluate_pathway_coverage(reference, dataset, lenient_parameters) for dataset in datasets
+    coverage_results = tuple(
+        evaluate_pathway_coverage(reference, build_ko_analysis_view(dataset))
+        for dataset in datasets
     )
 
     assert reference.reference_kos == ("K00001", "K00002")
@@ -222,117 +216,88 @@ def test_offline_pathway_ko_and_module_analyses_share_ordered_annotation_evidenc
     assert len(reference.exclusions) == 1
     assert all(item.origin is ResponseOrigin.CACHE for item in reference.link_provenance)
     assert all(item.origin is ResponseOrigin.CACHE for item in reference.metadata_provenance)
-    assert [result.evaluation_status for result in strict_results] == [
+    assert [result.evaluation_status for result in coverage_results] == [
         PathwayCoverageStatus.EVALUATED,
         PathwayCoverageStatus.EVALUATED,
         PathwayCoverageStatus.EVALUATED,
     ]
-    assert [result.coverage_ratio for result in strict_results] == [1.0, 0.5, 0.5]
-    assert [result.coverage_ratio for result in lenient_results] == [1.0, 1.0, 0.5]
-    assert [result.dataset_id for result in strict_results] == [
+    assert [result.coverage_ratio for result in coverage_results] == [1.0, 0.5, 0.5]
+    assert [result.dataset_id for result in coverage_results] == [
         dataset.dataset_id for dataset in datasets
     ]
     assert all(
         result.reference_unique_ko_count == len(reference.reference_kos)
-        for result in (*strict_results, *lenient_results)
+        for result in coverage_results
     )
     assert all(
         result.reference_link_provenance == reference.link_provenance
         and result.reference_metadata_provenance == reference.metadata_provenance
-        for result in (*strict_results, *lenient_results)
+        for result in coverage_results
     )
 
     pathway_comparison = compare_pathway_references(inputs, (reference,))
     pathway_target = pathway_comparison.targets[0]
     assert [item.label for item in pathway_comparison.datasets] == [
         "complete",
-        "uncertain",
+        "filtered",
         "incomplete",
     ]
     assert pathway_target.reference == reference
     assert pathway_target.reference.reference_kos == reference.reference_kos
     assert pathway_target.reference.link_provenance == reference.link_provenance
     assert pathway_target.reference.metadata_provenance == reference.metadata_provenance
-    assert [outcome.label for outcome in pathway_target.strict.outcomes] == [
+    assert [outcome.label for outcome in pathway_target.comparison.outcomes] == [
         "complete",
-        "uncertain",
+        "filtered",
         "incomplete",
     ]
-    assert [outcome.coverage_ratio for outcome in pathway_target.strict.outcomes] == [
+    assert [outcome.coverage_ratio for outcome in pathway_target.comparison.outcomes] == [
         1.0,
         0.5,
         0.5,
     ]
-    assert [outcome.coverage_ratio for outcome in pathway_target.lenient.outcomes] == [
-        1.0,
-        1.0,
-        0.5,
-    ]
-    assert [outcome.detected_reference_ko_count for outcome in pathway_target.strict.outcomes] == [
+    assert [
+        outcome.detected_reference_ko_count for outcome in pathway_target.comparison.outcomes
+    ] == [
         2,
         1,
-        1,
-    ]
-    assert [outcome.detected_reference_ko_count for outcome in pathway_target.lenient.outcomes] == [
-        2,
-        2,
         1,
     ]
     assert all(
-        outcome.reference_unique_ko_count == 2
-        for outcome in (*pathway_target.strict.outcomes, *pathway_target.lenient.outcomes)
+        outcome.reference_unique_ko_count == 2 for outcome in pathway_target.comparison.outcomes
     )
-    assert pathway_target.strict.evaluated_in_set_indexes == (0, 1, 2)
-    assert pathway_target.lenient.evaluated_in_set_indexes == (0, 1, 2)
-    assert pathway_target.strict.outcomes_differ is True
-    assert pathway_target.lenient.outcomes_differ is True
+    assert pathway_target.comparison.evaluated_in_set_indexes == (0, 1, 2)
+    assert pathway_target.comparison.outcomes_differ is True
     assert (
         PathwayComparisonResult.model_validate_json(pathway_comparison.model_dump_json())
         == pathway_comparison
     )
 
     ko_comparison = compare_ko_datasets(inputs)
-    accepted = next(
-        partition
-        for partition in ko_comparison.partitions
-        if partition.ko_class is ComparedKoClass.ACCEPTED
-    )
-    lenient = next(
-        partition
-        for partition in ko_comparison.partitions
-        if partition.ko_class is ComparedKoClass.LENIENT
-    )
+    partition = ko_comparison.partition
     assert [item.label for item in ko_comparison.datasets] == [
         "complete",
-        "uncertain",
+        "filtered",
         "incomplete",
     ]
-    assert accepted.shared_by_all == ("K00001",)
-    assert [item.ko_ids for item in accepted.set_specific] == [
+    assert partition.shared_by_all == ("K00001",)
+    assert [item.ko_ids for item in partition.set_specific] == [
         ("K00002", "K00005"),
         ("K00003",),
         ("K00004",),
     ]
-    assert lenient.shared_by_all == ("K00001",)
-    assert lenient.partially_shared[0].member_set_indexes == (0, 1)
-    assert lenient.partially_shared[0].ko_ids == ("K00002",)
+    assert partition.partially_shared == ()
 
     module_comparison = compare_module_graphs(inputs, (_module_graph(),))
     module_target = module_comparison.targets[0]
-    assert [outcome.label for outcome in module_target.strict.outcomes] == [
+    assert [outcome.label for outcome in module_target.comparison.outcomes] == [
         "complete",
-        "uncertain",
+        "filtered",
         "incomplete",
     ]
-    assert [outcome.evaluation_status for outcome in module_target.strict.outcomes] == [
+    assert [outcome.evaluation_status for outcome in module_target.comparison.outcomes] == [
         ModuleEvaluationStatus.COMPLETE,
         ModuleEvaluationStatus.INCOMPLETE,
         ModuleEvaluationStatus.INCOMPLETE,
     ]
-    assert [outcome.evaluation_status for outcome in module_target.lenient.outcomes] == [
-        ModuleEvaluationStatus.COMPLETE,
-        ModuleEvaluationStatus.COMPLETE,
-        ModuleEvaluationStatus.INCOMPLETE,
-    ]
-    assert module_target.strict.complete_in_set_indexes == (0,)
-    assert module_target.lenient.complete_in_set_indexes == (0, 1)
+    assert module_target.comparison.complete_in_set_indexes == (0,)

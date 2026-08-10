@@ -24,6 +24,7 @@ from deepkoala_mcp import SERVER_NAME, __version__
 from deepkoala_mcp.config import load_runtime_config
 from deepkoala_mcp.contracts import (
     JOB_ID_PATTERN,
+    MAX_OUTPUT_BYTES,
     MAX_RESOURCE_PAGE_BYTES,
     CancelDeepKoalaJobInput,
     CompanionStatus,
@@ -45,8 +46,10 @@ from deepkoala_mcp.jobs import ArtifactName, DeepKoalaJobManager
 
 _RESOURCE = re.compile(
     rf"^deepkoala://jobs/({JOB_ID_PATTERN})/(annotations|report)"
-    r"(?:/(0|[1-9][0-9]{0,7})/([1-9][0-9]{0,5}))?$"
+    r"(?:/(0|[1-9][0-9]{0,9})/([1-9][0-9]{0,5}))?$"
 )
+_RESOURCE_NOT_FOUND = -32002
+_MAX_RESOURCE_OFFSET = MAX_OUTPUT_BYTES - 1
 _M = TypeVar("_M", bound=BaseModel)
 
 
@@ -299,7 +302,12 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         except DeepKoalaMcpError as error:
             raise McpError(
                 types.ErrorData(
-                    code=types.INVALID_PARAMS,
+                    code=(
+                        _RESOURCE_NOT_FOUND
+                        if error.detail.code
+                        in {ErrorCode.JOB_NOT_FOUND, ErrorCode.ARTIFACT_NOT_FOUND}
+                        else types.INTERNAL_ERROR
+                    ),
                     message=f"{error.detail.code.value}: {error.detail.message}",
                     data=error.detail.model_dump(mode="json"),
                 )
@@ -346,7 +354,7 @@ async def _resource_contents(
         raise ValueError("incomplete range")
     offset = int(raw_offset)
     limit = int(raw_limit)
-    if limit > MAX_RESOURCE_PAGE_BYTES:
+    if offset > _MAX_RESOURCE_OFFSET or limit > MAX_RESOURCE_PAGE_BYTES:
         raise ValueError("range exceeds maximum")
     page = await manager.read_artifact(job_id, artifact, offset=offset, limit=limit)
     next_offset = offset + len(page.content)

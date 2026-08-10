@@ -8,8 +8,8 @@ from kegg_mcp.domain.annotations import FrozenModel
 class ReportLimits(FrozenModel):
     """Serializable hard bounds and Markdown preview limits for one render."""
 
-    max_input_rows: int = Field(default=100_000, strict=True, gt=0, le=10_000_000)
-    max_annotation_records: int = Field(
+    max_input_rows: int = Field(default=10_000_000, strict=True, gt=0, le=10_000_000)
+    max_accepted_ko_ids: int = Field(
         default=100_000,
         strict=True,
         ge=0,
@@ -38,7 +38,7 @@ class ReportLimits(FrozenModel):
         ge=1_024,
         le=16 * 1024 * 1024,
     )
-    max_annotation_csv_bytes: int = Field(
+    max_accepted_ko_csv_bytes: int = Field(
         default=128 * 1024 * 1024,
         strict=True,
         gt=0,

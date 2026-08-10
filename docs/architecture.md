@@ -40,17 +40,15 @@ protein FASTA
   -> deepkoala-mcp
   -> deepkoala_annotations.csv plus source provenance
   -> kegg-mcp
-  -> output bundle plus render_input.json version 4
+  -> output bundle plus render_input.json version 6
   -> kegg-render-mcp
   -> bounded static SVG or PNG artifacts
 ```
 
-Core initialization instructions fail closed when the only biological input is protein FASTA:
-they do not call a core analysis tool. A user-selected annotator takes precedence; otherwise Codex
-prefers `deepkoala-annotation`. If that Skill or `deepkoala-mcp` is unavailable, the task stops and
-asks once for explicit permission to install or repair the complete suite. After the required
-action succeeds, discovery and continuation occur in a new Codex task. If permission is declined,
-the core remains stopped until a selected route supplies supported KO evidence.
+Core initialization instructions describe only Core capabilities and boundaries. They reject raw
+protein FASTA as analysis input, require supported KO evidence from an independently configured
+annotator, and leave annotator selection, deployment recovery, and cross-Skill continuation to the
+repository Skills and installation guidance.
 
 The current product does not provide:
 
@@ -82,7 +80,7 @@ The repository keeps three process boundaries:
 | --- | --- | --- |
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
-| `kegg-render-mcp` | Validate a version 4 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
+| `kegg-render-mcp` | Validate a version 6 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 ### Platform boundary
 
@@ -122,10 +120,12 @@ subprocesses, manage weights, normalize records, call KEGG directly, parse KGML,
 construct SVG, manipulate pixels, or invent resource URIs. Stable versioned files in user-selected
 allowed output directories are the durable, default stage handoff. The sole same-task exception is
 an upstream Skill reading its own MCP's bounded controlled resource after a typed downstream
-`file_path` allowed-root rejection, then passing the byte-identical content through the downstream
-server's bounded inline input. Each Skill still calls exactly one MCP, and no job or resource
-identifier crosses into Core. Process-scoped job and result identifiers are local optimizations,
-not cross-process authorization or durable handoff tokens.
+`file_path` allowed-root rejection, then passing no more than 5,000,000 bytes of byte-identical
+content through the downstream server's bounded inline input. A larger result remains a stable file
+and requires a shared-root deployment repair; it is never paged through the model. Each Skill still
+calls exactly one MCP, and no job or resource identifier crosses into Core. Process-scoped job and
+result identifiers are local optimizations, not cross-process authorization or durable handoff
+tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
@@ -161,9 +161,9 @@ The following rules are invariant:
 
 - Raw source evidence is immutable after import.
 - One sequence may have multiple KO records, ranks, or domain-coordinate assignments.
-- A KO set is a derived view of records, not the primary evidence model.
+- In full normalization, a KO set is a derived view of records, not the primary evidence model.
 - The source decision is preserved separately from a named and versioned normalization policy.
-- Normalized states are `accepted`, `uncertain`, `rejected`, `unclassified`, and `invalid`.
+- Normalized states are `accepted`, `rejected`, `unclassified`, and `invalid`.
 - Malformed identifiers and unparsed rows remain visible in the import report.
 - Duplicate and conflicting evidence is reported and never silently collapsed.
 - Scores from different sources or score semantics are not compared as if they shared a scale.
@@ -171,9 +171,24 @@ The following rules are invariant:
 - All analysis parameters, algorithm versions, source versions, and KEGG retrieval provenance are
   serializable.
 
-Strict analysis uses accepted K numbers only. Lenient analysis uses accepted plus records that a
-documented policy explicitly classifies as uncertain. Rejected or merely below-threshold
-predictions never enter lenient analysis by default.
+Every MODULE, pathway, ranking, comparison, and rendering workflow uses one sorted unique set of
+accepted K numbers. Rejected, unclassified, invalid, and below-threshold predictions never enter
+analysis.
+
+Full normalization is the evidence-preserving operation and retains annotation records,
+protein-to-KO mappings, raw decisions and score evidence, and duplicate/conflict accounting. The
+high-level `analyze_ko_annotations` workflow always uses a compact `KoAnalysisView` with sorted
+unique accepted K numbers, aggregate counts, source and policy provenance, and bounded diagnostics.
+It intentionally does not retain record evidence, protein-to-KO mappings, or duplicate/conflict
+accounting. Allowed DeepKOALA detailed-file intake streams at most 1 GiB, 10 million source rows,
+and 20 million expanded assignments into at most 100,000 unique accepted K numbers. Other
+supported inputs produce the same analysis view under their applicable importer limits.
+
+Compact intake does not increase KEGG request, relationship-row, reference-loading,
+target-ranking, report, or output budgets. A view can fit its local limits while automatic
+KO-to-target mapping exceeds its own budget;
+callers then provide bounded explicit MODULE/pathway targets or split the input into scientifically
+independent analysis units rather than merging ad hoc shards.
 
 A K number assignment is an annotation, not experimental validation. A rejected assignment is not
 evidence that the function is biologically absent. Community or mixed-sample results describe
@@ -244,7 +259,7 @@ The Core query layer exposes seven focused capabilities:
   multiple memberships when requested, reports unmatched entities, and uses descriptive
   unique-input counts without enrichment or abundance weighting.
 - `audit_annotation_mapping` summarizes normalized evidence, duplicate and conflicting
-  assignments, strict and lenient mapping yields across caller-selected fixed KEGG relationship
+  assignments, accepted-KO mapping yields across caller-selected fixed KEGG relationship
   classes, unmapped K numbers, retrieval provenance, and missing or mixed source metadata warnings.
   Its separable remote mapping phase may be omitted, skipped at a preflight request limit, or
   stopped cleanly at aggregate row/response limits without discarding the local evidence audit or
@@ -321,15 +336,15 @@ support an organism-specific pathway claim.
 `PathwaySpec` validates the namespace, canonicalizes an omitted `map` view to `ko`, and
 de-duplicates paired views by pathway number. Global and overview references require explicit core
 analysis opt-in and a warning. A canonical KO target with an evaluated denominator and complete
-detected evidence is renderable through the version 4 handoff; `map` and organism references remain
+detected evidence is renderable through the version 6 handoff; `map` and organism references remain
 summary-only renderer targets.
 
 Pathway output does not contain `pathway_present`. Coverage must not be described as pathway
 presence, completeness, expression, activity, flux, phenotype, or experimental validation.
 
 When the high-level service receives no explicit MODULE or pathway target, it independently selects
-up to five MODULEs and five canonical KO reference pathways. Ranking uses the number of unique K
-numbers selected by the requested evidence mode and the canonical target identifier as the stable
+up to five MODULEs and five canonical KO reference pathways. Ranking uses the number of unique
+accepted K numbers and the canonical target identifier as the stable
 tie-breaker. Automatic pathway selection directly excludes the current KEGG Global, Overview, and
 higher-level Overview KO map identifiers before Top-N truncation and fills the selection from the
 next ranked regular references. The fixed identifier set was checked against the official KEGG
@@ -348,10 +363,16 @@ The core MCP server uses stdio transport. Protocol messages are the only stdout 
 diagnostics use stderr or a configured file. All tool inputs and outputs use explicit schemas,
 schema-conforming `structuredContent`, bounded text summaries, and accurate MCP annotations.
 
-`analyze_ko_annotations` is the common one-call workflow. It imports evidence once, performs
+`analyze_ko_annotations` is the common one-call workflow. It builds one compact analysis view,
 bounded optional Top-N selection, loads only required references, evaluates requested targets,
 retains complete bounded artifacts, and optionally writes a durable output bundle. Narrower tools
 reuse the same service and domain functions.
+
+For an allowed DeepKOALA detailed file, the workflow consumes the pinned descriptor once and
+carries `KoAnalysisView` through ranking, analysis, reporting, bundle construction, and rendering
+handoff. Other supported inputs are reduced to the same view. It is a first-class compact contract,
+never a fabricated `AnnotationDataset`; reports disclose that record-level evidence, protein
+mapping, and duplicate/conflict accounting are unavailable.
 
 The bounded retrieval/card, search, resolver, relation-trace, BRITE, mapping-audit, local
 snapshot-comparison, selected-reference export, and input-handoff tools are separate
@@ -392,7 +413,18 @@ The companion owns allowed-root FASTA validation, one deployment-wide runner lea
 subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the configured checkout's CLI
 and device-resolver contract plus its target interpreter platform, bounded polling and cleanup, and
 stable `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves
-detailed source evidence and resolved model provenance; it never normalizes K numbers.
+detailed source evidence and resolved model provenance; it never normalizes K numbers. Before a
+version 2 handoff is published, private in-memory FASTA IDs are compared with every output row:
+single-domain output requires exactly `topk` rows per input ID, while multi-domain output requires at
+least one row per input ID and permits additional domain or top-k rows. Only aggregate coverage
+counts enter the handoff and report. The companion continues to cap its generated detailed CSV at
+1 GiB and uses bounded-memory validation and no-replace publication. Core streams the stable allowed
+file under matching byte and row limits. The supported suite installer requires Core's allowed
+roots to cover every DeepKOALA output root. Core retains the original FASTA path as provenance
+without opening it under annotation-file path policy. A manual deployment whose output root is
+disjoint can use resource-to-inline recovery only when the successful output is at most 5,000,000
+bytes. Larger disjoint-root outputs require an explicit shared-root deployment repair and are never
+paged through the model or sent as inline MCP JSON.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The
@@ -401,9 +433,10 @@ configuration, tool, lifecycle, and detailed handoff behavior.
 
 ## Renderer contract
 
-The renderer consumes the Core's immutable `render_input.json` schema version 4 and
-`AnalysisExecutionProvenance` version 3. It never normalizes annotations, chooses a second KO
-policy, or recomputes MODULE completion, block coverage, pathway denominators, or coverage ratios.
+The renderer consumes the Core's immutable `render_input.json` schema version 6 and
+`AnalysisExecutionProvenance` version 5. It never normalizes annotations, chooses another KO
+selection policy, or recomputes MODULE completion, block coverage, pathway denominators, or
+coverage ratios.
 It produces bounded static regular-pathway box overlays, explicitly opted-in canonical KO
 global/overview line overlays, and project-owned MODULE logic diagrams. Broad maps remain excluded
 from automatic Top-N selection and carry conservative descriptive warnings when explicitly used.
@@ -494,7 +527,8 @@ on 2026-07-31:
 - [KEGG Mapper](https://www.kegg.jp/kegg/mapper/) and
   [KEGG Syntax KO sequence](https://www.kegg.jp/kegg/syntax/synteny.html)
 
-DeepKOALA behavior and detailed-output fields were reviewed again on 2026-08-01. The explicit
+DeepKOALA behavior, detailed-output fields, and per-input output cardinality were reviewed again on
+2026-08-09. The explicit
 CPU/CUDA/MPS device choices, Apple Silicon instructions, optional multi-domain CLI, HMMER invocation
 boundary, and short-sequence output were reviewed against official commit
 `bebbe0c43f50a26488f7092f6b355aae870a4ed9`:
@@ -503,15 +537,20 @@ boundary, and short-sequence output were reviewed against official commit
   [official repository](https://github.com/zhaoxi120/deepkoala)
 - [official CLI](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/cli.py) and
   [device resolver](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/utils.py) and
+  [single-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer.py) and
   [multi-domain implementation](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/deepkoala/infer_multi.py)
 
 The official `frag` versus `full` usage descriptions were reviewed again on 2026-07-22 against the
 [official repository README](https://github.com/zhaoxi120/deepkoala/blob/bebbe0c43f50a26488f7092f6b355aae870a4ed9/README.md).
 
-MCP tool and resource contracts were reviewed on 2026-07-16 against the 2025-06-18 specification:
+MCP tool and resource contracts were reviewed again on 2026-08-09 against the 2025-11-25
+specification:
 
-- [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) and
-  [resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
+- [MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) and
+  [resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
+
+CI interpreter selection was reviewed on 2026-08-09 against the official
+[setup-uv action](https://github.com/astral-sh/setup-uv) documentation.
 
 Codex Skill, repository-guidance, and generated-plugin behavior was reviewed again on 2026-07-23:
 

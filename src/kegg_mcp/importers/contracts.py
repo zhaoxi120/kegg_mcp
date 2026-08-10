@@ -6,6 +6,15 @@ from typing import Annotated, Self
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
+from kegg_mcp.domain.analysis_view import (
+    MAX_ANALYSIS_VIEW_COLUMNS,
+    MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
+    MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
+    MAX_ANALYSIS_VIEW_FIELD_LENGTH,
+    MAX_ANALYSIS_VIEW_INPUT_BYTES,
+    MAX_ANALYSIS_VIEW_INPUT_ROWS,
+    MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
+)
 from kegg_mcp.domain.annotations import (
     MAX_EVIDENCE_STRING_CHARACTERS,
     EvidenceField,
@@ -51,6 +60,53 @@ class ImportLimits(FrozenModel):
     max_rows: ImportLimitValue
     max_columns: ImportLimitValue
     max_field_length: ImportFieldLength
+
+
+class AnalysisViewImportLimits(FrozenModel):
+    """Deployment-owned bounds for streaming compact analysis-view intake."""
+
+    max_bytes: int = Field(
+        default=MAX_ANALYSIS_VIEW_INPUT_BYTES,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_INPUT_BYTES,
+    )
+    max_rows: int = Field(
+        default=MAX_ANALYSIS_VIEW_INPUT_ROWS,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_INPUT_ROWS,
+    )
+    max_expanded_assignments: int = Field(
+        default=MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_EXPANDED_ASSIGNMENTS,
+    )
+    max_unique_ko_ids: int = Field(
+        default=MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_UNIQUE_KO_IDS,
+    )
+    max_columns: int = Field(
+        default=MAX_ANALYSIS_VIEW_COLUMNS,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_COLUMNS,
+    )
+    max_field_length: int = Field(
+        default=MAX_ANALYSIS_VIEW_FIELD_LENGTH,
+        strict=True,
+        gt=0,
+        le=MAX_ANALYSIS_VIEW_FIELD_LENGTH,
+    )
+    max_diagnostic_preview: int = Field(
+        default=MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
+        strict=True,
+        ge=0,
+        le=MAX_ANALYSIS_VIEW_DIAGNOSTIC_PREVIEW,
+    )
 
 
 class SourceProvenanceInput(FrozenModel):

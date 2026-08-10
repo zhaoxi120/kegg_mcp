@@ -9,7 +9,6 @@ from kegg_mcp.domain import (
     USER_SUPPLIED_KO,
     DiagnosticCode,
     ErrorCode,
-    EvidenceMode,
     KeggMcpError,
     NormalizedStatus,
     ScoreType,
@@ -48,11 +47,11 @@ def _full_mapping() -> GenericColumnMapping:
     )
 
 
-def test_generic_csv_preserves_all_columns_and_policy_defined_uncertainty() -> None:
+def test_generic_csv_preserves_raw_unknown_decisions_but_selects_only_accepted_kos() -> None:
     payload = (
         "sample,sequence,ko,decision,score,threshold,rank,start,end,note\n"
         's1,p1,K00001,accepted,0.9,0.5,1,1,100,"alpha,beta"\n'
-        "s1,p1,K00002,uncertain,0.4,0.5,2,101,200,second\n"
+        "s1,p1,K00002,mystery,0.4,0.5,2,101,200,second\n"
         "s1,p2,K00003,rejected,0.2,0.5,1,1,50,third\n"
         "s1,p3,K00004,mystery,0.8,0.5,1,5,60,fourth\n"
     )
@@ -69,11 +68,10 @@ def test_generic_csv_preserves_all_columns_and_policy_defined_uncertainty() -> N
     assert [record.sequence_id for record in dataset.records[:2]] == ["p1", "p1"]
     assert [record.rank for record in dataset.records[:2]] == [1, 2]
     assert dataset.records[0].evidence.get("note") == "alpha,beta"
-    assert dataset.records[1].raw_decision == "uncertain"
-    assert dataset.records[1].normalized_status is NormalizedStatus.UNCERTAIN
+    assert dataset.records[1].raw_decision == "mystery"
+    assert dataset.records[1].normalized_status is NormalizedStatus.UNCLASSIFIED
     assert dataset.records[3].normalized_status is NormalizedStatus.UNCLASSIFIED
-    assert select_ko_ids(view, EvidenceMode.STRICT) == ("K00001",)
-    assert select_ko_ids(view, EvidenceMode.LENIENT) == ("K00001", "K00002")
+    assert select_ko_ids(view) == ("K00001",)
     assert any(
         issue.code is DiagnosticCode.UNRECOGNIZED_SOURCE_DECISION
         for issue in dataset.import_report.diagnostics

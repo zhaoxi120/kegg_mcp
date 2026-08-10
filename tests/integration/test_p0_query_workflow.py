@@ -137,12 +137,12 @@ class _RouteTransport:
 
 
 def _audit_link_body(path: str) -> bytes:
-    suffix = "/K00844+K01810"
+    suffix = "/K00844"
     if not path.endswith(suffix):
         raise AssertionError(f"unexpected synthetic KEGG LINK route: {path}")
     target = path.removesuffix(suffix).removeprefix("/link/")
     if target == "pathway":
-        return b"ko:K00844\tpath:ko00010\nko:K01810\tpath:ko00020\n"
+        return b"ko:K00844\tpath:ko00010\n"
     targets = {
         "module": b"md:M00001",
         "reaction": b"rn:R01786",
@@ -252,7 +252,7 @@ async def test_query_workflow_through_mcp_and_real_client(
                     "text": (
                         "sequence,ko,decision\n"
                         "p1,K00844,accepted\n"
-                        "p2,K01810,uncertain\n"
+                        "p2,K01810,unclassified\n"
                         "p3,K00001,rejected\n"
                     ),
                     "input_format": "generic_csv",
@@ -539,19 +539,15 @@ async def test_query_workflow_through_mcp_and_real_client(
                 },
             )
         )
-        assert audited["evidence"]["strict_unique_ko_count"] == 1
-        assert audited["evidence"]["lenient_unique_ko_count"] == 2
+        assert audited["evidence"]["accepted_unique_ko_count"] == 1
         assert audited["mapping_execution"]["status"] == "completed"
-        assert audited["lenient_only_ko_count"] == 1
-        assert audited["mappings"][0]["strict"]["mapped_unique_ko_count"] == 1
-        assert audited["mappings"][0]["lenient"]["mapped_unique_ko_count"] == 2
+        assert audited["mappings"][0]["mapping"]["mapped_unique_ko_count"] == 1
         assert audited["retrieval"]["batch_count"] == 5
         assert audited["warning_count"] >= len(audited["warning_preview"])
         audit_artifacts = await _read_all_artifacts(session, audited)
         audit_detail = json.loads(audit_artifacts["detail"])
-        assert audit_detail["strict_ko_ids"] == ["K00844"]
-        assert audit_detail["lenient_only_ko_ids"] == ["K01810"]
-        assert audit_detail["detail"]["lenient_only_ko_preview"] == ["K01810"]
+        assert audit_detail["accepted_ko_ids"] == ["K00844"]
+        assert audit_detail["accepted_without_any_audited_relationship"] == []
         warning_codes = {warning["code"] for warning in audit_detail["detail"]["warnings"]}
         assert "incomplete_assembly_context" in warning_codes
         assert "contamination_context" in warning_codes

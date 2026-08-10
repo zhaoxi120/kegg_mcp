@@ -106,7 +106,7 @@ rate_limit_root = {json.dumps(str(paths["rate"]))}
 {extra.get("kegg", "")}
 [core]
 result_store_path = {json.dumps(str(paths["private"] / "core-results.sqlite3"))}
-allowed_roots = [{json.dumps(str(paths["shared"]))}]
+allowed_roots = [{json.dumps(str(paths["output"]))}]
 {extra.get("core", "")}
 [deepkoala]
 state_root = {json.dumps(str(paths["deep_state"]))}
@@ -117,7 +117,7 @@ cpu_threads = 2
 {extra.get("deepkoala", "")}
 [renderer]
 state_root = {json.dumps(str(paths["render_state"]))}
-allowed_roots = [{json.dumps(str(paths["shared"]))}]
+allowed_roots = [{json.dumps(str(paths["output"]))}]
 offline_allow_stale = false
 {extra.get("renderer", "")}
 """
@@ -257,6 +257,7 @@ def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path
 
     assert config.kegg.rate_limit_root == paths["rate"].resolve()
     assert config.core.result_store_path == (core_state / "results.sqlite3").resolve()
+    assert config.core.allowed_roots == (paths["output"].resolve(),)
     assert config.deepkoala.input_roots == (paths["input"].resolve(),)
     assert config.deepkoala.output_roots == (paths["output"].resolve(),)
     assert config.renderer.allowed_roots == (paths["output"].resolve(),)
@@ -454,6 +455,38 @@ def test_deployment_config_rejects_nonwritable_private_state(tmp_path: Path) -> 
         INSTALLER_MODULE._load_deployment_config(config)
 
     assert raised.value.code == "deployment_path_invalid"
+
+
+def test_deployment_config_does_not_require_core_to_cover_deepkoala_input_root(
+    tmp_path: Path,
+) -> None:
+    config_path, paths = _write_config(tmp_path)
+
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+
+    assert config.core.allowed_roots == (paths["output"].resolve(),)
+    assert config.deepkoala.input_roots == (paths["input"].resolve(),)
+    assert not paths["input"].resolve().is_relative_to(config.core.allowed_roots[0])
+
+
+def test_deployment_config_requires_core_to_cover_deepkoala_output_root(
+    tmp_path: Path,
+) -> None:
+    config, paths = _write_config(tmp_path)
+    unshared_output = _mkdir(tmp_path / "unshared-output")
+    document = config.read_text(encoding="utf-8").replace(
+        f"output_roots = [{json.dumps(str(paths['output']))}]",
+        f"output_roots = [{json.dumps(str(unshared_output))}]",
+        1,
+    )
+    config.write_text(document, encoding="utf-8")
+    config.chmod(0o600)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config)
+
+    assert raised.value.code == "deployment_path_invalid"
+    assert str(raised.value) == "core.allowed_roots must cover every DeepKOALA output root"
 
 
 def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path) -> None:

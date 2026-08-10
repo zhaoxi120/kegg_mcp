@@ -11,15 +11,23 @@ import os
 import re
 import secrets
 import stat
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
+
+from typing_extensions import Buffer
 
 from deepkoala_mcp.contracts import (
     ANNOTATIONS_FILENAME,
     JOB_ID_PATTERN,
+    MAX_OUTPUT_BYTES,
+    MAX_OUTPUT_ROWS,
     MAX_RESOURCE_PAGE_BYTES,
     MAX_RETAINED_JOBS,
+    MAX_SEQUENCE_COUNT,
     RUN_REPORT_FILENAME,
+    AnnotationOutputCoverage,
 )
 
 _JOB = re.compile(rf"^{JOB_ID_PATTERN}$")
@@ -35,6 +43,14 @@ _MAX_STATE_ROOT_ENTRIES = _MAX_SESSIONS + 2
 _MAX_SESSION_ENTRIES = MAX_RETAINED_JOBS + 1
 _DELIVERED_ARTIFACTS = (ANNOTATIONS_FILENAME, RUN_REPORT_FILENAME)
 _REQUIRED_COLUMNS = frozenset({"name", "predict_label", "probability", "threshold", "annotate"})
+_MAX_CSV_FIELD_CHARACTERS = 16_384
+_MAX_CSV_COLUMN_NAME_CHARACTERS = 256
+_MAX_CSV_COLUMNS = 64
+_MAX_CSV_LOGICAL_RECORD_CHARACTERS = _MAX_CSV_COLUMNS * (2 * _MAX_CSV_FIELD_CHARACTERS + 3) + 2
+_MAX_EXPANDED_ASSIGNMENTS = 20_000_000
+_COMPOSITE_KO_LABEL = re.compile(r"K[0-9]{5}(?:[ \t]*\+[ \t]*K[0-9]{5})+\Z")
+_COPY_CHUNK_BYTES = 65_536
+_MAX_RESOURCE_OFFSET = MAX_OUTPUT_BYTES - 1
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _FILE_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
@@ -51,12 +67,49 @@ class OutputValidationError(RuntimeError):
     """Runner output or a delivered artifact is missing, unsafe, or malformed."""
 
 
+class _InitialSizeReader(io.RawIOBase):
+    """Read at most the exact descriptor size pinned before validation."""
+
+    def __init__(self, descriptor: int, expected_bytes: int) -> None:
+        super().__init__()
+        self._descriptor = descriptor
+        self._expected_bytes = expected_bytes
+        self.bytes_read = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Buffer, /) -> int:
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+        view = memoryview(buffer)
+        remaining = self._expected_bytes - self.bytes_read
+        if remaining <= 0:
+            return 0
+        chunk = os.read(self._descriptor, min(len(view), _COPY_CHUNK_BYTES, remaining))
+        if not chunk:
+            return 0
+        self.bytes_read += len(chunk)
+        view[: len(chunk)] = chunk
+        return len(chunk)
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactSlice:
     """One bounded immutable file slice and the observed total size."""
 
     content: bytes
     total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedDetailedCsv:
+    """One immutable validated output payload and its aggregate identity coverage."""
+
+    source_path: Path = field(repr=False)
+    source_identity: tuple[int, int, int, int, int] = field(repr=False)
+    output_bytes: int
+    coverage: AnnotationOutputCoverage
 
 
 @dataclass(slots=True)
@@ -209,16 +262,15 @@ def create_output_directory(
 
 def publish_artifacts(
     *,
-    raw_output: Path,
+    validated_output: _ValidatedDetailedCsv,
     output_directory: ControlledOutputDirectory,
-    report: str,
+    report_builder: Callable[[], str],
     max_output_bytes: int,
 ) -> tuple[Path, Path, int]:
-    """Validate detailed CSV and atomically publish both stable named artifacts."""
-    annotations, output_bytes = _validated_detailed_csv(raw_output, max_output_bytes)
-    report_bytes = report.encode("utf-8")
-    if not report_bytes or len(report_bytes) > _MAX_REPORT_BYTES:
-        raise OutputValidationError("run report exceeds the bounded size")
+    """Atomically publish one validated CSV, then build and publish its small report."""
+    output_bytes = validated_output.output_bytes
+    if output_bytes > max_output_bytes or validated_output.source_identity[2] != output_bytes:
+        raise OutputValidationError("validated output exceeds the publication bound")
     directory_fd = _open_controlled_directory(output_directory)
     installed_identities: list[tuple[str, tuple[int, int, int, int, int]]] = []
     try:
@@ -227,9 +279,18 @@ def publish_artifacts(
         installed_identities.append(
             (
                 ANNOTATIONS_FILENAME,
-                _write_noreplace(directory_fd, ANNOTATIONS_FILENAME, annotations),
+                _copy_noreplace(
+                    directory_fd,
+                    ANNOTATIONS_FILENAME,
+                    validated_output.source_path,
+                    expected_identity=validated_output.source_identity,
+                    max_bytes=max_output_bytes,
+                ),
             )
         )
+        report_bytes = report_builder().encode("utf-8")
+        if not report_bytes or len(report_bytes) > _MAX_REPORT_BYTES:
+            raise OutputValidationError("run report exceeds the bounded size")
         installed_identities.append(
             (
                 RUN_REPORT_FILENAME,
@@ -255,6 +316,9 @@ def publish_artifacts(
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
         _rollback_published_artifacts(directory_fd, tuple(installed_identities))
         raise OutputValidationError("stable output publication failed") from error
+    except BaseException:
+        _rollback_published_artifacts(directory_fd, tuple(installed_identities))
+        raise
     finally:
         os.close(directory_fd)
     return (
@@ -291,7 +355,7 @@ def read_artifact_slice(
     limit: int,
 ) -> ArtifactSlice:
     """Read one bounded byte range from a direct stable regular file."""
-    if offset < 0 or not 1 <= limit <= MAX_RESOURCE_PAGE_BYTES:
+    if offset < 0 or offset > _MAX_RESOURCE_OFFSET or not 1 <= limit <= MAX_RESOURCE_PAGE_BYTES:
         raise OutputValidationError("artifact range is outside the supported bounds")
     directory_fd = _open_controlled_directory(output_directory)
     try:
@@ -384,7 +448,23 @@ def close_output_directory(output_directory: ControlledOutputDirectory) -> None:
         os.close(descriptor)
 
 
-def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
+def _validate_detailed_csv(  # pyright: ignore[reportUnusedFunction]
+    path: Path,
+    max_bytes: int,
+    *,
+    expected_sequence_ids: frozenset[str],
+    multi: bool,
+    topk: int,
+) -> _ValidatedDetailedCsv:
+    """Validate detailed evidence and prove exact input-sequence identity coverage."""
+    if (
+        not expected_sequence_ids
+        or len(expected_sequence_ids) > MAX_SEQUENCE_COUNT
+        or any(not identifier for identifier in expected_sequence_ids)
+    ):
+        raise ValueError("expected FASTA identifiers are outside the internal bounds")
+    if not 1 <= topk <= 10:
+        raise ValueError("output coverage policy is outside the execution bounds")
     named = _artifact_metadata(path, max_bytes)
     descriptor = os.open(
         path,
@@ -394,26 +474,119 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
         before = os.fstat(descriptor)
         if _file_identity(named) != _file_identity(before):
             raise OutputValidationError("DeepKOALA output changed before validation")
-        content = bytearray()
-        while len(content) <= max_bytes:
-            chunk = os.read(descriptor, min(65_536, max_bytes + 1 - len(content)))
-            if not chunk:
-                break
-            content.extend(chunk)
+        raw_stream = _InitialSizeReader(descriptor, before.st_size)
+        with io.TextIOWrapper(
+            io.BufferedReader(raw_stream, buffer_size=_COPY_CHUNK_BYTES),
+            encoding="utf-8-sig",
+            errors="strict",
+            newline="",
+        ) as stream:
+            reader = csv.reader(_bounded_text_lines(stream), strict=True)
+            header = next(reader)
+            rows, output_counts = _validate_detailed_rows(
+                reader,
+                header,
+                expected_sequence_ids=expected_sequence_ids,
+                multi=multi,
+                topk=topk,
+            )
+        if raw_stream.bytes_read != before.st_size:
+            raise OutputValidationError("DeepKOALA output changed during validation")
         after = os.fstat(descriptor)
-        if len(content) > max_bytes or _file_identity(before) != _file_identity(after):
-            raise OutputValidationError("DeepKOALA output changed or exceeded its limit")
+        if _file_identity(before) != _file_identity(after):
+            raise OutputValidationError("DeepKOALA output changed during validation")
+    except (UnicodeError, csv.Error, StopIteration, ValueError) as error:
+        raise OutputValidationError("DeepKOALA detailed CSV is malformed") from error
     except OSError as error:
         raise OutputValidationError("DeepKOALA output could not be read safely") from error
     finally:
         os.close(descriptor)
 
+    coverage = AnnotationOutputCoverage(
+        input_sequence_count=len(expected_sequence_ids),
+        output_row_count=rows,
+        distinct_output_sequence_count=len(output_counts),
+    )
+    return _ValidatedDetailedCsv(
+        source_path=path,
+        source_identity=_file_identity(named),
+        output_bytes=named.st_size,
+        coverage=coverage,
+    )
+
+
+def _bounded_text_lines(stream: TextIO) -> Iterator[str]:
+    """Yield physical lines while bounding each complete logical CSV record."""
+    logical_characters = 0
+    column_count = 1
+    at_field_start = True
+    in_quotes = False
+    while True:
+        remaining = _MAX_CSV_LOGICAL_RECORD_CHARACTERS - logical_characters
+        line = stream.readline(remaining + 1)
+        if not line:
+            return
+        if len(line) > remaining:
+            raise OutputValidationError("DeepKOALA detailed CSV has an oversized logical record")
+        logical_characters += len(line)
+
+        if line.endswith("\r\n"):
+            content = line[:-2]
+            has_line_ending = True
+        elif line.endswith(("\r", "\n")):
+            content = line[:-1]
+            has_line_ending = True
+        else:
+            content = line
+            has_line_ending = False
+
+        index = 0
+        while index < len(content):
+            character = content[index]
+            if in_quotes:
+                if character == '"':
+                    if index + 1 < len(content) and content[index + 1] == '"':
+                        index += 2
+                        continue
+                    in_quotes = False
+                index += 1
+                continue
+            if at_field_start and character == '"':
+                in_quotes = True
+                at_field_start = False
+            elif character == ",":
+                column_count += 1
+                if column_count > _MAX_CSV_COLUMNS:
+                    raise OutputValidationError("DeepKOALA detailed CSV exceeds the column limit")
+                at_field_start = True
+            else:
+                at_field_start = False
+            index += 1
+
+        yield line
+        if has_line_ending and not in_quotes:
+            logical_characters = 0
+            column_count = 1
+            at_field_start = True
+
+
+def _validate_detailed_rows(
+    reader: Iterator[list[str]],
+    header: list[str],
+    *,
+    expected_sequence_ids: frozenset[str],
+    multi: bool,
+    topk: int,
+) -> tuple[int, dict[str, int]]:
+    """Validate streamed detailed rows and return bounded aggregate identity accounting."""
     try:
-        text = bytes(content).decode("utf-8-sig")
-        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
-        header = next(reader)
         if (
             not header
+            or len(header) > _MAX_CSV_COLUMNS
+            or any(
+                not value or len(value) > _MAX_CSV_COLUMN_NAME_CHARACTERS or "\x00" in value
+                for value in header
+            )
             or len(header) != len(set(header))
             or not _REQUIRED_COLUMNS.issubset(header)
             or (("start" in header) != ("end" in header))
@@ -424,14 +597,46 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
             (header.index("start"), header.index("end")) if "start" in header else None
         )
         rows = 0
+        expanded_assignments = 0
+        output_counts: dict[str, int] = {}
         for row in reader:
             if len(row) != len(header):
                 raise OutputValidationError("DeepKOALA detailed CSV has a malformed row")
             rows += 1
-            if not row[indexes["name"]]:
+            if rows > MAX_OUTPUT_ROWS:
+                raise OutputValidationError("DeepKOALA detailed CSV exceeds the output row limit")
+            if any(len(value) > _MAX_CSV_FIELD_CHARACTERS for value in row):
+                raise OutputValidationError("DeepKOALA detailed CSV exceeds the field limit")
+            if any("\x00" in value for value in row):
+                raise OutputValidationError("DeepKOALA detailed CSV contains binary content")
+            sequence_id = row[indexes["name"]]
+            if not sequence_id:
                 raise OutputValidationError("DeepKOALA detailed CSV has a missing identifier")
+            if sequence_id not in expected_sequence_ids:
+                raise OutputValidationError(
+                    "DeepKOALA detailed CSV contains an unexpected sequence identifier"
+                )
+            output_counts[sequence_id] = output_counts.get(sequence_id, 0) + 1
+            if not multi and output_counts[sequence_id] > topk:
+                raise OutputValidationError(
+                    "DeepKOALA single-domain output exceeds the requested top-k row count"
+                )
             prediction = row[indexes["predict_label"]]
+            candidate = prediction.strip()
+            expanded_assignments += (
+                candidate.count("+") + 1
+                if _COMPOSITE_KO_LABEL.fullmatch(candidate) is not None
+                else 1
+            )
+            if expanded_assignments > _MAX_EXPANDED_ASSIGNMENTS:
+                raise OutputValidationError(
+                    "DeepKOALA detailed CSV exceeds the expanded assignment limit"
+                )
             if not prediction:
+                if not multi:
+                    raise OutputValidationError(
+                        "DeepKOALA single-domain output requires a prediction for every row"
+                    )
                 coordinates = (
                     []
                     if coordinate_indexes is None
@@ -471,11 +676,17 @@ def _validated_detailed_csv(path: Path, max_bytes: int) -> tuple[bytes, int]:
                         )
         if rows == 0:
             raise OutputValidationError("DeepKOALA detailed CSV has no prediction rows")
-    except (UnicodeError, csv.Error, StopIteration, ValueError) as error:
-        if isinstance(error, OutputValidationError):
-            raise
+        if output_counts.keys() != expected_sequence_ids:
+            raise OutputValidationError(
+                "DeepKOALA detailed CSV does not cover every input sequence identifier"
+            )
+        if not multi and any(count != topk for count in output_counts.values()):
+            raise OutputValidationError(
+                "DeepKOALA single-domain output does not contain the requested top-k rows"
+            )
+    except ValueError as error:
         raise OutputValidationError("DeepKOALA detailed CSV is malformed") from error
-    return bytes(content), named.st_size
+    return rows, output_counts
 
 
 def _bounded_probability(value: str) -> float | None:
@@ -498,6 +709,69 @@ def _write_noreplace(
     name: str,
     content: bytes,
 ) -> tuple[int, int, int, int, int]:
+    return _install_noreplace(
+        directory_fd,
+        name,
+        lambda descriptor: _write_all(descriptor, content),
+    )
+
+
+def _copy_noreplace(
+    directory_fd: int,
+    name: str,
+    source_path: Path,
+    *,
+    expected_identity: tuple[int, int, int, int, int],
+    max_bytes: int,
+) -> tuple[int, int, int, int, int]:
+    """Stream one unchanged validated source into a no-replace stable artifact."""
+    named = _artifact_metadata(source_path, max_bytes)
+    source_descriptor = os.open(source_path, _FILE_READ_FLAGS)
+    try:
+        before = os.fstat(source_descriptor)
+        if (
+            _file_identity(named) != expected_identity
+            or _file_identity(before) != expected_identity
+        ):
+            raise OutputValidationError("validated output changed before publication")
+
+        def copy(target_descriptor: int) -> None:
+            copied = 0
+            while chunk := os.read(source_descriptor, _COPY_CHUNK_BYTES):
+                copied += len(chunk)
+                if copied > expected_identity[2]:
+                    raise OutputValidationError("validated output exceeds the publication bound")
+                _write_all(target_descriptor, chunk)
+            current = os.fstat(source_descriptor)
+            current_named = _artifact_metadata(source_path, max_bytes)
+            if (
+                copied != expected_identity[2]
+                or _file_identity(current) != expected_identity
+                or _file_identity(current_named) != expected_identity
+            ):
+                raise OutputValidationError("validated output changed during publication")
+
+        return _install_noreplace(directory_fd, name, copy)
+    except OSError as error:
+        raise OutputValidationError("validated output could not be published safely") from error
+    finally:
+        os.close(source_descriptor)
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError("artifact write made no progress")
+        remaining = remaining[written:]
+
+
+def _install_noreplace(
+    directory_fd: int,
+    name: str,
+    writer: Callable[[int], None],
+) -> tuple[int, int, int, int, int]:
     temporary = f".deepkoala-{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
@@ -507,10 +781,8 @@ def _write_noreplace(
     linked_inode: tuple[int, int] | None = None
     identity: tuple[int, int, int, int, int] | None = None
     try:
-        with os.fdopen(descriptor, "wb", closefd=False) as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
+        writer(descriptor)
+        os.fsync(descriptor)
         os.link(
             temporary,
             name,

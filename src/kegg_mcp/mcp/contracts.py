@@ -10,7 +10,7 @@ from pydantic_core import PydanticCustomError
 
 from kegg_mcp.analysis.pathway_coverage import PathwayReferenceNamespace
 from kegg_mcp.analysis.pathway_ranking import PathwaySelection
-from kegg_mcp.domain.annotations import AnalysisUnit, EvidenceMode, FrozenModel, ModuleId
+from kegg_mcp.domain.annotations import AnalysisUnit, FrozenModel, ModuleId
 from kegg_mcp.domain.errors import ErrorDetail
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.importers.contracts import MAX_ANNOTATION_DATE_CHARACTERS
@@ -188,7 +188,6 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
         ),
     )
     sample_id: str = Field(default="sample-1", min_length=1, max_length=256)
-    pathway_evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
     output_directory: str | None = Field(
         default=None,
@@ -329,7 +328,6 @@ class AnalyzePathwaysInput(FrozenModel):
 
     source: DatasetSource
     pathways: Annotated[tuple[PathwaySpec, ...], Field(min_length=1, max_length=25)]
-    evidence_mode: EvidenceMode = EvidenceMode.STRICT
     allow_global_or_overview: bool = False
 
     @field_validator("pathways")
@@ -505,7 +503,7 @@ def constrain_mcp_output_schema(schema: dict[str, object]) -> None:
                 cast(dict[str, object], limit_schema)["maximum"] = 100
     maxima = {
         "KoPreview": {"ko_ids": 100},
-        "KoClassComparisonSummary": {
+        "KoMembershipComparisonSummary": {
             "set_specific": 10,
             "partially_shared_patterns_preview": 256,
         },

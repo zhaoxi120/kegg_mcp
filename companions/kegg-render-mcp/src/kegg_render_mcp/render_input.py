@@ -37,14 +37,6 @@ _MAX_OUTPUT_DIRECTORY_BYTES = _MAX_PATH_BYTES - 1 - _MAX_ARTIFACT_NAME_BYTES
 class ValidatedRenderInput:
     document: RenderInput
 
-    @property
-    def accepted_ko_ids(self) -> frozenset[str]:
-        return frozenset(self.document.evidence.accepted_ko_ids)
-
-    @property
-    def uncertain_ko_ids(self) -> frozenset[str]:
-        return frozenset(self.document.evidence.uncertain_ko_ids)
-
     def pathway(self, pathway_id: str) -> PathwayRenderTarget:
         for target in self.document.pathways:
             if target.pathway_id == pathway_id:

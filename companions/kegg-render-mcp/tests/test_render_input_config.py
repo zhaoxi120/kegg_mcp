@@ -274,9 +274,12 @@ def test_render_input_strictly_validates_schema(
     render_input_file: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
-    assert loaded.document.schema_version == "4"
-    assert loaded.accepted_ko_ids == {"K00001"}
-    assert loaded.uncertain_ko_ids == {"K00002"}
+    assert loaded.document.schema_version == "6"
+    assert loaded.document.evidence.accepted_ko_ids == ("K00001", "K00002")
+    status_counts = {
+        item.status.value: item.count for item in loaded.document.evidence.status_counts
+    }
+    assert status_counts["accepted"] == 3
     assert loaded.target_ids == ("ko00010", "M00001")
 
 
@@ -287,7 +290,7 @@ def test_inline_render_input_uses_the_same_bounded_strict_parser(
     payload = render_input_file.read_text(encoding="utf-8")
     loaded = load_render_input(None, runtime_config, render_input_json=payload)
 
-    assert loaded.document.schema_version == "4"
+    assert loaded.document.schema_version == "6"
     assert loaded.target_ids == ("ko00010", "M00001")
     with pytest.raises(RenderMcpError) as ambiguous:
         load_render_input(
@@ -321,7 +324,7 @@ def test_handoff_requires_current_schema_literal(
     runtime_config: RendererRuntimeConfig,
 ) -> None:
     original = json.loads(render_input_file.read_text(encoding="utf-8"))
-    for version in ("unsupported", None):
+    for version in ("5", "unsupported", None):
         payload = dict(original)
         if version is None:
             payload.pop("schema_version")

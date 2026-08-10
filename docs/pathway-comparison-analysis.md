@@ -70,7 +70,7 @@ from being treated as an ordinary default analysis.
 
 ## Descriptive unique-KO coverage
 
-For one evidence mode, coverage is the deterministic set intersection:
+Coverage is the deterministic set intersection over sorted unique accepted K numbers:
 
 ```text
 detected KOs = selected input KOs intersect unique reference KOs
@@ -87,20 +87,18 @@ If the reference contains no K numbers, `evaluation_status` is `not_evaluable`, 
 and detected and missing counts are zero. An empty denominator is never reported as zero coverage,
 pathway absence, or successful evaluation.
 
-Strict and lenient calculations are separate:
-
-- strict selects accepted K numbers only;
-- lenient selects accepted plus policy-defined uncertain K numbers; and
-- rejected, unclassified, and invalid records enter neither mode.
-
-Source-rejected predictions are not silently promoted to lenient evidence. The result records the
-named decision policy, evidence mode, selected and reference KO sets, and their exact counts. A
-caller can recompute the set calculation from the retained immutable dataset and pathway reference.
+Rejected, unclassified, and invalid records do not enter coverage. The result records the named
+decision policy, selected and reference KO sets, and their exact counts. Full normalization lets a
+caller recompute the set calculation from the retained immutable dataset and pathway reference.
+The high-level `KoAnalysisView` retains the selected accepted-KO set and aggregate intake counts but
+intentionally cannot reproduce record-level evidence.
 
 ### Result bounds and provenance
 
-`PathwayCoverageResult` returns exact numerator, denominator, input-record, input-KO, missing,
-exclusion, duplicate, and relationship-row counts. Detected KOs, missing KOs, and excluded
+`PathwayCoverageResult` returns exact numerator, denominator, input-evidence, input-KO, missing,
+exclusion, duplicate, and relationship-row counts. `input_record_count` is the expanded-assignment
+count carried by the compact analysis view. Detected KOs, missing
+KOs, and excluded
 relationship entries are bounded previews with explicit truncation flags and warnings.
 `PathwayCoverageLimits` also bounds input records, input KOs, reference KOs, relationship rows,
 exclusions, dataset sources, provenance batches, and retained classification-evidence lines before
@@ -122,23 +120,10 @@ KO potential and cannot be attributed to one organism.
 
 `compare_ko_datasets` accepts two or more labelled `ComparisonDatasetInput` objects, preserves
 caller order, and requires the same named and versioned normalization policy for every dataset.
-It does not retrieve KEGG data and does not calculate abundance, uncertainty intervals, or
+It does not retrieve KEGG data and does not calculate abundance, confidence intervals, or
 replicate-aware statistics.
 
-The function derives and independently partitions four KO classes:
-
-| Class | Definition |
-| --- | --- |
-| `accepted` | K numbers with accepted evidence. |
-| `uncertain_record` | K numbers with policy-classified uncertain records, including a KO that may also have accepted evidence. |
-| `lenient_additional` | Uncertain-record K numbers not already present in the accepted set. |
-| `lenient` | The union of accepted and uncertain-record K numbers. |
-
-Keeping `uncertain_record` separate from `lenient_additional` prevents an uncertain record for an
-already accepted KO from being misreported as extra lenient support.
-
-For each class, `KoClassPartition` is a complete membership partition within the serialized hard
-limits:
+The function derives one accepted-KO `KoMembershipPartition` within the serialized hard limits:
 
 - `shared_by_all` contains K numbers present in every input;
 - `set_specific` contains one ordered entry per input for K numbers present only there; and
@@ -154,7 +139,8 @@ bounded lexical KO previews, a bounded membership-pattern preview, and explicit 
 complete in-memory detail is passed directly rather than identified by a workflow digest.
 
 Each dataset retains its label, input index, dataset identifier, decision policy, analysis
-unit, taxonomic context, sample labels, source provenance, record count, and four KO-class counts.
+unit, taxonomic context, sample labels, source provenance, record count, and selected unique-KO
+count.
 Different annotation-pipeline, analysis-unit, or taxonomic provenance produces explicit warnings
 without changing deterministic set arithmetic. Mixed or unknown units, pooled community or
 pangenome inputs, MAGs, and inputs pooling several samples receive additional scoped warnings.
@@ -166,12 +152,12 @@ one set of parameters. Comparing previously calculated results with different de
 denominators, retrieval provenance, algorithm versions, or limits would confound evidence
 differences with reference differences.
 
-`compare_module_graphs` evaluates each dataset in strict and lenient modes against the same
+`compare_module_graphs` evaluates each dataset's accepted K numbers against the same
 `ResolvedModuleGraph`. It preserves the shared definition and its provenance,
 calculation method, and analysis limits, and reports ordered outcome/status membership without
 renaming a difference as a biological change.
 
-`compare_pathway_references` evaluates every dataset in strict and lenient modes against each
+`compare_pathway_references` evaluates every dataset's accepted K numbers against each
 supplied immutable `PathwayKoReference` and the same `PathwayCoverageLimits`. Each target retains
 the complete bounded reference, unique-KO denominator, LINK and GET provenance, calculation
 method, and limits. Ordered outcomes report detected-reference-KO counts, denominator counts,
@@ -184,7 +170,7 @@ Its index and label must align with the comparison inputs, and its `OrganismGene
 the exact organism code required by the reference and dataset. KO and map comparisons reject these
 contexts instead of retaining an inapplicable organism claim. Global or overview references use
 one comparison-wide explicit opt-in. Functional comparison limits bound target counts and
-aggregate reference KOs and exclusions before the strict/lenient result matrix is built.
+aggregate reference KOs and exclusions before the accepted-evidence result matrix is built.
 
 Neither workflow reimplements normalization. Outcome differences are reported against the shared
 functional reference and do not replace the complete KO membership partitions.
@@ -230,7 +216,7 @@ reference = build_pathway_reference(
     get_result,
     PathwayReferenceNamespace.KO,
 )
-strict_result = evaluate_pathway_coverage(reference, annotation_dataset)
+coverage_result = evaluate_pathway_coverage(reference, analysis_view)
 
 inputs = (
     ComparisonDatasetInput(label="first", dataset=first_dataset),

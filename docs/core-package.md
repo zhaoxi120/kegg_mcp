@@ -14,8 +14,12 @@ Windows hosts use the Linux distribution through WSL2.
 The server accepts K-number lists, generic CSV/TSV annotation tables, and previously generated
 DeepKOALA detailed output. It:
 
-- preserves source decisions, scores, thresholds, multiple assignments, and provenance;
-- derives accepted-only strict and policy-defined lenient evidence views;
+- preserves source decisions, scores, thresholds, multiple assignments, and provenance during
+  full-record normalization;
+- derives one sorted unique accepted-KO analysis set for MODULE, pathway, ranking, comparison, and
+  rendering workflows;
+- streams allowed DeepKOALA detailed files into the same compact accepted-KO analysis view used by
+  every high-level input while leaving full normalization unchanged;
 - retrieves bounded KEGG `INFO`, organism-pathway `LIST`, `FIND`, `GET`, `LINK`, and `CONV`
   references through a local cache;
 - searches endpoint candidates, projects supported GET entries into deterministic typed cards,
@@ -49,8 +53,24 @@ remain independent stdio processes connected by stable versioned files:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 4 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
 ```
+
+`normalize_ko_annotations` always retains complete bounded evidence.
+`analyze_ko_annotations` always derives a compact sorted unique accepted-KO analysis view. For an
+allowed `annotations.file_path` using `input_format="deepkoala_detailed"`, streaming intake is
+bounded to 1 GiB, 10 million source rows, 20 million expanded assignments, 100,000 unique accepted
+K numbers, 64 columns, 16,384 characters per field, and a 100-item diagnostic preview. The view
+retains aggregate counts and provenance but no record evidence, protein-to-KO mapping, or
+duplicate/conflict accounting. The separate DeepKOALA companion can publish a generated detailed
+CSV up to the same 1 GiB ceiling with bounded-memory validation and publication. The supported suite
+installer ensures the stable output path is covered by Core's allowed roots; Core's inline input
+limit remains separate and smaller.
+
+Compact-view bounds do not change any KEGG request, relationship, reference-loading, ranking, or
+output budget. A large accepted-KO set can still exceed automatic KO-to-target mapping limits;
+callers should provide bounded explicit MODULE/pathway targets when known or split the input into
+scientifically independent analysis units rather than expecting unbounded Top-N ranking.
 
 Use the repository [suite installation guide](installation.md) for the complete Linux or Apple
 Silicon macOS Codex path. Other MCP clients may install and register Core independently on either

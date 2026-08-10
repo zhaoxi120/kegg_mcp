@@ -6,7 +6,7 @@ from typing import Annotated, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from kegg_mcp.analysis.comparison import compare_ko_datasets
+from kegg_mcp.analysis.comparison import compare_ko_datasets_with_views
 from kegg_mcp.analysis.comparison_contracts import (
     ComparisonDatasetInput,
     ComparisonDatasetProvenance,
@@ -24,7 +24,7 @@ from kegg_mcp.analysis.contracts import (
     ModuleReferenceIssue,
     ResolvedModuleGraph,
 )
-from kegg_mcp.analysis.module_evaluation import evaluate_module_pair
+from kegg_mcp.analysis.module_evaluation import evaluate_module
 from kegg_mcp.analysis.pathway_coverage import (
     PATHWAY_COVERAGE_METHOD,
     PATHWAY_COVERAGE_VERSION,
@@ -41,9 +41,9 @@ from kegg_mcp.analysis.pathway_coverage import (
     PathwayReferenceScope,
     evaluate_pathway_coverage,
 )
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
-    EvidenceMode,
     FrozenModel,
     normalize_identifier_label,
 )
@@ -51,9 +51,9 @@ from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggOperation
 
 MODULE_COMPARISON_METHOD = "shared_definition_module_outcome_comparison"
-MODULE_COMPARISON_VERSION = "1"
+MODULE_COMPARISON_VERSION = "2"
 PATHWAY_COMPARISON_METHOD = "shared_reference_pathway_coverage_comparison"
-PATHWAY_COMPARISON_VERSION = "1"
+PATHWAY_COMPARISON_VERSION = "2"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 
@@ -78,7 +78,7 @@ class FunctionalComparisonLimits(FrozenModel):
 
 
 class SetModuleOutcome(FrozenModel):
-    """One dataset's exact MODULE summary under one evidence mode."""
+    """One dataset's exact MODULE summary from accepted unique-KO evidence."""
 
     input_index: NonNegativeCount
     label: str = Field(min_length=1, max_length=128)
@@ -118,10 +118,9 @@ class SetModuleOutcome(FrozenModel):
         return self
 
 
-class ModuleModeComparison(FrozenModel):
-    """Ordered outcomes and status membership for one MODULE evidence mode."""
+class ModuleOutcomeComparison(FrozenModel):
+    """Ordered accepted-evidence outcomes and status membership for one MODULE."""
 
-    evidence_mode: EvidenceMode
     outcomes: Annotated[tuple[SetModuleOutcome, ...], Field(min_length=2)]
     outcomes_differ: bool
     complete_in_set_indexes: tuple[NonNegativeCount, ...]
@@ -130,7 +129,7 @@ class ModuleModeComparison(FrozenModel):
     not_evaluable_in_set_indexes: tuple[NonNegativeCount, ...]
 
     @model_validator(mode="after")
-    def validate_modes(self) -> Self:
+    def validate_outcomes(self) -> Self:
         indexes = tuple(item.input_index for item in self.outcomes)
         if indexes != tuple(range(len(self.outcomes))):
             raise ValueError("MODULE outcomes must retain contiguous comparison input order")
@@ -153,12 +152,11 @@ class ModuleModeComparison(FrozenModel):
 
 
 class ModuleTargetComparison(FrozenModel):
-    """Strict and lenient outcome differences for one shared resolved MODULE graph."""
+    """Accepted-evidence outcome differences for one shared resolved MODULE graph."""
 
     module_id: ModuleId
     module_name: str | None = Field(default=None, max_length=1_000)
-    strict: ModuleModeComparison
-    lenient: ModuleModeComparison
+    comparison: ModuleOutcomeComparison
     module_calculation_method: CalculationMethodReference
     definition_provenance: Annotated[
         tuple[EvaluatedDefinitionProvenance, ...],
@@ -173,14 +171,6 @@ class ModuleTargetComparison(FrozenModel):
 
     @model_validator(mode="after")
     def validate_target(self) -> Self:
-        if self.strict.evidence_mode is not EvidenceMode.STRICT:
-            raise ValueError("strict MODULE comparison requires strict outcomes")
-        if self.lenient.evidence_mode is not EvidenceMode.LENIENT:
-            raise ValueError("lenient MODULE comparison requires lenient outcomes")
-        if tuple(item.label for item in self.strict.outcomes) != tuple(
-            item.label for item in self.lenient.outcomes
-        ):
-            raise ValueError("strict and lenient MODULE outcomes must use the same input order")
         provenance_ids = tuple(item.module_id for item in self.definition_provenance)
         if self.module_id not in provenance_ids:
             raise ValueError("MODULE comparison provenance must include the root definition")
@@ -197,7 +187,7 @@ class ModuleComparisonResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:module-comparison-result:2",
+            "$id": "urn:kegg-mcp:schema:module-comparison-result:3",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -219,7 +209,7 @@ class ModuleComparisonResult(FrozenModel):
             raise ValueError("MODULE targets exceed the recorded functional comparison limit")
         labels = tuple(item.label for item in self.datasets)
         for target in self.targets:
-            if tuple(item.label for item in target.strict.outcomes) != labels:
+            if tuple(item.label for item in target.comparison.outcomes) != labels:
                 raise ValueError("MODULE comparison target inputs must match dataset order")
         if self.calculation_method != CalculationMethodReference(
             name=MODULE_COMPARISON_METHOD,
@@ -243,7 +233,7 @@ class PathwayComparisonOrganismContext(FrozenModel):
 
 
 class SetPathwayOutcome(FrozenModel):
-    """One dataset's exact descriptive pathway outcome under one evidence mode."""
+    """One dataset's exact descriptive pathway outcome from accepted unique-KO evidence."""
 
     input_index: NonNegativeCount
     label: str = Field(min_length=1, max_length=128)
@@ -282,17 +272,16 @@ class SetPathwayOutcome(FrozenModel):
         return self
 
 
-class PathwayModeComparison(FrozenModel):
-    """Ordered descriptive outcomes for one shared-reference pathway evidence mode."""
+class PathwayOutcomeComparison(FrozenModel):
+    """Ordered accepted-evidence outcomes for one shared pathway reference."""
 
-    evidence_mode: EvidenceMode
     outcomes: Annotated[tuple[SetPathwayOutcome, ...], Field(min_length=2, max_length=100)]
     outcomes_differ: bool
     evaluated_in_set_indexes: tuple[NonNegativeCount, ...]
     not_evaluable_in_set_indexes: tuple[NonNegativeCount, ...]
 
     @model_validator(mode="after")
-    def validate_mode(self) -> Self:
+    def validate_outcomes(self) -> Self:
         indexes = tuple(item.input_index for item in self.outcomes)
         if indexes != tuple(range(len(self.outcomes))):
             raise ValueError("pathway outcomes must retain contiguous comparison input order")
@@ -317,25 +306,17 @@ class PathwayModeComparison(FrozenModel):
 
 
 class PathwayTargetComparison(FrozenModel):
-    """Strict and lenient outcomes recomputed against one immutable pathway reference."""
+    """Accepted-evidence outcomes recomputed against one immutable pathway reference."""
 
     reference: PathwayKoReference
-    strict: PathwayModeComparison
-    lenient: PathwayModeComparison
+    comparison: PathwayOutcomeComparison
     pathway_calculation_method: CalculationMethodReference
     coverage_limits: PathwayCoverageLimits
     allow_global_or_overview: bool
 
     @model_validator(mode="after")
     def validate_target(self) -> Self:
-        if self.strict.evidence_mode is not EvidenceMode.STRICT:
-            raise ValueError("strict pathway comparison requires strict outcomes")
-        if self.lenient.evidence_mode is not EvidenceMode.LENIENT:
-            raise ValueError("lenient pathway comparison requires lenient outcomes")
-        strict_labels = tuple(item.label for item in self.strict.outcomes)
-        if strict_labels != tuple(item.label for item in self.lenient.outcomes):
-            raise ValueError("strict and lenient pathway outcomes must use the same input order")
-        outcomes = (*self.strict.outcomes, *self.lenient.outcomes)
+        outcomes = self.comparison.outcomes
         reference_count = len(self.reference.reference_kos)
         if any(item.reference_unique_ko_count != reference_count for item in outcomes):
             raise ValueError("all pathway outcomes must use the complete shared denominator")
@@ -363,7 +344,7 @@ class PathwayComparisonResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:pathway-comparison-result:1",
+            "$id": "urn:kegg-mcp:schema:pathway-comparison-result:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
@@ -396,7 +377,7 @@ class PathwayComparisonResult(FrozenModel):
             raise ValueError("pathway exclusions exceed the recorded aggregate limit")
         labels = tuple(item.label for item in self.datasets)
         for target in self.targets:
-            if tuple(item.label for item in target.strict.outcomes) != labels:
+            if tuple(item.label for item in target.comparison.outcomes) != labels:
                 raise ValueError("pathway comparison target inputs must match dataset order")
             if target.allow_global_or_overview != self.allow_global_or_overview:
                 raise ValueError("pathway targets must retain the comparison-wide broad-map opt-in")
@@ -433,7 +414,12 @@ def compare_module_graphs(
     """Recompute every dataset against the same resolved MODULE graphs before comparison."""
     effective_comparison_limits = comparison_limits or ComparisonLimits()
     effective_functional_limits = functional_limits or FunctionalComparisonLimits()
-    ko_detail = compare_ko_datasets(inputs, limits=effective_comparison_limits)
+    analysis_views = tuple(build_ko_analysis_view(item.dataset) for item in inputs)
+    ko_detail = compare_ko_datasets_with_views(
+        inputs,
+        analysis_views,
+        limits=effective_comparison_limits,
+    )
     if len(graphs) > effective_functional_limits.max_modules:
         fail(
             ErrorCode.INPUT_LIMIT_EXCEEDED,
@@ -456,7 +442,13 @@ def compare_module_graphs(
         )
 
     targets = tuple(
-        _compare_one_module(graph, inputs, evaluation_limits=evaluation_limits) for graph in graphs
+        _compare_one_module(
+            graph,
+            inputs,
+            analysis_views,
+            evaluation_limits=evaluation_limits,
+        )
+        for graph in graphs
     )
     return ModuleComparisonResult(
         datasets=ko_detail.datasets,
@@ -486,7 +478,12 @@ def compare_pathway_references(
     effective_comparison_limits = comparison_limits or ComparisonLimits()
     effective_functional_limits = functional_limits or FunctionalComparisonLimits()
     effective_coverage_limits = coverage_limits or PathwayCoverageLimits()
-    ko_detail = compare_ko_datasets(inputs, limits=effective_comparison_limits)
+    analysis_views = tuple(build_ko_analysis_view(item.dataset) for item in inputs)
+    ko_detail = compare_ko_datasets_with_views(
+        inputs,
+        analysis_views,
+        limits=effective_comparison_limits,
+    )
 
     if len(references) > effective_functional_limits.max_pathways:
         fail(
@@ -542,6 +539,7 @@ def compare_pathway_references(
         _compare_one_pathway(
             reference,
             inputs,
+            analysis_views,
             coverage_limits=effective_coverage_limits,
             organism_contexts=organism_contexts,
             allow_global_or_overview=allow_global_or_overview,
@@ -567,14 +565,18 @@ def compare_pathway_references(
 def _compare_one_module(
     graph: ResolvedModuleGraph,
     inputs: tuple[ComparisonDatasetInput, ...],
+    analysis_views: tuple[KoAnalysisView, ...],
     *,
     evaluation_limits: ModuleEvaluationLimits | None,
 ) -> ModuleTargetComparison:
-    pairs = tuple(
-        evaluate_module_pair(graph, item.dataset, limits=evaluation_limits) for item in inputs
+    results = tuple(
+        evaluate_module(
+            graph,
+            analysis_views[index],
+            limits=evaluation_limits,
+        )
+        for index, _item in enumerate(inputs)
     )
-    strict_results = tuple(pair.strict for pair in pairs)
-    lenient_results = tuple(pair.lenient for pair in pairs)
     identity_fields = (
         "module_id",
         "module_name",
@@ -585,10 +587,10 @@ def _compare_one_module(
         "provenance",
         "limits",
     )
-    first = strict_results[0]
+    first = results[0]
     if any(
         any(getattr(result, field) != getattr(first, field) for field in identity_fields)
-        for result in (*strict_results[1:], *lenient_results)
+        for result in results[1:]
     ):
         fail(
             ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE,
@@ -600,8 +602,7 @@ def _compare_one_module(
     return ModuleTargetComparison(
         module_id=first.module_id,
         module_name=first.module_name,
-        strict=_module_mode_comparison(EvidenceMode.STRICT, labels, strict_results),
-        lenient=_module_mode_comparison(EvidenceMode.LENIENT, labels, lenient_results),
+        comparison=_module_outcome_comparison(labels, results),
         module_calculation_method=first.calculation_method,
         definition_provenance=first.provenance,
         reference_retrieval_provenance=first.reference_retrieval_provenance,
@@ -610,11 +611,10 @@ def _compare_one_module(
     )
 
 
-def _module_mode_comparison(
-    mode: EvidenceMode,
+def _module_outcome_comparison(
     labels: tuple[str, ...],
     results: tuple[ModuleEvaluationResult, ...],
-) -> ModuleModeComparison:
+) -> ModuleOutcomeComparison:
     outcomes = tuple(
         SetModuleOutcome(
             input_index=index,
@@ -629,8 +629,7 @@ def _module_mode_comparison(
         for index, result in enumerate(results)
     )
     signatures = tuple(_module_outcome_signature(item) for item in outcomes)
-    return ModuleModeComparison(
-        evidence_mode=mode,
+    return ModuleOutcomeComparison(
         outcomes=outcomes,
         outcomes_differ=any(item != signatures[0] for item in signatures[1:]),
         complete_in_set_indexes=_indexes_for_status(outcomes, ModuleEvaluationStatus.COMPLETE),
@@ -705,40 +704,25 @@ def _validate_pathway_organism_contexts(
 def _compare_one_pathway(
     reference: PathwayKoReference,
     inputs: tuple[ComparisonDatasetInput, ...],
+    analysis_views: tuple[KoAnalysisView, ...],
     *,
     coverage_limits: PathwayCoverageLimits,
     organism_contexts: tuple[PathwayComparisonOrganismContext, ...],
     allow_global_or_overview: bool,
 ) -> PathwayTargetComparison:
-    strict_results = tuple(
+    results = tuple(
         evaluate_pathway_coverage(
             reference,
-            item.dataset,
+            analysis_views[index],
             _pathway_parameters(
                 reference,
-                EvidenceMode.STRICT,
                 index,
                 organism_contexts,
                 allow_global_or_overview,
             ),
             coverage_limits,
         )
-        for index, item in enumerate(inputs)
-    )
-    lenient_results = tuple(
-        evaluate_pathway_coverage(
-            reference,
-            item.dataset,
-            _pathway_parameters(
-                reference,
-                EvidenceMode.LENIENT,
-                index,
-                organism_contexts,
-                allow_global_or_overview,
-            ),
-            coverage_limits,
-        )
-        for index, item in enumerate(inputs)
+        for index, _item in enumerate(inputs)
     )
     identity_fields = (
         "pathway_id",
@@ -757,10 +741,10 @@ def _compare_one_pathway(
         "calculation_version",
         "limits",
     )
-    first = strict_results[0]
+    first = results[0]
     if any(
         any(getattr(result, field) != getattr(first, field) for field in identity_fields)
-        for result in (*strict_results[1:], *lenient_results)
+        for result in results[1:]
     ):
         fail(
             ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE,
@@ -771,8 +755,7 @@ def _compare_one_pathway(
     labels = tuple(item.label for item in inputs)
     return PathwayTargetComparison(
         reference=reference,
-        strict=_pathway_mode_comparison(EvidenceMode.STRICT, labels, strict_results),
-        lenient=_pathway_mode_comparison(EvidenceMode.LENIENT, labels, lenient_results),
+        comparison=_pathway_outcome_comparison(labels, results),
         pathway_calculation_method=CalculationMethodReference(
             name=first.calculation_method,
             version=first.calculation_version,
@@ -784,7 +767,6 @@ def _compare_one_pathway(
 
 def _pathway_parameters(
     reference: PathwayKoReference,
-    mode: EvidenceMode,
     input_index: int,
     organism_contexts: tuple[PathwayComparisonOrganismContext, ...],
     allow_global_or_overview: bool,
@@ -797,17 +779,15 @@ def _pathway_parameters(
         )
     return PathwayCoverageParameters(
         reference_namespace=reference.reference_namespace,
-        evidence_mode=mode,
         input_context=input_context,
         allow_global_or_overview=allow_global_or_overview,
     )
 
 
-def _pathway_mode_comparison(
-    mode: EvidenceMode,
+def _pathway_outcome_comparison(
     labels: tuple[str, ...],
     results: tuple[PathwayCoverageResult, ...],
-) -> PathwayModeComparison:
+) -> PathwayOutcomeComparison:
     outcomes = tuple(
         SetPathwayOutcome(
             input_index=index,
@@ -824,8 +804,7 @@ def _pathway_mode_comparison(
         for index, result in enumerate(results)
     )
     signatures = tuple(_pathway_outcome_signature(item) for item in outcomes)
-    return PathwayModeComparison(
-        evidence_mode=mode,
+    return PathwayOutcomeComparison(
         outcomes=outcomes,
         outcomes_differ=any(item != signatures[0] for item in signatures[1:]),
         evaluated_in_set_indexes=tuple(
@@ -858,11 +837,11 @@ __all__ = [
     "PATHWAY_COMPARISON_VERSION",
     "FunctionalComparisonLimits",
     "ModuleComparisonResult",
-    "ModuleModeComparison",
+    "ModuleOutcomeComparison",
     "ModuleTargetComparison",
     "PathwayComparisonOrganismContext",
     "PathwayComparisonResult",
-    "PathwayModeComparison",
+    "PathwayOutcomeComparison",
     "PathwayTargetComparison",
     "SetModuleOutcome",
     "SetPathwayOutcome",

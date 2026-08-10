@@ -21,6 +21,7 @@ from deepkoala_mcp.config import (
     CPU_THREADS_ENV,
     HMMSEARCH_EXECUTABLE_ENV,
     INPUT_ROOTS_ENV,
+    MAX_OUTPUT_BYTES_ENV,
     MAX_TIMEOUT_SECONDS_ENV,
     OUTPUT_ROOTS_ENV,
     PROFILES_DIR_ENV,
@@ -32,7 +33,10 @@ from deepkoala_mcp.config import (
 from deepkoala_mcp.contracts import (
     DEFAULT_MODEL_DATE,
     MAX_HEADER_BYTES,
+    MAX_OUTPUT_BYTES,
+    MAX_OUTPUT_ROWS,
     MAX_SEQUENCE_LENGTH,
+    AnnotationOutputCoverage,
     FastaSummary,
     ImportHandoff,
     RunDeepKoalaInput,
@@ -74,7 +78,21 @@ def test_load_runtime_config_has_bounded_linux_single_runner_defaults(
     assert config.allow_multi is False
     assert config.profiles_dir is None
     assert config.hmmsearch_executable is None
+    assert config.max_output_bytes == MAX_OUTPUT_BYTES == 1 << 30
     assert config.max_timeout_seconds == 3_600
+
+
+def test_load_runtime_config_bounds_deepkoala_output_at_core_file_limit(
+    tmp_path: Path,
+    checkout: Path,
+) -> None:
+    environment = _environment(tmp_path, checkout)
+    environment[MAX_OUTPUT_BYTES_ENV] = "5000000"
+    assert load_runtime_config(environment).max_output_bytes == 5_000_000
+
+    environment[MAX_OUTPUT_BYTES_ENV] = str(MAX_OUTPUT_BYTES + 1)
+    with pytest.raises(ValueError, match=MAX_OUTPUT_BYTES_ENV):
+        load_runtime_config(environment)
 
 
 def test_load_runtime_config_uses_mps_default_and_rejects_cuda_on_macos(
@@ -269,7 +287,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
         input_path="/allowed/original.faa",
     )
     handoff = ImportHandoff(
-        schema_version="1",
+        schema_version="2",
         tool_version="0.5.0",
         input_path="/allowed/original.faa",
         annotations_path="/outputs/run/deepkoala_annotations.csv",
@@ -277,6 +295,11 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
         input_format="deepkoala_detailed",
         annotations_resource_uri=f"deepkoala://jobs/{job_id}/annotations",
         report_resource_uri=f"deepkoala://jobs/{job_id}/report",
+        output_coverage=AnnotationOutputCoverage(
+            input_sequence_count=2,
+            output_row_count=3,
+            distinct_output_sequence_count=2,
+        ),
         source=source,
     )
     assert "+05:30" in handoff.model_dump_json()
@@ -292,6 +315,20 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     del payload["input_format"]
     with pytest.raises(ValidationError, match="input_format"):
         ImportHandoff.model_validate(payload, strict=True)
+    payload = handoff.model_dump(mode="python")
+    del payload["output_coverage"]
+    with pytest.raises(ValidationError, match="output_coverage"):
+        ImportHandoff.model_validate(payload, strict=True)
+    payload = handoff.model_dump(mode="python")
+    payload["output_coverage"]["missing_input_sequence_count"] = 1
+    with pytest.raises(ValidationError, match="missing_input_sequence_count"):
+        ImportHandoff.model_validate(payload, strict=True)
+    with pytest.raises(ValidationError, match="output_row_count"):
+        AnnotationOutputCoverage(
+            input_sequence_count=1,
+            output_row_count=MAX_OUTPUT_ROWS + 1,
+            distinct_output_sequence_count=1,
+        )
     for field in ("source_name", "source_version"):
         payload = handoff.model_dump(mode="python")
         del payload["source"][field]
@@ -334,6 +371,18 @@ def test_validate_fasta_normalizes_and_honors_structural_limits() -> None:
         validate_fasta_bytes(b">" + b"p" * (MAX_HEADER_BYTES + 1) + b"\nM\n")
 
 
+def test_validate_fasta_bounds_identifier_without_reducing_full_header_limit() -> None:
+    identifier = b"p" * 256
+    description = b" " + b"d" * (MAX_HEADER_BYTES - len(identifier) - 1)
+
+    summary, canonical = validate_fasta_bytes(b">" + identifier + description + b"\nM\n")
+
+    assert summary.sequence_count == 1
+    assert canonical == b">" + identifier + description + b"\nM\n"
+    with pytest.raises(FastaLimitError, match="sequence identifier exceeds"):
+        validate_fasta_bytes(b">" + b"p" * 257 + b"\nM\n")
+
+
 @pytest.mark.parametrize(
     "content",
     [b"", b"MPEPTIDE\n", b">p\n", b">p\nM  P\n", b">p\nM?P\n", b">p\nM\n>p\nW\n"],
@@ -358,6 +407,8 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
     )
     staged = job / "input.fasta"
     assert staged_result.input_path == source.resolve()
+    assert staged_result.sequence_ids == frozenset({"p"})
+    assert "sequence_ids" not in repr(staged_result)
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
@@ -386,6 +437,7 @@ def test_stage_accepts_large_valid_fasta_within_sequence_limits(tmp_path: Path) 
     assert staged.stat().st_size > 5_000_000
     assert staged_result.summary.total_residues == 5_100_000
     assert staged_result.summary.input_bytes == staged.stat().st_size
+    assert staged_result.sequence_ids == frozenset(f"protein-{index}" for index in range(51))
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
@@ -427,7 +479,7 @@ def test_failed_stage_preserves_a_replacement_staging_inode(
         destination: BinaryIO,
         *,
         max_sequences: int,
-    ) -> FastaSummary:
+    ) -> tuple[FastaSummary, frozenset[str]]:
         del source_stream, destination, max_sequences
         staged.unlink()
         staged.write_text("replacement content", encoding="ascii")
@@ -464,7 +516,7 @@ def test_stage_rejects_ancestor_replacement_during_intake(
         destination: BinaryIO,
         *,
         max_sequences: int,
-    ) -> FastaSummary:
+    ) -> tuple[FastaSummary, frozenset[str]]:
         summary = validate_stream(source, destination, max_sequences=max_sequences)
         allowed.rename(moved)
         allowed.mkdir()

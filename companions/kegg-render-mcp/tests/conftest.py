@@ -15,7 +15,7 @@ from kegg_mcp.analysis import (
     PathwayReferenceScope,
     resolve_module_definitions,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, build_ko_analysis_view
 from kegg_mcp.execution import (
     ANALYSIS_SERVICE_NAME,
     ANALYSIS_SERVICE_VERSION,
@@ -166,7 +166,13 @@ def make_render_input(
         max_field_length=1_000,
     )
     dataset = import_generic_table(
-        "sequence,ko,decision\na,K00001,accepted\nu,K00002,uncertain\nr,K00003,rejected\n",
+        (
+            "sequence,ko,decision\n"
+            "a,K00001,accepted\n"
+            "a-duplicate,K00001,accepted\n"
+            "b,K00002,accepted\n"
+            "r,K00003,rejected\n"
+        ),
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(sequence_id="sequence", ko_id="ko", raw_decision="decision"),
         policy=CANONICAL_SOURCE_STATUS,
@@ -212,13 +218,12 @@ def make_render_input(
         kegg_request_options=KeggRequestOptions(refresh=False, allow_stale=True),
         reference_loading_limits=ReferenceLoadingLimits(),
         pathway_parameters=PathwayExecutionParameters(
-            evidence_mode=EvidenceMode.LENIENT,
             allow_global_or_overview=allow_global_or_overview,
         ),
         direct_result_limits=AnalysisServiceLimits(),
     )
     return build_render_input(
-        dataset,
+        build_ko_analysis_view(dataset),
         (graph,),
         (reference,),
         execution,

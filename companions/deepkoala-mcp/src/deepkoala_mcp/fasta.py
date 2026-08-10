@@ -6,11 +6,12 @@ import asyncio
 import os
 import stat
 import unicodedata
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from functools import partial
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import BinaryIO, Final, TypeVar
 
 from anyio.to_thread import run_sync as run_sync_in_worker_thread
 
@@ -23,6 +24,8 @@ from deepkoala_mcp.contracts import (
 
 INPUT_FILENAME: Final = "input.fasta"
 _PROTEIN_ALPHABET: Final = frozenset("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
+_MAX_SEQUENCE_IDENTIFIER_CHARACTERS: Final = 256
+_T = TypeVar("_T")
 
 
 class FastaValidationError(ValueError):
@@ -43,6 +46,7 @@ class StagedFasta:
 
     summary: FastaSummary
     input_path: Path
+    sequence_ids: frozenset[str] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +75,7 @@ def stage_fasta(
             os.fdopen(os.dup(pinned.descriptor), "rb") as source,
             os.fdopen(output_descriptor, "wb", closefd=False) as destination,
         ):
-            summary = _validate_fasta_stream(
+            summary, sequence_ids = _validate_fasta_stream(
                 source,
                 destination,
                 max_sequences=max_sequences,
@@ -81,7 +85,11 @@ def stage_fasta(
         if pinned.file_state != _file_state(os.fstat(pinned.descriptor)):
             raise InputPathError("input file changed during intake")
         _revalidate_pinned_path(pinned)
-        return StagedFasta(summary=summary, input_path=pinned.resolved)
+        return StagedFasta(
+            summary=summary,
+            input_path=pinned.resolved,
+            sequence_ids=sequence_ids,
+        )
     except Exception:
         if output_descriptor is not None:
             _remove_owned_staging_file(staged_path, output_descriptor)
@@ -100,17 +108,20 @@ async def stage_fasta_in_worker(
     max_sequences: int,
 ) -> StagedFasta:
     """Run intake off the event loop and join it before propagating cancellation."""
-    worker = asyncio.create_task(
-        run_sync_in_worker_thread(
-            partial(
-                stage_fasta,
-                fasta_path=fasta_path,
-                input_roots=input_roots,
-                job_directory=job_directory,
-                max_sequences=max_sequences,
-            )
+    return await _run_sync_in_joined_worker(
+        partial(
+            stage_fasta,
+            fasta_path=fasta_path,
+            input_roots=input_roots,
+            job_directory=job_directory,
+            max_sequences=max_sequences,
         )
     )
+
+
+async def _run_sync_in_joined_worker(operation: Callable[[], _T]) -> _T:
+    """Run one blocking operation off-loop and join it before cancellation propagates."""
+    worker = asyncio.create_task(run_sync_in_worker_thread(operation))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError as cancellation:
@@ -134,7 +145,7 @@ def validate_fasta_bytes(
     """Validate protein FASTA bytes and return canonical ASCII bytes."""
     source = BytesIO(content)
     canonical = BytesIO()
-    summary = _validate_fasta_stream(source, canonical, max_sequences=max_sequences)
+    summary, _ = _validate_fasta_stream(source, canonical, max_sequences=max_sequences)
     return summary, canonical.getvalue()
 
 
@@ -143,7 +154,7 @@ def _validate_fasta_stream(
     destination: BinaryIO,
     *,
     max_sequences: int,
-) -> FastaSummary:
+) -> tuple[FastaSummary, frozenset[str]]:
     if not 1 <= max_sequences <= MAX_SEQUENCE_COUNT:
         raise ValueError("max_sequences is outside the hard companion limit")
     sequence_ids: set[str] = set()
@@ -199,11 +210,14 @@ def _validate_fasta_stream(
     if current_length is None:
         raise FastaValidationError("FASTA contains no records")
     _finish_sequence(current_length, lengths)
-    return FastaSummary(
-        sequence_count=len(lengths),
-        total_residues=total_residues,
-        max_sequence_length=max(lengths),
-        input_bytes=input_bytes,
+    return (
+        FastaSummary(
+            sequence_count=len(lengths),
+            total_residues=total_residues,
+            max_sequence_length=max(lengths),
+            input_bytes=input_bytes,
+        ),
+        frozenset(sequence_ids),
     )
 
 
@@ -317,6 +331,8 @@ def _validate_header(header: str) -> str:
     sequence_id = header.split(maxsplit=1)[0]
     if not sequence_id:
         raise FastaValidationError("FASTA header has no sequence identifier")
+    if len(sequence_id) > _MAX_SEQUENCE_IDENTIFIER_CHARACTERS:
+        raise FastaLimitError("FASTA sequence identifier exceeds the character limit")
     return sequence_id
 
 

@@ -2,12 +2,12 @@
 
 ## Compatible handoff
 
-1. Call `get_renderer_status` and require readiness plus the current schema version 4.
+1. Call `get_renderer_status` and require readiness plus the current schema version 6.
 2. Pass exactly one controlled absolute `render_input.json` path or bounded inline handoff to
    `render_analysis_bundle`, `render_pathway`, or `render_module`.
 3. Let the renderer validate schema, targets, evidence states, paths, output limits, and assets.
 
-Accept only schema version 4. Do not patch, repair, or reinterpret a schema-mismatched handoff.
+Accept only schema version 6. Do not patch, repair, or reinterpret a schema-mismatched handoff.
 Stop and request a current bundle from the independent KO-analysis stage.
 
 ## Atomic multi-target rendering
@@ -72,13 +72,9 @@ Skill, or pass a private result identifier between MCP processes.
 ## Unavailable renderer and lifecycle
 
 If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
-diagnostic and suggested operator action. An unavailable renderer tool immediately after successful
-installation is `task_reload_required`, not evidence that repair is needed; stop before rendering
-and use one new task. In a fresh task, a complete exact plugin/MCP inventory is
-`plugin_discovery_stale`: restart Codex once and retry in one new task without reinstalling.
-Request explicit repair permission only for incomplete deployment inventory or a concrete renderer
-failure. The Skill itself does not install software, download assets, or invoke an unrelated image
-tool. Preserve the requested formats and target scope.
+diagnostic and suggested operator action, then stop before rendering. The Skill itself does not
+install software, download assets, or invoke an unrelated image tool. Preserve the requested
+formats and target scope.
 
 Return only renderer-provided `kegg-render://results/{render_id}` and
 `kegg-render://results/{render_id}/{artifact}` resource URIs; never construct one from an ID.

@@ -26,13 +26,18 @@ Apply the canonical continuation rules in
 Cross a Skill boundary only through a successful versioned handoff. Prefer the stable file handoff;
 the only non-file transition is the canonical bounded-resource fallback after Core rejects a
 successful DeepKOALA handoff with the exact typed `file_path` allowed-root error. The preceding
-`deepkoala-annotation` Skill completes that resource read and returns the unchanged inline payload;
-this Skill never calls an upstream or rendering MCP.
+`deepkoala-annotation` Skill completes that resource read and returns the unchanged inline payload
+only when the successful output is at most 5,000,000 bytes. Larger outputs require a shared stable
+output path covered by Core; the unchanged original input path remains provenance only. Large
+outputs never pass through the model or an inline MCP argument. This Skill never calls an upstream
+or rendering MCP.
 
 ## Call only core `kegg-mcp`
 
-- Prefer `analyze_ko_annotations` for a complete normalization-to-MODULE/pathway workflow. It
-  normalizes evidence once and writes the stable bundle used by later stages.
+- Prefer `analyze_ko_annotations` for a complete annotation-intake-to-MODULE/pathway workflow. It
+  derives the compact sorted unique accepted-KO analysis view once and writes the stable bundle
+  used by later stages. Use `normalize_ko_annotations` separately when record-level evidence or
+  protein mappings are required.
 - When no MODULE or pathway target and no explicit selection are supplied, omit
   `pathway_selection`. Let the server independently select the Top-5 MODULEs and Top-5 canonical KO
   reference pathways by unique selected-KO overlap.
@@ -70,7 +75,7 @@ this Skill never calls an upstream or rendering MCP.
 ## Interpret and report
 
 1. Read [confidence-policy.md](references/confidence-policy.md) before discussing accepted,
-   uncertain, rejected, strict, or lenient evidence.
+   rejected, unclassified, invalid, compact analysis views, or full normalized evidence.
 2. Read [module-interpretation.md](references/module-interpretation.md) for MODULE or pathway
    output. Treat automatic MODULE ranking only as target selection, never as completion or
    enrichment. Keep exact completion separate from block coverage and descriptive pathway coverage.

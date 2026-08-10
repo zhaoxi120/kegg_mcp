@@ -32,6 +32,7 @@ from kegg_mcp.services.result_store import (
 )
 
 MAX_INLINE_RESOURCE_BYTES = 64 * 1024
+_RESOURCE_NOT_FOUND = -32002
 
 _RESULT_RE = re.compile(rf"ko-analysis://results/({RESULT_ID_FRAGMENT})\Z")
 _SECTION_RE = re.compile(
@@ -120,7 +121,12 @@ async def read_resource(uri: AnyUrl, runtime: McpRuntime) -> list[ReadResourceCo
     except KeggMcpError as exception:
         raise McpError(
             types.ErrorData(
-                code=types.INVALID_PARAMS,
+                code=(
+                    _RESOURCE_NOT_FOUND
+                    if exception.detail.code
+                    in {ErrorCode.RESULT_NOT_FOUND, ErrorCode.CACHE_ENTRY_NOT_FOUND}
+                    else types.INTERNAL_ERROR
+                ),
                 message=f"{exception.detail.code.value}: {exception.detail.message}",
                 data=exception.detail.model_dump(mode="json"),
             )

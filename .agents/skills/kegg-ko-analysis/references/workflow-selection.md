@@ -119,7 +119,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 ## Annotation mapping audit
 
 - Use `audit_annotation_mapping` for evidence status, duplicate or conflicting assignments,
-  strict/lenient KO views, selected KEGG mapping yields, provenance completeness, or optional
+  accepted-KO views, selected KEGG mapping yields, provenance completeness, or optional
   assembly-quality warnings.
 - Supply only the relationship classes required by the question in `mapping_targets`. Use an empty
   list for an evidence-only audit with no KEGG relationship requests.
@@ -157,7 +157,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   retained ranking but excludes them before Top-N target truncation. If the user explicitly
   requests a canonical KO total map such as `ko01100`, pass that explicit pathway target with
   `allow_global_or_overview=True`. Continue to rendering only after Core emits a complete,
-  renderable version 4 handoff. Do not substitute a `map` or organism reference, promote a
+  renderable version 6 handoff. Do not substitute a `map` or organism reference, promote a
   summary-only result, or request a model-native conceptual fallback.
 - Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
   exact completion and required-block coverage separately from the selected MODULE definitions.
@@ -172,10 +172,15 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    `normalize_ko_annotations` alone only when the user wants a reusable normalized table.
 2. Let the server infer unambiguous common columns and report the mapping. Supply an explicit
    column mapping only for ambiguous or non-standard tables.
-3. Preserve raw source decisions, scores, thresholds, ranks, domains, protein names, source/model
-   versions, timestamps, and the original absolute input path.
-4. Run strict analysis with accepted K numbers. Add only policy-defined uncertain records to a
-   requested lenient view.
+3. `analyze_ko_annotations` always derives a compact analysis view and does not retain raw
+   per-record evidence. Use `normalize_ko_annotations` when the request requires raw source
+   decisions, scores, thresholds, ranks, domains, protein names, sequence-to-KO mappings, or
+   duplicate/conflict accounting. Preserve source/model versions, timestamps, and the original
+   absolute input path as provenance in either route. Core validates the annotation `file_path`
+   under its allowed roots but does not reopen a distinct provenance `input_path`.
+4. Run every analysis with sorted unique accepted K numbers. Rejected, unclassified, and invalid
+   records remain evidence outcomes and do not enter MODULE, pathway, ranking, comparison, or
+   rendering results.
 5. Use stable bundle files for later MCP stages; do not pass a process-private result identifier.
 6. For an immediately preceding successful DeepKOALA handoff, first use its stable
    `annotations_path`. If and only if Core rejects that path with
@@ -184,20 +189,35 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    `field="file_path"`, return control to the installed
    `deepkoala-annotation` Skill for its bounded `annotations_resource_uri` fallback. This Skill
    does not call the companion MCP, change either server's allowed roots, copy the CSV, or retry the
-   same unreadable path. After the preceding Skill returns the byte-identical UTF-8 payload, call
-   Core with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
-   `annotations.file_path` and keep any analysis context only inside `annotations`. The same message
-   with `field="output_directory"` is an output-location error and must not enter this fallback.
+   same unreadable path. The preceding Skill may return byte-identical UTF-8 content only when the
+   successful job's `output_bytes` is at most the 5,000,000-byte Core inline limit. Then call Core
+   with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
+   `annotations.file_path` and keep any analysis context only inside `annotations`. For a larger
+   result, stop without reading resource pages and require repaired Core allowed roots that cover
+   the returned DeepKOALA output path, as enforced by the supported suite installer. The original
+   FASTA `input_path` is provenance only and does not trigger this fallback. The same message with
+   `field="output_directory"` is an output-location error and must not enter this fallback.
+
+### Compact high-level analysis view
+
+- For an allowed DeepKOALA detailed `annotations.file_path`, let Core stream the source under its
+  fixed maxima: 1 GiB, 10,000,000 source rows, 20,000,000 expanded assignments, 100,000 unique
+  accepted K numbers, 64 columns, 16,384 characters per field, and 100 retained diagnostics. Do
+  not split and merge file chunks in the Skill to evade these limits. Other formats and bounded
+  inline inputs keep their applicable importer limits but produce the same analysis view.
+- Compact local intake does not raise existing KEGG request, reference-loading, relationship-row,
+  response-byte, ranking, or output budgets. If the accepted set is likely to exhaust those
+  budgets, provide bounded explicit `module_ids` or `pathways` when the scientific targets are
+  known, or split the source into independently meaningful analysis units; do not shard one unit
+  and merge rankings in the LLM.
 
 ## Automatic cross-Skill continuation
 
 - When the immediately preceding `deepkoala-annotation` stage produced the evidence,
-  consume its stable CSV handoff directly when Core can read it. Use the returned
-  `annotations_path`, `input_format`, and `source` object unchanged;
+  follow annotation-table step 6 above and consume its stable CSV handoff directly when Core can
+  read it, using the returned `annotations_path`, `input_format`, and `source` object unchanged;
   do not ask the user to restate the path, copy it, repeat the request, or confirm a KEGG-analysis
-  stage already present in the original request. If the typed allowed-root error described above
-  occurs, use only the canonical resource fallback and then the mutually exclusive
-  `annotations.text` branch. Do not rerun annotation or rewrite the CSV.
+  stage already present in the original request. Do not rerun annotation or rewrite the CSV.
 - When the original request also asks to render, visualize, draw, or export graphics, first require
   a successfully written, compatible `render_input.json`, then automatically continue with the installed
   `kegg-pathway-rendering` Skill. Pass the unchanged `render_input.json` path while
@@ -211,7 +231,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 
 ## Multiple KO sets
 
-- Use `compare_ko_sets` with compatible evidence modes and reference provenance.
+- Use `compare_ko_sets` with compatible decision-policy and reference provenance.
 - Describe results as deterministic set membership and functional-reference differences, not
   differential abundance, enrichment, or biological specificity.
 

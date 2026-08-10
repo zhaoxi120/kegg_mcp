@@ -9,24 +9,21 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
-    AnnotationDataset,
-    EvidenceMode,
     FrozenModel,
     KNumber,
     ModuleId,
-    build_ko_evidence_view,
-    select_ko_ids,
 )
 from kegg_mcp.domain.errors import ErrorCode, fail
 from kegg_mcp.domain.identifiers import try_normalize_ko_id
 from kegg_mcp.kegg.contracts import KeggPairRow, is_kegg_pathway_identifier
 
 PATHWAY_RANKING_METHOD = "selected_unique_ko_count"
-PATHWAY_RANKING_VERSION = "1"
+PATHWAY_RANKING_VERSION = "2"
 MODULE_RANKING_METHOD = "selected_unique_ko_count"
-MODULE_RANKING_VERSION = "1"
+MODULE_RANKING_VERSION = "2"
 
 
 class PathwaySelection(FrozenModel):
@@ -117,14 +114,13 @@ class PathwayRankingResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:pathway-ranking-result:1",
+            "$id": "urn:kegg-mcp:schema:pathway-ranking-result:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     method: Literal["selected_unique_ko_count"]
-    method_version: Literal["1"]
-    evidence_mode: EvidenceMode
+    method_version: Literal["2"]
     selected_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=100_000)]
     relationships: Annotated[tuple[KoPathwayRelationship, ...], Field(max_length=1_000_000)]
     rows: Annotated[tuple[PathwayRankingRow, ...], Field(max_length=100_000)]
@@ -190,14 +186,13 @@ class ModuleRankingResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:module-ranking-result:1",
+            "$id": "urn:kegg-mcp:schema:module-ranking-result:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     method: Literal["selected_unique_ko_count"]
-    method_version: Literal["1"]
-    evidence_mode: EvidenceMode
+    method_version: Literal["2"]
     selected_ko_ids: Annotated[tuple[KNumber, ...], Field(max_length=100_000)]
     relationships: Annotated[tuple[KoModuleRelationship, ...], Field(max_length=1_000_000)]
     rows: Annotated[tuple[ModuleRankingRow, ...], Field(max_length=100_000)]
@@ -250,15 +245,14 @@ TargetNormalizer = Callable[[str, str], tuple[str, str] | None]
 
 
 def _rank_ko_targets(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
-    evidence_mode: EvidenceMode,
     *,
     target_name: str,
     normalize_target: TargetNormalizer,
 ) -> tuple[tuple[str, ...], tuple[_RankedRelationship, ...], tuple[_RankedTarget, ...]]:
     """Apply one selected KO view and deterministic overlap ranking to a typed target."""
-    selected_ko_ids = select_ko_ids(build_ko_evidence_view(dataset), evidence_mode)
+    selected_ko_ids = evidence.accepted_ko_ids
     selected = frozenset(selected_ko_ids)
     relationships: list[_RankedRelationship] = []
     detected_by_target: dict[str, set[str]] = {}
@@ -325,15 +319,13 @@ def _normalize_module_target(raw_target: str, target_value: str) -> tuple[str, s
 
 
 def rank_pathways(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
-    evidence_mode: EvidenceMode,
 ) -> PathwayRankingResult:
     """Aggregate KO-to-pathway rows using one selected evidence view and stable ordering."""
     selected_ko_ids, ranked_relationships, ranked_targets = _rank_ko_targets(
-        dataset,
+        evidence,
         relationship_rows,
-        evidence_mode,
         target_name="pathway",
         normalize_target=_normalize_pathway_target,
     )
@@ -363,7 +355,6 @@ def rank_pathways(
     return PathwayRankingResult(
         method=PATHWAY_RANKING_METHOD,
         method_version=PATHWAY_RANKING_VERSION,
-        evidence_mode=evidence_mode,
         selected_ko_ids=selected_ko_ids,
         relationships=relationships,
         rows=rows,
@@ -371,15 +362,13 @@ def rank_pathways(
 
 
 def rank_modules(
-    dataset: AnnotationDataset,
+    evidence: KoAnalysisView,
     relationship_rows: tuple[KeggPairRow, ...],
-    evidence_mode: EvidenceMode,
 ) -> ModuleRankingResult:
     """Aggregate KO-to-MODULE rows using the shared selected-evidence ranking policy."""
     selected_ko_ids, ranked_relationships, ranked_targets = _rank_ko_targets(
-        dataset,
+        evidence,
         relationship_rows,
-        evidence_mode,
         target_name="MODULE",
         normalize_target=_normalize_module_target,
     )
@@ -406,7 +395,6 @@ def rank_modules(
     return ModuleRankingResult(
         method=MODULE_RANKING_METHOD,
         method_version=MODULE_RANKING_VERSION,
-        evidence_mode=evidence_mode,
         selected_ko_ids=selected_ko_ids,
         relationships=relationships,
         rows=rows,

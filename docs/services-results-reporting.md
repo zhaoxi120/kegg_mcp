@@ -35,14 +35,27 @@ traversal, classification, or audit logic.
 ## High-level analysis
 
 `analyze_ko_annotations` is the supported one-call service for a K-number list or annotation table.
-It normalizes evidence once, optionally selects bounded MODULE and pathway targets, loads references,
-evaluates requested targets, renders retained artifacts, and optionally writes one transactional
-output bundle. Narrower normalization, mapping, MODULE, pathway, and comparison tools reuse the
-same service functions.
+It constructs one compact accepted-KO analysis view, optionally selects bounded MODULE and pathway
+targets, loads references, evaluates requested targets, renders retained artifacts, and optionally
+writes one transactional output bundle. Narrower normalization, mapping, MODULE, pathway, and
+comparison tools reuse the same service functions.
+
+Every supported high-level input produces a first-class `KoAnalysisView` containing sorted unique
+accepted K numbers, aggregate intake/status counts, provenance, and bounded diagnostics. Record
+evidence, protein-to-KO mappings, and duplicate/conflict accounting are unavailable in this
+workflow. `normalize_ko_annotations` remains the separate full-record workflow. Allowed DeepKOALA
+detailed file input is streamed; other formats and bounded inline input use their applicable
+importer bounds without changing the analysis semantics.
+
+Compact intake does not raise KEGG request, relationship-row, reference-loading, ranking, report,
+or output limits. Automatic Top-N mapping can still reject a large accepted-KO set at its own
+budget. The caller should supply bounded explicit MODULE/pathway targets when known or split the
+input into independently meaningful analysis units; the service does not merge arbitrary shards
+into one ranking.
 
 When neither explicit targets nor explicit selection are supplied, the service independently
-selects up to five MODULEs and five canonical KO reference pathways. Ranking uses unique K numbers
-from the requested evidence mode, sorts by descending overlap, and uses the canonical target ID as
+selects up to five MODULEs and five canonical KO reference pathways. Ranking uses sorted unique
+accepted K numbers, sorts by descending overlap, and uses the canonical target ID as
 the stable tie-breaker. MODULE ranking selects definitions; it is not completion or enrichment.
 
 Duplicate annotation or KEGG relationship rows never inflate unique-KO counts. Complete rankings
@@ -148,14 +161,15 @@ unmatched-entity previews, clipped node names with explicit flags, and compact r
 accounting. Classification counts are unique supplied-entity counts without abundance weighting or
 statistical enrichment.
 
-`audit_annotation_mapping` reuses the imported immutable annotation dataset and selected fixed KO
-relationship mappings. The caller may select any subset of pathway, MODULE, reaction, enzyme, and
+`audit_annotation_mapping` reuses the imported immutable full-record annotation dataset and
+selected fixed KO relationship mappings. The caller may select any subset of pathway, MODULE,
+reaction, enzyme, and
 BRITE targets; all five are the default, while an empty selection performs an evidence-only audit
 without KEGG calls. Before mapping, the service uses the same typed LINK preparation as execution
 to count exact endpoint batches. If the selection would exceed the 100-request audit budget,
 `mapping_execution.status` is `skipped_request_limit`: no relationship request runs, but the local
 evidence audit and explicit skipped-target metadata are still returned. A completed mapping reports
-strict and lenient yields, one-to-many and unmapped K numbers, source-provenance warnings, and KEGG
+accepted-KO yields, one-to-many and unmapped K numbers, source-provenance warnings, and KEGG
 cache, release, and retrieval summaries. The audit does not alter source decisions, fill missing K
 numbers, compare incompatible scores, or infer biological absence. The direct result contains the
 evidence summary, mapping execution state, compact per-target counts and yields, compact retrieval
@@ -222,11 +236,12 @@ provenance remain retained and are never rebuilt by the LLM.
 | --- | --- | --- |
 | `structured` | `application/json` | Canonical complete result within the configured JSON limit. |
 | `summary` | `text/markdown` | Conservative bounded report with explicit truncation. |
-| `annotations` | `text/csv` | Complete flat annotation records within the CSV limit. |
+| `accepted_kos` | `text/csv` | Sorted unique accepted K numbers plus their accepted status for high-level analysis. |
 
 Serialization rejects non-finite JSON, uses stable CSV columns, protects spreadsheet-formula cells,
 and records exact UTF-8 byte sizes. Structured JSON and CSV fail rather than returning partial
-content. Only the Markdown preview may be truncated.
+content. Only the Markdown preview may be truncated. High-level reports state that record-level
+evidence, protein mappings, and duplicate/conflict accounting were not retained.
 
 ## Output bundles and renderer handoff
 
@@ -234,6 +249,11 @@ The bundle writer serializes service-owned tables and reports into a new or empt
 directory, validates the complete planned artifact set, publishes files without replacement, and
 installs the manifest last as the transaction marker. Source-path redaction is applied while
 constructing the manifest rather than by MCP transport.
+
+Every analysis bundle includes `unique_accepted_kos.tsv` and omits
+`normalized_annotations.tsv` and `protein_ko_mapping.tsv`. Bundle schema version 5 does not expose
+a retention-mode selector or claim that omitted evidence was evaluated or retained. Use the
+normalization bundle for complete normalized records and protein mappings.
 
 Reference and input-handoff writers reuse the same fail-closed publication boundary. They
 preflight per-artifact and aggregate UTF-8 bytes, create owner-only regular files without following
@@ -243,10 +263,10 @@ preserve caller text verbatim after validation rejects tabs, line breaks, NUL, a
 format-breaking controls. A failed transaction removes only files and a fresh directory proven to
 belong to that transaction.
 
-The renderer handoff is a separate typed service model. It contains only accepted and
-policy-defined uncertain evidence plus complete-within-limit authoritative analysis state;
-rejected, unclassified, and invalid records never enter visualization evidence. Its detailed
-schema and renderability semantics are owned by
+The renderer handoff is a separate typed version 6 service model. It contains sorted unique
+accepted K numbers plus complete-within-limit authoritative analysis state; rejected,
+unclassified, and invalid records never enter visualization evidence. Its detailed schema and
+renderability semantics are owned by
 [Visualization architecture](visualization-architecture.md).
 
 ## Scoped result storage

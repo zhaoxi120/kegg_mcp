@@ -9,11 +9,9 @@ from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_v
 from kegg_mcp.domain.annotations import (
     JSON_SCHEMA_DIALECT,
     DecisionPolicyReference,
-    EvidenceMode,
     FrozenModel,
     KNumber,
     ModuleId,
-    RecordIdentifier,
     validate_utf8_text,
 )
 from kegg_mcp.kegg.contracts import KeggBatchProvenance, KeggOperation, ResponseOrigin
@@ -24,7 +22,7 @@ MODULE_RESOLVER_VERSION: Literal["1"] = "1"
 MODULE_CALCULATION_METHOD: Literal["exact_completion_and_top_level_block_coverage"] = (
     "exact_completion_and_top_level_block_coverage"
 )
-MODULE_CALCULATION_VERSION: Literal["1"] = "1"
+MODULE_CALCULATION_VERSION: Literal["2"] = "2"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
@@ -165,7 +163,6 @@ class ModuleWarningCode(StrEnum):
     NO_REQUIRED_COMPONENT = "NO_REQUIRED_COMPONENT"
     MISSING_ALTERNATIVES_TRUNCATED = "MISSING_ALTERNATIVES_TRUNCATED"
     OUTPUT_PREVIEW_TRUNCATED = "OUTPUT_PREVIEW_TRUNCATED"
-    UNCERTAIN_SUPPORT_TRUNCATED = "UNCERTAIN_SUPPORT_TRUNCATED"
     STALE_DEFINITION = "STALE_DEFINITION"
 
 
@@ -629,8 +626,6 @@ class ModuleEvaluationLimits(FrozenModel):
     max_matched_ko_ids: int = Field(default=256, strict=True, gt=0, le=10_000)
     max_block_previews: int = Field(default=50, strict=True, gt=0, le=10_000)
     max_optional_components: int = Field(default=200, strict=True, gt=0, le=10_000)
-    max_uncertain_support_items: int = Field(default=500, strict=True, gt=0, le=10_000)
-    max_uncertain_records_per_ko: int = Field(default=100, strict=True, gt=0, le=10_000)
 
 
 class ModuleAnalysisLimits(FrozenModel):
@@ -720,24 +715,6 @@ class OptionalComponentResult(FrozenModel):
         return self
 
 
-class UncertainSupport(FrozenModel):
-    """Policy-defined uncertain evidence responsible for a lenient block change."""
-
-    ko_id: KNumber
-    record_ids: Annotated[tuple[RecordIdentifier, ...], Field(min_length=1)]
-    required_block_indexes: Annotated[tuple[PositiveCount, ...], Field(min_length=1)]
-    record_ids_truncated: bool = False
-    required_block_indexes_truncated: bool = False
-
-    @model_validator(mode="after")
-    def validate_order(self) -> Self:
-        if self.record_ids != tuple(sorted(set(self.record_ids))):
-            raise ValueError("uncertain record identifiers must be sorted and unique")
-        if self.required_block_indexes != tuple(sorted(set(self.required_block_indexes))):
-            raise ValueError("uncertain block indexes must be sorted and unique")
-        return self
-
-
 class ModuleWarning(FrozenModel):
     """One bounded machine-readable interpretation or safety warning."""
 
@@ -769,7 +746,7 @@ class ModuleEvaluationResult(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:module-evaluation-result:2",
+            "$id": "urn:kegg-mcp:schema:module-evaluation-result:3",
             "$schema": JSON_SCHEMA_DIALECT,
         },
     )
@@ -778,7 +755,6 @@ class ModuleEvaluationResult(FrozenModel):
     module_name: str | None = Field(default=None, max_length=1_000)
     dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     decision_policy: DecisionPolicyReference
-    evidence_mode: EvidenceMode
     evidence_ko_count: NonNegativeCount
     evaluation_status: ModuleEvaluationStatus
     is_complete: bool | None
@@ -790,7 +766,6 @@ class ModuleEvaluationResult(FrozenModel):
     missing_blocks_preview: tuple[ModuleBlockResult, ...]
     not_evaluable_blocks_preview: tuple[ModuleBlockResult, ...]
     optional_components: tuple[OptionalComponentResult, ...]
-    uncertain_support: tuple[UncertainSupport, ...]
     unresolved_references: tuple[ModuleReferenceIssue, ...]
     calculation_method: CalculationMethodReference
     warnings: tuple[ModuleWarning, ...]
@@ -919,28 +894,6 @@ class ModuleEvaluationResult(FrozenModel):
                 and len(component.matched_ko_ids) != matched_limit
             ):
                 raise ValueError("truncated optional KO previews must fill their output limit")
-        if len(self.uncertain_support) > self.limits.evaluation.max_uncertain_support_items:
-            raise ValueError("uncertain support exceeds the configured output limit")
-        if self.evidence_mode is EvidenceMode.STRICT and self.uncertain_support:
-            raise ValueError("strict evaluations cannot report uncertain support")
-        support_ko_ids = tuple(item.ko_id for item in self.uncertain_support)
-        if support_ko_ids != tuple(sorted(set(support_ko_ids))):
-            raise ValueError("uncertain support must have sorted unique K numbers")
-        for support in self.uncertain_support:
-            record_limit = self.limits.evaluation.max_uncertain_records_per_ko
-            if len(support.record_ids) > record_limit:
-                raise ValueError("uncertain record identifiers exceed the configured output limit")
-            if support.record_ids_truncated and len(support.record_ids) != record_limit:
-                raise ValueError("truncated uncertain record previews must fill their output limit")
-            if len(support.required_block_indexes) > preview_limit:
-                raise ValueError("uncertain block indexes exceed the configured preview limit")
-            if (
-                support.required_block_indexes_truncated
-                and len(support.required_block_indexes) != preview_limit
-            ):
-                raise ValueError("truncated uncertain block previews must fill their output limit")
-            if any(index > self.required_block_count for index in support.required_block_indexes):
-                raise ValueError("uncertain support must identify required blocks")
         provenance_ids = tuple(item.module_id for item in self.provenance)
         if len(provenance_ids) != len(set(provenance_ids)):
             raise ValueError("evaluated definition provenance must have unique module identifiers")
@@ -956,77 +909,6 @@ class ModuleEvaluationResult(FrozenModel):
             version=MODULE_CALCULATION_VERSION,
         ):
             raise ValueError("calculation_method is incompatible with this result schema")
-        return self
-
-
-class PairedModuleEvaluation(FrozenModel):
-    """Separate strict and lenient evaluations over one immutable dataset."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:paired-module-evaluation:2",
-            "$schema": JSON_SCHEMA_DIALECT,
-        },
-    )
-
-    strict: ModuleEvaluationResult
-    lenient: ModuleEvaluationResult
-    strict_to_lenient_changed: bool
-    newly_completed_block_indexes: tuple[PositiveCount, ...]
-    newly_completed_blocks_truncated: bool = False
-
-    @model_validator(mode="after")
-    def validate_pair(self) -> Self:
-        if self.strict.evidence_mode is not EvidenceMode.STRICT:
-            raise ValueError("strict result must use strict evidence")
-        if self.lenient.evidence_mode is not EvidenceMode.LENIENT:
-            raise ValueError("lenient result must use lenient evidence")
-        identity_fields = (
-            "module_id",
-            "module_name",
-            "dataset_id",
-            "decision_policy",
-            "required_block_count",
-            "calculation_method",
-            "unresolved_references",
-            "reference_retrieval_provenance",
-            "provenance",
-            "limits",
-        )
-        if any(
-            getattr(self.strict, name) != getattr(self.lenient, name) for name in identity_fields
-        ):
-            raise ValueError("strict and lenient results must share analysis identity")
-        if self.newly_completed_block_indexes != tuple(
-            sorted(set(self.newly_completed_block_indexes))
-        ):
-            raise ValueError("newly completed block indexes must be sorted and unique")
-        if self.lenient.evidence_ko_count < self.strict.evidence_ko_count:
-            raise ValueError("lenient evidence must contain at least as many K numbers as strict")
-        if any(
-            index > self.strict.required_block_count for index in self.newly_completed_block_indexes
-        ):
-            raise ValueError("newly completed block indexes must identify required blocks")
-        completed_delta = (
-            self.lenient.completed_required_blocks - self.strict.completed_required_blocks
-        )
-        if completed_delta < 0:
-            raise ValueError("lenient evidence cannot complete fewer blocks than strict evidence")
-        preview_count = len(self.newly_completed_block_indexes)
-        preview_limit = self.lenient.limits.evaluation.max_block_previews
-        if self.newly_completed_blocks_truncated:
-            if not (completed_delta > preview_count and preview_count == preview_limit):
-                raise ValueError(
-                    "truncated new-block previews must be full and omit at least one block"
-                )
-        elif preview_count != completed_delta:
-            raise ValueError("complete new-block previews must match the completed-block change")
-        expected_changed = completed_delta > 0 or any(
-            getattr(self.strict, field_name) != getattr(self.lenient, field_name)
-            for field_name in ("evaluation_status", "is_complete", "block_coverage")
-        )
-        if self.strict_to_lenient_changed != expected_changed:
-            raise ValueError("strict_to_lenient_changed must reflect the paired results")
         return self
 
 

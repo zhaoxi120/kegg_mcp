@@ -17,7 +17,7 @@ from kegg_mcp.analysis import (
     rank_modules,
     rank_pathways,
 )
-from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, EvidenceMode
+from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, build_ko_analysis_view
 from kegg_mcp.importers import (
     GenericColumnMapping,
     ImportLimits,
@@ -86,9 +86,8 @@ def test_duplicate_annotation_records_do_not_inflate_detected_nodes() -> None:
     dataset = import_plain_ko("K00001\nK00001\n", limits=_LIMITS)
 
     ranked = rank_pathways(
-        dataset,
+        build_ko_analysis_view(dataset),
         (_row("K00001", "ko00020", 1),),
-        EvidenceMode.STRICT,
     )
 
     assert ranked.selected_ko_ids == ("K00001",)
@@ -100,13 +99,12 @@ def test_duplicate_link_rows_change_relationship_count_but_not_node_count() -> N
     dataset = import_plain_ko("K00001\n", limits=_LIMITS)
 
     ranked = rank_pathways(
-        dataset,
+        build_ko_analysis_view(dataset),
         (
             _row("K00001", "ko00020", 1),
             _row("K00001", "map00020", 2),
             _row("K00001", "ko00020", 3),
         ),
-        EvidenceMode.STRICT,
     )
 
     assert len(ranked.rows) == 1
@@ -114,9 +112,9 @@ def test_duplicate_link_rows_change_relationship_count_but_not_node_count() -> N
     assert ranked.rows[0].relationship_row_count == 3
 
 
-def test_strict_and_lenient_ranking_use_only_their_selected_evidence() -> None:
+def test_pathway_ranking_uses_only_accepted_evidence() -> None:
     dataset = import_generic_table(
-        ("sequence,ko,decision\np1,K00001,accepted\np2,K00002,uncertain\np3,K00003,rejected\n"),
+        ("sequence,ko,decision\np1,K00001,accepted\np2,K00002,unclassified\np3,K00003,rejected\n"),
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(
             sequence_id="sequence",
@@ -132,24 +130,21 @@ def test_strict_and_lenient_ranking_use_only_their_selected_evidence() -> None:
         _row("K00003", "ko00010", 3),
     )
 
-    strict = rank_pathways(dataset, rows, EvidenceMode.STRICT)
-    lenient = rank_pathways(dataset, rows, EvidenceMode.LENIENT)
+    ranked = rank_pathways(build_ko_analysis_view(dataset), rows)
 
-    assert [item.pathway_id for item in strict.rows] == ["ko00030"]
-    assert [item.pathway_id for item in lenient.rows] == ["ko00020", "ko00030"]
-    assert all(item.pathway_id != "ko00010" for item in (*strict.rows, *lenient.rows))
+    assert [item.pathway_id for item in ranked.rows] == ["ko00030"]
+    assert all(item.pathway_id != "ko00010" for item in ranked.rows)
 
 
 def test_ties_use_canonical_pathway_id_and_contracts_round_trip() -> None:
     dataset = import_plain_ko("K00001\nK00002\n", limits=_LIMITS)
 
     ranked = rank_pathways(
-        dataset,
+        build_ko_analysis_view(dataset),
         (
             _row("K00001", "ko00020", 1),
             _row("K00002", "map00010", 2),
         ),
-        EvidenceMode.STRICT,
     )
 
     assert [item.pathway_id for item in ranked.rows] == ["ko00010", "ko00020"]
@@ -173,13 +168,12 @@ def test_module_ranking_reuses_unique_selected_ko_semantics() -> None:
     dataset = import_plain_ko("K00001\nK00001\nK00002\n", limits=_LIMITS)
 
     ranked = rank_modules(
-        dataset,
+        build_ko_analysis_view(dataset),
         (
             _module_row("K00001", "M00020", 1),
             _module_row("K00001", "M00020", 2, namespace="module"),
             _module_row("K00002", "M00010", 3),
         ),
-        EvidenceMode.STRICT,
     )
 
     assert [item.module_id for item in ranked.rows] == ["M00010", "M00020"]
@@ -188,9 +182,9 @@ def test_module_ranking_reuses_unique_selected_ko_semantics() -> None:
     assert {item.target_namespace for item in ranked.relationships} == {"md", "module"}
 
 
-def test_module_ranking_excludes_rejected_and_respects_lenient_evidence() -> None:
+def test_module_ranking_excludes_rejected_and_unclassified_evidence() -> None:
     dataset = import_generic_table(
-        ("sequence,ko,decision\np1,K00001,accepted\np2,K00002,uncertain\np3,K00003,rejected\n"),
+        ("sequence,ko,decision\np1,K00001,accepted\np2,K00002,unclassified\np3,K00003,rejected\n"),
         dialect=TableDialect.CSV,
         mapping=GenericColumnMapping(
             sequence_id="sequence",
@@ -206,15 +200,13 @@ def test_module_ranking_excludes_rejected_and_respects_lenient_evidence() -> Non
         _module_row("K00003", "M00010", 3),
     )
 
-    strict = rank_modules(dataset, rows, EvidenceMode.STRICT)
-    lenient = rank_modules(dataset, rows, EvidenceMode.LENIENT)
+    ranked = rank_modules(build_ko_analysis_view(dataset), rows)
 
-    assert [item.module_id for item in strict.rows] == ["M00030"]
-    assert [item.module_id for item in lenient.rows] == ["M00020", "M00030"]
-    assert all(item.module_id != "M00010" for item in (*strict.rows, *lenient.rows))
-    assert type(lenient).model_validate_json(lenient.model_dump_json()) == lenient
+    assert [item.module_id for item in ranked.rows] == ["M00030"]
+    assert all(item.module_id != "M00010" for item in ranked.rows)
+    assert type(ranked).model_validate_json(ranked.model_dump_json()) == ranked
     _assert_current_ranking_identity(
-        lenient,
+        ranked,
         method=MODULE_RANKING_METHOD,
         method_version=MODULE_RANKING_VERSION,
     )

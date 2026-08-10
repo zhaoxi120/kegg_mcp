@@ -392,7 +392,7 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
             cast(dict[str, object], status.structuredContent["result"])["data"],  # type: ignore[index]
         )
         bounds = cast(dict[str, object], status_data["bounds"])
-        assert status_data["render_input_schema_version"] == "4"
+        assert status_data["render_input_schema_version"] == "6"
         assert "render_input_schema_version" in RendererStatus.model_json_schema()["required"]
         assert bounds["max_results"] == runtime_config.limits.max_results
         assert bounds["max_xml_depth"] == runtime_config.limits.max_xml_depth
@@ -467,8 +467,12 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         deleted = await session.call_tool("delete_render_result", {"render_id": render_id})
         _validate(_tool(tools, "delete_render_result"), deleted)
         assert deleted.isError is False
-        with pytest.raises(McpError):
+        with pytest.raises(McpError) as missing:
             await session.read_resource(AnyUrl(f"kegg-render://results/{render_id}"))
+        assert missing.value.error.code == -32002
+        with pytest.raises(McpError) as invalid:
+            await session.read_resource(AnyUrl("kegg-render://results/not-a-render-id"))
+        assert invalid.value.error.code == types.INVALID_PARAMS
 
 
 @pytest.mark.asyncio

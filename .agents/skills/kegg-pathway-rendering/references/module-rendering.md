@@ -5,9 +5,9 @@ MODULE graphics are project-owned logic diagrams, not biochemical topology claim
 selection.
 
 Require the renderer to preserve top-level AND blocks, OR alternatives, optional components,
-parentheses, MODULE references, and visible unsupported or cyclic content. Keep exact strict and
-lenient completion separate from project block coverage and keep optional components outside the
-required denominator.
+parentheses, MODULE references, and visible unsupported or cyclic content. Keep the accepted-only
+exact completion result separate from project block coverage and keep optional components outside
+the required denominator.
 
 Preserve partially evaluable, not evaluable, oversized, summary-only, or not-renderable status.
 Never drop blocks, reconstruct an AST, or claim that adding a minimal missing alternative will

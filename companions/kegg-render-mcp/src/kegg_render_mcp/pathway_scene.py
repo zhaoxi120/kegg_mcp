@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Protocol, cast
 
 from anyio import to_thread
 from kegg_mcp.domain import ErrorCode as CoreErrorCode
@@ -140,19 +140,13 @@ class UnconfiguredAssetProvider:
 
 
 @dataclass(frozen=True, slots=True)
-class Overlay:
-    state: Literal["accepted", "uncertain"]
-    geometry: KgmlGraphic
-
-
-@dataclass(frozen=True, slots=True)
 class PathwayScene:
     target_id: str
     title: str
     width: int
     height: int
     source_png: bytes
-    overlays: tuple[Overlay, ...]
+    overlays: tuple[KgmlGraphic, ...]
     caption: str
     retained_box_graphic_count: int
     retained_polyline_graphic_count: int
@@ -194,7 +188,6 @@ async def construct_pathway_scene(
         raise _asset_invalid("Retrieved pathway assets have incompatible media metadata.")
     kgml = parse_kgml(kgml_asset.content, target_id, limits)  # type: ignore[arg-type]
     validate_graphic_bounds(kgml, image.width, image.height)
-    evidence_mode = target.evidence_mode.value
     detected = frozenset(target.detected_ko_ids)
     retained_ko_ids = frozenset(ko_id for graphic in kgml.graphics for ko_id in graphic.ko_ids)
     mapped_detected_ko_ids = tuple(sorted(detected.intersection(retained_ko_ids)))
@@ -205,13 +198,7 @@ async def construct_pathway_scene(
             "Core-detected pathway evidence has no safely retained box or polyline geometry in "
             "the matching KGML asset."
         )
-    accepted = render_input.accepted_ko_ids.intersection(detected)
-    eligible_uncertain: frozenset[str] = (
-        render_input.uncertain_ko_ids.intersection(detected)
-        if evidence_mode == "lenient"
-        else frozenset()
-    )
-    overlays = _overlay_states(kgml, accepted, eligible_uncertain)
+    overlays = _accepted_overlays(kgml, detected)
     ratio = cast(float, target.coverage_ratio)
     name = target.pathway_name
     namespace = target.reference_namespace.value
@@ -233,8 +220,8 @@ async def construct_pathway_scene(
     if broad_map:
         warnings.append(
             "This global or overview base map retains KEGG contextual colors and arrowheads; "
-            "only the renderer's solid accepted and dashed uncertain overlays encode input "
-            "annotation evidence. Base-map direction must not be interpreted as evidence of "
+            "only the renderer's solid accepted overlays encode input annotation evidence. "
+            "Base-map direction must not be interpreted as evidence of "
             "directionality or activity."
         )
     community_limit = (
@@ -245,20 +232,20 @@ async def construct_pathway_scene(
     )
     caption = (
         f"{target_id} - {name}. Core descriptive KO coverage: {numerator}/{denominator} "
-        f"({ratio:.1%}); reference namespace: {namespace}; evidence mode: {evidence_mode}; "
-        f"analysis unit: {analysis_unit}.{community_limit} "
+        f"({ratio:.1%}); reference namespace: {namespace}; analysis unit: "
+        f"{analysis_unit}.{community_limit} "
         "This visualization represents annotation evidence, not pathway presence, activity, "
         "flux, phenotype, or experimental validation."
         + (
-            " Existing base-map colors and arrowheads are KEGG context; only solid and dashed "
-            "overlays encode the supplied evidence, without inferring direction or activity."
+            " Existing base-map colors and arrowheads are KEGG context; only solid overlays "
+            "encode the supplied evidence, without inferring direction or activity."
             if broad_map
             else ""
         )
     )
     retained_box_graphic_count = sum(graphic.kind == "box" for graphic in kgml.graphics)
     retained_polyline_graphic_count = len(kgml.graphics) - retained_box_graphic_count
-    box_overlay_count = sum(overlay.geometry.kind == "box" for overlay in overlays)
+    box_overlay_count = sum(graphic.kind == "box" for graphic in overlays)
     polyline_overlay_count = len(overlays) - box_overlay_count
     return PathwayScene(
         target_id=target_id,
@@ -287,19 +274,8 @@ async def _retrieve_pair(
     return image, kgml
 
 
-def _overlay_states(
-    kgml: KgmlDocument, accepted: frozenset[str], uncertain: frozenset[str]
-) -> tuple[Overlay, ...]:
-    result: list[Overlay] = []
-    for graphic in kgml.graphics:
-        state: Literal["accepted", "uncertain"] | None = None
-        if accepted.intersection(graphic.ko_ids):
-            state = "accepted"
-        elif uncertain.intersection(graphic.ko_ids):
-            state = "uncertain"
-        if state is not None:
-            result.append(Overlay(state=state, geometry=graphic))
-    return tuple(sorted(result, key=lambda item: item.state == "accepted"))
+def _accepted_overlays(kgml: KgmlDocument, accepted: frozenset[str]) -> tuple[KgmlGraphic, ...]:
+    return tuple(graphic for graphic in kgml.graphics if accepted.intersection(graphic.ko_ids))
 
 
 def _classify_probe_error(error: CoreKeggMcpError) -> ConnectivityStatus:

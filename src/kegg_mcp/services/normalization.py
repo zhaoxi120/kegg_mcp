@@ -6,6 +6,7 @@ import csv
 import io
 from pathlib import Path
 
+from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
 from kegg_mcp.domain.annotations import AnnotationDataset
 from kegg_mcp.domain.decisions import CANONICAL_SOURCE_STATUS, USER_SUPPLIED_KO
 from kegg_mcp.domain.errors import ErrorCode, fail
@@ -88,6 +89,16 @@ def normalize_annotations(
             and request.column_mapping is None
         ),
         output_bundle=output_bundle,
+    )
+
+
+def build_analysis_view(request: NormalizeAnnotationsRequest) -> KoAnalysisView:
+    """Import one bounded materialized request and immediately discard record-level evidence."""
+    if request.text is None:
+        raise AssertionError("analysis-view requests must be materialized before service execution")
+    return build_ko_analysis_view(
+        _import_dataset(request),
+        input_bytes=len(request.text.encode()),
     )
 
 
@@ -200,4 +211,4 @@ def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumn
     )
 
 
-__all__ = ["_import_dataset", "normalize_annotations"]
+__all__ = ["build_analysis_view", "normalize_annotations"]

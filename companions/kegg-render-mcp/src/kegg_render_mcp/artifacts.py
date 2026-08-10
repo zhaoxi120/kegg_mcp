@@ -175,7 +175,7 @@ class RenderArtifactStore:
         created_at = datetime.now(UTC)
         expires_at = created_at + timedelta(seconds=self._config.retention_seconds)
         manifest = {
-            "schema_version": "2",
+            "schema_version": "4",
             "renderer": {"name": "kegg-render-mcp", "version": __version__},
             "created_at": created_at.isoformat(),
             "target_ids": target_ids,

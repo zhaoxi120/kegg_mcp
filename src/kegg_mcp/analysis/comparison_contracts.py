@@ -21,19 +21,10 @@ from kegg_mcp.domain.annotations import (
 )
 
 KO_COMPARISON_METHOD = "deterministic_ko_membership"
-KO_COMPARISON_VERSION = "1"
+KO_COMPARISON_VERSION = "2"
 
 NonNegativeCount = Annotated[int, Field(strict=True, ge=0)]
 PositiveCount = Annotated[int, Field(strict=True, gt=0)]
-
-
-class ComparedKoClass(StrEnum):
-    """Status-derived KO sets partitioned independently during comparison."""
-
-    ACCEPTED = "accepted"
-    UNCERTAIN_RECORD = "uncertain_record"
-    LENIENT_ADDITIONAL = "lenient_additional"
-    LENIENT = "lenient"
 
 
 class ComparisonWarningCode(StrEnum):
@@ -104,10 +95,7 @@ class ComparisonDatasetProvenance(FrozenModel):
         Field(min_length=1, max_length=100),
     ]
     record_count: NonNegativeCount
-    accepted_ko_count: NonNegativeCount
-    uncertain_record_ko_count: NonNegativeCount
-    lenient_additional_ko_count: NonNegativeCount
-    lenient_ko_count: NonNegativeCount
+    selected_unique_ko_count: NonNegativeCount
 
     @field_validator("label")
     @classmethod
@@ -122,14 +110,6 @@ class ComparisonDatasetProvenance(FrozenModel):
         for label in value:
             normalize_identifier_label(label, field_name="sample label")
         return value
-
-    @model_validator(mode="after")
-    def validate_ko_counts(self) -> Self:
-        if self.lenient_additional_ko_count > self.uncertain_record_ko_count:
-            raise ValueError("lenient-additional KOs must be a subset of uncertain-record KOs")
-        if self.accepted_ko_count + self.lenient_additional_ko_count != self.lenient_ko_count:
-            raise ValueError("lenient KO count must equal accepted plus lenient-additional KOs")
-        return self
 
 
 class DatasetSpecificKoSet(FrozenModel):
@@ -166,10 +146,9 @@ class KoMembershipPattern(FrozenModel):
         return self
 
 
-class KoClassPartition(FrozenModel):
-    """Lossless bounded membership partition for one status-derived KO class."""
+class KoMembershipPartition(FrozenModel):
+    """Lossless bounded membership partition for selected unique K numbers."""
 
-    ko_class: ComparedKoClass
     union_count: NonNegativeCount
     shared_by_all: tuple[KNumber, ...]
     set_specific: Annotated[tuple[DatasetSpecificKoSet, ...], Field(min_length=2)]
@@ -236,13 +215,13 @@ class KoSetComparisonDetail(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:ko-set-comparison-detail:1",
+            "$id": "urn:kegg-mcp:schema:ko-set-comparison-detail:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     datasets: Annotated[tuple[ComparisonDatasetProvenance, ...], Field(min_length=2)]
-    partitions: Annotated[tuple[KoClassPartition, ...], Field(min_length=4, max_length=4)]
+    partition: KoMembershipPartition
     calculation_method: CalculationMethodReference
     warnings: tuple[ComparisonWarning, ...]
     limits: ComparisonLimits
@@ -255,13 +234,9 @@ class KoSetComparisonDetail(FrozenModel):
             raise ValueError("comparison datasets must retain contiguous input order")
         if len(labels) != len(set(labels)):
             raise ValueError("comparison dataset labels must be unique")
-        expected_classes = tuple(ComparedKoClass)
-        if tuple(item.ko_class for item in self.partitions) != expected_classes:
-            raise ValueError("comparison partitions must use canonical KO-class order")
-        for partition in self.partitions:
-            partition_labels = tuple(item.label for item in partition.set_specific)
-            if partition_labels != labels:
-                raise ValueError("partition labels must match comparison dataset order")
+        partition_labels = tuple(item.label for item in self.partition.set_specific)
+        if partition_labels != labels:
+            raise ValueError("partition labels must match comparison dataset order")
         if len(self.datasets) > self.limits.max_sets:
             raise ValueError("comparison datasets exceed the recorded set limit")
         total_records = sum(item.record_count for item in self.datasets)
@@ -270,21 +245,19 @@ class KoSetComparisonDetail(FrozenModel):
         for dataset in self.datasets:
             if dataset.record_count > self.limits.max_records_per_set:
                 raise ValueError("one comparison dataset exceeds the recorded record limit")
-            if dataset.lenient_ko_count > self.limits.max_unique_kos_per_set:
+            if dataset.selected_unique_ko_count > self.limits.max_unique_kos_per_set:
                 raise ValueError("one comparison dataset exceeds the recorded unique-KO limit")
             if len(dataset.sources) > self.limits.max_sources_per_set:
                 raise ValueError("one comparison dataset exceeds the recorded source limit")
             if len(dataset.sample_labels) > self.limits.max_sample_labels_per_set:
                 raise ValueError("one comparison dataset exceeds the recorded sample-label limit")
-        membership_entries = 0
-        for partition in self.partitions:
-            input_count = len(self.datasets)
-            membership_entries += len(partition.shared_by_all) * input_count
-            membership_entries += sum(len(item.ko_ids) for item in partition.set_specific)
-            membership_entries += sum(
-                len(pattern.ko_ids) * len(pattern.member_set_indexes)
-                for pattern in partition.partially_shared
-            )
+        input_count = len(self.datasets)
+        membership_entries = len(self.partition.shared_by_all) * input_count
+        membership_entries += sum(len(item.ko_ids) for item in self.partition.set_specific)
+        membership_entries += sum(
+            len(pattern.ko_ids) * len(pattern.member_set_indexes)
+            for pattern in self.partition.partially_shared
+        )
         if membership_entries > self.limits.max_total_membership_entries:
             raise ValueError("KO memberships exceed the recorded comparison limit")
         if self.calculation_method != CalculationMethodReference(
@@ -332,10 +305,9 @@ class KoMembershipPatternPreview(FrozenModel):
     ko_set: KoPreview
 
 
-class KoClassComparisonSummary(FrozenModel):
+class KoMembershipComparisonSummary(FrozenModel):
     """Exact partition counts with bounded KO and membership-pattern previews."""
 
-    ko_class: ComparedKoClass
     union_count: NonNegativeCount
     shared_by_all: KoPreview
     set_specific: Annotated[tuple[DatasetSpecificKoPreview, ...], Field(min_length=2)]
@@ -362,16 +334,13 @@ class KoSetComparisonSummary(FrozenModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "$id": "urn:kegg-mcp:schema:ko-set-comparison-summary:1",
+            "$id": "urn:kegg-mcp:schema:ko-set-comparison-summary:2",
             "$schema": JSON_SCHEMA_DIALECT,
         }
     )
 
     datasets: Annotated[tuple[ComparisonDatasetProvenance, ...], Field(min_length=2)]
-    partitions: Annotated[
-        tuple[KoClassComparisonSummary, ...],
-        Field(min_length=4, max_length=4),
-    ]
+    partition: KoMembershipComparisonSummary
     calculation_method: CalculationMethodReference
     warnings: tuple[ComparisonWarning, ...]
     detail_limits: ComparisonLimits
@@ -379,19 +348,16 @@ class KoSetComparisonSummary(FrozenModel):
 
     @model_validator(mode="after")
     def validate_summary(self) -> Self:
-        if tuple(item.ko_class for item in self.partitions) != tuple(ComparedKoClass):
-            raise ValueError("comparison summaries must use canonical KO-class order")
-        for partition in self.partitions:
-            previews = [partition.shared_by_all]
-            previews.extend(item.ko_set for item in partition.set_specific)
-            previews.extend(item.ko_set for item in partition.partially_shared_patterns_preview)
-            if any(len(preview.ko_ids) > self.preview_limits.max_ko_ids for preview in previews):
-                raise ValueError("KO previews exceed the recorded output limit")
-            if (
-                len(partition.partially_shared_patterns_preview)
-                > self.preview_limits.max_membership_patterns
-            ):
-                raise ValueError("membership-pattern previews exceed the recorded output limit")
+        previews = [self.partition.shared_by_all]
+        previews.extend(item.ko_set for item in self.partition.set_specific)
+        previews.extend(item.ko_set for item in self.partition.partially_shared_patterns_preview)
+        if any(len(preview.ko_ids) > self.preview_limits.max_ko_ids for preview in previews):
+            raise ValueError("KO previews exceed the recorded output limit")
+        if (
+            len(self.partition.partially_shared_patterns_preview)
+            > self.preview_limits.max_membership_patterns
+        ):
+            raise ValueError("membership-pattern previews exceed the recorded output limit")
         if self.calculation_method != CalculationMethodReference(
             name=KO_COMPARISON_METHOD,
             version=KO_COMPARISON_VERSION,
@@ -406,7 +372,6 @@ class KoSetComparisonSummary(FrozenModel):
 __all__ = [
     "KO_COMPARISON_METHOD",
     "KO_COMPARISON_VERSION",
-    "ComparedKoClass",
     "ComparisonDatasetInput",
     "ComparisonDatasetProvenance",
     "ComparisonLimits",
@@ -415,8 +380,8 @@ __all__ = [
     "ComparisonWarningCode",
     "DatasetSpecificKoPreview",
     "DatasetSpecificKoSet",
-    "KoClassComparisonSummary",
-    "KoClassPartition",
+    "KoMembershipComparisonSummary",
+    "KoMembershipPartition",
     "KoMembershipPattern",
     "KoMembershipPatternPreview",
     "KoPreview",
