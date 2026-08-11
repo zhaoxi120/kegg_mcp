@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
@@ -17,7 +17,7 @@ from kegg_mcp.kegg.contracts import (
 )
 from kegg_mcp.services.output_bundle import OutputBundleArtifact
 
-EXTERNAL_HANDOFF_SCHEMA_VERSION = "1"
+EXTERNAL_HANDOFF_SCHEMA_VERSION = "2"
 MAX_EXTERNAL_HANDOFF_ITEMS = 10_000
 MAX_EXTERNAL_HANDOFF_DATA_BYTES = 2_000_000
 
@@ -337,10 +337,7 @@ class MapperMwsearchRequest(FrozenModel):
 def _valid_positive_exact_mass(value: str) -> bool:
     if _EXACT_MASS.fullmatch(value) is None:
         return False
-    try:
-        return Decimal(value) > 0
-    except InvalidOperation:  # pragma: no cover - regex already excludes invalid decimals
-        return False
+    return Decimal(value) > 0
 
 
 class SyntaxKoCompositionRequest(FrozenModel):
@@ -404,7 +401,7 @@ ExternalHandoffRequest = Annotated[
 class ExternalHandoffBundle(FrozenModel):
     """Stable paths and bounded summary for one local external-tool input bundle."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     target: ExternalHandoffTarget
     output_directory: str = Field(min_length=1, max_length=4_096)
     data_file: str = Field(min_length=1, max_length=4_096)

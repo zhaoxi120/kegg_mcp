@@ -336,7 +336,6 @@ def _materialize_suite_artifacts(
         request,
         snapshot,
         launcher,
-        config,
     )
     plugin_root = marketplace_root / "plugins" / "kegg-mcp"
     return request, snapshot, config, plugin_root, launcher, paths
@@ -1527,7 +1526,12 @@ def test_plugin_registration_verifies_version_bindings_and_cached_skills(
     monkeypatch.setattr(INSTALLER_MODULE, "_codex_mcp_entries", mcp_entries)
     journal = INSTALLER_MODULE.RegistrationJournal()
 
-    INSTALLER_MODULE._register_plugin(request, marketplace_root, journal)
+    INSTALLER_MODULE._register_plugin(
+        request,
+        marketplace_root,
+        journal,
+        snapshot.versions["kegg-mcp"],
+    )
 
     assert commands == [
         (
@@ -1569,9 +1573,11 @@ def test_successful_transaction_publishes_complete_generated_suite(
         actual_request: Any,
         marketplace_root: Path,
         journal: Any,
+        expected_version: str,
     ) -> None:
         assert actual_request is request
         assert marketplace_root == request.install_root / "marketplace"
+        assert expected_version == snapshot.versions["kegg-mcp"]
         assert (marketplace_root / ".agents" / "plugins" / "marketplace.json").is_file()
         journal.marketplace_attempted = True
         journal.marketplace_added = True

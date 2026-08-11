@@ -262,9 +262,9 @@ advice.
 - [ ] Selected-reference bundles contain only the requested bounded canonical entry snapshot and
       optional BRITE result. They do not export cache payloads or mirror KEGG. The bundle records
       parser/schema and sanitized retrieval batches in `reference_snapshot.json`; the manifest
-      contains only producer, payload hashes/MIME/sizes, selection and optional BRITE summary, and
-      a sanitized retrieval summary, without result IDs, request keys, endpoint values,
-      credentials, or local paths.
+      contains only producer, payload MIME types/sizes, selection and optional BRITE summary, and a
+      sanitized retrieval summary, without unused content hashes, result IDs, request keys,
+      endpoint values, credentials, or local paths.
 - [ ] KEGG Mapper and Syntax handoffs only validate and serialize local inputs. They do not issue a
       KEGG request, upload, start a browser, execute an external tool, or parse a downstream result;
       Syntax KO Sequence order is explicitly caller supplied.

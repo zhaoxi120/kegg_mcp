@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import stat
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -448,7 +447,7 @@ def test_prepare_external_handoff_writes_committed_bundle_and_manifest(tmp_path:
 
     assert Path(result.data_file).read_text(encoding="utf-8") == "eco:b0002\nK00844\n"
     manifest = json.loads(Path(result.manifest).read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "1"
+    assert manifest["schema_version"] == "2"
     assert manifest["target"] == "mapper_search"
     assert manifest["parameters"] == {"organism": "eco", "scope": "organism"}
     assert manifest["input"] == {
@@ -465,7 +464,11 @@ def test_prepare_external_handoff_writes_committed_bundle_and_manifest(tmp_path:
     }
     assert manifest["format"]["official_source"] == "https://www.kegg.jp/kegg/mapper/"
     assert "spreadsheet_formula_cells_escaped" not in manifest["format"]
-    assert manifest["files"][0]["sha256"] == sha256(b"eco:b0002\nK00844\n").hexdigest()
+    assert manifest["files"][0] == {
+        "byte_size": len(b"eco:b0002\nK00844\n"),
+        "mime_type": "text/plain",
+        "name": "mapper_search.txt",
+    }
     assert "eco:b0002" not in json.dumps(manifest)
     assert result.item_count == 2
     assert result.data_byte_size == len(b"eco:b0002\nK00844\n")

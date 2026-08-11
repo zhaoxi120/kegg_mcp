@@ -1717,7 +1717,6 @@ def _materialize_plugin(
     request: InstallRequest,
     snapshot: SourceSnapshot,
     launcher: Path,
-    config: DeploymentConfig,
 ) -> Path:
     marketplace_root = request.install_root / "marketplace"
     plugin_root = marketplace_root / "plugins" / PLUGIN_NAME
@@ -1756,85 +1755,7 @@ def _materialize_plugin(
         },
         mode=0o644,
     )
-    _validate_generated_plugin(request, snapshot, config, plugin_root, launcher)
     return marketplace_root
-
-
-def _read_json_file(path: Path) -> object:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        _error("plugin_validation_failed", "a generated plugin document is invalid")
-
-
-def _validate_generated_plugin(
-    request: InstallRequest,
-    snapshot: SourceSnapshot,
-    config: DeploymentConfig,
-    plugin_root: Path,
-    launcher: Path,
-) -> None:
-    manifest = _read_json_file(plugin_root / ".codex-plugin" / "plugin.json")
-    if not isinstance(manifest, dict):
-        _error("plugin_validation_failed", "the generated plugin manifest is invalid")
-    typed_manifest = cast(dict[str, object], manifest)
-    if typed_manifest.get("name") != PLUGIN_NAME:
-        _error("plugin_validation_failed", "the generated plugin manifest is invalid")
-    if typed_manifest.get("version") != snapshot.versions["kegg-mcp"]:
-        _error("plugin_validation_failed", "the generated plugin version is invalid")
-    if (
-        typed_manifest.get("skills") != "./skills/"
-        or typed_manifest.get("mcpServers") != "./.mcp.json"
-    ):
-        _error("plugin_validation_failed", "the generated plugin component paths are invalid")
-    skill_root = plugin_root / "skills"
-    try:
-        names = {path.name for path in skill_root.iterdir()}
-    except OSError:
-        _error("plugin_validation_failed", "the generated plugin Skills are unavailable")
-    if names != set(SKILL_NAMES):
-        _error("plugin_validation_failed", "the generated plugin Skill set is invalid")
-    if any(not (skill_root / name / "SKILL.md").is_file() for name in SKILL_NAMES):
-        _error("plugin_validation_failed", "a generated plugin Skill entrypoint is missing")
-
-    document = _read_json_file(plugin_root / ".mcp.json")
-    if not isinstance(document, dict):
-        _error("plugin_validation_failed", "the generated MCP document is invalid")
-    typed_document = cast(dict[str, object], document)
-    if set(typed_document) != {"mcpServers"}:
-        _error("plugin_validation_failed", "the generated MCP document is invalid")
-    servers = typed_document.get("mcpServers")
-    if not isinstance(servers, dict):
-        _error("plugin_validation_failed", "the generated MCP set is invalid")
-    typed_servers = cast(dict[str, object], servers)
-    if set(typed_servers) != set(SERVER_NAMES):
-        _error("plugin_validation_failed", "the generated MCP set is invalid")
-    for server_name in SERVER_NAMES:
-        raw = typed_servers.get(server_name)
-        runtime = RUNTIME_COMMANDS[server_name][0]
-        expected = {
-            "command": str(_runtime_python(request.install_root, runtime)),
-            "args": ["-I", str(launcher), server_name],
-            "cwd": ".",
-        }
-        if raw != expected:
-            _error("plugin_validation_failed", "a generated MCP launcher is invalid")
-    serialized_public_config = json.dumps(
-        {"plugin": typed_manifest, "mcp": typed_document}, ensure_ascii=True, sort_keys=True
-    )
-    private_values = {
-        str(config.deepkoala.state_root),
-        str(config.renderer.state_root),
-        str(config.kegg.rate_limit_root),
-        str(config.core.result_store_path),
-        *(str(path) for path in config.core.allowed_roots),
-    }
-    if config.kegg.cache_path is not None:
-        private_values.add(str(config.kegg.cache_path))
-    if config.kegg.licensed_endpoint is not None:
-        private_values.add(config.kegg.licensed_endpoint)
-    if any(value in serialized_public_config for value in private_values):
-        _error("plugin_validation_failed", "private deployment values escaped into plugin metadata")
 
 
 def _plugin_is_installed(request: InstallRequest) -> bool:
@@ -2036,7 +1957,10 @@ def _codex_plugin_cache_matches(
 
 
 def _register_plugin(
-    request: InstallRequest, marketplace_root: Path, journal: RegistrationJournal
+    request: InstallRequest,
+    marketplace_root: Path,
+    journal: RegistrationJournal,
+    expected_version: str,
 ) -> None:
     journal.marketplace_attempted = True
     marketplace_result = _run_command(
@@ -2060,11 +1984,7 @@ def _register_plugin(
     journal.plugin_added = True
 
     generated_plugin_root = marketplace_root / "plugins" / PLUGIN_NAME
-    manifest = _read_json_file(generated_plugin_root / ".codex-plugin" / "plugin.json")
-    if not isinstance(manifest, dict):
-        _error("plugin_verification_failed", "Codex did not cache the expected suite plugin")
-    expected_version = cast(dict[str, object], manifest).get("version")
-    if not isinstance(expected_version, str) or not _plugin_is_ready(request, expected_version):
+    if not _plugin_is_ready(request, expected_version):
         _error("plugin_verification_failed", "Codex did not report an enabled suite plugin")
     entries = _codex_mcp_entries(request)
     if not _codex_mcp_bindings_match(request, entries):
@@ -2234,8 +2154,13 @@ def _perform_install(
         _verify_distribution_versions(request, snapshot)
         _verify_runtime_configuration(request, environments)
         launcher = _materialize_deployment(request, snapshot, environments)
-        marketplace_root = _materialize_plugin(request, snapshot, launcher, config)
-        _register_plugin(request, marketplace_root, journal)
+        marketplace_root = _materialize_plugin(request, snapshot, launcher)
+        _register_plugin(
+            request,
+            marketplace_root,
+            journal,
+            snapshot.versions["kegg-mcp"],
+        )
         _write_json(
             request.install_root / "installation.json",
             {

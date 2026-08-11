@@ -1,6 +1,5 @@
 """Tests for the integrity-checked user-local KEGG response cache."""
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -655,7 +654,7 @@ def test_read_only_cache_reuses_an_existing_database_and_rejects_mutation(
     cache_path = tmp_path / "kegg.sqlite3"
     _write_response(SQLiteKeggCache(cache_path))
     cache = SQLiteKeggCache(cache_path, read_only=True)
-    digest_before = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    content_before = cache_path.read_bytes()
     modified_before = cache_path.stat().st_mtime_ns
     sidecars_before = tuple(sorted(item.name for item in tmp_path.glob("kegg.sqlite3-*")))
 
@@ -665,7 +664,7 @@ def test_read_only_cache_reuses_an_existing_database_and_rejects_mutation(
     assert lookup.state is CacheReadState.FRESH
     assert lookup.response is not None
     assert status.entry_count == 1
-    assert hashlib.sha256(cache_path.read_bytes()).hexdigest() == digest_before
+    assert cache_path.read_bytes() == content_before
     assert cache_path.stat().st_mtime_ns == modified_before
     assert tuple(sorted(item.name for item in tmp_path.glob("kegg.sqlite3-*"))) == sidecars_before
     with pytest.raises(KeggMcpError) as write_error:
