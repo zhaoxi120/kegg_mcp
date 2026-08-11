@@ -88,17 +88,22 @@ def module_scene_layout(
     reference_edge_count: int,
 ) -> tuple[int, int, int]:
     """Return the renderer's normative width, height, and SVG-node estimate."""
-    maximum_node_x = 50 + max_depth * 220
-    has_panels = bool(required_block_count or optional_component_count or reference_edge_count)
-    panel_height = (
-        required_block_count * 34
-        + optional_component_count * 28
-        + reference_edge_count * 28
-        + 34 * int(bool(optional_component_count))
-        + 34 * int(bool(reference_edge_count))
+    maximum_node_right = 50 + max_depth * 220 + 176
+    panel_counts = (
+        required_block_count,
+        optional_component_count,
+        reference_edge_count,
     )
-    width = max(900, maximum_node_x + (950 if has_panels else 260))
-    height = max(620, 360 + max(node_count * 58, panel_height))
+    populated_panel_count = sum(bool(count) for count in panel_counts)
+    panel_bottom = (
+        140
+        + sum(26 + count * 28 for count in panel_counts if count)
+        + max(0, populated_panel_count - 1) * 12
+    )
+    node_y = panel_bottom + 30 if populated_panel_count else 150
+    node_span = max(0, node_count - 1) * 48 + 40
+    width = max(900, maximum_node_right + 50)
+    height = max(620, node_y + node_span + 170)
     svg_nodes = (
         24
         + node_count * 4

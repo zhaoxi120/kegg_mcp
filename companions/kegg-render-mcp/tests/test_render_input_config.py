@@ -366,6 +366,9 @@ def test_path_traversal_relative_and_symlink_escape_are_rejected(
         with pytest.raises(RenderMcpError) as raised:
             load_render_input(path, runtime_config)
         assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+        assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+            "field": "render_input_path"
+        }
 
 
 def test_unsafe_writable_intermediate_directory_is_rejected(
@@ -427,6 +430,22 @@ def test_output_directory_creation_is_deferred_to_export(
     assert not output.exists()
 
 
+def test_output_directory_outside_allowed_roots_names_the_field(
+    tmp_path: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    with pytest.raises(RenderMcpError, match="outside the configured allowed roots") as raised:
+        resolve_output_directory(
+            str(tmp_path / "outside-render-output"),
+            runtime_config.allowed_roots,
+        )
+
+    assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+    assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+        "field": "output_directory"
+    }
+
+
 def test_output_directory_reserves_path_space_for_artifact_names(
     allowed_root: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
@@ -439,6 +458,9 @@ def test_output_directory_reserves_path_space_for_artifact_names(
         resolve_output_directory(str(output), runtime_config.allowed_roots)
 
     assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+    assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+        "field": "output_directory"
+    }
     assert tuple(allowed_root.iterdir()) == entries_before
 
 

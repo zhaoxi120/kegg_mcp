@@ -66,15 +66,18 @@ def load_render_input(
     if (path_text is None) == (render_input_json is None):
         raise _invalid_input("Provide exactly one renderer input source.")
     if path_text is not None:
-        descriptor, _ = _open_beneath(
-            path_text,
-            config.allowed_roots,
-            final_kind="file",
-        )
         try:
-            payload = _bounded_read(descriptor, config.limits.max_input_bytes)
-        finally:
-            os.close(descriptor)
+            descriptor, _ = _open_beneath(
+                path_text,
+                config.allowed_roots,
+                final_kind="file",
+            )
+            try:
+                payload = _bounded_read(descriptor, config.limits.max_input_bytes)
+            finally:
+                os.close(descriptor)
+        except RenderMcpError as error:
+            raise _with_path_field(error, "render_input_path") from None
     else:
         assert render_input_json is not None
         try:
@@ -129,44 +132,50 @@ def resolve_output_directory(path_text: str | None, roots: tuple[Path, ...]) -> 
     if path_text is None:
         candidate = roots[-1] / f"kegg-render-{secrets.token_hex(16)}"
         return _output_directory_path(str(candidate))
-    path = _output_directory_path(path_text)
-    root = _containing_root(path, roots)
-    if path == root:
-        descriptor, _ = _open_beneath(path_text, roots, final_kind="directory")
-        os.close(descriptor)
-        return path
-
-    parent_descriptor, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
     try:
-        try:
-            descriptor = os.open(
-                path.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                dir_fd=parent_descriptor,
-            )
-        except FileNotFoundError:
-            return path
-        except OSError as error:
-            raise _path_error(
-                "The renderer output directory could not be opened safely."
-            ) from error
-        try:
-            _validate_private_directory_fd(descriptor)
-        finally:
+        path = _output_directory_path(path_text)
+        root = _containing_root(path, roots)
+        if path == root:
+            descriptor, _ = _open_beneath(path_text, roots, final_kind="directory")
             os.close(descriptor)
-    finally:
-        os.close(parent_descriptor)
-    return path
+            return path
+
+        parent_descriptor, _ = _open_beneath(str(path.parent), roots, final_kind="directory")
+        try:
+            try:
+                descriptor = os.open(
+                    path.name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=parent_descriptor,
+                )
+            except FileNotFoundError:
+                return path
+            except OSError as error:
+                raise _path_error(
+                    "The renderer output directory could not be opened safely."
+                ) from error
+            try:
+                _validate_private_directory_fd(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent_descriptor)
+        return path
+    except RenderMcpError as error:
+        raise _with_path_field(error, "output_directory") from None
 
 
 def open_allowed_directory(path: Path, roots: tuple[Path, ...]) -> tuple[int, bool]:
     """Open or create a validated output directory and report whether it was created."""
-    return _open_beneath(
-        str(path),
-        roots,
-        final_kind="directory",
-        create_final_directory=True,
-    )
+    try:
+        return _open_beneath(
+            str(path),
+            roots,
+            final_kind="directory",
+            create_final_directory=True,
+        )
+    except RenderMcpError as error:
+        raise _with_path_field(error, "output_directory") from None
 
 
 def assert_allowed_directory_identity(
@@ -392,6 +401,21 @@ def _path_error(message: str) -> RenderMcpError:
             code=ErrorCode.INPUT_PATH_REJECTED,
             message=message,
             suggested_action="Use a direct path beneath a configured allowed root.",
+        )
+    )
+
+
+def _with_path_field(error: RenderMcpError, field: str) -> RenderMcpError:
+    if error.detail.code is not ErrorCode.INPUT_PATH_REJECTED:
+        return error
+    return RenderMcpError(
+        error.detail.model_copy(
+            update={
+                "safe_details": (
+                    *error.detail.safe_details,
+                    SafeDetail(name="field", value=field),
+                )
+            }
         )
     )
 
