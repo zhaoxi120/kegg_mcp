@@ -508,6 +508,7 @@ async def test_query_workflow_through_mcp_and_real_client(
                     ],
                     "include_all_paths": True,
                     "include_unmatched": True,
+                    "preview_limit": 3,
                 },
             )
         )
