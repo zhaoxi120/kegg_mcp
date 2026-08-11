@@ -104,6 +104,10 @@ class MapBriteHierarchyRequest(FrozenModel):
         strict=True,
         ge=0,
         le=MAX_BRITE_PREVIEW_PATHS,
+        description=(
+            "Number of path and classification previews returned directly, from 0 through 3; "
+            "defaults to 3. Complete bounded detail remains retained."
+        ),
     )
 
     @model_validator(mode="after")

@@ -191,9 +191,9 @@ The server exposes eighteen Core tools:
   `brite_paths.tsv`, and the commit-marker `reference_manifest.json`. The snapshot records the
   selected cards, request, parser/schema, sanitized retrieval batches, and optional BRITE detail.
   The manifest records the producer, selection and optional BRITE summary, sanitized retrieval
-  summary, and payload size, MIME, and hash metadata without result IDs, request keys, endpoint
-  values, or local paths. This local tool makes no KEGG request and exports neither the raw cache
-  nor an unbounded KEGG mirror.
+  summary, and payload size and MIME metadata without result IDs, request keys, endpoint values,
+  or local paths. Bundle schema version 2 omits unused content hashes. This local tool makes no
+  KEGG request and exports neither the raw cache nor an unbounded KEGG mirror.
 - `prepare_kegg_handoff`: prepare one discriminated local handoff under an explicit allowed-root
   output directory. Its seven targets prepare validated input files for KEGG Mapper Reconstruct,
   Search, Color, Join, or MWsearch, or KEGG Syntax KO Composition or caller-ordered KO Sequence.
@@ -459,10 +459,13 @@ organism references remain summary-only. The server loads pathway LINK/GET refer
 selected targets. Duplicate annotation records and duplicate LINK rows cannot increase the detected
 node count.
 
-Generic tables with unambiguous common headers are mapped automatically and the decision is
-reported; ambiguous or non-standard tables require an explicit mapping. When `annotations` is used
-in the high-level tool, biological context belongs inside that nested object. KO-only MCP inputs do
-not accept organism-specific pathway references because they lack gene-level context. Cache tuning,
+Generic tables with unambiguous common headers are mapped automatically and the actual logical-to-
+source column bindings are returned with the result; ambiguous or non-standard tables require an
+explicit mapping. Exact common `score` and `threshold` headers are preserved with
+`score_type="source_specific"` and `threshold_rule="source_specific"`, because the column names
+alone do not establish probability or comparison semantics. When `annotations` is used in the
+high-level tool, biological context belongs inside that nested object. KO-only MCP inputs do not
+accept organism-specific pathway references because they lack gene-level context. Cache tuning,
 refresh flags, and internal limit models are deployment-owned rather than ordinary tool inputs.
 
 File input and explicit `output_directory` paths are disabled until `KEGG_MCP_ALLOWED_ROOTS` is

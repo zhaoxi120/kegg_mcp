@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -231,7 +230,7 @@ def _retain_brite(
     return result.result_id
 
 
-def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
+def test_writes_committed_reference_bundle_with_portable_artifact_metadata(
     tmp_path: Path,
 ) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
@@ -261,7 +260,7 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
     assert result.schema_version == REFERENCE_BUNDLE_SCHEMA_VERSION
 
     manifest = json.loads((output / REFERENCE_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "1"
+    assert manifest["schema_version"] == "2"
     assert manifest["bundle_type"] == "kegg_reference"
     assert manifest["brite"] == {
         "missing_brite_count": 0,
@@ -284,7 +283,7 @@ def test_writes_committed_reference_bundle_with_portable_integrity_metadata(
     for record in manifest["artifacts"]:
         content = (output / record["name"]).read_bytes()
         assert record["byte_size"] == len(content)
-        assert record["sha256"] == hashlib.sha256(content).hexdigest()
+        assert set(record) == {"byte_size", "mime_type", "name"}
         assert record["mime_type"] in {
             "application/json",
             "text/tab-separated-values; charset=utf-8",

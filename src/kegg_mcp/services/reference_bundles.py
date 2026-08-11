@@ -59,7 +59,7 @@ from kegg_mcp.services.entry_snapshot_io import read_entry_card_snapshot
 from kegg_mcp.services.query_models import MAX_QUERY_PROVENANCE_BATCHES
 from kegg_mcp.services.result_store import RESULT_ID_SCHEMA_PATTERN, SQLiteResultStore
 
-REFERENCE_BUNDLE_SCHEMA_VERSION = "1"
+REFERENCE_BUNDLE_SCHEMA_VERSION = "2"
 REFERENCE_SNAPSHOT_SCHEMA_VERSION = "1"
 REFERENCE_MANIFEST_NAME = "reference_manifest.json"
 REFERENCE_SNAPSHOT_NAME = "reference_snapshot.json"
@@ -73,7 +73,6 @@ MAX_REFERENCE_BUNDLE_BYTES = 32 * 1024 * 1024
 
 _JSON_MIME_TYPE = "application/json"
 _TSV_MIME_TYPE = "text/tab-separated-values; charset=utf-8"
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _BUNDLE_FILE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 
@@ -105,12 +104,11 @@ class WriteKeggReferenceBundleRequest(FrozenModel):
 
 
 class ReferenceBundleFileRecord(FrozenModel):
-    """Portable integrity metadata without a local filesystem path."""
+    """Portable artifact metadata without a local filesystem path."""
 
     name: str = Field(pattern=_BUNDLE_FILE_PATTERN)
     mime_type: str = Field(min_length=1, max_length=100)
     byte_size: int = Field(strict=True, ge=0, le=MAX_REFERENCE_BUNDLE_ARTIFACT_BYTES)
-    sha256: str = Field(pattern=_SHA256_PATTERN)
 
 
 class ReferenceBundleArtifact(ReferenceBundleFileRecord):
@@ -227,7 +225,7 @@ class ReferenceBundleRetrievalSummary(FrozenModel):
 class ReferenceBundleManifest(FrozenModel):
     """Committed portable manifest; local paths and endpoint labels are excluded."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     bundle_type: Literal["kegg_reference"]
     producer: ReferenceBundleProducer
     selection: ReferenceBundleSelectionSummary
@@ -280,7 +278,7 @@ class ReferenceBundleRetrievalBatch(FrozenModel):
 class KeggReferenceBundle(FrozenModel):
     """Paths and compact counts for one committed durable reference bundle."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     output_directory: str = Field(min_length=1, max_length=4_096)
     manifest: str = Field(min_length=1, max_length=4_096)
     requested_entry_count: int = Field(strict=True, ge=1, le=MAX_ENTRY_CARDS)
@@ -390,7 +388,7 @@ def write_kegg_reference_bundle(
         for name, content in payloads.items()
     )
     artifact_records = tuple(
-        ReferenceBundleFileRecord.model_validate(spec.integrity_record()) for spec in payload_specs
+        ReferenceBundleFileRecord.model_validate(spec.metadata_record()) for spec in payload_specs
     )
     manifest = ReferenceBundleManifest(
         schema_version=REFERENCE_BUNDLE_SCHEMA_VERSION,
@@ -421,7 +419,6 @@ def write_kegg_reference_bundle(
             name=spec.name,
             mime_type=spec.mime_type,
             byte_size=spec.byte_size,
-            sha256=spec.sha256,
             path=str(output_directory / spec.name),
         )
         for spec in all_specs

@@ -199,13 +199,15 @@ stable `reference_snapshot.json`, `relationships.tsv`, optional `brite_paths.tsv
 `reference_manifest.json` files. The snapshot records the selected cards, request, parser/schema,
 complete sanitized retrieval batches, and optional BRITE request and provenance. The manifest
 records the producer, selection and optional BRITE summary, sanitized retrieval summary, and
-payload MIME types, sizes, and SHA-256 hashes without process-scoped result identifiers, request
-keys, endpoint values, or local paths.
+payload MIME types and sizes without process-scoped result identifiers, request keys, endpoint
+values, or local paths. Bundle schema version 2 omits content hashes because no consumer uses them
+to avoid reading an artifact or to change validation behavior.
 
 `prepare_external_handoff` validates one allowlisted KEGG Mapper Reconstruct, Search, Color, Join,
 or MWsearch request, or one KEGG Syntax KO Composition or KO Sequence request. It writes the
 target's upload-shaped data file and `handoff_manifest.json` without a KEGG API call, upload,
-browser, subprocess, or downstream-result parsing. KO Sequence requires
+browser, subprocess, or downstream-result parsing. Handoff schema version 2 records file names,
+MIME types, and byte sizes without unused content hashes. KO Sequence requires
 `order_semantics="caller_supplied_genomic_order"`; the service never infers genomic order.
 
 These services are query and evidence-routing paths, not extensions of the annotator or renderer.

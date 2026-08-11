@@ -101,6 +101,9 @@ async def test_output_path_budget_is_rejected_before_assets_or_allocation(
                 output_directory=str(output),
             )
         assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+        assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+            "field": "output_directory"
+        }
         assert synthetic_provider.calls == []
         assert tuple(allowed_root.iterdir()) == entries_before
         _assert_no_partial_result(service, allowed_root, allocated_before)

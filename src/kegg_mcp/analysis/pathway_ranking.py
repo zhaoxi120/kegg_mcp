@@ -36,7 +36,15 @@ class PathwaySelection(FrozenModel):
         }
     )
 
-    top_n: int = Field(default=5, strict=True, ge=1, le=25)
+    top_n: int = Field(
+        default=5,
+        strict=True,
+        ge=1,
+        le=25,
+        description=(
+            "Number of ranked KO-reference pathways selected, from 1 through 25; defaults to 5."
+        ),
+    )
 
 
 class ModuleSelection(FrozenModel):

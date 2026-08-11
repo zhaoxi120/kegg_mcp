@@ -119,7 +119,8 @@ TOOL_SPECS = (
             "Derive a compact sorted unique accepted-KO view from an inline KO list or supported "
             "annotation table and run requested MODULE and pathway analyses in one call; use "
             "normalize_ko_annotations when record-level evidence is required. pathway_selection "
-            "can rank candidates server-side and load references only for a bounded Top-N."
+            "can rank candidates server-side and load references only for a bounded Top-N; "
+            "pathway_selection.top_n accepts 1 through 25 and defaults to 5."
         ),
         AnalyzeKoAnnotationsInput,
         AnalyzeKoAnnotationsToolEnvelope,
@@ -155,7 +156,8 @@ TOOL_SPECS = (
         "Search KEGG entries",
         (
             "Search one allowlisted KEGG database with bounded FIND semantics. Results are "
-            "endpoint candidates without an invented relevance score or selected best match."
+            "endpoint candidates without an invented relevance score or selected best match. "
+            "max_results accepts 1 through 100 and defaults to 20."
         ),
         SearchKeggEntriesInput,
         SearchEntriesToolEnvelope,
@@ -180,6 +182,8 @@ TOOL_SPECS = (
         "Trace KEGG relations",
         (
             "Trace one or two bounded levels of allowlisted typed KEGG cross-references. "
+            "max_depth accepts 1 through 2 and defaults to 1; max_nodes accepts 1 through 200 "
+            "and defaults to 200; max_edges accepts 1 through 500 and defaults to 500. "
             "Returned edges do not establish regulation, causality, activity, or phenotype."
         ),
         TraceKeggRelationsInput,
@@ -192,7 +196,8 @@ TOOL_SPECS = (
         "Map BRITE hierarchy",
         (
             "Map typed KEGG entities into bounded BRITE hierarchy paths. Omitting brite_ids "
-            "uses KO-only BRITE discovery; counts are descriptive unique-input classifications."
+            "uses KO-only BRITE discovery. preview_limit accepts 0 through 3 and defaults to 3; "
+            "counts are descriptive unique-input classifications."
         ),
         MapBriteHierarchyInput,
         BriteHierarchyToolEnvelope,
@@ -294,7 +299,8 @@ TOOL_SPECS = (
         "List retained analysis results",
         (
             "List one bounded metadata page of active results owned by the current stdio "
-            "session; other sessions are never visible."
+            "session; other sessions are never visible. offset accepts 0 through 1,000,000 and "
+            "defaults to 0; limit accepts 1 through 100 and defaults to 50."
         ),
         ListAnalysisResultsInput,
         ListResultsToolEnvelope,

@@ -705,8 +705,6 @@ def _bound_markdown(lines: Iterable[str], maximum_bytes: int) -> tuple[str, bool
         selected.append(line)
         byte_count += candidate_size
     content = "\n".join(selected).rstrip() + notice
-    if len(content.encode("utf-8")) > maximum_bytes:  # pragma: no cover - defensive
-        _limit_exceeded("Markdown bytes", len(content.encode("utf-8")), maximum_bytes)
     return content, True
 
 

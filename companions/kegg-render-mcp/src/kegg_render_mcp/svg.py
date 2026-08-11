@@ -114,7 +114,7 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
     if estimated_nodes > max_nodes:
         raise _limit_error("The MODULE SVG exceeds the configured node limit.")
     positions = {
-        node.node_id: (50 + node.depth * 220, 190 + index * 58)
+        node.node_id: (50 + node.depth * 220, scene.node_y + index * 48)
         for index, node in enumerate(scene.nodes)
     }
     lines = [
@@ -158,26 +158,31 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
                 _text(x + 10, y + 25, _truncate(node.label, 24), 13, bold=node.depth == 0),
             ]
         )
-    panel_x = max((x for x, _ in positions.values()), default=50) + 230
-    lines.append(_text(panel_x, 164, "Required block states", 17, bold=True))
-    for index, block in enumerate(scene.blocks):
-        y = 190 + index * 34
-        color = _block_color(block.state)
-        lines.extend(
-            [
-                f'<rect x="{panel_x}" y="{y}" width="18" height="18" fill="{color}" '
-                'stroke="#374151" stroke-width="1"/>',
-                _text(
-                    panel_x + 28,
-                    y + 15,
-                    f"Block {block.block_index}: {block.state}",
-                    12,
-                ),
-            ]
-        )
-    panel_y = 190 + len(scene.blocks) * 34
+    panel_x = 50
+    panel_y = 140
+    populated_panel = False
+    if scene.blocks:
+        lines.append(_text(panel_x, panel_y, "Required block states", 17, bold=True))
+        panel_y += 26
+        for block in scene.blocks:
+            color = _block_color(block.state)
+            lines.extend(
+                [
+                    f'<rect x="{panel_x}" y="{panel_y}" width="18" height="18" '
+                    f'fill="{color}" stroke="#374151" stroke-width="1"/>',
+                    _text(
+                        panel_x + 28,
+                        panel_y + 15,
+                        f"Block {block.block_index}: {block.state}",
+                        12,
+                    ),
+                ]
+            )
+            panel_y += 28
+        populated_panel = True
     if scene.optional_components:
-        panel_y += 18
+        if populated_panel:
+            panel_y += 12
         lines.append(_text(panel_x, panel_y, "Optional component states", 17, bold=True))
         panel_y += 26
         for item in scene.optional_components:
@@ -190,8 +195,10 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
                 )
             )
             panel_y += 28
+        populated_panel = True
     if scene.reference_edges:
-        panel_y += 12
+        if populated_panel:
+            panel_y += 12
         lines.append(_text(panel_x, panel_y, "Resolved MODULE references", 17, bold=True))
         panel_y += 26
         for edge in scene.reference_edges:
@@ -204,7 +211,7 @@ def render_module_svg(scene: ModuleScene, *, max_bytes: int, max_nodes: int) -> 
                 )
             )
             panel_y += 28
-    caption_y = min(scene.height - 80, max(240, 220 + len(scene.nodes) * 58))
+    caption_y = scene.height - 110
     if scene.warnings:
         lines.append(
             _text(30, caption_y - 24, "Warnings: " + " | ".join(scene.warnings)[:1000], 12)

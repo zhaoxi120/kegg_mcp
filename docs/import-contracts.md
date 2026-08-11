@@ -245,6 +245,12 @@ The low-level generic importer requires an explicit `mapping` in its Python sign
 schema. The service and MCP layer may perform bounded signature detection, but an ambiguous table
 returns `AMBIGUOUS_COLUMN_MAPPING`; no layer normalizes it by guessing.
 
+Service-level inference recognizes exact common `score` and `threshold` headers. It binds their
+numeric values with `score_type="source_specific"` and `threshold_rule="source_specific"`; callers
+must provide an explicit mapping to claim a more specific semantic such as `probability` or `gte`.
+The normalization result returns the actual logical-to-source column bindings alongside
+`column_mapping_inferred`.
+
 ## DeepKOALA detailed import
 
 `import_deepkoala_detailed` requires the exact documented columns:

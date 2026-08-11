@@ -7,7 +7,7 @@ import io
 from pathlib import Path
 
 from kegg_mcp.domain.analysis_view import KoAnalysisView, build_ko_analysis_view
-from kegg_mcp.domain.annotations import AnnotationDataset
+from kegg_mcp.domain.annotations import AnnotationDataset, ScoreType, ThresholdRule
 from kegg_mcp.domain.decisions import CANONICAL_SOURCE_STATUS, USER_SUPPLIED_KO
 from kegg_mcp.domain.errors import ErrorCode, fail
 from kegg_mcp.importers import (
@@ -83,6 +83,7 @@ def normalize_annotations(
         diagnostic_count=len(dataset.import_report.diagnostics),
         diagnostic_preview=diagnostics,
         diagnostics_truncated=len(diagnostics) < len(dataset.import_report.diagnostics),
+        column_mapping=dataset.import_report.column_mapping,
         column_mapping_inferred=(
             request.input_format
             in {AnnotationInputFormat.GENERIC_CSV, AnnotationInputFormat.GENERIC_TSV}
@@ -161,7 +162,7 @@ def _import_dataset(request: NormalizeAnnotationsRequest) -> AnnotationDataset:
 
 
 def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumnMapping:
-    """Infer only unambiguous common generic-table column names and echo them in the dataset."""
+    """Infer unambiguous common columns with explicitly source-specific numeric semantics."""
     try:
         header = next(csv.reader(io.StringIO(text), delimiter=delimiter, strict=True))
     except (StopIteration, csv.Error):
@@ -198,6 +199,8 @@ def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumn
     ko_id = select("ko_id", ("ko_id", "ko", "k_number", "kegg_orthology"), required=True)
     if sequence_id is None or ko_id is None:
         raise AssertionError("required generic-column inference returned no column")
+    score = select("score", ("score",), required=False)
+    threshold = select("threshold", ("threshold",), required=False)
     return GenericColumnMapping(
         sequence_id=sequence_id,
         ko_id=ko_id,
@@ -208,6 +211,10 @@ def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumn
         raw_decision=select(
             "raw_decision", ("raw_decision", "decision", "status", "annotate"), required=False
         ),
+        score=score,
+        score_type=ScoreType.SOURCE_SPECIFIC if score is not None else None,
+        threshold=threshold,
+        threshold_rule=ThresholdRule.SOURCE_SPECIFIC if threshold is not None else None,
     )
 
 

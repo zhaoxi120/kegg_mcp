@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from kegg_mcp.analysis import (
     CalculationMethodReference,
@@ -20,6 +20,7 @@ from kegg_mcp.analysis import (
 )
 from kegg_mcp.domain.annotations import (
     AnalysisUnit,
+    ColumnBinding,
     DecisionPolicyReference,
     FrozenModel,
     ImportDiagnostic,
@@ -117,6 +118,23 @@ class NormalizeAnnotationsRequest(FrozenModel):
         le=MAX_NORMALIZATION_PREVIEW,
     )
 
+    @field_validator("decision_policy")
+    @classmethod
+    def validate_decision_policy_for_format(
+        cls,
+        value: GenericDecisionPolicy | None,
+        info: ValidationInfo,
+    ) -> GenericDecisionPolicy | None:
+        input_format = info.data.get("input_format", AnnotationInputFormat.PLAIN_KO)
+        if input_format is AnnotationInputFormat.PLAIN_KO and value not in {
+            None,
+            GenericDecisionPolicy.USER_SUPPLIED_KO,
+        }:
+            raise ValueError("decision_policy for plain_ko must be user_supplied_ko when provided")
+        if input_format is AnnotationInputFormat.DEEPKOALA_DETAILED and value is not None:
+            raise ValueError("decision_policy is not configurable for deepkoala_detailed")
+        return value
+
     @model_validator(mode="after")
     def validate_format_configuration(self) -> Self:
         if (self.text is None) == (self.file_path is None):
@@ -125,8 +143,8 @@ class NormalizeAnnotationsRequest(FrozenModel):
             AnnotationInputFormat.GENERIC_CSV,
             AnnotationInputFormat.GENERIC_TSV,
         }
-        if not is_generic and (self.column_mapping is not None or self.decision_policy is not None):
-            raise ValueError("column_mapping and decision_policy are valid only for generic tables")
+        if not is_generic and self.column_mapping is not None:
+            raise ValueError("column_mapping is valid only for generic tables")
         for name in ("max_bytes", "max_rows", "max_columns", "max_field_length"):
             if getattr(self.import_limits, name) > getattr(DEFAULT_IMPORT_LIMITS, name):
                 raise ValueError(f"import_limits.{name} exceeds the MCP service hard bound")
@@ -211,6 +229,10 @@ class NormalizeAnnotationsResult(FrozenModel):
         tuple[ImportDiagnostic, ...], Field(max_length=MAX_NORMALIZATION_PREVIEW)
     ]
     diagnostics_truncated: bool
+    column_mapping: Annotated[
+        tuple[ColumnBinding, ...],
+        Field(max_length=10, description="Logical fields and source columns actually imported."),
+    ] = ()
     column_mapping_inferred: bool = False
     output_bundle: OutputBundle | None = None
 

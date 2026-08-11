@@ -156,67 +156,89 @@ def render_module_png(scene: ModuleScene, *, max_pixels: int, max_output_bytes: 
         font=font,
     )
     positions = {
-        node.node_id: (40 + node.depth * 205, 130 + index * 48)
+        node.node_id: (50 + node.depth * 220, scene.node_y + index * 48)
         for index, node in enumerate(scene.nodes)
     }
     for node in scene.nodes:
         if node.parent_id is not None:
             parent_x, parent_y = positions[node.parent_id]
             x, y = positions[node.node_id]
-            draw.line((parent_x + 160, parent_y + 15, x, y + 15), fill="#94A3B8", width=2)
+            draw.line((parent_x + 176, parent_y + 20, x, y + 20), fill="#94A3B8", width=2)
     for node in scene.nodes:
         x, y = positions[node.node_id]
         color = UNSUPPORTED_COLOR if node.unsupported else "#6B7280" if node.optional else "#4B5563"
         draw.rounded_rectangle(
-            (x, y, x + 160, y + 30), radius=5, fill="white", outline=color, width=3
+            (x, y, x + 176, y + 40), radius=5, fill="white", outline=color, width=3
         )
-        draw.text((x + 7, y + 9), node.label[:24], fill="#1F2937", font=font)
-    panel_x = max((x for x, _ in positions.values()), default=40) + 190
-    draw.text((panel_x, 112), "Required blocks", fill="#1F2937", font=font)
-    for index, block in enumerate(scene.blocks):
-        y = 132 + index * 28
-        color = _block_color(block.state)
-        draw.rectangle((panel_x, y, panel_x + 15, y + 15), fill=color, outline="#374151")
+        draw.text((x + 10, y + 14), node.label[:24], fill="#1F2937", font=font)
+    panel_x = 50
+    panel_y = 140
+    populated_panel = False
+    if scene.blocks:
+        draw.text((panel_x, panel_y - 11), "Required blocks", fill="#1F2937", font=font)
+        panel_y += 26
+        for block in scene.blocks:
+            color = _block_color(block.state)
+            draw.rectangle(
+                (panel_x, panel_y, panel_x + 18, panel_y + 18),
+                fill=color,
+                outline="#374151",
+            )
+            draw.text(
+                (panel_x + 28, panel_y + 3),
+                f"{block.block_index}: {block.state}",
+                fill="#1F2937",
+                font=font,
+            )
+            panel_y += 28
+        populated_panel = True
+    if scene.optional_components:
+        if populated_panel:
+            panel_y += 12
         draw.text(
-            (panel_x + 22, y + 3),
-            f"{block.block_index}: {block.state}",
+            (panel_x, panel_y - 11),
+            "Optional component states",
             fill="#1F2937",
             font=font,
         )
-    panel_y = 132 + len(scene.blocks) * 28
-    if scene.optional_components:
-        panel_y += 14
-        draw.text((panel_x, panel_y), "Optional component states", fill="#1F2937", font=font)
-        panel_y += 20
+        panel_y += 26
         for item in scene.optional_components:
             draw.text(
-                (panel_x, panel_y),
+                (panel_x, panel_y + 3),
                 f"Optional {item.component_index} ({item.source_module_id}): {item.state}",
                 fill="#1F2937",
                 font=font,
             )
-            panel_y += 22
+            panel_y += 28
+        populated_panel = True
     if scene.reference_edges:
-        panel_y += 10
-        draw.text((panel_x, panel_y), "Resolved MODULE references", fill="#1F2937", font=font)
-        panel_y += 20
+        if populated_panel:
+            panel_y += 12
+        draw.text(
+            (panel_x, panel_y - 11),
+            "Resolved MODULE references",
+            fill="#1F2937",
+            font=font,
+        )
+        panel_y += 26
         for edge in scene.reference_edges:
             draw.text(
-                (panel_x, panel_y),
+                (panel_x, panel_y + 3),
                 f"{edge.source_module_id} -> {edge.target_module_id}",
                 fill="#1F2937",
                 font=font,
             )
-            panel_y += 22
+            panel_y += 28
+    caption_y = scene.height - 110
     if scene.warnings:
         _draw_wrapped(
             draw,
             "Warnings: " + " | ".join(scene.warnings)[:1000],
-            (30, scene.height - 104),
+            (30, caption_y - 24),
             width=130,
             font=font,
         )
-    _draw_wrapped(draw, scene.caption, (30, scene.height - 64), width=130, font=font)
+    _draw_wrapped(draw, scene.caption, (30, caption_y), width=130, font=font)
     return _serialize_png(canvas, max_output_bytes)
 
 

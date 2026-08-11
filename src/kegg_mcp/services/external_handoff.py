@@ -186,7 +186,7 @@ def _serialize_manifest(
             "source_retrieved_on": _FORMAT_SOURCE_RETRIEVED_ON,
         },
         "files": [
-            data_artifact.integrity_record(),
+            data_artifact.metadata_record(),
             {
                 "name": _MANIFEST_NAME,
                 "mime_type": _mime_type(_MANIFEST_NAME),

@@ -553,7 +553,7 @@ def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -
                 ModuleDefinition.from_text(
                     module_id="M00001",
                     module_name="Oversized renderer layout",
-                    definition="+".join("K00001" for _ in range(400)),
+                    definition="+".join("K00001" for _ in range(450)),
                 ),
             ),
         ),

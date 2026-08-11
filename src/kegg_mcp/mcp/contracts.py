@@ -128,7 +128,13 @@ class NormalizeKoAnnotationsInput(FrozenModel):
     kegg_organism_code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9]{1,7}$")
     source: SourceProvenanceInput | None = None
     column_mapping: GenericColumnMapping | None = None
-    decision_policy: GenericDecisionPolicy | None = None
+    decision_policy: GenericDecisionPolicy | None = Field(
+        default=None,
+        description=(
+            "Optional for generic CSV/TSV. For plain_ko, omit it or use user_supplied_ko; "
+            "deepkoala_detailed uses its fixed source policy."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_service_contract(self) -> Self:
@@ -377,8 +383,20 @@ class DeleteAnalysisResultInput(FrozenModel):
 class ListAnalysisResultsInput(FrozenModel):
     """Bounded current-session retained-result page."""
 
-    offset: int = Field(default=0, strict=True, ge=0, le=1_000_000)
-    limit: int = Field(default=50, strict=True, ge=1, le=100)
+    offset: int = Field(
+        default=0,
+        strict=True,
+        ge=0,
+        le=1_000_000,
+        description="Zero-based result offset, from 0 through 1,000,000; defaults to 0.",
+    )
+    limit: int = Field(
+        default=50,
+        strict=True,
+        ge=1,
+        le=100,
+        description="Maximum metadata records returned, from 1 through 100; defaults to 50.",
+    )
 
 
 class ResultResourceIndex(FrozenModel):

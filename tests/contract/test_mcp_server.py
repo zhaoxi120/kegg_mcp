@@ -489,16 +489,27 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         assert {"text", "file_path", "output_directory", "manifest_path_mode"} <= set(
             normalize_properties
         )
+        assert (
+            "For plain_ko, omit it or use user_supplied_ko"
+            in normalize_properties["decision_policy"]["description"]
+        )
         for internal_field in ("limits", "refresh", "allow_stale"):
             assert internal_field not in normalize_properties
-        search_schema = _tool_by_name(tools, "search_kegg_entries").inputSchema
+        search_tool = _tool_by_name(tools, "search_kegg_entries")
+        assert search_tool.description is not None
+        assert "max_results accepts 1 through 100 and defaults to 20" in search_tool.description
+        search_schema = search_tool.inputSchema
         assert set(search_schema["properties"]) == {
             "database",
             "query",
             "mode",
             "max_results",
         }
-        assert search_schema["properties"]["max_results"]["maximum"] == 100
+        max_results_schema = search_schema["properties"]["max_results"]
+        assert max_results_schema["minimum"] == 1
+        assert max_results_schema["maximum"] == 100
+        assert max_results_schema["default"] == 20
+        assert "from 1 through 100; defaults to 20" in max_results_schema["description"]
         entries_schema = _tool_by_name(tools, "get_kegg_entries").inputSchema
         assert entries_schema["properties"]["projection"]["default"] == "preview"
         assert entries_schema["properties"]["projection"]["enum"] == [
@@ -566,10 +577,33 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             "chebi",
             "pubchem_sid",
         }
-        trace_schema = _tool_by_name(tools, "trace_kegg_relations").inputSchema
-        assert trace_schema["properties"]["max_depth"]["maximum"] == 2
-        assert trace_schema["properties"]["max_nodes"]["maximum"] == 200
-        assert trace_schema["properties"]["max_edges"]["maximum"] == 500
+        trace_tool = _tool_by_name(tools, "trace_kegg_relations")
+        assert trace_tool.description is not None
+        assert "max_nodes accepts 1 through 200 and defaults to 200" in trace_tool.description
+        assert "max_edges accepts 1 through 500 and defaults to 500" in trace_tool.description
+        trace_schema = trace_tool.inputSchema
+        for field_name, minimum, maximum, default in (
+            ("max_depth", 1, 2, 1),
+            ("max_nodes", 1, 200, 200),
+            ("max_edges", 1, 500, 500),
+        ):
+            field_schema = trace_schema["properties"][field_name]
+            assert field_schema["minimum"] == minimum
+            assert field_schema["maximum"] == maximum
+            assert field_schema["default"] == default
+            assert (
+                f"from {minimum} through {maximum}; defaults to {default}"
+                in field_schema["description"]
+            )
+        brite_tool = _tool_by_name(tools, "map_brite_hierarchy")
+        assert brite_tool.description is not None
+        assert "preview_limit accepts 0 through 3 and defaults to 3" in brite_tool.description
+        brite_preview_limit_schema = brite_tool.inputSchema["properties"]["preview_limit"]
+        assert brite_preview_limit_schema["type"] == "integer"
+        assert brite_preview_limit_schema["minimum"] == 0
+        assert brite_preview_limit_schema["maximum"] == 3
+        assert brite_preview_limit_schema["default"] == 3
+        assert "from 0 through 3; defaults to 3" in brite_preview_limit_schema["description"]
         audit_schema = _tool_by_name(tools, "audit_annotation_mapping").inputSchema
         mapping_targets_schema = audit_schema["properties"]["mapping_targets"]
         assert mapping_targets_schema["maxItems"] == 5
@@ -589,6 +623,14 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         selection_schema = analysis_properties["pathway_selection"]["properties"]
         assert selection_schema["top_n"]["minimum"] == 1
         assert selection_schema["top_n"]["maximum"] == 25
+        assert selection_schema["top_n"]["default"] == 5
+        assert "from 1 through 25; defaults to 5" in selection_schema["top_n"]["description"]
+        analysis_tool_description = _tool_by_name(tools, "analyze_ko_annotations").description
+        assert analysis_tool_description is not None
+        assert (
+            "pathway_selection.top_n accepts 1 through 25 and defaults to 5"
+            in analysis_tool_description
+        )
         analysis_unit_schema = analysis_properties["analysis_unit"]
         assert analysis_unit_schema["type"] == "string"
         assert "isolate_proteome" in analysis_unit_schema["enum"]
@@ -605,9 +647,21 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
             assert "evidence_mode" not in _tool_by_name(tools, tool_name).inputSchema["properties"]
         delete_schema = _tool_by_name(tools, "delete_analysis_result").inputSchema
         assert set(delete_schema["properties"]) == {"result_id"}
-        list_schema = _tool_by_name(tools, "list_analysis_results").inputSchema
+        list_tool = _tool_by_name(tools, "list_analysis_results")
+        assert list_tool.description is not None
+        assert "limit accepts 1 through 100 and defaults to 50" in list_tool.description
+        list_schema = list_tool.inputSchema
         assert set(list_schema["properties"]) == {"offset", "limit"}
-        assert list_schema["properties"]["limit"]["maximum"] == 100
+        offset_schema = list_schema["properties"]["offset"]
+        assert offset_schema["minimum"] == 0
+        assert offset_schema["maximum"] == 1_000_000
+        assert offset_schema["default"] == 0
+        assert "from 0 through 1,000,000; defaults to 0" in offset_schema["description"]
+        limit_schema = list_schema["properties"]["limit"]
+        assert limit_schema["minimum"] == 1
+        assert limit_schema["maximum"] == 100
+        assert limit_schema["default"] == 50
+        assert "from 1 through 100; defaults to 50" in limit_schema["description"]
         list_output = _tool_by_name(tools, "list_analysis_results").outputSchema
         assert list_output is not None
         page_properties = list_output["$defs"]["ResultMetadataPage"]["properties"]
@@ -665,6 +719,11 @@ async def test_discovery_declares_all_tools_annotations_and_resources(tmp_path: 
         status_counts_schema = normalize_output_defs["ImportSummary"]["properties"]["status_counts"]
         assert status_counts_schema["minItems"] == 4
         assert status_counts_schema["maxItems"] == 4
+        normalize_result_properties = normalize_output_defs["NormalizeAnnotationsResult"][
+            "properties"
+        ]
+        assert normalize_result_properties["column_mapping"]["maxItems"] == 10
+        assert "actually imported" in normalize_result_properties["column_mapping"]["description"]
         assert set(normalize_output_defs["NormalizedStatus"]["enum"]) == {
             "accepted",
             "rejected",
@@ -976,6 +1035,64 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_plain_ko_explicit_default_policy_matches_omission_and_rejects_other_policy(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_runtime(tmp_path))
+    async with create_connected_server_and_client_session(server) as session:
+        omitted = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844\nK01810\n",
+                "input_format": "plain_ko",
+                "analysis_unit": "unknown",
+            },
+        )
+        explicit = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844\nK01810\n",
+                "input_format": "plain_ko",
+                "analysis_unit": "unknown",
+                "decision_policy": "user_supplied_ko",
+            },
+        )
+
+        assert omitted.isError is False
+        assert explicit.isError is False
+        assert omitted.structuredContent is not None
+        assert explicit.structuredContent is not None
+        omitted_data = omitted.structuredContent["result"]["data"]
+        explicit_data = explicit.structuredContent["result"]["data"]
+        expected_policy = {"name": "user_supplied_ko", "version": "1"}
+        assert omitted_data["provenance"]["decision_policy"] == expected_policy
+        assert explicit_data["provenance"]["decision_policy"] == expected_policy
+        assert (
+            explicit_data["import_summary"]["status_counts"]
+            == omitted_data["import_summary"]["status_counts"]
+        )
+        assert explicit_data["record_preview"] == omitted_data["record_preview"]
+
+        incompatible = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "text": "K00844\nK01810\n",
+                "input_format": "plain_ko",
+                "decision_policy": "canonical_source_status",
+            },
+        )
+        assert incompatible.isError is True
+        assert incompatible.structuredContent is not None
+        incompatible_error = incompatible.structuredContent["error"]
+        assert incompatible_error["code"] == "ANALYSIS_CONFIGURATION_INVALID"
+        incompatible_details = {
+            item["name"]: item["value"] for item in incompatible_error["safe_details"]
+        }
+        assert incompatible_details["field_path"] == "decision_policy"
+        assert incompatible_details["issue_type"] == "value_error"
+
+
+@pytest.mark.asyncio
 async def test_offline_status_and_probe_are_network_disabled_without_transport_use(
     tmp_path: Path,
 ) -> None:
@@ -1022,6 +1139,72 @@ async def test_recoverable_execution_errors_are_typed_and_schema_valid(
         assert invalid_details["field_path"] == "$.<unknown_field>"
         assert malicious_unknown_field not in json.dumps(invalid.model_dump(mode="json"))
         assert malicious_unknown_field not in capsys.readouterr().err
+
+        invalid_brite_preview = await session.call_tool(
+            "map_brite_hierarchy",
+            {
+                "entity_ids": [
+                    {"kind": "ko", "identifier": "K00844"},
+                    {"kind": "ko", "identifier": "K01810"},
+                    {"kind": "ko", "identifier": "K01623"},
+                ],
+                "include_all_paths": True,
+                "include_unmatched": True,
+                "preview_limit": 4,
+            },
+        )
+        _validate_result(_tool_by_name(tools, "map_brite_hierarchy"), invalid_brite_preview)
+        assert invalid_brite_preview.isError is True
+        assert invalid_brite_preview.structuredContent is not None
+        invalid_brite_details = {
+            item["name"]: item["value"]
+            for item in invalid_brite_preview.structuredContent["error"]["safe_details"]
+        }
+        assert invalid_brite_details["field_path"] == "preview_limit"
+        assert invalid_brite_details["issue_type"] == "less_than_equal"
+        assert invalid_brite_details["maximum"] == "3"
+        assert invalid_brite_details["provided_value"] == "4"
+
+        invalid_trace = await session.call_tool(
+            "trace_kegg_relations",
+            {
+                "seeds": [{"kind": "ko", "identifier": "K00844"}],
+                "edge_types": ["ko_to_pathway"],
+                "max_nodes": 500,
+                "max_edges": 1_000,
+            },
+        )
+        _validate_result(_tool_by_name(tools, "trace_kegg_relations"), invalid_trace)
+        assert invalid_trace.isError is True
+        assert invalid_trace.structuredContent is not None
+        assert invalid_trace.structuredContent["error"]["safe_details"] == [
+            {"name": "stage", "value": "input_validation"},
+            {"name": "field_path", "value": "max_nodes"},
+            {"name": "issue_type", "value": "less_than_equal"},
+            {"name": "maximum", "value": "200"},
+            {"name": "provided_value", "value": "500"},
+            {"name": "field_path", "value": "max_edges"},
+            {"name": "issue_type", "value": "less_than_equal"},
+            {"name": "maximum", "value": "500"},
+            {"name": "provided_value", "value": "1000"},
+            {"name": "validation_issue_count", "value": "2"},
+        ]
+
+        invalid_taxon = await session.call_tool(
+            "normalize_ko_annotations",
+            {"text": "K00844", "taxon_id": 0},
+        )
+        _validate_result(_tool_by_name(tools, "normalize_ko_annotations"), invalid_taxon)
+        assert invalid_taxon.isError is True
+        assert invalid_taxon.structuredContent is not None
+        invalid_taxon_details = {
+            item["name"]: item["value"]
+            for item in invalid_taxon.structuredContent["error"]["safe_details"]
+        }
+        assert invalid_taxon_details["field_path"] == "taxon_id"
+        assert invalid_taxon_details["issue_type"] == "greater_than"
+        assert invalid_taxon_details["exclusive_minimum"] == "0"
+        assert invalid_taxon_details["provided_value"] == "0"
 
         missing_resolution_kind = await session.call_tool(
             "resolve_kegg_entities",
@@ -1561,7 +1744,7 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
     output = tmp_path / "normalized"
     fasta.write_text(">protein-1 alpha enzyme\nMAAA\n", encoding="utf-8")
     annotations.write_text(
-        "sequence_id,protein_name,ko_id\nprotein-1,alpha enzyme,K00001\n",
+        "sequence_id,protein_name,ko_id,score,threshold\nprotein-1,alpha enzyme,K00001,0.95,0.50\n",
         encoding="utf-8",
     )
     server = create_server(_runtime(tmp_path, allowed_roots=(str(tmp_path.resolve()),)))
@@ -1593,6 +1776,17 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
         assert result.structuredContent is not None
         data = result.structuredContent["result"]["data"]
         assert data["column_mapping_inferred"] is True
+        assert data["column_mapping"] == [
+            {"logical_field": "sequence_id", "source_column": "sequence_id"},
+            {"logical_field": "ko_id", "source_column": "ko_id"},
+            {"logical_field": "protein_name", "source_column": "protein_name"},
+            {"logical_field": "score", "source_column": "score"},
+            {"logical_field": "threshold", "source_column": "threshold"},
+        ]
+        assert data["record_preview"][0]["score"] == 0.95
+        assert data["record_preview"][0]["score_type"] == "source_specific"
+        assert data["record_preview"][0]["threshold"] == 0.5
+        assert data["record_preview"][0]["threshold_rule"] == "source_specific"
         assert data["provenance"]["source_preview"][0]["input_path"] == str(fasta)
         assert data["provenance"]["source_preview"][0]["annotation_date"].endswith(("Z", "+09:00"))
         bundle = data["output_bundle"]

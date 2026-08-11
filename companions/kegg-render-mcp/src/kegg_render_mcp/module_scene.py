@@ -52,6 +52,7 @@ class ModuleScene:
     analysis_unit: str
     width: int
     height: int
+    node_y: int
     nodes: tuple[ModuleNode, ...]
     blocks: tuple[ModuleBlockPanel, ...]
     optional_components: tuple[ModuleOptionalPanel, ...]
@@ -142,6 +143,11 @@ def construct_module_scene(
         optional_component_count=len(optional_components),
         reference_edge_count=len(reference_edges),
     )
+    node_y = _module_node_y(
+        required_block_count=len(blocks),
+        optional_component_count=len(optional_components),
+        reference_edge_count=len(reference_edges),
+    )
     if not module_scene_fits_renderer(
         node_count=len(nodes),
         max_depth=max_depth,
@@ -179,6 +185,7 @@ def construct_module_scene(
         analysis_unit=analysis_unit.value,
         width=width,
         height=height,
+        node_y=node_y,
         nodes=nodes,
         blocks=blocks,
         optional_components=optional_components,
@@ -285,3 +292,25 @@ def _display_optional(value: bool | None) -> str:
 
 def _display_ratio(value: float | None) -> str:
     return "not evaluable" if value is None else f"{value:.1%}"
+
+
+def _module_node_y(
+    *,
+    required_block_count: int,
+    optional_component_count: int,
+    reference_edge_count: int,
+) -> int:
+    panel_counts = (
+        required_block_count,
+        optional_component_count,
+        reference_edge_count,
+    )
+    populated_panel_count = sum(bool(count) for count in panel_counts)
+    if not populated_panel_count:
+        return 150
+    panel_bottom = (
+        140
+        + sum(26 + count * 28 for count in panel_counts if count)
+        + (populated_panel_count - 1) * 12
+    )
+    return panel_bottom + 30

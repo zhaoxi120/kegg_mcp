@@ -183,7 +183,13 @@ class SearchKeggEntriesRequest(FrozenModel):
     database: KeggSearchDatabase
     query: str = Field(min_length=1, max_length=256)
     mode: KeggSearchMode = KeggSearchMode.KEYWORD
-    max_results: int = Field(default=20, strict=True, ge=1, le=MAX_SEARCH_RESULTS)
+    max_results: int = Field(
+        default=20,
+        strict=True,
+        ge=1,
+        le=MAX_SEARCH_RESULTS,
+        description="Maximum endpoint candidates returned, from 1 through 100; defaults to 20.",
+    )
 
     @field_validator("query")
     @classmethod
@@ -1009,9 +1015,29 @@ class TraceKeggRelationsRequest(FrozenModel):
         tuple[KeggRelationType, ...], Field(min_length=1, max_length=len(KeggRelationType))
     ]
     organism_scope: str | None = Field(default=None, min_length=3, max_length=4)
-    max_depth: int = Field(default=1, strict=True, ge=1, le=2)
-    max_nodes: int = Field(default=MAX_TRACE_NODES, strict=True, ge=1, le=MAX_TRACE_NODES)
-    max_edges: int = Field(default=MAX_TRACE_EDGES, strict=True, ge=1, le=MAX_TRACE_EDGES)
+    max_depth: int = Field(
+        default=1,
+        strict=True,
+        ge=1,
+        le=2,
+        description="Maximum traversal depth, from 1 through 2; defaults to 1.",
+    )
+    max_nodes: int = Field(
+        default=MAX_TRACE_NODES,
+        strict=True,
+        ge=1,
+        le=MAX_TRACE_NODES,
+        description=(
+            "Maximum graph nodes retained, including seeds, from 1 through 200; defaults to 200."
+        ),
+    )
+    max_edges: int = Field(
+        default=MAX_TRACE_EDGES,
+        strict=True,
+        ge=1,
+        le=MAX_TRACE_EDGES,
+        description="Maximum relationship edges retained, from 1 through 500; defaults to 500.",
+    )
 
     @model_validator(mode="after")
     def require_unique_inputs(self) -> Self:

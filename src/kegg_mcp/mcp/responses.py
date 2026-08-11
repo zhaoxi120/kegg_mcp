@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sys
+from math import isfinite
 from typing import cast
 
 from mcp import types
@@ -20,6 +21,12 @@ _SAFE_NESTED_CONTEXT_FIELDS = frozenset(
         "annotations.sample_id",
     }
 )
+_SAFE_NUMERIC_CONSTRAINTS = {
+    "greater_than": ("exclusive_minimum", "gt"),
+    "greater_than_equal": ("minimum", "ge"),
+    "less_than": ("exclusive_maximum", "lt"),
+    "less_than_equal": ("maximum", "le"),
+}
 
 
 def success(
@@ -70,7 +77,7 @@ def validation_error(
 ) -> ErrorDetail:
     details = [SafeDetail(name="stage", value="input_validation")]
     safe_field_names = _schema_field_names(input_model)
-    for issue in error.errors(include_input=False, include_url=False)[:8]:
+    for issue in error.errors(include_input=True, include_url=False)[:7]:
         issue_type = str(issue.get("type", "invalid"))[:1_000]
         location = _safe_validation_location(
             issue.get("loc", ()),
@@ -88,6 +95,21 @@ def validation_error(
                     location = conflict_fields[0]
         details.append(SafeDetail(name="field_path", value=location[:1_000]))
         details.append(SafeDetail(name="issue_type", value=issue_type))
+        constraint = _SAFE_NUMERIC_CONSTRAINTS.get(issue_type)
+        if constraint is not None and isinstance(context, dict):
+            detail_name, context_key = constraint
+            constraint_value = context.get(context_key)
+            if isinstance(constraint_value, int | float) and not isinstance(constraint_value, bool):
+                details.append(SafeDetail(name=detail_name, value=str(constraint_value)))
+                provided_value = issue.get("input")
+                if (
+                    isinstance(provided_value, int | float)
+                    and not isinstance(provided_value, bool)
+                    and (not isinstance(provided_value, float) or isfinite(provided_value))
+                ):
+                    provided_text = str(provided_value)
+                    if len(provided_text) <= 1_000:
+                        details.append(SafeDetail(name="provided_value", value=provided_text))
         if safe_conflict_fields:
             details.append(SafeDetail(name="conflict_fields", value=",".join(safe_conflict_fields)))
     details.append(SafeDetail(name="validation_issue_count", value=str(error.error_count())))
