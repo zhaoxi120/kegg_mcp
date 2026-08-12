@@ -142,6 +142,35 @@ async def test_discovery_declares_five_compact_policy_bounded_tools(
 
 
 @pytest.mark.asyncio
+async def test_path_schema_error_identifies_output_directory_without_echoing_path(
+    runtime_config: DeepKoalaRuntimeConfig,
+) -> None:
+    server = create_server(_manager(runtime_config))
+    invalid_path = str(runtime_config.output_roots[0] / ".." / "private-output-name")
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        rejected = await session.call_tool(
+            "run_deepkoala_job",
+            {**_input(runtime_config, "invalid-output-path"), "output_directory": invalid_path},
+        )
+
+        _validate(_tool(tools, "run_deepkoala_job"), rejected)
+        assert rejected.isError is True
+        assert rejected.structuredContent is not None
+        error = cast(dict[str, object], rejected.structuredContent["error"])
+        assert error["code"] == "INVALID_REQUEST"
+        details = {
+            cast(str, item["name"]): item["value"]
+            for item in cast(list[dict[str, object]], error["safe_details"])
+        }
+        assert details == {
+            "validation_issue_count": "1",
+            "field": "output_directory",
+        }
+        assert invalid_path not in json.dumps(error)
+
+
+@pytest.mark.asyncio
 async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timestamps(
     runtime_config: DeepKoalaRuntimeConfig,
 ) -> None:

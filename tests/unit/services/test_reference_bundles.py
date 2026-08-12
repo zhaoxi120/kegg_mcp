@@ -750,6 +750,72 @@ def test_snapshot_from_another_scope_is_not_exported(tmp_path: Path) -> None:
     assert not output.exists()
 
 
+def test_active_non_snapshot_result_reports_artifact_kind_mismatch(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    result = store.create(
+        "reference-scope",
+        (
+            ResultArtifactInput(
+                section="detail",
+                mime_type="application/json",
+                content=b"{}",
+            ),
+        ),
+    )
+    output = tmp_path / "wrong-artifact-kind"
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            _request(result.result_id),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    details = {item.name: item.value for item in caught.value.detail.safe_details}
+    assert details == {
+        "expected_artifact_kind": ENTRY_CARD_SNAPSHOT_SECTION,
+        "actual_artifact_kind": "detail",
+    }
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("source_state", ("unknown", "expired"))
+def test_unavailable_reference_source_remains_not_found(
+    tmp_path: Path,
+    source_state: str,
+) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    if source_state == "unknown":
+        result_id = "res_" + "a" * 32
+    else:
+        result_id = store.create(
+            "reference-scope",
+            (
+                ResultArtifactInput(
+                    section=ENTRY_CARD_SNAPSHOT_SECTION,
+                    mime_type="application/json",
+                    content=_snapshot().model_dump_json().encode("utf-8"),
+                ),
+            ),
+            now=datetime.now(UTC) - timedelta(days=2),
+        ).result_id
+    output = tmp_path / source_state
+
+    with pytest.raises(KeggMcpError) as caught:
+        write_kegg_reference_bundle(
+            _request(result_id),
+            output_directory=output,
+            result_store=store,
+            scope_id="reference-scope",
+        )
+
+    assert caught.value.detail.code is ErrorCode.RESULT_NOT_FOUND
+    assert caught.value.detail.safe_details == ()
+    assert not output.exists()
+
+
 def test_non_brite_result_is_rejected_as_brite_source(tmp_path: Path) -> None:
     store = SQLiteResultStore(tmp_path / "results.sqlite3")
     result_id = _retain(store, _snapshot())

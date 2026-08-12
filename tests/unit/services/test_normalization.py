@@ -2,9 +2,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from kegg_mcp.domain import (
     AnnotationDataset,
     ColumnBinding,
+    ErrorCode,
+    KeggMcpError,
     NormalizedStatus,
     ScoreType,
     ThresholdRule,
@@ -125,3 +129,59 @@ def test_inferred_generic_numeric_columns_preserve_source_specific_evidence_and_
     )
     assert inferred_tsv == explicit_tsv
     assert "prot1\t\tK00844\taccepted\tsource_accepted\t0.95\t0.5" in inferred_tsv
+
+
+def test_inferred_protein_column_is_the_sequence_identifier(tmp_path: Path) -> None:
+    result = normalize_annotations(
+        NormalizeAnnotationsRequest(
+            text=" Protein ,KO\np1,K00844\np2,K01810\n",
+            input_format=AnnotationInputFormat.GENERIC_CSV,
+        ),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="protein-alias",
+    )
+
+    assert result.column_mapping == (
+        ColumnBinding(logical_field="sequence_id", source_column=" Protein "),
+        ColumnBinding(logical_field="ko_id", source_column="KO"),
+    )
+    assert [record.sequence_id for record in result.record_preview] == ["p1", "p2"]
+
+
+def test_inferred_protein_and_sequence_id_columns_are_ambiguous_but_explicit_mapping_works(
+    tmp_path: Path,
+) -> None:
+    request = NormalizeAnnotationsRequest(
+        text="protein,sequence_id,ko\nalpha,p1,K00844\n",
+        input_format=AnnotationInputFormat.GENERIC_CSV,
+    )
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+
+    with pytest.raises(KeggMcpError) as error:
+        normalize_annotations(request, result_store=store, scope_id="ambiguous")
+
+    assert error.value.detail.code is ErrorCode.AMBIGUOUS_COLUMN_MAPPING
+
+    explicit = normalize_annotations(
+        request.model_copy(
+            update={
+                "column_mapping": GenericColumnMapping(
+                    sequence_id="sequence_id",
+                    ko_id="ko",
+                    protein_name="protein",
+                )
+            }
+        ),
+        result_store=store,
+        scope_id="explicit",
+    )
+    assert explicit.column_mapping_inferred is False
+    assert explicit.record_preview[0].sequence_id == "p1"
+    retained = AnnotationDataset.model_validate_json(
+        store.read_artifact(
+            "explicit",
+            explicit.result.result_id,
+            explicit.artifact.section,
+        ).content
+    )
+    assert retained.records[0].protein_name == "alpha"
