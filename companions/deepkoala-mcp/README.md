@@ -110,6 +110,8 @@ and defaults to `false`. Set it to `true` only when the user requests multi-doma
 status reports both `allow_multi=true` and `multi_ready=true`; multi-domain requests must keep
 `batch_size=1` because the upstream multi-domain path does not use configurable batching. HMMER
 remains a CPU subprocess even when neural inference uses MPS.
+An input-schema rejection returns `INVALID_REQUEST`. When exactly one declared top-level field is
+invalid, `safe_details` identifies that field without returning its value or a private path.
 
 DeepKOALA always receives detailed-output, an explicit `device=cpu|cuda|mps`, and `num_workers=0`;
 it never receives `device=auto` and the companion does not enable silent MPS-to-CPU fallback. A

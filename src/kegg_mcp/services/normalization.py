@@ -193,7 +193,7 @@ def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumn
 
     sequence_id = select(
         "sequence_id",
-        ("sequence_id", "protein_id", "seq_id", "query_id", "gene_id"),
+        ("sequence_id", "protein_id", "protein", "seq_id", "query_id", "gene_id"),
         required=True,
     )
     ko_id = select("ko_id", ("ko_id", "ko", "k_number", "kegg_orthology"), required=True)
@@ -204,9 +204,7 @@ def _infer_generic_column_mapping(text: str, *, delimiter: str) -> GenericColumn
     return GenericColumnMapping(
         sequence_id=sequence_id,
         ko_id=ko_id,
-        protein_name=select(
-            "protein_name", ("protein_name", "protein", "description"), required=False
-        ),
+        protein_name=select("protein_name", ("protein_name", "description"), required=False),
         sample_id=select("sample_id", ("sample_id", "sample"), required=False),
         raw_decision=select(
             "raw_decision", ("raw_decision", "decision", "status", "annotate"), required=False

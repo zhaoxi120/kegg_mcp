@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from kegg_mcp.domain.errors import ErrorCode, SafeDetail, fail
+from kegg_mcp.domain.errors import ErrorCode, KeggMcpError, SafeDetail, fail
 from kegg_mcp.services.entry_cards import (
     ENTRY_CARD_SCHEMA_VERSION,
     ENTRY_CARD_SNAPSHOT_SECTION,
@@ -21,13 +21,36 @@ def read_entry_card_snapshot(
     chunks: list[bytes] = []
     offset = 0
     while True:
-        page = result_store.read_artifact(
-            scope_id,
-            result_id,
-            ENTRY_CARD_SNAPSHOT_SECTION,
-            offset=offset,
-            limit=result_store.limits.max_range_bytes,
-        )
+        try:
+            page = result_store.read_artifact(
+                scope_id,
+                result_id,
+                ENTRY_CARD_SNAPSHOT_SECTION,
+                offset=offset,
+                limit=result_store.limits.max_range_bytes,
+            )
+        except KeggMcpError as error:
+            if error.detail.code is not ErrorCode.RESULT_NOT_FOUND:
+                raise
+            artifacts = result_store.list_artifacts(scope_id, result_id, limit=1)
+            fail(
+                ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
+                "The selected active result has an incompatible artifact kind.",
+                suggested_action=(
+                    "Use a result identifier returned by get_kegg_entries with projection set "
+                    "to card or references."
+                ),
+                safe_details=(
+                    SafeDetail(
+                        name="expected_artifact_kind",
+                        value=ENTRY_CARD_SNAPSHOT_SECTION,
+                    ),
+                    SafeDetail(
+                        name="actual_artifact_kind",
+                        value=artifacts.items[0].section,
+                    ),
+                ),
+            )
         if page.mime_type != "application/json":
             fail(
                 ErrorCode.ANALYSIS_CONFIGURATION_INVALID,

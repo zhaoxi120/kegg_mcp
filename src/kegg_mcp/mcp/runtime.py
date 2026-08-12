@@ -9,18 +9,20 @@ from anyio import CapacityLimiter
 
 from kegg_mcp.kegg import KeggClient
 from kegg_mcp.mcp.config import McpRuntimeConfig, load_runtime_config
+from kegg_mcp.services.models import ConnectivityProbeResult
 from kegg_mcp.services.reference_budget import KeggMcpClient
 from kegg_mcp.services.result_store import SQLiteResultStore
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class McpRuntime:
-    """Injected services and one opaque stdio result scope."""
+    """Injected services, one opaque stdio result scope, and process-local probe state."""
 
     client: KeggMcpClient
     result_store: SQLiteResultStore
     scope_id: str
     allowed_roots: tuple[str, ...] = ()
+    last_connectivity_probe: ConnectivityProbeResult | None = None
     client_handler_limiter: CapacityLimiter = field(
         default_factory=lambda: CapacityLimiter(1),
         init=False,

@@ -542,13 +542,24 @@ class CompareKoSetsResult(FrozenModel):
     functional_summary: FunctionalComparisonSummary
 
 
+class ConnectivityState(StrEnum):
+    REACHABLE = "reachable"
+    NETWORK_DISABLED = "network_disabled"
+    DNS_FAILURE = "dns_failure"
+    CONNECTION_FAILURE = "connection_failure"
+    LOCAL_STORAGE_FAILURE = "local_storage_failure"
+    AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
+
+
 class ServerStatusResult(FrozenModel):
     server_version: str = Field(min_length=1, max_length=100)
     transport: Literal["stdio"] = "stdio"
     access_mode: AccessMode
     cache_endpoint_class: RetrievalEndpointClass
     network_enabled: bool
-    connectivity: Literal["not_probed"] = "not_probed"
+    connectivity: ConnectivityState | Literal["not_probed"] = "not_probed"
+    connectivity_probed_at: datetime | None = None
+    connectivity_error_code: ErrorCode | None = None
     academic_use_confirmed: bool
     licensed_use_confirmed: bool
     cache_configured: bool = True
@@ -571,15 +582,6 @@ class ServerStatusResult(FrozenModel):
     normal_exit_scope_cleanup: bool = True
     durable_output: Literal["output_bundle"] = "output_bundle"
     result_quota_bytes: int = Field(strict=True, gt=0)
-
-
-class ConnectivityState(StrEnum):
-    REACHABLE = "reachable"
-    NETWORK_DISABLED = "network_disabled"
-    DNS_FAILURE = "dns_failure"
-    CONNECTION_FAILURE = "connection_failure"
-    LOCAL_STORAGE_FAILURE = "local_storage_failure"
-    AUTHORIZATION_CONFIGURATION_FAILURE = "authorization_configuration_failure"
 
 
 class ConnectivityProbeResult(FrozenModel):
