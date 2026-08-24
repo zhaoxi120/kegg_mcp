@@ -1,9 +1,10 @@
 # deepkoala-mcp
 
 `deepkoala-mcp` is the optional local stdio companion that runs a configured DeepKOALA installation.
-It accepts an allowlisted absolute protein FASTA path, starts one controlled detailed annotation job,
-and publishes stable files in a service-allocated or caller-selected output directory. Pass the
-returned detailed CSV path and source provenance to the core `kegg-mcp` importer.
+It accepts an explicit absolute protein FASTA path without an input-directory allowlist, starts one
+controlled detailed annotation job, and publishes stable files in a service-allocated or
+caller-selected output directory. Pass the returned detailed CSV path and source provenance to the
+core `kegg-mcp` importer.
 
 The companion does not normalize KO evidence, query KEGG, interpret pathways or MODULEs, or bundle
 PyTorch, DeepKOALA, model weights, or KOfam profiles as package dependencies.
@@ -23,7 +24,7 @@ Manual and development deployments require:
 - a Python environment that imports `deepkoala`, `deepkoala.utils`, and `torch`;
 - a readable `weights_{full|frag}.pt` and matching `ko_config_{full|frag}.json` under a dated
   `resources/YYYYMM` directory;
-- explicit input, output, and private state roots; and
+- explicit output and private state roots; and
 - local stdio transport.
 
 Install the companion from the repository root in the runtime that will serve it:
@@ -42,8 +43,7 @@ separator (`:` on Linux and macOS).
 |---|---:|---|
 | `DEEPKOALA_MCP_CHECKOUT` | yes | Readable DeepKOALA checkout |
 | `DEEPKOALA_MCP_PYTHON` | yes | Executable DeepKOALA Python |
-| `DEEPKOALA_MCP_STATE_ROOT` | yes | Private state root, separate from inputs and outputs |
-| `DEEPKOALA_MCP_INPUT_ROOTS` | yes | Roots containing caller FASTA files |
+| `DEEPKOALA_MCP_STATE_ROOT` | yes | Private state root, separate from outputs |
 | `DEEPKOALA_MCP_OUTPUT_ROOTS` | yes | Writable roots for stable result directories; the last is the default |
 | `DEEPKOALA_MCP_ALLOWED_MODELS` | no | Subset of `full,frag`; default `full,frag` |
 | `DEEPKOALA_MCP_ALLOWED_DEVICES` | no | Exact `cpu`, Linux `cpu,cuda`, or macOS `cpu,mps`; defaults to the matching platform pair |
@@ -61,17 +61,14 @@ Example manual configuration:
 export DEEPKOALA_MCP_CHECKOUT=/absolute/path/to/DeepKOALA
 export DEEPKOALA_MCP_PYTHON=/absolute/path/to/deepkoala-env/bin/python
 export DEEPKOALA_MCP_STATE_ROOT=/absolute/private/deepkoala-mcp-state
-export DEEPKOALA_MCP_INPUT_ROOTS=/absolute/path/to/codex/attachments:/absolute/project/inputs
 export DEEPKOALA_MCP_OUTPUT_ROOTS=/absolute/project/results
 deepkoala-mcp doctor --json
 ```
 
-For Codex desktop drag and drop, explicitly include the existing `attachments` directory beneath
-the active Codex data directory as an input root. Codex-generated child directories are accepted;
-the file itself must remain a direct regular file. Use the resolved absolute path because shell
-examples and deployment TOML must not rely on `~` expansion. Do not allow the entire Codex data
-directory or use the attachment root for output. The companion validates and privately stages
-accepted FASTA input, so the client does not need to copy it into a project input root.
+FASTA input does not require deployment root configuration. Pass the explicit absolute local path
+unchanged, including a Codex desktop drag-and-drop path or a file under `Downloads`. The path must
+name a direct readable regular file without symlinks or `..` traversal. The companion validates and
+privately stages the FASTA, so the client does not need to copy it into a project input directory.
 
 For a non-Codex MCP client, configure the absolute installed command with `args: ["serve"]` and the
 same environment. The generated Codex plugin already provides this registration for suite installs.
@@ -183,7 +180,7 @@ default handoff, and resource IDs must not be passed to another server as result
 inline recovery remains limited to 5,000,000 bytes; an annotation CSV above that size therefore
 requires a stable output path allowed by both components. Core retains the unchanged FASTA input
 path as provenance without reopening it under annotation-file path policy, so supported deployments
-need to share DeepKOALA output roots with Core but not DeepKOALA input roots.
+need to share DeepKOALA output roots with Core; no DeepKOALA input roots exist.
 
 ## Process and filesystem safety
 
@@ -199,9 +196,9 @@ need to share DeepKOALA output roots with Core but not DeepKOALA input roots.
 - Timeout, cancellation, process-group termination, descendant cleanup, Linux parent-death signals,
   and a Darwin sentinel process that outlives an exited group leader bound the external process
   lifecycle.
-- Inputs must be direct files beneath allowed roots; output must be a new or empty owner-only
-  directory beneath an allowed root. Traversal, unsafe ancestry, replacement, and symlink escape
-  are rejected.
+- Inputs may be explicit absolute direct regular local files anywhere readable by the companion;
+  output must be a new or empty owner-only directory beneath an allowed root. Relative paths,
+  traversal, unsafe ancestry, replacement, and symlinks are rejected.
 - Temporary state and generated files use restrictive permissions and are never published by
   overwriting an existing path.
 - The companion server contains no network client, dependency installer, or model download path.

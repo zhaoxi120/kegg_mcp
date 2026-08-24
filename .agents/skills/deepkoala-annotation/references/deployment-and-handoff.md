@@ -48,29 +48,25 @@ are operator-managed and may be provisioned separately after explicit user autho
 Skill does not configure them. The companion must not automate the GenomeNet web form or make
 network requests.
 
-## Codex attachment intake
+## Direct local FASTA intake
 
-Codex desktop stores a dragged or uploaded file below a generated child of the active Codex data
-directory's `attachments` directory. A supported suite deployment may list that stable attachment
-directory alongside project input directories in `deepkoala.input_roots`. DeepKOALA accepts nested
-direct regular files beneath every configured input root and privately stages validated FASTA input
-before execution. The attachment root is input-only: it is not a DeepKOALA output root or a Core
-allowed root, and Core retains the original FASTA path as provenance without reopening it.
+DeepKOALA accepts an explicit absolute direct regular local FASTA path without an input-directory
+allowlist and privately stages the validated file before execution. Pass a Codex drag-and-drop path,
+a file under `Downloads`, or a project path unchanged; do not create a shell copy or add its parent
+directory to deployment configuration. Core retains the original FASTA path as provenance without
+reopening it.
 
-If `run_deepkoala_job` returns `PATH_NOT_ALLOWED` with `The FASTA path is unavailable or outside the
-deployment policy.` for a Codex attachment, classify `deployment_input_root_mismatch`. Stop before
-annotation and report that the suite must be installed into a new private root with the stable
-Codex `attachments` directory explicitly included in `deepkoala.input_roots`. Do not copy the FASTA
-with a shell command, allow the entire Codex data directory, home directory, or temporary directory,
-change a running server's path policy, or retry the same path. After the corrected plugin is
-activated, continue the preserved request in a new Codex task.
+If `run_deepkoala_job` returns `PATH_NOT_ALLOWED` with `The FASTA path is unavailable or not a
+supported direct local file.`, the path is relative, contains traversal, uses a symlink, is not a
+readable regular file, is unavailable, or changed during intake. Report that actual path condition;
+do not classify it as an input-root mismatch or reinstall the suite.
 
 ## Stable file contract
 
 A successful job provides:
 
 - handoff `schema_version="2"` and `tool_version`;
-- the original allowlisted absolute protein FASTA path;
+- the original explicit absolute protein FASTA path;
 - an absolute `deepkoala_annotations.csv` path;
 - an absolute `deepkoala_run_report.md` path;
 - `input_format="deepkoala_detailed"`;

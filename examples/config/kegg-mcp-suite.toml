@@ -9,7 +9,7 @@
 # must not be a symlink. Private state directories must be owner-only. Shared
 # roots may be used for stable handoffs, but must not overlap private state.
 
-schema_version = 1
+schema_version = 2
 
 [kegg]
 # Set this to true only after the user confirms that both the user and this work
@@ -32,14 +32,8 @@ allowed_roots = [
 # The suite installer creates a private DeepKOALA checkout and environment under
 # the installation root after --allow-deepkoala-install is explicitly supplied.
 state_root = "/absolute/private/path/to/kegg-suite/deepkoala-state"
-# Include the active Codex data directory's attachments child to accept files
-# added through desktop drag and drop. DeepKOALA validates and privately stages
-# the attached file; it does not require a caller-created copy. Replace the
-# placeholder with the resolved absolute path; TOML does not expand `~`.
-input_roots = [
-  "/absolute/path/to/codex/attachments",
-  "/absolute/shared/path/to/kegg-suite/inputs",
-]
+# FASTA input uses the explicit absolute path supplied with each job and has no
+# directory allowlist. The companion validates and privately stages that file.
 output_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2

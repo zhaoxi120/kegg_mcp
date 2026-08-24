@@ -20,7 +20,6 @@ from deepkoala_mcp.config import (
     CHECKOUT_ENV,
     CPU_THREADS_ENV,
     HMMSEARCH_EXECUTABLE_ENV,
-    INPUT_ROOTS_ENV,
     MAX_OUTPUT_BYTES_ENV,
     MAX_TIMEOUT_SECONDS_ENV,
     OUTPUT_ROOTS_ENV,
@@ -52,15 +51,12 @@ from deepkoala_mcp.fasta import (
 
 
 def _environment(tmp_path: Path, checkout: Path) -> dict[str, str]:
-    inputs = tmp_path / "inputs"
     outputs = tmp_path / "outputs"
-    inputs.mkdir()
     outputs.mkdir()
     return {
         CHECKOUT_ENV: str(checkout),
         PYTHON_ENV: str(Path(sys.executable).resolve()),
         STATE_ROOT_ENV: str(tmp_path / "state"),
-        INPUT_ROOTS_ENV: str(inputs),
         OUTPUT_ROOTS_ENV: str(outputs),
     }
 
@@ -199,7 +195,7 @@ def test_load_runtime_config_requires_absolute_multi_dependencies_when_enabled(
             load_runtime_config(incomplete)
 
 
-def test_load_runtime_config_requires_both_shared_root_sets(
+def test_load_runtime_config_requires_output_roots(
     tmp_path: Path,
     checkout: Path,
 ) -> None:
@@ -213,17 +209,14 @@ def test_runtime_config_rejects_state_overlap(
     tmp_path: Path,
     checkout: Path,
 ) -> None:
-    root = tmp_path / "private"
     output = tmp_path / "output"
-    root.mkdir()
     output.mkdir()
     with pytest.raises(ValidationError, match="overlap"):
         DeepKoalaRuntimeConfig(
             checkout=checkout,
             python_executable=Path(sys.executable).resolve(),
-            state_root=root / "state",
-            input_roots=(root,),
-            output_roots=(output,),
+            state_root=output / "state",
+            output_roots=(output.resolve(),),
         )
 
 
@@ -288,7 +281,7 @@ def test_handoff_rejects_version_and_path_mismatch_and_round_trips_timezones() -
     )
     handoff = ImportHandoff(
         schema_version="2",
-        tool_version="0.5.0",
+        tool_version="0.6.0",
         input_path="/allowed/original.faa",
         annotations_path="/outputs/run/deepkoala_annotations.csv",
         report_path="/outputs/run/deepkoala_run_report.md",
@@ -392,16 +385,15 @@ def test_validate_fasta_rejects_invalid_documents(content: bytes) -> None:
         validate_fasta_bytes(content)
 
 
-def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
-    allowed = tmp_path / "allowed"
+def test_stage_explicit_path_is_privately_copied(tmp_path: Path) -> None:
+    caller_directory = tmp_path / "caller"
     job = tmp_path / "job"
-    allowed.mkdir()
+    caller_directory.mkdir()
     job.mkdir(mode=0o700)
-    source = allowed / "proteins.faa"
+    source = caller_directory / "proteins.faa"
     source.write_text(">p\nMPEPTIDE\n", encoding="ascii")
     staged_result = stage_fasta(
         fasta_path=str(source),
-        input_roots=(allowed.resolve(),),
         job_directory=job,
         max_sequences=10,
     )
@@ -412,9 +404,10 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
-def test_stage_accepts_a_nested_codex_attachment_path(tmp_path: Path) -> None:
-    attachments = tmp_path / "attachments"
-    attachment_directory = attachments / "01234567-89ab-cdef-0123-456789abcdef"
+def test_stage_accepts_a_nested_codex_attachment_path_without_root_config(tmp_path: Path) -> None:
+    attachment_directory = (
+        tmp_path / "attachments" / "01234567-89ab-cdef-0123-456789abcdef"
+    )
     job = tmp_path / "job"
     attachment_directory.mkdir(parents=True)
     job.mkdir(mode=0o700)
@@ -423,7 +416,6 @@ def test_stage_accepts_a_nested_codex_attachment_path(tmp_path: Path) -> None:
 
     staged_result = stage_fasta(
         fasta_path=str(source),
-        input_roots=(attachments.resolve(),),
         job_directory=job,
         max_sequences=10,
     )
@@ -447,7 +439,6 @@ def test_stage_accepts_large_valid_fasta_within_sequence_limits(tmp_path: Path) 
 
     staged_result = stage_fasta(
         fasta_path=str(source),
-        input_roots=(allowed.resolve(),),
         job_directory=job,
         max_sequences=51,
     )
@@ -474,7 +465,6 @@ def test_stage_preserves_an_existing_private_staging_name(tmp_path: Path) -> Non
     with pytest.raises(FileExistsError):
         stage_fasta(
             fasta_path=str(source),
-            input_roots=(allowed.resolve(),),
             job_directory=job,
             max_sequences=10,
         )
@@ -510,7 +500,6 @@ def test_failed_stage_preserves_a_replacement_staging_inode(
     with pytest.raises(FastaValidationError, match="synthetic failure"):
         stage_fasta(
             fasta_path=str(source),
-            input_roots=(allowed.resolve(),),
             job_directory=job,
             max_sequences=10,
         )
@@ -548,7 +537,6 @@ def test_stage_rejects_ancestor_replacement_during_intake(
     with pytest.raises(InputPathError, match="changed during intake"):
         stage_fasta(
             fasta_path=str(source_path),
-            input_roots=(allowed.resolve(),),
             job_directory=job,
             max_sequences=10,
         )
@@ -558,22 +546,19 @@ def test_stage_rejects_ancestor_replacement_during_intake(
     assert not (job / "input.fasta").exists()
 
 
-def test_stage_path_rejects_escape_and_symlink(tmp_path: Path) -> None:
-    allowed = tmp_path / "allowed"
-    outside = tmp_path / "outside"
+def test_stage_path_rejects_relative_and_symlink_paths(tmp_path: Path) -> None:
+    caller_directory = tmp_path / "caller"
     job = tmp_path / "job"
-    allowed.mkdir()
-    outside.mkdir()
+    caller_directory.mkdir()
     job.mkdir()
-    source = outside / "private.faa"
+    source = caller_directory / "private.faa"
     source.write_text(">private\nM\n", encoding="ascii")
-    link = allowed / "link.faa"
+    link = caller_directory / "link.faa"
     link.symlink_to(source)
-    for path in (source, link):
+    for path in (Path("relative.faa"), link):
         with pytest.raises(InputPathError):
             stage_fasta(
                 fasta_path=str(path),
-                input_roots=(allowed.resolve(),),
                 job_directory=job,
                 max_sequences=10,
             )

@@ -245,7 +245,6 @@ def _build_runtime_config(root: Path, *, multi: bool = False) -> DeepKoalaRuntim
         checkout=checkout.resolve(),
         python_executable=Path(sys.executable).resolve(),
         state_root=(root / "companion-state").resolve(),
-        input_roots=(inputs.resolve(),),
         output_roots=(outputs.resolve(),),
         max_timeout_seconds=30,
     )
@@ -318,7 +317,7 @@ def _run_arguments(
     topk: int = 1,
     multi: bool = False,
 ) -> dict[str, object]:
-    fasta = config.input_roots[0] / f"{name}.faa"
+    fasta = config.state_root.parent / "inputs" / f"{name}.faa"
     fasta.write_text(
         "".join(f">{sequence_id}\nMPEPTIDE\n" for sequence_id in sequence_ids),
         encoding="ascii",
@@ -505,7 +504,9 @@ async def test_shared_file_handoff_crosses_real_mcp_json_boundary_once(
         provenance = cast(dict[str, object], normalized["provenance"])
         source = cast(dict[str, object], cast(list[object], provenance["source_preview"])[0])
         assert source["source_name"] == "deepkoala"
-        assert source["input_path"] == str(config.input_roots[0] / "shared-filesystem.faa")
+        assert source["input_path"] == str(
+            config.state_root.parent / "inputs" / "shared-filesystem.faa"
+        )
         assert not Path(cast(str, source["input_path"])).is_relative_to(config.output_roots[0])
 
         stable_annotations = Path(handoff.annotations_path)

@@ -57,7 +57,9 @@ def _input(
     *,
     sequence_ids: tuple[str, ...] = ("protein-1",),
 ) -> dict[str, object]:
-    fasta = config.input_roots[0] / f"{name}.faa"
+    input_directory = config.state_root.parent / "caller-inputs"
+    input_directory.mkdir(exist_ok=True)
+    fasta = input_directory / f"{name}.faa"
     fasta.write_text(
         "".join(f">{sequence_id}\nMPEPTIDE\n" for sequence_id in sequence_ids),
         encoding="ascii",
@@ -211,7 +213,7 @@ async def test_memory_transport_returns_schema_valid_stable_handoff_and_z_timest
         assert cast(str, job["completed_at"]).endswith("Z")
         handoff = cast(dict[str, object], data["handoff"])
         assert handoff["schema_version"] == "2"
-        assert handoff["tool_version"] == "0.5.0"
+        assert handoff["tool_version"] == "0.6.0"
         assert handoff["output_coverage"] == {
             "input_sequence_count": 1,
             "output_row_count": 1,
@@ -303,9 +305,7 @@ async def test_stdio_process_initializes_without_stdout_noise(
     tmp_path: Path,
     checkout: Path,
 ) -> None:
-    inputs = tmp_path / "stdio-inputs"
     outputs = tmp_path / "stdio-outputs"
-    inputs.mkdir()
     outputs.mkdir()
     environment = dict(os.environ)
     environment.update(
@@ -313,7 +313,6 @@ async def test_stdio_process_initializes_without_stdout_noise(
             "DEEPKOALA_MCP_CHECKOUT": str(checkout),
             "DEEPKOALA_MCP_PYTHON": str(Path(sys.executable).resolve()),
             "DEEPKOALA_MCP_STATE_ROOT": str((tmp_path / "stdio-state").resolve()),
-            "DEEPKOALA_MCP_INPUT_ROOTS": str(inputs),
             "DEEPKOALA_MCP_OUTPUT_ROOTS": str(outputs),
             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
         }
@@ -345,7 +344,7 @@ async def test_stdio_process_initializes_without_stdout_noise(
         initialized = await _read(process, 1)
         result = cast(dict[str, object], initialized["result"])
         server_info = cast(dict[str, object], result["serverInfo"])
-        assert server_info == {"name": "deepkoala-mcp", "version": "0.5.0"}
+        assert server_info == {"name": "deepkoala-mcp", "version": "0.6.0"}
         await _write(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         await _write(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         listed = cast(dict[str, object], (await _read(process, 2))["result"])

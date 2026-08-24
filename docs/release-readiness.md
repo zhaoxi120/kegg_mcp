@@ -12,7 +12,7 @@ discovery before creating the next tag. Record the final evidence in the release
 | Distribution | Source version | Supported platform | Contract |
 | --- | --- | --- | --- |
 | `kegg-mcp` | `0.10.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and accepted unique-KO analysis server; `RenderInput` producer |
-| `deepkoala-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
+| `deepkoala-mcp` | `0.6.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
 | `kegg-render-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.10,<0.11` and `RenderInput` v6 |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
@@ -218,9 +218,12 @@ advice.
 - [ ] Native Windows startup fails closed rather than substituting weaker path, ownership, locking,
       or atomic-publication behavior.
 - [ ] DeepKOALA FASTA intake remains streamed and structurally bounded without an aggregate byte
-      cap; other inputs, identifiers, resources, retained bytes, outputs, and summaries remain
-      bounded.
-- [ ] Allowed-root paths reject traversal, unsafe ancestry, replacement races, and symlink escape.
+      cap. It accepts explicit absolute direct regular local files without an input-directory
+      allowlist; other inputs, identifiers, resources, retained bytes, outputs, and summaries
+      remain bounded.
+- [ ] Configured output and handoff roots reject traversal, unsafe ancestry, replacement races,
+      and symlink escape. Direct DeepKOALA inputs retain the same path-shape and race checks without
+      a directory allowlist.
 - [ ] Outputs never replace existing entries and publish their manifest last.
 - [ ] Result IDs remain opaque, scoped, expiring, and safely indistinguishable when unavailable.
 - [ ] Status, logs, and errors redact credentials, endpoints, environment values, and local paths.

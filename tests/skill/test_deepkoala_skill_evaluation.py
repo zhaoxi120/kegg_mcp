@@ -73,19 +73,15 @@ def test_default_output_is_fresh_project_local_and_explicit_path_wins() -> None:
         assert fragment in normalized
 
 
-def test_codex_attachment_input_root_mismatch_has_one_deployment_route() -> None:
+def test_explicit_local_fasta_path_needs_no_input_root_route() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
-        "Codex desktop stores a dragged or uploaded file",
-        "stable Codex `attachments` directory",
-        "generated child directories",
+        "DeepKOALA accepts an explicit absolute direct regular local FASTA path",
         "Pass a Codex drag-and-drop attachment's provided absolute path unchanged",
+        "a file under `Downloads`",
         "`PATH_NOT_ALLOWED`",
-        "`deployment_input_root_mismatch`",
-        "explicitly included in `deepkoala.input_roots`",
-        "Do not copy the FASTA with a shell command",
-        "allow the entire Codex data directory, home directory, or temporary directory",
-        "new Codex task",
+        "without an input-directory allowlist",
+        "do not classify it as an input-root mismatch or reinstall the suite",
     ):
         assert fragment in normalized
 

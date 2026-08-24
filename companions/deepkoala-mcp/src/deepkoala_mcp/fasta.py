@@ -37,7 +37,7 @@ class FastaLimitError(FastaValidationError):
 
 
 class InputPathError(ValueError):
-    """A caller-supplied path violates the configured input boundary."""
+    """A caller-supplied path violates the direct local-file contract."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +61,11 @@ class _PinnedFasta:
 def stage_fasta(
     *,
     fasta_path: str,
-    input_roots: tuple[Path, ...],
     job_directory: Path,
     max_sequences: int,
 ) -> StagedFasta:
-    """Stream one allowlisted file into a validated canonical private copy."""
-    pinned = _open_allowed_file(Path(fasta_path), input_roots)
+    """Stream one explicit local file into a validated canonical private copy."""
+    pinned = _open_input_file(Path(fasta_path))
     staged_path = job_directory / INPUT_FILENAME
     output_descriptor: int | None = None
     try:
@@ -103,7 +102,6 @@ def stage_fasta(
 async def stage_fasta_in_worker(
     *,
     fasta_path: str,
-    input_roots: tuple[Path, ...],
     job_directory: Path,
     max_sequences: int,
 ) -> StagedFasta:
@@ -112,7 +110,6 @@ async def stage_fasta_in_worker(
         partial(
             stage_fasta,
             fasta_path=fasta_path,
-            input_roots=input_roots,
             job_directory=job_directory,
             max_sequences=max_sequences,
         )
@@ -221,11 +218,10 @@ def _validate_fasta_stream(
     )
 
 
-def _open_allowed_file(
+def _open_input_file(
     path: Path,
-    allowed_roots: tuple[Path, ...],
 ) -> _PinnedFasta:
-    if not path.is_absolute() or ".." in path.parts or not allowed_roots:
+    if not path.is_absolute() or ".." in path.parts:
         raise InputPathError("input path is not allowed")
     try:
         named = path.lstat()
@@ -234,9 +230,7 @@ def _open_allowed_file(
         raise InputPathError("input path is unavailable") from error
     if resolved != path or stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
         raise InputPathError("input path must be a direct regular file without symlinks")
-    root = next((root for root in allowed_roots if resolved.is_relative_to(root)), None)
-    if root is None:
-        raise InputPathError("input path escapes the configured roots")
+    root = Path(resolved.anchor)
 
     try:
         descriptor, ancestry = _open_beneath(resolved, root)
@@ -279,10 +273,10 @@ def _revalidate_pinned_path(pinned: _PinnedFasta) -> None:
 
 
 def _open_beneath(path: Path, root: Path) -> tuple[int, tuple[tuple[int, int], ...]]:
-    """Open a resolved file by walking from an allowed root without symlinks."""
+    """Open a resolved file by walking from its filesystem root without symlinks."""
     parts = path.relative_to(root).parts
     if not parts:
-        raise OSError("input path names an allowed directory")
+        raise OSError("input path names a filesystem root")
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
     file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)

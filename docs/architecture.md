@@ -79,7 +79,7 @@ The repository keeps three process boundaries:
 | Process | Responsibility | Explicit exclusions |
 | --- | --- | --- |
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
-| `deepkoala-mcp` | Validate an allowed FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
+| `deepkoala-mcp` | Validate an explicit local FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
 | `kegg-render-mcp` | Validate a version 6 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 ### Platform boundary
@@ -396,8 +396,10 @@ action, and redacted details. Inputs, fields, identifiers, target counts, decomp
 outputs, and retained artifacts are bounded by schema or structure. DeepKOALA FASTA intake is the
 one aggregate-byte exception: it is streamed without a total file-size cap while sequence count,
 per-sequence length, header length, path, and replacement-race bounds remain enforced. Filesystem
-access requires direct absolute paths below configured roots and rejects traversal, unsafe ancestry,
-replacement races, and symlink escape. No component uses `shell=True`.
+output and cross-component handoff access requires direct absolute paths below configured roots.
+DeepKOALA FASTA input instead accepts any explicit absolute direct regular local file readable by
+the companion. All file paths reject traversal, unsafe ancestry, replacement races, and symlinks.
+No component uses `shell=True`.
 
 ## DeepKOALA companion contract
 
@@ -409,10 +411,11 @@ The annotator neither performs Core entity search, identifier resolution, relati
 classification, or annotation mapping audit nor consumes their retained artifacts. Its stable
 detailed CSV remains immutable source evidence at the Core importer boundary.
 
-The companion owns allowed-root FASTA validation, one deployment-wide runner lease, fixed direct
-subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the configured checkout's CLI
-and device-resolver contract plus its target interpreter platform, bounded polling and cleanup, and
-stable `deepkoala_annotations.csv` and `deepkoala_run_report.md` delivery. Its output preserves
+The companion owns direct local-file FASTA validation and private staging, one deployment-wide
+runner lease, fixed direct subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the
+configured checkout's CLI and device-resolver contract plus its target interpreter platform,
+bounded polling and cleanup, and stable `deepkoala_annotations.csv` and
+`deepkoala_run_report.md` delivery. FASTA input has no directory allowlist. Its output preserves
 detailed source evidence and resolved model provenance; it never normalizes K numbers. Before a
 version 2 handoff is published, private in-memory FASTA IDs are compared with every output row:
 single-domain output requires exactly `topk` rows per input ID, while multi-domain output requires at

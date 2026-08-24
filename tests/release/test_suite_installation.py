@@ -72,8 +72,6 @@ def _mkdir(path: Path, *, private: bool = False) -> Path:
 def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
     private = _mkdir(tmp_path / "private", private=True)
     shared = _mkdir(tmp_path / "shared")
-    input_root = _mkdir(shared / "input")
-    attachment_root = _mkdir(shared / "codex-attachments")
     output_root = _mkdir(shared / "output")
     external_python = tmp_path / "deepkoala-python"
     external_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -84,8 +82,6 @@ def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
     return {
         "private": private,
         "shared": shared,
-        "input": input_root,
-        "attachments": attachment_root,
         "output": output_root,
         "python": external_python,
         "profiles": _mkdir(tmp_path / "profiles"),
@@ -99,7 +95,7 @@ def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
 def _deployment_toml(paths: dict[str, Path], *, extras: dict[str, str] | None = None) -> str:
     extra = extras or {}
     return f"""\
-schema_version = 1
+schema_version = 2
 {extra.get("root", "")}
 [kegg]
 access_mode = "public_academic"
@@ -112,7 +108,6 @@ allowed_roots = [{json.dumps(str(paths["output"]))}]
 {extra.get("core", "")}
 [deepkoala]
 state_root = {json.dumps(str(paths["deep_state"]))}
-input_roots = [{json.dumps(str(paths["input"]))}]
 output_roots = [{json.dumps(str(paths["output"]))}]
 allowed_models = ["full", "frag"]
 cpu_threads = 2
@@ -239,8 +234,6 @@ def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path
         "/absolute/private/path/to/kegg-suite/core/results.sqlite3": str(
             core_state / "results.sqlite3"
         ),
-        "/absolute/shared/path/to/kegg-suite/inputs": str(paths["input"]),
-        "/absolute/path/to/codex/attachments": str(paths["attachments"]),
         "/absolute/shared/path/to/kegg-suite/analysis": str(paths["output"]),
         "/absolute/private/path/to/kegg-suite/deepkoala-state": str(paths["deep_state"]),
         "/absolute/private/path/to/kegg-suite/renderer-state": str(paths["render_state"]),
@@ -261,10 +254,6 @@ def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path
     assert config.kegg.rate_limit_root == paths["rate"].resolve()
     assert config.core.result_store_path == (core_state / "results.sqlite3").resolve()
     assert config.core.allowed_roots == (paths["output"].resolve(),)
-    assert config.deepkoala.input_roots == (
-        paths["attachments"].resolve(),
-        paths["input"].resolve(),
-    )
     assert config.deepkoala.output_roots == (paths["output"].resolve(),)
     assert config.renderer.allowed_roots == (paths["output"].resolve(),)
 
@@ -427,7 +416,7 @@ def test_deployment_config_rejects_file_replacement_between_path_check_and_open(
 def test_deployment_config_rejects_boolean_schema_version(tmp_path: Path) -> None:
     config, _ = _write_config(tmp_path)
     document = config.read_text(encoding="utf-8").replace(
-        "schema_version = 1", "schema_version = true", 1
+        "schema_version = 2", "schema_version = true", 1
     )
     config.write_text(document, encoding="utf-8")
     config.chmod(0o600)
@@ -462,16 +451,20 @@ def test_deployment_config_rejects_nonwritable_private_state(tmp_path: Path) -> 
     assert raised.value.code == "deployment_path_invalid"
 
 
-def test_deployment_config_does_not_require_core_to_cover_deepkoala_input_root(
+def test_deployment_config_rejects_obsolete_deepkoala_input_roots(
     tmp_path: Path,
 ) -> None:
-    config_path, paths = _write_config(tmp_path)
+    config_path, _ = _write_config(
+        tmp_path,
+        extras={
+            "deepkoala": f'input_roots = [{json.dumps(str(tmp_path / "inputs"))}]'
+        },
+    )
 
-    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._load_deployment_config(config_path)
 
-    assert config.core.allowed_roots == (paths["output"].resolve(),)
-    assert config.deepkoala.input_roots == (paths["input"].resolve(),)
-    assert not paths["input"].resolve().is_relative_to(config.core.allowed_roots[0])
+    assert raised.value.code == "deployment_config_invalid"
 
 
 def test_deployment_config_requires_core_to_cover_deepkoala_output_root(
@@ -743,7 +736,6 @@ def test_private_deployment_values_do_not_enter_generated_plugin_metadata(
         str(config.renderer.state_root),
         str(config.kegg.rate_limit_root),
         str(config.core.result_store_path),
-        str(paths["input"]),
         str(paths["output"]),
         str(paths["profiles"]),
         str(paths["hmmsearch"]),

@@ -109,7 +109,9 @@ def _request(
     fasta: str = ">protein-1\nMPEPTIDE\n",
     **updates: object,
 ) -> RunDeepKoalaInput:
-    input_path = config.input_roots[0] / f"{name}.faa"
+    input_directory = config.state_root.parent / "caller-inputs"
+    input_directory.mkdir(exist_ok=True)
+    input_path = input_directory / f"{name}.faa"
     input_path.write_text(fasta, encoding="ascii")
     values: dict[str, object] = {
         "fasta_path": str(input_path),
@@ -187,7 +189,7 @@ async def test_run_starts_directly_and_publishes_stable_validated_handoff(
         assert "- Unexpected output sequence count: `0`" in report_text
         assert stat.S_IMODE(annotations.stat().st_mode) == 0o600
         assert handoff.schema_version == "2"
-        assert handoff.tool_version == "0.5.0"
+        assert handoff.tool_version == "0.6.0"
         assert handoff.output_coverage.input_sequence_count == 1
         assert handoff.output_coverage.output_row_count == 1
         assert handoff.output_coverage.distinct_output_sequence_count == 1
@@ -323,7 +325,6 @@ async def test_cancelled_intake_joins_worker_before_cleanup_and_next_run(
     def blocking_stage(
         *,
         fasta_path: str,
-        input_roots: tuple[Path, ...],
         job_directory: Path,
         max_sequences: int,
     ) -> StagedFasta:
@@ -335,7 +336,6 @@ async def test_cancelled_intake_joins_worker_before_cleanup_and_next_run(
             raise RuntimeError("test intake release timed out")
         return real_stage(
             fasta_path=fasta_path,
-            input_roots=input_roots,
             job_directory=job_directory,
             max_sequences=max_sequences,
         )
@@ -596,16 +596,18 @@ async def test_cleanup_validation_failure_still_makes_the_job_terminal(
 
 
 @pytest.mark.asyncio
-async def test_path_and_nonempty_output_fail_before_runner_start(
+async def test_symlink_input_and_nonempty_output_fail_before_runner_start(
     runtime_config: DeepKoalaRuntimeConfig,
     tmp_path: Path,
 ) -> None:
     runner = SuccessfulRunner()
-    outside = tmp_path / "outside.faa"
-    outside.write_text(">p\nM\n", encoding="ascii")
+    source = tmp_path / "source.faa"
+    source.write_text(">p\nM\n", encoding="ascii")
+    symlink = tmp_path / "input-link.faa"
+    symlink.symlink_to(source)
     requests = [
         RunDeepKoalaInput(
-            fasta_path=str(outside),
+            fasta_path=str(symlink),
             output_directory=str(runtime_config.output_roots[0] / "outside-input"),
         ),
         _request(
@@ -686,7 +688,7 @@ async def test_omitted_output_directory_allocates_a_fresh_configured_child(
     config = runtime_config.model_copy(
         update={"output_roots": (*runtime_config.output_roots, default_output_root)}
     )
-    input_path = runtime_config.input_roots[0] / "allocated.faa"
+    input_path = runtime_config.state_root.parent / "allocated.faa"
     input_path.write_text(">protein-1\nMPEPTIDE\n", encoding="ascii")
     request = RunDeepKoalaInput(fasta_path=str(input_path))
 

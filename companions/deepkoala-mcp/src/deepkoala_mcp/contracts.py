@@ -441,7 +441,6 @@ class CompanionStatus(FrozenModel):
     max_sequences: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
     max_output_bytes: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
     max_timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
-    input_root_count: int = Field(strict=True, ge=1)
     output_root_count: int = Field(strict=True, ge=1)
     file_handoff_enabled: Literal[True] = True
     resource_fallback_enabled: Literal[True] = True

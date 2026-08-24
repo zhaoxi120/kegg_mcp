@@ -2,7 +2,7 @@
 
 KEGG MCP provides three independent local stdio servers and three focused Codex Skills:
 
-- `deepkoala-mcp` annotates an allowlisted protein FASTA with a configured local DeepKOALA
+- `deepkoala-mcp` annotates an explicit local protein FASTA with a configured local DeepKOALA
   installation;
 - `kegg-mcp` normalizes KO evidence and performs KEGG-aware MODULE, pathway, and comparison
   analyses; and
@@ -100,12 +100,10 @@ Native Intel macOS and native Windows are unsupported.
 ### 1. Prepare private and shared directories
 
 Start from a reviewed release checkout or source archive. Create an owner-only private parent for
-configuration and installation state, plus the shared roots that will contain user input and stable
-handoff files:
+configuration and installation state, plus the shared roots that will contain stable handoff files:
 
 ```bash
 mkdir -p /absolute/private
-mkdir -p /absolute/project/inputs
 mkdir -p /absolute/project/annotations
 mkdir -p /absolute/project/analysis
 mkdir -p /absolute/private/core
@@ -123,13 +121,9 @@ The installation root itself must not exist yet. Its direct parent must be owner
 the installation root inside the source checkout, an input/output root, a cache, or another
 component's state root.
 
-Private state roots must not overlap each other or the shared input/output roots. The Core allowed
-roots must cover the DeepKOALA output roots and every renderer handoff root. DeepKOALA input roots
-remain part of private-state overlap validation but need not be readable by Core. To accept a
-protein FASTA added through Codex desktop drag and drop, include the existing `attachments`
-directory beneath the active Codex data directory as a DeepKOALA input root. Do not allow the
-entire Codex data directory, home directory, or temporary directory. Use the resolved absolute
-path; the TOML parser does not expand `~` or environment variables.
+Private state roots must not overlap each other or the shared output roots. The Core allowed roots
+must cover the DeepKOALA output roots and every renderer handoff root. DeepKOALA FASTA input has no
+directory allowlist and is not part of deployment overlap validation.
 
 ### 2. Write the strict deployment TOML
 
@@ -139,7 +133,7 @@ directory. The tracked file is a placeholder-only template, not a deployment con
 For an eligible public-academic deployment:
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [kegg]
 access_mode = "public_academic"
@@ -156,10 +150,6 @@ allowed_roots = [
 
 [deepkoala]
 state_root = "/absolute/private/deepkoala-state"
-input_roots = [
-  "/absolute/path/to/codex/attachments",
-  "/absolute/project/inputs",
-]
 output_roots = ["/absolute/project/annotations"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2
@@ -177,18 +167,12 @@ Renderer uses the last `renderer.allowed_roots` entry. In this example, annotati
 beneath `/absolute/project/annotations`, while Core and Renderer output goes beneath
 `/absolute/project/analysis`. Explicit allowed output paths still take precedence.
 
-Codex stores each dragged or uploaded file below a generated child of its `attachments` directory.
-DeepKOALA accepts those nested direct files when that stable attachment root is listed in
-`deepkoala.input_roots`, then validates and stages the FASTA into private job state before running
-the annotator. Pass the attachment path unchanged and omit `output_directory` unless the user
-selected a configured output location. Do not copy the FASTA with a shell command, add the
-attachment root to `deepkoala.output_roots`, or add it to `core.allowed_roots`; Core consumes the
-generated annotation under the shared DeepKOALA output root and retains the original FASTA path as
-provenance without reopening it.
-
-The installer is fresh-install only. Adding an attachment root to an existing deployment therefore
-requires a new private installation root and a new Codex task after the replacement plugin is
-activated; do not edit generated `deployment.json` in place.
+Pass an explicit absolute FASTA path unchanged, whether it comes from Codex desktop drag and drop,
+`Downloads`, or a project directory. DeepKOALA accepts direct readable regular local files without
+an input-root setting, then validates and stages the FASTA into private job state before running the
+annotator. Omit `output_directory` unless the user selected a configured output location. Core
+consumes the generated annotation under the shared DeepKOALA output root and retains the original
+FASTA path as provenance without reopening it.
 
 Protect the file and its direct parent:
 

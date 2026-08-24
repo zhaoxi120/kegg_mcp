@@ -15,7 +15,6 @@ from deepkoala_mcp.config import (
     ALLOWED_DEVICES_ENV,
     CHECKOUT_ENV,
     HMMSEARCH_EXECUTABLE_ENV,
-    INPUT_ROOTS_ENV,
     OUTPUT_ROOTS_ENV,
     PROFILES_DIR_ENV,
     PYTHON_ENV,
@@ -29,7 +28,6 @@ def _environment(config: DeepKoalaRuntimeConfig) -> dict[str, str]:
         CHECKOUT_ENV: str(config.checkout),
         PYTHON_ENV: str(config.python_executable),
         STATE_ROOT_ENV: str(config.state_root),
-        INPUT_ROOTS_ENV: str(config.input_roots[0]),
         OUTPUT_ROOTS_ENV: str(config.output_roots[0]),
         ALLOWED_DEVICES_ENV: ",".join(config.allowed_devices),
     }
@@ -63,7 +61,6 @@ def test_doctor_reports_ready_without_exposing_paths(
     assert document["mps_available"] is False
     assert document["allowed_devices"] == ["cpu"]
     assert document["downloads_enabled"] is False
-    assert document["input_root_count"] == 1
     assert document["output_root_count"] == 1
     assert document["private_paths"] == "redacted"
     assert document["allow_multi"] is False

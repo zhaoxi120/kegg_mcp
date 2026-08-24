@@ -1,6 +1,6 @@
 ---
 name: deepkoala-annotation
-description: Run a configured local DeepKOALA companion on an allowlisted protein FASTA and produce a stable detailed-CSV annotation handoff plus run report. Use when a user explicitly asks for DeepKOALA annotation, supplies a protein FASTA without KO evidence, or wants to resume or inspect a local DeepKOALA job. Do not use for KO normalization, KEGG retrieval, MODULE or pathway analysis, rendering, model installation, or web-form automation.
+description: Run a configured local DeepKOALA companion on an explicit absolute local protein FASTA and produce a stable detailed-CSV annotation handoff plus run report. Use when a user explicitly asks for DeepKOALA annotation, supplies a protein FASTA without KO evidence, or wants to resume or inspect a local DeepKOALA job. Do not use for KO normalization, KEGG retrieval, MODULE or pathway analysis, rendering, model installation, or web-form automation.
 ---
 
 # DeepKOALA annotation
@@ -14,8 +14,8 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    root from the FASTA path or create a directory with a shell command. An explicit directory may
    be new or empty and owner-only; never select an existing non-empty directory. Pass a Codex
    drag-and-drop attachment's provided absolute path unchanged; do not copy it into a guessed input
-   root. The deployment may explicitly allow the stable Codex `attachments` directory, including
-   its generated child directories, as a DeepKOALA input root.
+   root. DeepKOALA accepts explicit absolute direct local FASTA paths without an input-directory
+   allowlist and privately stages the validated file.
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency

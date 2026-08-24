@@ -25,7 +25,6 @@ ENV_PREFIX = "DEEPKOALA_MCP_"
 CHECKOUT_ENV = f"{ENV_PREFIX}CHECKOUT"
 PYTHON_ENV = f"{ENV_PREFIX}PYTHON"
 STATE_ROOT_ENV = f"{ENV_PREFIX}STATE_ROOT"
-INPUT_ROOTS_ENV = f"{ENV_PREFIX}INPUT_ROOTS"
 OUTPUT_ROOTS_ENV = f"{ENV_PREFIX}OUTPUT_ROOTS"
 ALLOWED_MODELS_ENV = f"{ENV_PREFIX}ALLOWED_MODELS"
 ALLOWED_DEVICES_ENV = f"{ENV_PREFIX}ALLOWED_DEVICES"
@@ -48,7 +47,7 @@ def _default_devices() -> tuple[Literal["cpu", "cuda", "mps"], ...]:
 
 
 class DeepKoalaRuntimeConfig(BaseModel):
-    """Private deployment paths and the complete execution allowlist."""
+    """Private deployment paths and bounded execution policy."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -61,7 +60,6 @@ class DeepKoalaRuntimeConfig(BaseModel):
     checkout: Path
     python_executable: Path
     state_root: Path
-    input_roots: tuple[Path, ...]
     output_roots: tuple[Path, ...]
     allowed_models: tuple[ModelName, ...] = ("full", "frag")
     allowed_devices: tuple[Literal["cpu", "cuda", "mps"], ...] = Field(
@@ -147,10 +145,9 @@ class DeepKoalaRuntimeConfig(BaseModel):
             raise ValueError("state_root must not be a filesystem root")
         if _overlap(self.state_root, self.checkout):
             raise ValueError("state_root must not overlap checkout")
-        _validate_roots("input_roots", self.input_roots)
         _validate_roots("output_roots", self.output_roots, writable=True)
-        if any(_overlap(root, self.state_root) for root in (*self.input_roots, *self.output_roots)):
-            raise ValueError("input and output roots must not overlap state_root")
+        if any(_overlap(root, self.state_root) for root in self.output_roots):
+            raise ValueError("output_roots must not overlap state_root")
         if any(_overlap(root, self.checkout) for root in self.output_roots):
             raise ValueError("output_roots must not overlap checkout")
         if len(self.allowed_models) != len(set(self.allowed_models)):
@@ -177,7 +174,7 @@ class DeepKoalaRuntimeConfig(BaseModel):
                 raise ValueError(f"{name} must be an absolute traversal-free non-root path")
             if any(
                 _overlap(path, root)
-                for root in (self.state_root, *self.input_roots, *self.output_roots)
+                for root in (self.state_root, *self.output_roots)
             ):
                 raise ValueError(f"{name} must not overlap mutable companion roots")
         return self
@@ -193,7 +190,6 @@ def load_runtime_config(
         checkout=_required_existing(values, CHECKOUT_ENV, directory=True),
         python_executable=_required_existing(values, PYTHON_ENV, directory=False),
         state_root=_absolute(_required(values, STATE_ROOT_ENV), STATE_ROOT_ENV),
-        input_roots=_roots(_required(values, INPUT_ROOTS_ENV), INPUT_ROOTS_ENV),
         output_roots=_roots(_required(values, OUTPUT_ROOTS_ENV), OUTPUT_ROOTS_ENV),
         allowed_models=_models(values.get(ALLOWED_MODELS_ENV, "full,frag")),
         allowed_devices=_devices(values.get(ALLOWED_DEVICES_ENV, ",".join(_default_devices()))),
@@ -381,7 +377,6 @@ __all__ = [
     "CHECKOUT_ENV",
     "CPU_THREADS_ENV",
     "HMMSEARCH_EXECUTABLE_ENV",
-    "INPUT_ROOTS_ENV",
     "MAX_OUTPUT_BYTES_ENV",
     "MAX_SEQUENCES_ENV",
     "MAX_TIMEOUT_SECONDS_ENV",

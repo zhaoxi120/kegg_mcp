@@ -29,7 +29,7 @@ DEFAULT_MARKETPLACE_NAME = "kegg-mcp-local"
 DEEPKOALA_REPOSITORY = "https://github.com/zhaoxi120/deepkoala.git"
 DEEPKOALA_REVISION = "bebbe0c43f50a26488f7092f6b355aae870a4ed9"
 DEFAULT_DEEPKOALA_MODEL_DATE = "202502"
-DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
+DEPLOYMENT_CONFIG_SCHEMA_VERSION = 2
 DEPLOYMENT_MANIFEST_SCHEMA_VERSION = 1
 SERVER_NAMES = ("deepkoala-mcp", "kegg-mcp", "kegg-render-mcp")
 SKILL_NAMES = ("deepkoala-annotation", "kegg-ko-analysis", "kegg-pathway-rendering")
@@ -137,7 +137,6 @@ class CoreConfig:
 @dataclass(frozen=True)
 class DeepKoalaConfig:
     state_root: Path
-    input_roots: tuple[Path, ...]
     output_roots: tuple[Path, ...]
     allowed_models: tuple[str, ...]
     cpu_threads: int
@@ -572,7 +571,6 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
         deepkoala,
         {
             "state_root",
-            "input_roots",
             "output_roots",
             "allowed_models",
             "cpu_threads",
@@ -590,7 +588,6 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
         private=True,
         writable=True,
     )
-    deepkoala_inputs = _paths(deepkoala, "input_roots", "deepkoala")
     deepkoala_outputs = _paths(deepkoala, "output_roots", "deepkoala", writable=True)
     raw_allowed_models = deepkoala.get("allowed_models", ["full", "frag"])
     if not isinstance(raw_allowed_models, list):
@@ -662,7 +659,6 @@ def _load_deployment_config(path: Path) -> DeploymentConfig:
         core=CoreConfig(result_store_path=result_store, allowed_roots=core_roots),
         deepkoala=DeepKoalaConfig(
             state_root=deepkoala_state,
-            input_roots=deepkoala_inputs,
             output_roots=deepkoala_outputs,
             allowed_models=tuple(allowed_models),
             cpu_threads=cpu_threads,
@@ -708,7 +704,6 @@ def _validate_cross_component_paths(config: DeploymentConfig) -> None:
         _error("deployment_path_invalid", "private state roots must not overlap")
     shared = (
         *config.core.allowed_roots,
-        *config.deepkoala.input_roots,
         *config.deepkoala.output_roots,
         *config.renderer.allowed_roots,
     )
@@ -1237,9 +1232,6 @@ def _deployment_environments(
         "DEEPKOALA_MCP_CHECKOUT": str(checkout),
         "DEEPKOALA_MCP_PYTHON": str(python_executable),
         "DEEPKOALA_MCP_STATE_ROOT": str(config.deepkoala.state_root),
-        "DEEPKOALA_MCP_INPUT_ROOTS": os.pathsep.join(
-            str(root) for root in config.deepkoala.input_roots
-        ),
         "DEEPKOALA_MCP_OUTPUT_ROOTS": os.pathsep.join(
             str(root) for root in config.deepkoala.output_roots
         ),

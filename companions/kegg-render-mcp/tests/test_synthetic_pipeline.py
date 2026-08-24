@@ -81,7 +81,9 @@ async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
         handoff = _parse_handoff(completed)
         handoff_payload = cast(dict[str, object], _wire_data(completed)["handoff"])
 
-    expected_fasta = deepkoala_config.input_roots[0] / "synthetic-pipeline.faa"
+    expected_fasta = (
+        deepkoala_config.state_root.parent / "inputs" / "synthetic-pipeline.faa"
+    )
     assert handoff.input_path == str(expected_fasta)
     assert handoff.source.model_version == "202502"
     assert handoff.source.model_name == "full"
