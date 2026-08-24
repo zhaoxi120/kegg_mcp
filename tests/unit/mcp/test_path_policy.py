@@ -1,4 +1,4 @@
-"""Race-resistant allowed-root path policy tests."""
+"""Race-resistant direct local path policy tests."""
 
 from __future__ import annotations
 
@@ -25,14 +25,13 @@ def _request(path: Path, *, max_bytes: int) -> NormalizeAnnotationsRequest:
     )
 
 
-def test_direct_regular_file_at_exact_limit_is_materialized(tmp_path: Path) -> None:
-    source = tmp_path / "annotations.txt"
+def test_explicit_download_file_at_exact_limit_is_materialized(tmp_path: Path) -> None:
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    source = downloads / "annotations.txt"
     source.write_bytes(b"K00001\n")
 
-    materialized = path_policy.materialize_annotation_file(
-        _request(source, max_bytes=7),
-        (str(tmp_path),),
-    )
+    materialized = path_policy.materialize_annotation_file(_request(source, max_bytes=7))
 
     assert materialized.text == "K00001\n"
     assert materialized.file_path is None
@@ -40,7 +39,7 @@ def test_direct_regular_file_at_exact_limit_is_materialized(tmp_path: Path) -> N
     assert materialized.source.input_path == str(source)
 
 
-def test_distinct_source_provenance_path_is_not_reopened_under_annotation_roots(
+def test_distinct_source_provenance_path_is_not_reopened_as_annotation_input(
     tmp_path: Path,
 ) -> None:
     annotation_root = tmp_path / "annotations"
@@ -57,10 +56,7 @@ def test_distinct_source_provenance_path_is_not_reopened_under_annotation_roots(
         }
     )
 
-    materialized = path_policy.materialize_annotation_file(
-        request,
-        (str(annotation_root.resolve()),),
-    )
+    materialized = path_policy.materialize_annotation_file(request)
 
     assert materialized.text == "K00001\n"
     assert materialized.source is not None
@@ -76,7 +72,6 @@ def test_file_one_byte_over_limit_is_rejected_without_path_disclosure(tmp_path: 
     with pytest.raises(KeggMcpError) as caught:
         path_policy.materialize_annotation_file(
             _request(source, max_bytes=6),
-            (str(tmp_path),),
         )
 
     assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
@@ -91,14 +86,17 @@ def test_sparse_oversized_file_is_rejected_before_read(tmp_path: Path) -> None:
     with pytest.raises(KeggMcpError) as caught:
         path_policy.materialize_annotation_file(
             _request(source, max_bytes=16),
-            (str(tmp_path),),
         )
 
     assert caught.value.detail.code is ErrorCode.INPUT_LIMIT_EXCEEDED
 
 
 @pytest.mark.parametrize("link_final", [False, True])
-def test_symlinked_path_component_is_rejected(tmp_path: Path, *, link_final: bool) -> None:
+def test_symlinked_input_is_resolved_to_canonical_target(
+    tmp_path: Path,
+    *,
+    link_final: bool,
+) -> None:
     real_directory = tmp_path / "real"
     real_directory.mkdir()
     source = real_directory / "annotations.txt"
@@ -111,13 +109,21 @@ def test_symlinked_path_component_is_rejected(tmp_path: Path, *, link_final: boo
         alias.symlink_to(real_directory, target_is_directory=True)
         supplied = alias / source.name
 
+    materialized = path_policy.materialize_annotation_file(_request(supplied, max_bytes=100))
+
+    assert materialized.text == "K00001\n"
+    assert materialized.source is not None
+    assert materialized.source.input_path == str(source.resolve())
+
+
+def test_relative_input_path_is_rejected_without_root_configuration_text() -> None:
+    request = _request(Path("annotations.txt"), max_bytes=100)
+
     with pytest.raises(KeggMcpError) as caught:
-        path_policy.materialize_annotation_file(
-            _request(supplied, max_bytes=100),
-            (str(tmp_path),),
-        )
+        path_policy.materialize_annotation_file(request)
 
     assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
+    assert "KEGG_MCP_ALLOWED_ROOTS" not in caught.value.detail.model_dump_json()
 
 
 def test_in_place_mutation_during_read_is_rejected(
@@ -143,7 +149,6 @@ def test_in_place_mutation_during_read_is_rejected(
     with pytest.raises(KeggMcpError) as caught:
         path_policy.materialize_annotation_file(
             _request(source, max_bytes=100),
-            (str(tmp_path),),
         )
 
     assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
@@ -173,70 +178,64 @@ def test_named_file_replacement_during_read_is_rejected(
     with pytest.raises(KeggMcpError) as caught:
         path_policy.materialize_annotation_file(
             _request(source, max_bytes=100),
-            (str(tmp_path),),
         )
 
     assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
 
 
-def test_allowed_root_permissions_are_rechecked_for_each_access(tmp_path: Path) -> None:
-    root = tmp_path / "allowed"
-    root.mkdir(mode=0o700)
-    source = root / "annotations.txt"
-    source.write_text("K00001\n", encoding="utf-8")
-    allowed_roots = (str(root.resolve()),)
-    root.chmod(0o777)
+def test_explicit_output_may_be_outside_configured_default_root(tmp_path: Path) -> None:
+    default_root = tmp_path / "configured-output"
+    default_root.mkdir(mode=0o700)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    explicit = desktop / "analysis"
 
-    try:
-        with pytest.raises(KeggMcpError) as caught:
-            path_policy.materialize_annotation_file(
-                _request(source, max_bytes=100),
-                allowed_roots,
-            )
-    finally:
-        root.chmod(0o700)
+    resolved = path_policy.resolve_output_directory(
+        str(explicit),
+        (str(default_root.resolve()),),
+        default_prefix="kegg-analysis",
+    )
 
-    assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
+    assert resolved == explicit
 
 
-def test_allowed_root_replacement_between_name_check_and_open_is_rejected(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "allowed"
-    root.mkdir(mode=0o700)
-    source = root / "annotations.txt"
-    source.write_text("K00001\n", encoding="utf-8")
-    replacement = tmp_path / "replacement"
-    replacement.mkdir(mode=0o700)
-    (replacement / source.name).write_text("K00002\n", encoding="utf-8")
-    displaced = tmp_path / "displaced"
-    real_open = os.open
-    replaced = False
+def test_explicit_output_resolves_a_symlinked_parent(tmp_path: Path) -> None:
+    actual_parent = tmp_path / "Desktop"
+    actual_parent.mkdir()
+    selected_parent = tmp_path / "selected-output"
+    selected_parent.symlink_to(actual_parent, target_is_directory=True)
 
-    def replace_root_before_open(
-        path: str | os.PathLike[str],
-        flags: int,
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> int:
-        nonlocal replaced
-        if not replaced and dir_fd is None and Path(path) == root:
-            root.rename(displaced)
-            replacement.rename(root)
-            replaced = True
-        if dir_fd is None:
-            return real_open(path, flags, mode)
-        return real_open(path, flags, mode, dir_fd=dir_fd)
+    resolved = path_policy.resolve_output_directory(
+        str(selected_parent / "analysis"),
+        (),
+        default_prefix="kegg-analysis",
+    )
 
-    monkeypatch.setattr(path_policy.os, "open", replace_root_before_open)
+    assert resolved == actual_parent / "analysis"
 
+
+def test_configured_root_is_used_only_for_default_output_allocation(tmp_path: Path) -> None:
+    default_root = tmp_path / "configured-output"
+    default_root.mkdir(mode=0o700)
+
+    resolved = path_policy.resolve_output_directory(
+        None,
+        (str(default_root.resolve()),),
+        default_prefix="kegg-analysis",
+    )
+
+    assert resolved is not None
+    assert resolved.parent == default_root
+    assert resolved.name.startswith("kegg-analysis-")
+
+
+def test_relative_output_path_is_rejected_without_root_configuration_text() -> None:
     with pytest.raises(KeggMcpError) as caught:
-        path_policy.materialize_annotation_file(
-            _request(source, max_bytes=100),
-            (str(root.resolve()),),
+        path_policy.resolve_output_directory(
+            "analysis",
+            (),
+            default_prefix="kegg-analysis",
         )
 
-    assert replaced is True
-    assert caught.value.detail.code is ErrorCode.INVALID_ANNOTATION_TABLE
+    assert caught.value.detail.code is ErrorCode.ANALYSIS_CONFIGURATION_INVALID
+    assert "KEGG_MCP_ALLOWED_ROOTS" not in caught.value.detail.model_dump_json()

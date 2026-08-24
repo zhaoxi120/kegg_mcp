@@ -51,7 +51,7 @@ def test_doctor_json_reports_redacted_file_handoff_state(tmp_path: Path) -> None
     assert str(shared) not in output.getvalue()
 
 
-def test_doctor_reports_disabled_file_handoff_without_roots() -> None:
+def test_doctor_reports_direct_file_handoff_without_default_output_roots() -> None:
     output = StringIO()
 
     exit_code = cli.main(
@@ -62,8 +62,8 @@ def test_doctor_reports_disabled_file_handoff_without_roots() -> None:
 
     text = output.getvalue()
     assert exit_code == 0
-    assert "file handoff enabled: false (0 configured roots; paths redacted)" in text
-    assert "Set KEGG_MCP_ALLOWED_ROOTS" in text
+    assert "file handoff enabled: true (0 configured default output roots; paths redacted)" in text
+    assert "explicit input and output paths remain available" in text
 
 
 def test_doctor_accepts_explicit_academic_user_test_profile() -> None:
@@ -85,7 +85,8 @@ def test_doctor_accepts_explicit_academic_user_test_profile() -> None:
     assert document["network_probe"] == "not_run"
     assert document["next_actions"] == [
         "Call probe_kegg_connectivity from an MCP client before the first live analysis.",
-        "Set KEGG_MCP_ALLOWED_ROOTS to enable file handoff and output bundles.",
+        "Set KEGG_MCP_ALLOWED_ROOTS only if service-allocated default output directories are "
+        "required; explicit input and output paths remain available.",
     ]
 
 

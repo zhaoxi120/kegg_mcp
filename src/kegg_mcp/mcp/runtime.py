@@ -16,7 +16,7 @@ from kegg_mcp.services.result_store import SQLiteResultStore
 
 @dataclass(slots=True)
 class McpRuntime:
-    """Injected services, one opaque stdio result scope, and process-local probe state."""
+    """Injected services, optional default output roots, and process-local state."""
 
     client: KeggMcpClient
     result_store: SQLiteResultStore

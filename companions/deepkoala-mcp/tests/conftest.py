@@ -89,15 +89,12 @@ def checkout(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def runtime_config(tmp_path: Path, checkout: Path) -> DeepKoalaRuntimeConfig:
-    inputs = tmp_path / "inputs"
     outputs = tmp_path / "outputs"
-    inputs.mkdir()
     outputs.mkdir()
     return DeepKoalaRuntimeConfig(
         checkout=checkout,
         python_executable=Path(sys.executable).resolve(),
         state_root=(tmp_path / "state").resolve(),
-        input_roots=(inputs.resolve(),),
         output_roots=(outputs.resolve(),),
         allowed_devices=("cpu",),
         cpu_threads=2,

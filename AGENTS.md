@@ -155,8 +155,10 @@ schema, parser, fixture, or acceptance test.
 - Bound inputs, identifiers, records, URI parameters, previews, retained bytes, and output sizes.
   Expose large results through validated scoped resources or controlled output bundles.
 - Treat result identifiers as opaque and scope-isolated; define retention and safe deletion.
-- Restrict file paths to configured roots. Reject traversal, unsafe ancestry, replacement races,
-  and symlink escapes.
+- Accept explicit local input files and explicit output destinations without directory allowlists.
+  Configured output roots define only service-allocated defaults. Resolve caller-facing symlinks to
+  canonical paths, then reject traversal, unsafe filesystem types, replacement races, and target
+  changes.
 - Redact secrets, environment values, usernames, endpoints, and full local paths from status,
   errors, and logs.
 - Keep renderer inputs, XML, images, SVG, output paths, and retained artifacts bounded, static,

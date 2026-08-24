@@ -142,37 +142,24 @@ class StateSession:
 
 def create_output_directory(
     path: Path,
-    output_roots: tuple[Path, ...],
 ) -> ControlledOutputDirectory:
-    """Open or atomically create one owner-only empty directory below an allowed root."""
-    if not path.is_absolute() or ".." in path.parts or not output_roots:
+    """Open or atomically create one empty directory at an explicit absolute path."""
+    if not path.is_absolute() or ".." in path.parts:
         raise OutputPathError("output directory is not allowed")
-    parent = path.parent
     try:
-        resolved_parent = parent.resolve(strict=True)
-        parent_metadata = parent.lstat()
-    except OSError as error:
-        raise OutputPathError("output parent is unavailable") from error
-    if (
-        resolved_parent != parent
-        or stat.S_ISLNK(parent_metadata.st_mode)
-        or not stat.S_ISDIR(parent_metadata.st_mode)
-    ):
-        raise OutputPathError("output parent must be a direct directory without symlinks")
-    root = next(
-        (
-            root
-            for root in output_roots
-            if resolved_parent == root or resolved_parent.is_relative_to(root)
-        ),
-        None,
-    )
-    if root is None:
-        raise OutputPathError("output directory escapes the configured roots")
+        path = path.resolve(strict=True)
+    except FileNotFoundError:
+        try:
+            path = path.parent.resolve(strict=True) / path.name
+        except (OSError, RuntimeError) as error:
+            raise OutputPathError("output parent is unavailable") from error
+    except (OSError, RuntimeError) as error:
+        raise OutputPathError("output directory is unavailable") from error
+    root = Path(path.anchor)
     try:
         relative_parts = path.relative_to(root).parts
     except ValueError as error:
-        raise OutputPathError("output directory escapes the configured roots") from error
+        raise OutputPathError("output directory has no usable filesystem anchor") from error
     if not relative_parts:
         raise OutputAlreadyExistsError("output directory already exists")
 
@@ -222,16 +209,18 @@ def create_output_directory(
             ):
                 raise OutputPathError("created output directory was replaced before opening")
             os.fchmod(directory_fd, 0o700)
-            _validate_owner_only_directory(directory_fd)
+            _validate_output_directory(directory_fd)
         else:
             try:
-                _validate_owner_only_directory(directory_fd)
+                _validate_output_directory(directory_fd)
                 if _directory_has_entry(directory_fd):
                     raise OutputAlreadyExistsError("output directory is not empty")
             except OutputAlreadyExistsError:
                 raise
             except (OSError, ValueError) as error:
                 raise OutputPathError("existing output directory is unsafe") from error
+        if not os.access(path, os.W_OK | os.X_OK):
+            raise OutputPathError("output directory is not writable")
         identity = _directory_identity(os.fstat(directory_fd))
         return ControlledOutputDirectory(
             path=path,
@@ -1216,7 +1205,7 @@ def _open_output_root(path: Path) -> int:
         _validate_output_ancestor(descriptor)
     except (OSError, ValueError) as error:
         os.close(descriptor)
-        raise OutputPathError("output root is not a private user-owned directory") from error
+        raise OutputPathError("output filesystem root is unavailable") from error
     return descriptor
 
 
@@ -1242,7 +1231,7 @@ def _open_controlled_directory(output_directory: ControlledOutputDirectory) -> i
     descriptor: int | None = None
     try:
         pinned = os.fstat(output_directory.directory_fd)
-        _validate_owner_only_directory(output_directory.directory_fd)
+        _validate_output_directory(output_directory.directory_fd)
         if _directory_identity(pinned) != output_directory.identity:
             raise ValueError("pinned output directory identity changed")
         root_fd = _open_named_root(output_directory)
@@ -1250,7 +1239,7 @@ def _open_controlled_directory(output_directory: ControlledOutputDirectory) -> i
             root_fd,
             output_directory.relative_parts,
         )
-        _validate_owner_only_directory(descriptor)
+        _validate_output_directory(descriptor)
         if _directory_identity(os.fstat(descriptor)) != output_directory.identity:
             raise ValueError("named output directory was replaced")
         return descriptor
@@ -1297,7 +1286,7 @@ def _open_named_root(output_directory: ControlledOutputDirectory) -> int:
             _directory_identity(pinned) != output_directory.root_identity
             or _directory_identity(os.fstat(descriptor)) != output_directory.root_identity
         ):
-            raise ValueError("configured output root was replaced")
+            raise ValueError("output filesystem root was replaced")
         return descriptor
     except BaseException:
         os.close(descriptor)
@@ -1325,12 +1314,8 @@ def _require_named_directory_identity(
 
 def _validate_output_ancestor(descriptor: int) -> None:
     metadata = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o022
-    ):
-        raise ValueError("output ancestors must be user-owned and not group-writable")
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("output ancestors must be directories")
 
 
 def _directory_has_entry(directory_fd: int) -> bool:
@@ -1467,6 +1452,11 @@ def _validate_owner_only_directory(descriptor: int) -> None:
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
         raise ValueError("controlled directory must be owner-only")
+
+
+def _validate_output_directory(descriptor: int) -> None:
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        raise ValueError("controlled output must be a directory")
 
 
 def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:

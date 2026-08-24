@@ -998,7 +998,7 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert status_data["transport"] == "stdio"
         assert status_data["access_mode"] == "public_academic"
         assert status_data["network_enabled"] is True
-        assert status_data["file_handoff_enabled"] is False
+        assert status_data["file_handoff_enabled"] is True
         assert status_data["allowed_root_count"] == 0
         assert status_data["connectivity"] == "not_probed"
         assert status_data["inspection_status"] == "not_probed"
@@ -1955,6 +1955,51 @@ async def test_file_handoff_json_round_trip_and_normalization_bundle(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "external_input",
+    (
+        Path("Downloads") / "annotations.csv",
+        Path(".codex") / "attachments" / "task-id" / "annotations.csv",
+    ),
+)
+async def test_explicit_external_input_and_output_ignore_default_output_root(
+    tmp_path: Path,
+    external_input: Path,
+) -> None:
+    default_output_root = tmp_path / "configured-output"
+    default_output_root.mkdir(mode=0o700)
+    annotations = tmp_path / external_input
+    annotations.parent.mkdir(parents=True)
+    annotations.write_text(
+        "sequence_id,ko_id\nprotein-1,K00001\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "Desktop" / f"normalized-{external_input.parts[0].lstrip('.')}"
+    output.parent.mkdir()
+    runtime = _runtime(
+        tmp_path,
+        allowed_roots=(str(default_output_root.resolve()),),
+    )
+
+    async with create_connected_server_and_client_session(create_server(runtime)) as session:
+        result = await session.call_tool(
+            "normalize_ko_annotations",
+            {
+                "file_path": str(annotations),
+                "output_directory": str(output),
+                "input_format": "generic_csv",
+            },
+        )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    bundle = result.structuredContent["result"]["data"]["output_bundle"]
+    assert bundle["output_directory"] == str(output)
+    assert Path(bundle["manifest"]).is_file()
+    assert tuple(default_output_root.iterdir()) == ()
+
+
+@pytest.mark.asyncio
 async def test_omitted_output_uses_fresh_child_of_last_configured_root(
     tmp_path: Path,
 ) -> None:
@@ -2627,33 +2672,38 @@ async def test_automatic_top_five_excludes_special_maps_and_fills_from_later_ran
 
 
 @pytest.mark.asyncio
-async def test_file_handoff_rejects_incomplete_csv_and_symlink_escape(tmp_path: Path) -> None:
-    allowed = tmp_path / "allowed"
-    allowed.mkdir()
-    incomplete = allowed / "incomplete.csv"
+async def test_file_handoff_rejects_incomplete_csv_and_resolves_external_symlink(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "configured-output"
+    output_root.mkdir()
+    incomplete = tmp_path / "incomplete.csv"
     incomplete.write_text("sequence_id,note\nprotein-1,missing KO\n", encoding="utf-8")
-    outside = tmp_path / "outside.csv"
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    outside = downloads / "outside.csv"
     outside.write_text("sequence_id,ko_id\nprotein-1,K00001\n", encoding="utf-8")
-    escaped = allowed / "escaped.csv"
-    escaped.symlink_to(outside)
-    server = create_server(_runtime(tmp_path, allowed_roots=(str(allowed.resolve()),)))
+    attachment_alias = tmp_path / "attachment.csv"
+    attachment_alias.symlink_to(outside)
+    server = create_server(_runtime(tmp_path, allowed_roots=(str(output_root.resolve()),)))
 
     async with create_connected_server_and_client_session(server) as session:
         malformed = await session.call_tool(
             "normalize_ko_annotations",
             {"file_path": str(incomplete), "input_format": "generic_csv"},
         )
-        escaped_result = await session.call_tool(
+        symlink_result = await session.call_tool(
             "normalize_ko_annotations",
-            {"file_path": str(escaped), "input_format": "generic_csv"},
+            {"file_path": str(attachment_alias), "input_format": "generic_csv"},
         )
 
         assert malformed.isError is True
         assert malformed.structuredContent is not None
         assert malformed.structuredContent["error"]["code"] == "MISSING_REQUIRED_COLUMN"
-        assert escaped_result.isError is True
-        assert escaped_result.structuredContent is not None
-        assert escaped_result.structuredContent["error"]["code"] == "INVALID_ANNOTATION_TABLE"
+        assert symlink_result.isError is False
+        assert symlink_result.structuredContent is not None
+        provenance = symlink_result.structuredContent["result"]["data"]["provenance"]
+        assert provenance["source_preview"][0]["input_path"] == str(outside.resolve())
 
 
 @pytest.mark.asyncio

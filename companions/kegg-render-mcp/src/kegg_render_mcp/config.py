@@ -133,7 +133,9 @@ class RendererRuntimeConfig(BaseModel):
     )
 
     state_root: Path
-    allowed_roots: tuple[Path, ...]
+    allowed_roots: tuple[Path, ...] = Field(
+        description="Configured roots used only for automatic output allocation."
+    )
     access_mode: RendererAccessMode = "unconfigured"
     licensed_endpoint: str | None = Field(default=None, min_length=1, max_length=2048, repr=False)
     cache_path: Path | None = Field(default=None, repr=False)
@@ -153,17 +155,17 @@ class RendererRuntimeConfig(BaseModel):
             or not self.allowed_roots
             or len(self.allowed_roots) > 64
         ):
-            raise ValueError("allowed_roots must be non-empty and unique")
+            raise ValueError("default output roots must be non-empty and unique")
         for root in self.allowed_roots:
             checked = _safe_absolute(root, "allowed_root")
             if checked == Path(checked.anchor):
-                raise ValueError("allowed_roots must contain existing non-root directories")
+                raise ValueError("default output roots must be existing non-root directories")
             try:
                 _validate_allowed_root(checked)
             except OSError as error:
-                raise ValueError("allowed_roots contains an unavailable root") from error
+                raise ValueError("a default output root is unavailable") from error
             if _overlap(state, checked):
-                raise ValueError("allowed_roots must not overlap state_root")
+                raise ValueError("default output roots must not overlap state_root")
         if self.access_mode == "licensed" and self.licensed_endpoint is None:
             raise ValueError("licensed access requires exactly one private endpoint")
         if self.access_mode not in {"licensed", "offline_cache"} and (
@@ -261,7 +263,9 @@ def _validate_allowed_root(path: Path) -> None:
             or metadata.st_uid != os.geteuid()
             or metadata.st_mode & 0o022
         ):
-            raise ValueError("allowed roots must be owned, direct, and not group/world writable")
+            raise ValueError(
+                "default output roots must be owned, direct, and not group/world writable"
+            )
     finally:
         os.close(descriptor)
 

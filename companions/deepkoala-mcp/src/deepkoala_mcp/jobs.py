@@ -203,7 +203,6 @@ class DeepKoalaJobManager:
                 directory_created = True
                 staged = await stage_fasta_in_worker(
                     fasta_path=request.fasta_path,
-                    input_roots=self.config.input_roots,
                     job_directory=directory,
                     max_sequences=self.config.max_sequences,
                 )
@@ -212,10 +211,7 @@ class DeepKoalaJobManager:
                     if request.output_directory is not None
                     else self.config.output_roots[-1] / f"deepkoala-{job_id.removeprefix('job_')}"
                 )
-                output_directory = create_output_directory(
-                    requested_output,
-                    self.config.output_roots,
-                )
+                output_directory = create_output_directory(requested_output)
                 record = _JobRecord(
                     job_id=job_id,
                     directory=directory,
@@ -244,23 +240,23 @@ class DeepKoalaJobManager:
                 fail(
                     ErrorCode.OUTPUT_ALREADY_EXISTS,
                     "The requested output directory exists and is not empty.",
-                    suggested_action=(
-                        "Choose a new or empty owner-only output directory for this run."
-                    ),
+                    suggested_action="Choose a new or empty output directory for this run.",
                 )
             except OutputPathError:
                 fail(
                     ErrorCode.OUTPUT_NOT_ALLOWED,
-                    "The requested output directory is outside the deployment policy.",
+                    "The requested output directory is unavailable or unsupported.",
                     suggested_action=(
-                        "Choose a new or empty owner-only directory below a configured output root."
+                        "Choose a writable absolute path for a new or empty directory."
                     ),
                 )
             except InputPathError:
                 fail(
                     ErrorCode.PATH_NOT_ALLOWED,
-                    "The FASTA path is unavailable or outside the deployment policy.",
-                    suggested_action="Use a direct readable file below a configured input root.",
+                    "The FASTA path is unavailable or not a supported local file.",
+                    suggested_action=(
+                        "Use an absolute path that resolves to a readable regular local file."
+                    ),
                 )
             except FastaLimitError:
                 fail(
@@ -409,7 +405,6 @@ class DeepKoalaJobManager:
             max_sequences=self.config.max_sequences,
             max_output_bytes=self.config.max_output_bytes,
             max_timeout_seconds=self.config.max_timeout_seconds,
-            input_root_count=len(self.config.input_roots),
             output_root_count=len(self.config.output_roots),
         )
 
@@ -683,7 +678,7 @@ def _raise_internal(stage: str, error: Exception) -> NoReturn:
     fail(
         ErrorCode.INTERNAL_ERROR,
         "The companion could not roll back a partially staged local run safely.",
-        suggested_action="Check owner-only state and output directories before retrying.",
+        suggested_action="Check the state directory and output destination before retrying.",
     )
 
 

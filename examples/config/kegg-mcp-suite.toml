@@ -6,10 +6,10 @@
 # or licensed KEGG endpoints to this example.
 #
 # Every directory below must already exist, be owned by the current user, and
-# must not be a symlink. Private state directories must be owner-only. Shared
-# roots may be used for stable handoffs, but must not overlap private state.
+# must not be a symlink. Private state directories must be owner-only. Configured
+# output roots provide service defaults and must not overlap private state.
 
-schema_version = 1
+schema_version = 2
 
 [kegg]
 # Set this to true only after the user confirms that both the user and this work
@@ -21,8 +21,9 @@ licensed_use_confirmed = false
 rate_limit_root = "/absolute/private/path/to/kegg-suite/rate-limit"
 
 [core]
-# The result database remains private. Core must allow every stable handoff root
-# produced by the DeepKOALA companion or consumed by Renderer.
+# The result database remains private. The legacy-named allowed_roots list is used
+# only when Core allocates an omitted output directory; explicit inputs and outputs
+# do not need to be beneath it.
 result_store_path = "/absolute/private/path/to/kegg-suite/core/results.sqlite3"
 allowed_roots = [
   "/absolute/shared/path/to/kegg-suite/analysis",
@@ -32,14 +33,9 @@ allowed_roots = [
 # The suite installer creates a private DeepKOALA checkout and environment under
 # the installation root after --allow-deepkoala-install is explicitly supplied.
 state_root = "/absolute/private/path/to/kegg-suite/deepkoala-state"
-# Include the active Codex data directory's attachments child to accept files
-# added through desktop drag and drop. DeepKOALA validates and privately stages
-# the attached file; it does not require a caller-created copy. Replace the
-# placeholder with the resolved absolute path; TOML does not expand `~`.
-input_roots = [
-  "/absolute/path/to/codex/attachments",
-  "/absolute/shared/path/to/kegg-suite/inputs",
-]
+# FASTA input uses the explicit absolute path supplied with each job and has no
+# directory allowlist. Caller-facing symlinks resolve canonically before the
+# companion validates and privately stages the file.
 output_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2
@@ -50,8 +46,9 @@ allow_multi = false
 # hmmsearch_executable = "/absolute/path/to/hmmsearch"
 
 [renderer]
-# Renderer consumes only the shared analysis handoff in this example. Keeping
-# offline_allow_stale false rejects expired cached KEGG assets.
+# The legacy-named allowed_roots list is only the Renderer's automatic output
+# allocation default. Explicit render inputs and outputs may use other local paths.
+# Keeping offline_allow_stale false rejects expired cached KEGG assets.
 state_root = "/absolute/private/path/to/kegg-suite/renderer-state"
 allowed_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
 offline_allow_stale = false

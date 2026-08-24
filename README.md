@@ -81,10 +81,10 @@ step is skipped. Rendering is always optional.
 
 ## Try it
 
-Once the suite is installed and your files are inside folders allowed by your local configuration,
-prompts can focus on the research task. Codex desktop drag-and-drop works when the active Codex
-data directory's `attachments` child is included in `deepkoala.input_roots`; the companion accepts
-the generated nested attachment path and privately stages the FASTA itself.
+Once the suite is installed, prompts can focus on the research task. DeepKOALA accepts an explicit
+absolute local FASTA path without an input-directory allowlist. Codex desktop drag-and-drop paths
+and files under `Downloads` can be passed unchanged; caller-facing symlinks resolve to their
+canonical regular-file targets and the companion privately stages the FASTA itself.
 
 ### Protein FASTA
 
@@ -185,15 +185,14 @@ duplicate/conflict accounting; use normalization or audit when those records are
 Community and pangenome results describe pooled encoded potential rather than one isolate.
 
 The high-level Core workflow applies the same compact analysis semantics to small and large
-inputs. An allowed DeepKOALA detailed file is streamed under fixed maxima of 1 GiB, 10 million
-source rows, 20 million expanded assignments, and 100,000 unique accepted K numbers. Bounded inline
-and other supported inputs produce the same accepted-KO view under their applicable importer
-limits. The DeepKOALA companion can validate and publish a detailed CSV up to the same 1 GiB file
-ceiling without loading the complete output into memory. Suite installations require Core's
-allowed roots to cover every DeepKOALA output root. Core validates the stable annotation CSV while
-retaining the original FASTA path as provenance without reopening it. The resource-to-inline
-recovery route remains limited to 5,000,000 bytes for manual deployments whose output roots are
-disjoint.
+inputs. An explicit local DeepKOALA detailed file is streamed under fixed maxima of 1 GiB, 10
+million source rows, 20 million expanded assignments, and 100,000 unique accepted K numbers.
+Bounded inline and other supported inputs produce the same accepted-KO view under their applicable
+importer limits. The DeepKOALA companion can validate and publish a detailed CSV up to the same 1 GiB file
+ceiling without loading the complete output into memory. Core accepts the stable annotation CSV at
+its returned absolute path, so suite and manual deployments do not need shared-root coverage or a
+resource-to-inline recovery route. The resolved FASTA path remains provenance rather than another
+Core input.
 
 Compact local intake does not raise KEGG request, relationship, reference-loading, ranking, or
 output budgets. Very large accepted-KO sets may therefore require explicit MODULE/pathway targets
@@ -202,9 +201,9 @@ mapping.
 
 ## Local data and KEGG access
 
-- Input files and generated results remain inside folders allowed by your local configuration. Live
-  modes send only the limited identifiers, terms, and parameters needed for the selected KEGG
-  request.
+- Input files and generated results remain at local paths selected by the user or allocated beneath
+  configured default output roots. Live modes send only the limited identifiers, terms, and
+  parameters needed for the selected KEGG request.
 - Use confirmed `public_academic` access only when both the user and the work qualify for public
   academic KEGG REST access. Other live deployments need an appropriately licensed endpoint.
 - `offline_cache` issues no KEGG HTTP requests and never falls back to the network.

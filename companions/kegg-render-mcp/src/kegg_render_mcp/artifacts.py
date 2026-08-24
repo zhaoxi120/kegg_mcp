@@ -253,7 +253,6 @@ class RenderArtifactStore:
             if output_directory is not None:
                 export_bundle(
                     output_directory,
-                    self._config.allowed_roots,
                     all_artifacts,
                     manifest_name=manifest_name,
                 )

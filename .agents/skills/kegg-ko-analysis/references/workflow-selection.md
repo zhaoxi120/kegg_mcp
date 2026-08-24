@@ -165,8 +165,10 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
 
 ## Annotation table or detailed CSV
 
-1. Use a controlled absolute path in `file_path`. Pass a user-specified new or empty
-   `output_directory` unchanged; the user-specified path wins. Otherwise, omit `output_directory`
+1. Use an absolute readable local path in `file_path`. Caller-facing symlinks resolve to their
+   canonical regular-file target. Pass a user-specified safe absolute new or empty
+   `output_directory` unchanged; it may be anywhere local and the user-specified path wins.
+   Otherwise, omit `output_directory`
    and let Core allocate a fresh directory beneath its configured project output root. Do not guess
    a root from the input path, create it with a shell command, or reuse a non-empty directory. Use
    `normalize_ko_annotations` alone only when the user wants a reusable normalized table.
@@ -176,31 +178,22 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
    per-record evidence. Use `normalize_ko_annotations` when the request requires raw source
    decisions, scores, thresholds, ranks, domains, protein names, sequence-to-KO mappings, or
    duplicate/conflict accounting. Preserve source/model versions, timestamps, and the original
-   absolute input path as provenance in either route. Core validates the annotation `file_path`
-   under its allowed roots but does not reopen a distinct provenance `input_path`.
+   absolute input path as provenance in either route. Core reads the explicit annotation
+   `file_path` without a directory allowlist but does not reopen a distinct provenance
+   `input_path`.
 4. Run every analysis with sorted unique accepted K numbers. Rejected, unclassified, and invalid
    records remain evidence outcomes and do not enter MODULE, pathway, ranking, comparison, or
    rendering results.
 5. Use stable bundle files for later MCP stages; do not pass a process-private result identifier.
-6. For an immediately preceding successful DeepKOALA handoff, first use its stable
-   `annotations_path`. If and only if Core rejects that path with
-   `ANALYSIS_CONFIGURATION_INVALID`, the typed message
-   `A local handoff path is outside the configured allowed roots.`, and a `safe_details` entry of
-   `field="file_path"`, return control to the installed
-   `deepkoala-annotation` Skill for its bounded `annotations_resource_uri` fallback. This Skill
-   does not call the companion MCP, change either server's allowed roots, copy the CSV, or retry the
-   same unreadable path. The preceding Skill may return byte-identical UTF-8 content only when the
-   successful job's `output_bytes` is at most the 5,000,000-byte Core inline limit. Then call Core
-   with nested `annotations.text` plus the unchanged `input_format` and `source`; omit
-   `annotations.file_path` and keep any analysis context only inside `annotations`. For a larger
-   result, stop without reading resource pages and require repaired Core allowed roots that cover
-   the returned DeepKOALA output path, as enforced by the supported suite installer. The original
-   FASTA `input_path` is provenance only and does not trigger this fallback. The same message with
-   `field="output_directory"` is an output-location error and must not enter this fallback.
+6. For an immediately preceding successful DeepKOALA handoff, use its stable `annotations_path`
+   directly with the unchanged `input_format` and `source`. Do not call the companion MCP, read its
+   process-scoped resource as a transport fallback, copy the CSV, or alter either server's path
+   configuration. Core's configured `allowed_roots` are only default output-allocation roots and
+   do not constrain this explicit input path.
 
 ### Compact high-level analysis view
 
-- For an allowed DeepKOALA detailed `annotations.file_path`, let Core stream the source under its
+- For a DeepKOALA detailed `annotations.file_path`, let Core stream the source under its
   fixed maxima: 1 GiB, 10,000,000 source rows, 20,000,000 expanded assignments, 100,000 unique
   accepted K numbers, 64 columns, 16,384 characters per field, and 100 retained diagnostics. Do
   not split and merge file chunks in the Skill to evade these limits. Other formats and bounded

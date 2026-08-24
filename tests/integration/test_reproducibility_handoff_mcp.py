@@ -312,7 +312,7 @@ async def test_handoff_rejects_occupied_output_without_any_kegg_request(
 
 
 @pytest.mark.asyncio
-async def test_mcp_rejects_cross_scope_unsupported_enrichment_and_output_paths(
+async def test_mcp_rejects_cross_scope_and_unsupported_handoff_but_accepts_explicit_output(
     tmp_path: Path,
 ) -> None:
     client = _SyntheticClient()
@@ -362,7 +362,7 @@ async def test_mcp_rejects_cross_scope_unsupported_enrichment_and_output_paths(
     assert not unsupported_enrichment_output.exists()
 
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
-    disallowed = await dispatch_tool(
+    explicit_output = await dispatch_tool(
         "prepare_kegg_handoff",
         {
             "output_directory": str(outside),
@@ -373,5 +373,10 @@ async def test_mcp_rejects_cross_scope_unsupported_enrichment_and_output_paths(
         },
         runtime,
     )
-    assert disallowed.isError is True
-    assert not outside.exists()
+    assert explicit_output.isError is False
+    outside_data = _data(explicit_output)
+    assert outside_data["target"] == "syntax_ko_composition"
+    _assert_private_bundle(
+        outside,
+        {Path(cast(str, outside_data["data_file"])).name, "handoff_manifest.json"},
+    )

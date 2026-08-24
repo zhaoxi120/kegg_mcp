@@ -3,8 +3,10 @@
 ## Compatible handoff
 
 1. Call `get_renderer_status` and require readiness plus the current schema version 6.
-2. Pass exactly one controlled absolute `render_input.json` path or bounded inline handoff to
-   `render_analysis_bundle`, `render_pathway`, or `render_module`.
+2. Pass exactly one absolute local `render_input.json` path or bounded inline handoff to
+   `render_analysis_bundle`, `render_pathway`, or `render_module`. Caller-facing input symlinks
+   resolve to canonical regular files. An explicit output may be any safe absolute new or empty
+   local directory; configured roots are only automatic output-allocation defaults.
 3. Let the renderer validate schema, targets, evidence states, paths, output limits, and assets.
 
 Accept only schema version 6. Do not patch, repair, or reinterpret a schema-mismatched handoff.
@@ -71,7 +73,7 @@ Skill, or pass a private result identifier between MCP processes.
 
 ## Unavailable renderer and lifecycle
 
-If the renderer is absent, unready, incompatible, or missing an allowed root, return the stable
+If the renderer is absent, unready, or incompatible, return the stable
 diagnostic and suggested operator action, then stop before rendering. The Skill itself does not
 install software, download assets, or invoke an unrelated image tool. Preserve the requested
 formats and target scope.

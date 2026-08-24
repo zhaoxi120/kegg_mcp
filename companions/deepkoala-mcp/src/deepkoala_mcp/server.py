@@ -210,9 +210,10 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
         SERVER_NAME,
         version=__version__,
         instructions=(
-            "Run one bounded local DeepKOALA annotation job directly from an allowlisted protein "
-            "FASTA path into an explicit new or empty controlled output directory, or a fresh "
-            "service-allocated directory. The runner defaults to CPU and uses CUDA or Apple "
+            "Run one bounded local DeepKOALA annotation job directly from an explicit absolute "
+            "protein FASTA path into a new or empty controlled output directory, or a fresh "
+            "service-allocated directory. FASTA inputs do not use a directory allowlist. The "
+            "runner defaults to CPU and uses CUDA or Apple "
             "Silicon MPS only after an explicit device request allowed by deployment policy. It "
             "uses detailed output and no worker processes. Multi-domain mode defaults to false "
             "and is available only when the deployment reports it ready and a request explicitly "

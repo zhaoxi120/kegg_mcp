@@ -452,7 +452,7 @@ def test_ci_clean_installs_fresh_wheels_outside_the_checkout() -> None:
     assert smoke_path.is_file()
     for distribution, version in (
         ("kegg-mcp", "0.10.0"),
-        ("deepkoala-mcp", "0.5.0"),
+        ("deepkoala-mcp", "0.6.0"),
         ("kegg-render-mcp", "0.5.0"),
     ):
         assert f"--distribution {distribution}" in ci

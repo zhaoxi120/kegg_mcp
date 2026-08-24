@@ -55,7 +55,7 @@ def get_server_status_service(
         ),
         academic_use_confirmed=access.mode is AccessMode.PUBLIC_ACADEMIC,
         licensed_use_confirmed=cache_endpoint_class is RetrievalEndpointClass.LICENSED,
-        file_handoff_enabled=allowed_root_count > 0,
+        file_handoff_enabled=True,
         allowed_root_count=allowed_root_count,
         supported_tools=supported_tools,
         result_active_ttl_seconds=result_store.limits.retention_seconds,

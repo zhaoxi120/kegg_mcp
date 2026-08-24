@@ -36,7 +36,6 @@ class _DoctorDocument(TypedDict):
     allow_multi: bool
     multi_ready: bool
     state_root_ready: bool
-    input_root_count: int | None
     output_root_count: int | None
     downloads_enabled: bool
     private_paths: str
@@ -115,7 +114,6 @@ def _doctor_document(environment: Mapping[str, str]) -> tuple[_DoctorDocument, i
             allow_multi=config.allow_multi,
             multi_ready=multi_ready,
             state_root_ready=True,
-            input_root_count=len(config.input_roots),
             output_root_count=len(config.output_roots),
         ),
         0 if ready else 2,
@@ -137,7 +135,6 @@ def _document(
     allow_multi: bool = False,
     multi_ready: bool = False,
     state_root_ready: bool = False,
-    input_root_count: int | None = None,
     output_root_count: int | None = None,
 ) -> _DoctorDocument:
     return {
@@ -154,7 +151,6 @@ def _document(
         "allow_multi": allow_multi,
         "multi_ready": multi_ready,
         "state_root_ready": state_root_ready,
-        "input_root_count": input_root_count,
         "output_root_count": output_root_count,
         "downloads_enabled": False,
         "private_paths": "redacted",

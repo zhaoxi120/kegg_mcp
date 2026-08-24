@@ -7,7 +7,7 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
 
 ## Require an authoritative handoff
 
-1. Accept a controlled `render_input.json` version 6 path or the renderer's bounded inline input
+1. Accept an absolute local `render_input.json` version 6 path or the renderer's bounded inline input
    transport. If the original request starts with only protein FASTA or KO evidence, route those
    earlier stages through the installed focused Skills and enter this Skill only after the core
    returns a compatible stable handoff; never call those MCP servers here. Read the missing-stage
@@ -19,7 +19,8 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
    and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, reinterpret, or recompute its
    evidence in the Skill. Stop on a schema mismatch and request a current version 6 handoff. A
-   user-specified output directory wins. Otherwise, omit `output_directory` and let the renderer
+   user-specified safe absolute new or empty output directory wins and may be anywhere local.
+   Otherwise, omit `output_directory` and let the renderer
    allocate a fresh directory beneath its configured project output root. Do not guess a root from
    the handoff path, create the directory with a shell command, or reuse a non-empty directory.
 

@@ -19,9 +19,9 @@ from kegg_render_mcp.contracts import (
     RenderMcpError,
 )
 from kegg_render_mcp.render_input import (
-    assert_allowed_directory_identity,
-    open_allowed_directory,
-    remove_created_empty_directory,
+    assert_output_directory_identity,
+    open_output_directory,
+    remove_created_empty_output_directory,
 )
 
 _ARTIFACT_NAME = re.compile(rf"{ARTIFACT_NAME_PATTERN}\Z")
@@ -57,14 +57,13 @@ class ExportArtifact(Protocol):
 
 def export_bundle(
     output_directory: Path,
-    allowed_roots: tuple[Path, ...],
     artifacts: tuple[ExportArtifact, ...],
     *,
     manifest_name: str,
 ) -> None:
-    """Install one complete export into a new or empty controlled directory."""
+    """Install one complete export into a new or empty local directory."""
     ordered, manifest = _partition_bundle(artifacts, manifest_name)
-    descriptor, created = open_allowed_directory(output_directory, allowed_roots)
+    descriptor, created = open_output_directory(output_directory)
     temporaries: dict[str, _TemporaryArtifact] = {}
     installed: list[_InstalledArtifact] = []
     temporary_aliases_removed = False
@@ -78,7 +77,7 @@ def export_bundle(
             _link_new(descriptor, item.name, temporary.name)
             installed_item = _installed_artifact(descriptor, item.name, temporary)
             installed.append(installed_item)
-        assert_allowed_directory_identity(output_directory, allowed_roots, descriptor)
+        assert_output_directory_identity(output_directory, descriptor)
         _assert_installed_artifacts(descriptor, installed)
         manifest_temporary = temporaries[manifest.name]
         _assert_temporary_artifact(descriptor, manifest_temporary)
@@ -93,7 +92,7 @@ def export_bundle(
             _unlink_temporary_alias(descriptor, temporary)
         temporary_aliases_removed = True
         os.fsync(descriptor)
-        assert_allowed_directory_identity(output_directory, allowed_roots, descriptor)
+        assert_output_directory_identity(output_directory, descriptor)
         _assert_installed_artifacts(descriptor, installed)
         committed = True
     except FileExistsError:
@@ -115,7 +114,7 @@ def export_bundle(
             with contextlib.suppress(OSError):
                 os.fsync(descriptor)
         if not committed and created:
-            remove_created_empty_directory(output_directory, allowed_roots, descriptor)
+            remove_created_empty_output_directory(output_directory, descriptor)
         os.close(descriptor)
 
 

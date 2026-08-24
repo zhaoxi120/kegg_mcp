@@ -168,8 +168,8 @@ class RunDeepKoalaInput(FrozenModel):
         min_length=1,
         max_length=4_096,
         description=(
-            "New or empty owner-only directory beneath an allowed output root. Omit to let the "
-            "companion allocate a fresh directory beneath its configured output root."
+            "New or empty explicit absolute output directory. Omit to let the companion allocate "
+            "a fresh directory beneath its configured output root."
         ),
     )
     model: ModelName = "full"
@@ -441,7 +441,6 @@ class CompanionStatus(FrozenModel):
     max_sequences: int = Field(strict=True, ge=1, le=MAX_SEQUENCE_COUNT)
     max_output_bytes: int = Field(strict=True, ge=1, le=MAX_OUTPUT_BYTES)
     max_timeout_seconds: int = Field(strict=True, ge=1, le=86_400)
-    input_root_count: int = Field(strict=True, ge=1)
     output_root_count: int = Field(strict=True, ge=1)
     file_handoff_enabled: Literal[True] = True
     resource_fallback_enabled: Literal[True] = True
