@@ -17,10 +17,13 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 
 import kegg_mcp.mcp.server as server_module
+from kegg_mcp.domain.errors import ErrorCode, ErrorDetail, KeggMcpError, SafeDetail
 from kegg_mcp.kegg import (
     CachePolicy,
     GetRequest,
     GetResult,
+    InfoRequest,
+    InfoResult,
     KeggClient,
     KeggClientConfig,
     KeggEntryRef,
@@ -48,7 +51,7 @@ from kegg_mcp.kegg.contracts import (
     KeggPairRow,
 )
 from kegg_mcp.kegg.operations import prepare_get
-from kegg_mcp.kegg.parsers import parse_flat_file_response
+from kegg_mcp.kegg.parsers import parse_flat_file_response, parse_info_response
 from kegg_mcp.kegg.rate_limit import (
     UNSUPPORTED_PLATFORM_DIAGNOSTIC,
     UnsupportedRuntimePlatformError,
@@ -140,6 +143,25 @@ class _FakeReferenceClient:
     def config(self) -> KeggClientConfig:
         return self._config
 
+    def info(
+        self,
+        request: InfoRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> InfoResult:
+        del options
+        self.call_log.append(("info", request.database.value))
+        document = parse_info_response(
+            b"kegg             Kyoto Encyclopedia of Genes and Genomes\n"
+            b"kegg             Release synthetic-contract\n",
+            request.database,
+        )
+        return InfoResult(
+            request=request,
+            document=document,
+            batch=_provenance(KeggOperation.INFO, "probe"),
+        )
+
     def get(
         self,
         request: GetRequest,
@@ -225,6 +247,31 @@ class _FakeReferenceClient:
             request=request,
             rows=rows,
             batches=(_provenance(KeggOperation.LINK, "3"),),
+        )
+
+
+class _ChangingProbeClient(_FakeReferenceClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self._probe_count = 0
+
+    def info(
+        self,
+        request: InfoRequest,
+        *,
+        options: KeggRequestOptions | None = None,
+    ) -> InfoResult:
+        self._probe_count += 1
+        if self._probe_count == 1:
+            return super().info(request, options=options)
+        raise KeggMcpError(
+            ErrorDetail(
+                code=ErrorCode.KEGG_REQUEST_FAILED,
+                message="Synthetic connection failure.",
+                recoverable=True,
+                suggested_action="Retry after connectivity is restored.",
+                safe_details=(SafeDetail(name="transport_kind", value="connection"),),
+            )
         )
 
 
@@ -1032,6 +1079,60 @@ async def test_status_and_normalize_return_schema_valid_non_erased_data(tmp_path
         assert repeated.isError is True
         assert repeated.structuredContent is not None
         assert repeated.structuredContent["error"]["code"] == "RESULT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_status_tracks_the_latest_connectivity_probe_in_the_same_session(
+    tmp_path: Path,
+) -> None:
+    runtime = McpRuntime(
+        client=cast(KeggMcpClient, _ChangingProbeClient()),
+        result_store=SQLiteResultStore(tmp_path / "results.sqlite3"),
+        scope_id="changing-probe-scope",
+        allowed_roots=(str(tmp_path.resolve()),),
+    )
+    server = create_server(runtime)
+    async with create_connected_server_and_client_session(server) as session:
+        tools = (await session.list_tools()).tools
+        initial = await session.call_tool("get_server_status", {})
+        assert initial.structuredContent is not None
+        initial_data = initial.structuredContent["result"]["data"]
+        assert initial_data["connectivity"] == "not_probed"
+        assert initial_data["connectivity_probed_at"] is None
+
+        reachable = await session.call_tool("probe_kegg_connectivity", {})
+        _validate_result(_tool_by_name(tools, "probe_kegg_connectivity"), reachable)
+        assert reachable.isError is False
+        assert reachable.structuredContent is not None
+        reachable_data = reachable.structuredContent["result"]["data"]
+        assert reachable_data["state"] == "reachable"
+
+        failed = await session.call_tool("probe_kegg_connectivity", {})
+        _validate_result(_tool_by_name(tools, "probe_kegg_connectivity"), failed)
+        assert failed.isError is False
+        assert failed.structuredContent is not None
+        failed_data = failed.structuredContent["result"]["data"]
+        assert failed_data["state"] == "connection_failure"
+        assert failed_data["error_code"] == "KEGG_REQUEST_FAILED"
+        assert failed_data["probed_at"] != reachable_data["probed_at"]
+
+        status = await session.call_tool("get_server_status", {})
+        _validate_result(_tool_by_name(tools, "get_server_status"), status)
+        assert status.isError is False
+        assert status.structuredContent is not None
+        status_data = status.structuredContent["result"]["data"]
+        assert status_data["connectivity"] == failed_data["state"]
+        assert status_data["connectivity_probed_at"] == failed_data["probed_at"]
+        assert status_data["connectivity_error_code"] == failed_data["error_code"]
+        assert status_data["inspection_status"] == "not_probed"
+
+        resource = await session.read_resource(AnyUrl("ko-analysis://status"))
+        content = resource.contents[0]
+        assert isinstance(content, types.TextResourceContents)
+        resource_data = json.loads(content.text)
+        assert resource_data["connectivity"] == failed_data["state"]
+        assert resource_data["connectivity_probed_at"] == failed_data["probed_at"]
+        assert resource_data["connectivity_error_code"] == failed_data["error_code"]
 
 
 @pytest.mark.asyncio

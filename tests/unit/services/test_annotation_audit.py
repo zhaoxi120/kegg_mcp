@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from kegg_mcp.domain.annotations import ScoreType
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.importers import GenericColumnMapping, SourceProvenanceInput
 from kegg_mcp.kegg import (
@@ -280,6 +281,38 @@ def test_audit_reuses_one_accepted_mapping_union_per_target_and_reports_losses(
     assert retained["complete_relationship_rows"]["pathway"][0]["batch_index"] == 0
     assert retained["complete_relationship_rows"]["module"][0]["batch_index"] == 2
     assert retained["provenance"][2]["request_key"] == "synthetic:3"
+
+
+def test_normalization_and_audit_share_same_status_conflict_count(tmp_path: Path) -> None:
+    store = SQLiteResultStore(tmp_path / "results.sqlite3")
+    scope_id = "status-conflict"
+    normalized = normalize_annotations(
+        NormalizeAnnotationsRequest(
+            text=("sequence_id,ko,status,score\np1,K00844,accepted,0.9\np1,K00844,rejected,0.1\n"),
+            input_format=AnnotationInputFormat.GENERIC_CSV,
+            column_mapping=GenericColumnMapping(
+                sequence_id="sequence_id",
+                ko_id="ko",
+                raw_decision="status",
+                score="score",
+                score_type=ScoreType.PROBABILITY,
+            ),
+            decision_policy=GenericDecisionPolicy.CANONICAL_SOURCE_STATUS,
+        ),
+        result_store=store,
+        scope_id=scope_id,
+    )
+
+    audited = audit_annotation_mapping(
+        DatasetSource(result_id=normalized.result.result_id),
+        client=_AuditClient(),
+        result_store=store,
+        scope_id=scope_id,
+        mapping_targets=(),
+    )
+
+    assert normalized.import_summary.conflict_count == 1
+    assert audited.evidence.conflicting_assignment_count == normalized.import_summary.conflict_count
 
 
 def test_audit_warns_for_each_mapping_batch_without_a_database_release(

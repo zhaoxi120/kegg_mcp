@@ -128,6 +128,33 @@ def test_generic_table_preserves_same_sequence_top_k_and_reports_explicit_slot_c
     )
 
 
+def test_generic_table_reports_conflicting_status_for_same_ko_assignment() -> None:
+    payload = (
+        "sequence,ko,decision,score\n"
+        "p1,K00001,accepted,0.9\n"
+        "p1,K00001,rejected,0.1\n"
+        "p1,K00002,accepted,0.8\n"
+    )
+    mapping = GenericColumnMapping(
+        sequence_id="sequence",
+        ko_id="ko",
+        raw_decision="decision",
+        score="score",
+        score_type=ScoreType.PROBABILITY,
+    )
+
+    dataset = import_generic_table(
+        payload,
+        dialect=TableDialect.CSV,
+        mapping=mapping,
+        policy=CANONICAL_SOURCE_STATUS,
+        limits=LIMITS,
+    )
+
+    assert dataset.import_report.duplicate_count == 0
+    assert dataset.import_report.conflict_count == 1
+
+
 def test_generic_table_keeps_malformed_numeric_text_and_reports_it() -> None:
     payload = "sequence,ko,decision,score\np1,K00001,accepted,NaN\n"
     mapping = GenericColumnMapping(
@@ -423,6 +450,7 @@ def test_generic_table_retains_invalid_ko_and_exact_duplicate_rows() -> None:
     assert dataset.records[0].normalized_status is NormalizedStatus.INVALID
     assert dataset.records[0].raw_ko == "BAD"
     assert dataset.import_report.duplicate_count == 1
+    assert dataset.import_report.conflict_count == 0
 
 
 def test_generic_mapping_rejects_reused_columns_and_incomplete_semantics() -> None:

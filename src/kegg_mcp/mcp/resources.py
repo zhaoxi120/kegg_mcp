@@ -311,6 +311,7 @@ def _status(runtime: McpRuntime):  # type annotation is inferred from the servic
         result_store=runtime.result_store,
         supported_tools=TOOL_NAMES,
         allowed_root_count=len(runtime.allowed_roots),
+        last_connectivity_probe=runtime.last_connectivity_probe,
     )
 
 

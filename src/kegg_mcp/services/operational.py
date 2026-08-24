@@ -26,6 +26,7 @@ def get_server_status_service(
     result_store: SQLiteResultStore,
     supported_tools: tuple[str, ...],
     allowed_root_count: int,
+    last_connectivity_probe: ConnectivityProbeResult | None = None,
 ) -> ServerStatusResult:
     """Return redacted configuration facts without probing or revealing paths."""
     access = client.config.access
@@ -43,6 +44,15 @@ def get_server_status_service(
         access_mode=access.mode,
         cache_endpoint_class=cache_endpoint_class,
         network_enabled=access.mode is not AccessMode.OFFLINE_CACHE,
+        connectivity=(
+            last_connectivity_probe.state if last_connectivity_probe is not None else "not_probed"
+        ),
+        connectivity_probed_at=(
+            last_connectivity_probe.probed_at if last_connectivity_probe is not None else None
+        ),
+        connectivity_error_code=(
+            last_connectivity_probe.error_code if last_connectivity_probe is not None else None
+        ),
         academic_use_confirmed=access.mode is AccessMode.PUBLIC_ACADEMIC,
         licensed_use_confirmed=cache_endpoint_class is RetrievalEndpointClass.LICENSED,
         file_handoff_enabled=allowed_root_count > 0,

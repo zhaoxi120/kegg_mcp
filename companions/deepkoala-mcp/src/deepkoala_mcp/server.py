@@ -73,9 +73,10 @@ class _ToolSpec:
 
 
 class _RequestValidationError(Exception):
-    def __init__(self, issue_count: int) -> None:
+    def __init__(self, issue_count: int, field: str | None) -> None:
         super().__init__("invalid tool input")
         self.issue_count = issue_count
+        self.field = field
 
 
 async def _handle_status(manager: DeepKoalaJobManager, request: BaseModel) -> _ToolExecution:
@@ -247,14 +248,17 @@ def create_server(manager: DeepKoalaJobManager | None = None) -> Server[object]:
                 raise RuntimeError("DeepKOALA tool handler returned the wrong output contract")
             return _success(execution.output, execution.narrative)
         except _RequestValidationError as error:
+            safe_details = [
+                SafeDetail(name="validation_issue_count", value=str(error.issue_count)),
+            ]
+            if error.field is not None:
+                safe_details.append(SafeDetail(name="field", value=error.field))
             return _error(
                 ErrorDetail(
                     code=ErrorCode.INVALID_REQUEST,
                     message="The tool input did not satisfy its explicit schema.",
                     suggested_action="Correct the supplied fields using the tool input schema.",
-                    safe_details=(
-                        SafeDetail(name="validation_issue_count", value=str(error.issue_count)),
-                    ),
+                    safe_details=tuple(safe_details),
                 )
             )
         except DeepKoalaMcpError as error:
@@ -402,7 +406,17 @@ def _parse(model: type[_M], arguments: dict[str, Any]) -> _M:
     try:
         return model.model_validate(arguments, strict=True)
     except ValidationError as error:
-        raise _RequestValidationError(error.error_count()) from None
+        fields = tuple(
+            dict.fromkeys(
+                location[0]
+                for issue in error.errors(include_url=False, include_context=False)
+                if (location := issue["loc"])
+                and isinstance(location[0], str)
+                and location[0] in model.model_fields
+            )
+        )
+        field = fields[0] if len(fields) == 1 else None
+        raise _RequestValidationError(error.error_count(), field) from None
 
 
 def _success(model: BaseModel, narrative: str) -> types.CallToolResult:

@@ -242,8 +242,10 @@ skipped. Missing mapped headers, duplicate headers, invalid CSV structure, and i
 are recoverable structured errors.
 
 The low-level generic importer requires an explicit `mapping` in its Python signature and generated
-schema. The service and MCP layer may perform bounded signature detection, but an ambiguous table
-returns `AMBIGUOUS_COLUMN_MAPPING`; no layer normalizes it by guessing.
+schema. The service and MCP layer may perform bounded signature detection. Common sequence-ID
+headers are `sequence_id`, `protein_id`, `protein`, `seq_id`, `query_id`, and `gene_id`; `protein`
+is not also inferred as `protein_name`. If more than one alias for one logical field is present, the
+table returns `AMBIGUOUS_COLUMN_MAPPING`; no layer resolves that ambiguity by guessing.
 
 Service-level inference recognizes exact common `score` and `threshold` headers. It binds their
 numeric values with `score_type="source_specific"` and `threshold_rule="source_specific"`; callers
@@ -291,9 +293,10 @@ No importer removes duplicate or conflicting evidence.
 
 - The plain importer reports repeated normalized K numbers as duplicates.
 - Table importers report exact repeated logical rows as duplicates.
-- The generic importer reports a conflict only when different KOs or statuses occupy the same
-  explicit rank/domain slot for the same sample and sequence. Unslotted generic top-k or multi-label
-  records remain valid.
+- The generic importer uses an explicit rank/domain slot when one is present. Otherwise, the
+  sample-scoped sequence and KO form the assignment slot. Different KOs without rank/domain slots
+  remain valid multi-label records, while different statuses for the same sequence and KO are
+  reported as a conflict.
 - The DeepKOALA importer uses an explicit domain as its assignment slot when coordinates are
   present. Without coordinates, the sample-scoped sequence is the assignment slot, so different
   assignments from different source rows to that sequence are reported as a conflict. Components

@@ -80,8 +80,10 @@ cached-entry resource remains a cache-only read and never falls back to the netw
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
 includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
-surfaces do not probe connectivity or enumerate cache contents. Use the explicit connectivity
-tool when a live-access preflight is required. Operators can inspect bounded cache counts with
+surfaces do not initiate connectivity probes or enumerate cache contents. Server status reports
+the state, time, and stable error code from the latest connectivity probe completed in the current
+stdio process; a new process starts as `not_probed`. Use the explicit connectivity tool when a
+live-access preflight is required. Operators can inspect bounded cache counts with
 `kegg-mcp cache status --json` and remove only expired rows with
 `kegg-mcp cache cleanup --expired --json`.
 
@@ -560,6 +562,9 @@ and does not create a scoped retained result.
 
 `delete_analysis_result` removes one active result only when it belongs to the current scope.
 Unknown, expired, already deleted, and cross-scope identifiers all return `RESULT_NOT_FOUND`.
+An active current-scope result that lacks the artifact kind required by a selected-reference
+bundle instead returns `ANALYSIS_CONFIGURATION_INVALID` with the expected and actual artifact
+kinds.
 `list_analysis_results` returns at most 100 metadata rows per page from only the current scope.
 Operators can remove TTL-expired rows without starting the stdio server by running
 `kegg-mcp cleanup --expired [--json]`. This command does not remove unexpired results or KEGG cache

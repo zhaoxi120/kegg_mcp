@@ -474,6 +474,7 @@ def compare_sets(context: ToolContext, model: BaseModel) -> ToolOutcome:
 def probe_connectivity(context: ToolContext, model: BaseModel) -> ToolOutcome:
     cast(ProbeKeggConnectivityInput, model)
     result = probe_kegg_connectivity_service(context.runtime.client)
+    context.runtime.last_connectivity_probe = result
     return ToolOutcome(
         result,
         f"KEGG connectivity preflight completed: {result.state.value}.",
@@ -515,6 +516,7 @@ def get_status(context: ToolContext, model: BaseModel) -> ToolOutcome:
         result_store=runtime.result_store,
         supported_tools=context.supported_tools,
         allowed_root_count=len(runtime.allowed_roots),
+        last_connectivity_probe=runtime.last_connectivity_probe,
     )
     return ToolOutcome(result, "Returned redacted local server status.")
 

@@ -592,9 +592,7 @@ def finalize_dataset(
             all_diagnostics.append(
                 ImportDiagnostic(
                     code=DiagnosticCode.CONFLICTING_ASSIGNMENT,
-                    message=(
-                        "The same explicit assignment slot contains conflicting source records."
-                    ),
+                    message="The same assignment slot contains conflicting source records.",
                     row_number=record.evidence.row_number,
                     field=None,
                     safe_details=(
@@ -686,8 +684,8 @@ def no_assignment_slot(record: AnnotationRecord) -> None:
     return None
 
 
-def explicit_assignment_slot(record: AnnotationRecord) -> tuple[object, ...] | None:
-    """Return a generic slot only when rank or domain coordinates are explicit."""
+def generic_assignment_slot(record: AnnotationRecord) -> tuple[object, ...] | None:
+    """Return a generic rank/domain slot, or a KO assignment slot when implicit."""
     if record.sequence_id is None:
         return None
     if record.rank is not None or record.domain_start is not None:
@@ -698,7 +696,9 @@ def explicit_assignment_slot(record: AnnotationRecord) -> tuple[object, ...] | N
             record.domain_start,
             record.domain_end,
         )
-    return None
+    if record.ko_id is None:
+        return None
+    return (record.sample_id, record.sequence_id, "ko", record.ko_id)
 
 
 def sequence_or_domain_assignment_slot(record: AnnotationRecord) -> tuple[object, ...] | None:
