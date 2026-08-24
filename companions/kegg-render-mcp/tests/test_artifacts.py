@@ -385,14 +385,16 @@ def _synthetic_overview_kgml() -> bytes:
 async def test_service_renders_both_targets_formats_and_durable_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
-    allowed_root: Path,
+    tmp_path: Path,
     synthetic_provider: SyntheticProvider,
 ) -> None:
     service = RendererService(runtime_config, synthetic_provider)
     service.open()
     durable_files: dict[str, bytes] | None = None
     render_id: str | None = None
-    output = allowed_root / "images"
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    output = downloads / "images"
     try:
         result = await service.render(
             render_input_path=str(render_input_file),
@@ -983,7 +985,6 @@ def test_export_rejects_temporary_artifact_content_races(
     with pytest.raises(RenderMcpError) as raised:
         export_writer.export_bundle(
             output,
-            (allowed_root,),
             artifacts,
             manifest_name="render_manifest.json",
         )
@@ -1039,7 +1040,6 @@ def test_export_validates_manifest_temporary_before_commit(
     with pytest.raises(RenderMcpError) as raised:
         export_writer.export_bundle(
             output,
-            (allowed_root,),
             artifacts,
             manifest_name="render_manifest.json",
         )
@@ -1064,7 +1064,6 @@ def test_export_rejects_duplicate_names(allowed_root: Path) -> None:
     with pytest.raises(RenderMcpError) as raised:
         export_writer.export_bundle(
             output,
-            (allowed_root,),
             artifacts,
             manifest_name="render_manifest.json",
         )
@@ -1140,7 +1139,6 @@ def test_export_rejects_output_directory_replacement_during_publication(
     with pytest.raises(RenderMcpError) as raised:
         export_writer.export_bundle(
             output,
-            (allowed_root,),
             artifacts,
             manifest_name="render_manifest.json",
         )
@@ -1179,7 +1177,6 @@ def test_export_rejects_artifact_replacement_during_publication(
     with pytest.raises(RenderMcpError) as raised:
         export_writer.export_bundle(
             output,
-            (allowed_root,),
             artifacts,
             manifest_name="render_manifest.json",
         )

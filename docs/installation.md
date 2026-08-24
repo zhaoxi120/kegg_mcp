@@ -84,8 +84,9 @@ and KEGG asset client, but it neither registers nor starts the Core stdio server
 wheel installs repository-scoped Skills. The generated plugin is a local deployment artifact, not
 a fourth distribution or a tracked copy of the Skills.
 
-For a direct, manually configured Core server, file handoff remains disabled until
-`KEGG_MCP_ALLOWED_ROOTS` is configured; the complete manual environment belongs in
+For a direct, manually configured Core server, explicit local file handoff is always available.
+`KEGG_MCP_ALLOWED_ROOTS` only supplies default output roots when a caller omits
+`output_directory`; the complete manual environment belongs in
 [Manual component deployment](manual-component-deployment.md).
 
 `render_input.json` uses the renderer-specific version 6 contract and carries
@@ -97,10 +98,10 @@ included in tests, packages, or releases.
 Run this section on Linux, including a WSL2 Linux environment, or on native Apple Silicon macOS.
 Native Intel macOS and native Windows are unsupported.
 
-### 1. Prepare private and shared directories
+### 1. Prepare private and default output directories
 
 Start from a reviewed release checkout or source archive. Create an owner-only private parent for
-configuration and installation state, plus the shared roots that will contain stable handoff files:
+configuration and installation state, plus roots for service-allocated outputs:
 
 ```bash
 mkdir -p /absolute/private
@@ -117,13 +118,15 @@ chmod 700 /absolute/private/deepkoala-state
 chmod 700 /absolute/private/renderer-state
 ```
 
-The installation root itself must not exist yet. Its direct parent must be owner-only. Do not place
-the installation root inside the source checkout, an input/output root, a cache, or another
+For a first installation, the installation root itself must not exist yet. A later run may name the
+same complete installer-managed root to update it in place. Its direct parent must be owner-only.
+Do not place the installation root inside the source checkout, an output root, a cache, or another
 component's state root.
 
-Private state roots must not overlap each other or the shared output roots. The Core allowed roots
-must cover the DeepKOALA output roots and every renderer handoff root. DeepKOALA FASTA input has no
-directory allowlist and is not part of deployment overlap validation.
+Private state roots must not overlap each other or the configured default output roots. Core,
+DeepKOALA, and Renderer roots may be independent; explicit cross-component input and output paths
+do not require shared-root coverage. DeepKOALA FASTA input has no directory allowlist and is not
+part of deployment overlap validation.
 
 ### 2. Write the strict deployment TOML
 
@@ -161,18 +164,21 @@ allowed_roots = ["/absolute/project/analysis"]
 offline_allow_stale = false
 ```
 
-Root order defines service-managed defaults when a caller omits `output_directory`: Core uses the
+The legacy `allowed_roots` name now refers only to automatic output allocation. Root order defines
+service-managed defaults when a caller omits `output_directory`: Core uses the
 last `core.allowed_roots` entry, DeepKOALA uses the last `deepkoala.output_roots` entry, and the
 Renderer uses the last `renderer.allowed_roots` entry. In this example, annotation output goes
 beneath `/absolute/project/annotations`, while Core and Renderer output goes beneath
-`/absolute/project/analysis`. Explicit allowed output paths still take precedence.
+`/absolute/project/analysis`. Any safe absolute explicit output path still takes precedence and
+need not be beneath a configured root.
 
 Pass an explicit absolute FASTA path unchanged, whether it comes from Codex desktop drag and drop,
 `Downloads`, or a project directory. DeepKOALA accepts direct readable regular local files without
 an input-root setting, then validates and stages the FASTA into private job state before running the
-annotator. Omit `output_directory` unless the user selected a configured output location. Core
-consumes the generated annotation under the shared DeepKOALA output root and retains the original
-FASTA path as provenance without reopening it.
+annotator. Caller-facing FASTA symlinks resolve to their canonical readable regular-file targets.
+Omit `output_directory` unless the user selected an explicit output location. Core consumes the
+generated annotation at its returned absolute path regardless of root configuration and treats the
+resolved FASTA path as provenance rather than another input.
 
 Protect the file and its direct parent:
 
@@ -261,11 +267,11 @@ Use direct absolute executable paths:
 Preflight validates the source tree, external tools, configuration, paths, and Codex conflicts. It
 does not create a persistent installation or change Codex registration.
 
-### 5. Confirm and install DeepKOALA
+### 5. Confirm and install or update the suite
 
-Each new suite installation root requires one explicit first-install confirmation. After informing
-the user that the installer will initialize a private checkout, fetch the pinned official
-DeepKOALA revision, and install its upstream Python requirements, run:
+Each installation or managed in-place update requires explicit confirmation before the installer
+fetches the pinned official DeepKOALA revision and installs its upstream Python requirements. After
+informing the user, run:
 
 ```bash
 /absolute/path/to/python3.11 \
@@ -296,8 +302,8 @@ used.
 #### Optional multi-domain capability
 
 The suite never downloads HMMER or KOfam profiles. An operator who already has authorized local
-resources may make the capability available by setting all three fields before installing a new
-suite root:
+resources may make the capability available by setting all three fields before installing or
+updating the suite:
 
 ```toml
 [deepkoala]
@@ -308,21 +314,21 @@ hmmsearch_executable = "/absolute/path/to/hmmsearch"
 ```
 
 The profile directory and executable must be direct, non-symlink, safely permissioned paths and may
-not overlap suite state or biological input/output roots. Configuration preflight checks the local
+not overlap suite state or configured output roots. Configuration preflight checks the local
 paths; post-install verification checks the executable, profiles, and supported upstream adapter
 interface without running inference. Enabling this deployment capability does not enable it for
 every job: `run_deepkoala_job` still uses `multi=false` unless the user explicitly requests
 multi-domain annotation. Multi-domain requests must keep `batch_size=1`. The companion never
 accepts either resource path from an MCP request.
 
-The suite installer is fresh-install only. To add this capability after a default suite install,
-either configure a manually managed companion deployment or install a new suite root with the
-three fields above; the installer does not mutate an existing deployment in place.
+To add this capability to an installer-managed suite, update the private deployment TOML and rerun
+the same installer command against the existing installation root and marketplace. The installer
+accepts only a complete root that its manifest and active Codex registration prove it manages;
+unmanaged or mismatched existing roots are rejected.
 
-Later FASTA jobs in the same installed deployment do not repeat the installation question. A
-different new installation root requires a new confirmation. This repository provides no model
-updater; a later official model may be installed separately by an operator after a specific user
-request and then selected by its installed date.
+Later FASTA jobs in the same installed deployment do not repeat the installation question. This
+repository provides no independent model updater; a later official model may be installed
+separately by an operator after a specific user request and then selected by its installed date.
 
 Dependency resolution for the three checked-in lockfiles is offline by default. If installation
 reports that a locked artifact is unavailable, the operator may rerun the same installation command
@@ -357,10 +363,12 @@ commands. A private launcher reads owner-only deployment metadata and directly e
 server without a shell. Private endpoints, roots, and external-runtime paths do not enter the
 plugin metadata cached by Codex.
 
-The installer is fresh-install only. It does not update, resume, or uninstall an existing
-deployment. Existing marketplace, plugin, MCP names, or installation roots are conflicts rather
-than update targets. Do not move an installed root because the launch commands contain absolute
-paths.
+The installer creates a new suite when the requested root is absent and updates that same suite in
+place when the existing root, manifest, marketplace, plugin, and MCP registrations prove one exact
+installer-managed deployment. It rejects unmanaged roots and registrations owned by another
+installation. Interrupted or ambiguous transactions are recovery cases rather than update targets;
+the installer does not expose resume or uninstall. Do not move an installed root because the
+launch commands contain absolute paths.
 
 The successful machine-readable summary includes:
 
@@ -374,10 +382,11 @@ The successful machine-readable summary includes:
 }
 ```
 
-These fields describe Codex activation, not a partial installation. The task that ran the installer
-keeps its original tool snapshot and cannot call MCP servers registered later in that task. Do not
-run the installer again. Close the installation task and open one new task outside this checkout;
-only that fresh task is valid discovery evidence.
+For an in-place update, `status` is `updated`; the activation fields are unchanged. They describe
+Codex activation, not a partial installation. The task that ran the installer keeps its original
+tool snapshot and cannot use newly registered MCP snapshots in that task. Do not rerun the
+installer merely to refresh the current task. Close the installation or update task and open one
+new task outside this checkout; only that fresh task is valid discovery evidence.
 
 If installation fails or is interrupted, follow the bounded recovery procedure in
 [Troubleshooting](troubleshooting.md). Do not delete a preserved installation root while Codex
@@ -469,18 +478,17 @@ selection, not completion or enrichment. Exact MODULE completion is calculated s
 Pathway KO coverage is descriptive and does not establish pathway presence, completeness,
 expression, activity, flux, phenotype, or statistical significance.
 
-Every high-level Core analysis derives the same compact sorted unique accepted-KO view. An allowed
+Every high-level Core analysis derives the same compact sorted unique accepted-KO view. An explicit
 DeepKOALA detailed file is streamed at up to 1 GiB, 10 million rows, 20 million expanded
 assignments, and 100,000 unique accepted K numbers; bounded inline and other supported inputs use
 their applicable importer limits without changing the analysis semantics. The view retains
 aggregate counts, source and policy provenance, and bounded diagnostics, but no record evidence,
 protein-to-KO mapping, or duplicate/conflict accounting. Use `normalize_ko_annotations` when those
 records are required and the input fits its separate full-record limits. The `deepkoala-mcp`
-companion can validate and publish detailed CSV output up to 1 GiB with bounded memory. The suite
-installer requires Core's allowed roots to cover every DeepKOALA output root, so large results can
-use the stable file directly. Core preserves a distinct original FASTA path as provenance without
-reopening it under annotation-file path policy. A manual output-disjoint deployment has only the
-5,000,000-byte bounded resource-to-inline recovery route and must be repaired to share larger files.
+companion can validate and publish detailed CSV output up to 1 GiB with bounded memory. Core accepts
+the stable output path directly regardless of configured default roots, so large results need no
+shared-root deployment or resource-to-inline recovery route. Core preserves the resolved FASTA path
+as provenance rather than reopening it as annotation input.
 
 See [MCP tools, resources, and configuration](mcp-server.md) for explicit target requests, generic
 annotation tables, result pagination, and complete schemas.
@@ -510,7 +518,7 @@ response. `unique_accepted_kos.tsv` is present in every analysis bundle. High-le
 bundles omit `normalized_annotations.tsv` and `protein_ko_mapping.tsv`; the separate normalization
 bundle provides those record-derived files. Analysis bundles use schema version 5.
 
-Core can also write two other durable bundle families beneath the same allowed roots:
+Core can also write two other durable bundle families at caller-selected absolute output paths:
 
 - a selected KEGG reference bundle with `reference_snapshot.json`, deterministic
   `relationships.tsv`, optional `brite_paths.tsv`, and `reference_manifest.json`; and
@@ -537,7 +545,7 @@ Start with the redacted diagnostic outside the MCP client:
 ```
 
 The diagnostic validates configuration without contacting KEGG or revealing configured paths and
-endpoint values. For plugin discovery, installer recovery, offline cache misses, allowed-root
+endpoint values. For plugin discovery, installer recovery, offline cache misses, local-path
 errors, result scope, and protocol stdout problems, use the dedicated
 [Troubleshooting guide](troubleshooting.md).
 

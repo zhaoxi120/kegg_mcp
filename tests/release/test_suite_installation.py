@@ -456,9 +456,7 @@ def test_deployment_config_rejects_obsolete_deepkoala_input_roots(
 ) -> None:
     config_path, _ = _write_config(
         tmp_path,
-        extras={
-            "deepkoala": f'input_roots = [{json.dumps(str(tmp_path / "inputs"))}]'
-        },
+        extras={"deepkoala": f"input_roots = [{json.dumps(str(tmp_path / 'inputs'))}]"},
     )
 
     with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
@@ -467,24 +465,30 @@ def test_deployment_config_rejects_obsolete_deepkoala_input_roots(
     assert raised.value.code == "deployment_config_invalid"
 
 
-def test_deployment_config_requires_core_to_cover_deepkoala_output_root(
+def test_deployment_config_allows_independent_component_handoff_roots(
     tmp_path: Path,
 ) -> None:
     config, paths = _write_config(tmp_path)
     unshared_output = _mkdir(tmp_path / "unshared-output")
+    unshared_render = _mkdir(tmp_path / "unshared-render")
     document = config.read_text(encoding="utf-8").replace(
         f"output_roots = [{json.dumps(str(paths['output']))}]",
         f"output_roots = [{json.dumps(str(unshared_output))}]",
         1,
     )
+    renderer_roots = f"allowed_roots = [{json.dumps(str(paths['output']))}]"
+    before_renderer, after_renderer = document.rsplit(renderer_roots, 1)
+    document = (
+        before_renderer + f"allowed_roots = [{json.dumps(str(unshared_render))}]" + after_renderer
+    )
     config.write_text(document, encoding="utf-8")
     config.chmod(0o600)
 
-    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
-        INSTALLER_MODULE._load_deployment_config(config)
+    loaded = INSTALLER_MODULE._load_deployment_config(config)
 
-    assert raised.value.code == "deployment_path_invalid"
-    assert str(raised.value) == "core.allowed_roots must cover every DeepKOALA output root"
+    assert loaded.deepkoala.output_roots == (unshared_output.resolve(),)
+    assert loaded.core.allowed_roots == (paths["output"].resolve(),)
+    assert loaded.renderer.allowed_roots == (unshared_render.resolve(),)
 
 
 def test_deepkoala_multi_defaults_off_without_external_resources(tmp_path: Path) -> None:
@@ -615,7 +619,7 @@ def test_deepkoala_multi_rejects_unsafe_external_paths(tmp_path: Path, unsafe_pa
 
 
 @pytest.mark.parametrize("resource", ["profiles", "hmmsearch"])
-@pytest.mark.parametrize("overlap", ["deep_state", "input", "output"])
+@pytest.mark.parametrize("overlap", ["deep_state", "render_state", "output"])
 def test_deepkoala_multi_resources_must_not_overlap_private_or_handoff_roots(
     tmp_path: Path, resource: str, overlap: str
 ) -> None:
@@ -1630,6 +1634,170 @@ def test_successful_transaction_publishes_complete_generated_suite(
         "status",
     }
     assert stat.S_IMODE((request.install_root / "installation.json").stat().st_mode) == 0o600
+
+
+def test_managed_install_root_is_updated_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, snapshot, config, paths = _suite_install_inputs(tmp_path)
+    registrations: list[str] = []
+
+    def no_op(*_: object) -> None:
+        return None
+
+    def register(
+        actual_request: Any,
+        marketplace_root: Path,
+        journal: Any,
+        expected_version: str,
+    ) -> None:
+        assert actual_request.install_root == request.install_root
+        assert marketplace_root == request.install_root / "marketplace"
+        assert expected_version == snapshot.versions["kegg-mcp"]
+        registrations.append(expected_version)
+        journal.marketplace_attempted = True
+        journal.marketplace_added = True
+        journal.plugin_attempted = True
+        journal.plugin_added = True
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_install_runtimes", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_install_managed_deepkoala", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_verify_distribution_versions", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_verify_runtime_configuration", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_register_plugin", register)
+    monkeypatch.setattr(INSTALLER_MODULE, "_remove_managed_registration", no_op)
+
+    INSTALLER_MODULE._perform_install(request, config, snapshot)
+    old_identity = request.install_root.stat().st_ino
+    (request.install_root / "old-only.txt").write_text("old\n", encoding="utf-8")
+    checked_root, previous_version = INSTALLER_MODULE._validate_install_root(
+        request.install_root,
+        paths["private"] / "deployment.toml",
+        config,
+        request.marketplace_name,
+    )
+    updated_request = replace(
+        request,
+        install_root=checked_root,
+        previous_version=previous_version,
+    )
+    updated_config = replace(
+        config,
+        deepkoala=replace(config.deepkoala, cpu_threads=3),
+    )
+
+    INSTALLER_MODULE._perform_update(updated_request, updated_config, snapshot)
+
+    deployment = json.loads(
+        (request.install_root / "deployment" / "deployment.json").read_text(encoding="utf-8")
+    )
+    assert previous_version == snapshot.versions["kegg-mcp"]
+    assert request.install_root.stat().st_ino != old_identity
+    assert deployment["environments"]["deepkoala-mcp"]["DEEPKOALA_MCP_CPU_THREADS"] == "3"
+    assert not (request.install_root / "old-only.txt").exists()
+    assert not request.install_root.with_name(
+        f".{request.install_root.name}.update-backup"
+    ).exists()
+    assert registrations == [previous_version, snapshot.versions["kegg-mcp"]]
+
+
+def test_existing_unmanaged_install_root_is_rejected(tmp_path: Path) -> None:
+    config_path, _ = _write_config(tmp_path)
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    install_parent = _mkdir(tmp_path / "install-parent", private=True)
+    install_root = _mkdir(install_parent / "suite", private=True)
+    (install_root / "unrelated.txt").write_text("not managed\n", encoding="utf-8")
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._validate_install_root(
+            install_root,
+            config_path,
+            config,
+            "kegg-mcp-test",
+        )
+
+    assert raised.value.code == "install_root_unmanaged"
+
+
+def test_interrupted_update_backup_blocks_a_fresh_install(tmp_path: Path) -> None:
+    config_path, _ = _write_config(tmp_path)
+    config = INSTALLER_MODULE._load_deployment_config(config_path)
+    install_parent = _mkdir(tmp_path / "install-parent", private=True)
+    install_root = install_parent / "suite"
+    _mkdir(install_parent / ".suite.update-backup", private=True)
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._validate_install_root(
+            install_root,
+            config_path,
+            config,
+            "kegg-mcp-test",
+        )
+
+    assert raised.value.code == "update_backup_exists"
+
+
+def test_failed_managed_update_restores_previous_suite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, snapshot, config, _ = _suite_install_inputs(tmp_path)
+    runtime_installs = 0
+    registrations_restored = 0
+
+    def install_runtimes(*_: object) -> None:
+        nonlocal runtime_installs
+        runtime_installs += 1
+        if runtime_installs == 2:
+            raise INSTALLER_MODULE.InstallError("runtime_install_failed", "simulated failure")
+
+    def no_op(*_: object) -> None:
+        return None
+
+    def register(
+        _request: Any,
+        _marketplace_root: Path,
+        journal: Any,
+        _expected_version: str,
+    ) -> None:
+        journal.marketplace_attempted = True
+        journal.marketplace_added = True
+        journal.plugin_attempted = True
+        journal.plugin_added = True
+
+    def restore(*_: object) -> bool:
+        nonlocal registrations_restored
+        registrations_restored += 1
+        return True
+
+    monkeypatch.setattr(INSTALLER_MODULE, "_install_runtimes", install_runtimes)
+    monkeypatch.setattr(INSTALLER_MODULE, "_install_managed_deepkoala", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_verify_distribution_versions", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_verify_runtime_configuration", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_register_plugin", register)
+    monkeypatch.setattr(INSTALLER_MODULE, "_remove_managed_registration", no_op)
+    monkeypatch.setattr(INSTALLER_MODULE, "_restore_managed_registration", restore)
+    monkeypatch.setattr(INSTALLER_MODULE, "_rollback_codex", lambda *_: True)
+
+    INSTALLER_MODULE._perform_install(request, config, snapshot)
+    sentinel = request.install_root / "previous-suite.txt"
+    sentinel.write_text("previous\n", encoding="utf-8")
+    updated_request = replace(
+        request,
+        previous_version=snapshot.versions["kegg-mcp"],
+    )
+
+    with pytest.raises(INSTALLER_MODULE.InstallError) as raised:
+        INSTALLER_MODULE._perform_update(updated_request, config, snapshot)
+
+    assert raised.value.code == "runtime_install_failed"
+    assert sentinel.read_text(encoding="utf-8") == "previous\n"
+    assert (request.install_root / "installation.json").is_file()
+    assert not request.install_root.with_name(
+        f".{request.install_root.name}.update-backup"
+    ).exists()
+    assert registrations_restored == 1
 
 
 def test_install_summary_requires_a_new_task_without_requesting_reinstallation(

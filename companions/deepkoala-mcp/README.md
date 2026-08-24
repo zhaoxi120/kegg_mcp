@@ -12,8 +12,9 @@ PyTorch, DeepKOALA, model weights, or KOfam profiles as package dependencies.
 ## Installation and runtime requirements
 
 The primary Codex deployment path is the repository suite installer. It creates a separate locked
-companion runtime and, after the one-time `--allow-deepkoala-install` confirmation for a new suite
-root, installs the official DeepKOALA checkout with its bundled `202502` resources. Follow the
+companion runtime and, after the explicit `--allow-deepkoala-install` confirmation for an
+installation or managed update, installs the official DeepKOALA checkout with its bundled `202502`
+resources. Follow the
 [suite installation guide](../../docs/installation.md) rather than registering this server again.
 
 Manual and development deployments require:
@@ -67,8 +68,9 @@ deepkoala-mcp doctor --json
 
 FASTA input does not require deployment root configuration. Pass the explicit absolute local path
 unchanged, including a Codex desktop drag-and-drop path or a file under `Downloads`. The path must
-name a direct readable regular file without symlinks or `..` traversal. The companion validates and
-privately stages the FASTA, so the client does not need to copy it into a project input directory.
+be absolute without `..` traversal and resolve to a readable regular file. Caller-facing symlinks
+resolve to their canonical targets. The companion validates and privately stages the FASTA, so the
+client does not need to copy it into a project input directory.
 
 For a non-Codex MCP client, configure the absolute installed command with `args: ["serve"]` and the
 same environment. The generated Codex plugin already provides this registration for suite installs.
@@ -103,8 +105,9 @@ directory, and process startup in one call. The only required field is:
 ```
 
 Omitting `output_directory` allocates a fresh directory beneath the deployment's last configured
-output root; an explicit path may select a new or existing empty owner-only directory beneath an
-allowed output root. Other optional fields are `model` (`full` by default, or `frag`), `model_date`
+output root; an explicit path may select any absolute local new or existing empty directory and
+does not need to be beneath a configured root. Other optional fields are `model` (`full` by
+default, or `frag`), `model_date`
 (`202502` by default,
 `latest`, or an installed `YYYYMM`), `device` (`cpu` by default, or explicit `cuda` or `mps` when
 allowed), `batch_size` (1-64), `topk` (1-10), and `timeout_seconds` within the deployment cap. GPU
@@ -131,7 +134,7 @@ the DeepKOALA source and the actual resolved model resource version used by that
 
 ## Stable output and lifecycle
 
-An explicit output directory must be new or an existing empty owner-only directory. When omitted,
+An explicit output directory must be new or an existing empty directory. When omitted,
 the service allocates a fresh child beneath the last configured output root. A successful job
 publishes exactly:
 
@@ -176,11 +179,10 @@ output are removed for every terminal outcome.
 
 The status field `resource_fallback_enabled=true` and bounded process-scoped resources under
 `deepkoala://jobs/{job_id}/...` describe companion artifact access only. Stable files remain the
-default handoff, and resource IDs must not be passed to another server as result identity. Core's
-inline recovery remains limited to 5,000,000 bytes; an annotation CSV above that size therefore
-requires a stable output path allowed by both components. Core retains the unchanged FASTA input
-path as provenance without reopening it under annotation-file path policy, so supported deployments
-need to share DeepKOALA output roots with Core; no DeepKOALA input roots exist.
+cross-MCP handoff, and resource IDs must not be passed to another server as result identity. Core
+accepts the returned absolute annotation path without requiring shared configured roots. The
+canonical FASTA input path remains provenance rather than another Core input; no DeepKOALA input
+roots exist.
 
 ## Process and filesystem safety
 
@@ -196,9 +198,10 @@ need to share DeepKOALA output roots with Core; no DeepKOALA input roots exist.
 - Timeout, cancellation, process-group termination, descendant cleanup, Linux parent-death signals,
   and a Darwin sentinel process that outlives an exited group leader bound the external process
   lifecycle.
-- Inputs may be explicit absolute direct regular local files anywhere readable by the companion;
-  output must be a new or empty owner-only directory beneath an allowed root. Relative paths,
-  traversal, unsafe ancestry, replacement, and symlinks are rejected.
+- Inputs may be explicit absolute local paths anywhere readable by the companion, with
+  caller-facing symlinks resolved to canonical regular files. Explicit output may be any absolute
+  new or empty local directory. Relative paths, traversal, unsafe filesystem types, replacement,
+  and target changes are rejected.
 - Temporary state and generated files use restrictive permissions and are never published by
   overwriting an existing path.
 - The companion server contains no network client, dependency installer, or model download path.

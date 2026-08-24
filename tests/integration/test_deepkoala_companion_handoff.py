@@ -633,7 +633,7 @@ async def test_advanced_csv_variants_cross_the_companion_core_boundary(
 
 @pytest.mark.parametrize("large", [False, True], ids=["direct-text", "paged-base64"])
 @pytest.mark.asyncio
-async def test_resource_fallback_reconstructs_inline_core_input_with_offset_timestamp(
+async def test_annotation_resource_roundtrip_preserves_offset_timestamp(
     tmp_path: Path,
     large: bool,
 ) -> None:
@@ -683,7 +683,7 @@ async def test_resource_fallback_reconstructs_inline_core_input_with_offset_time
 
 
 @pytest.mark.asyncio
-async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_reuse(
+async def test_disjoint_roots_use_direct_paths_for_nested_analysis_and_result_only_reuse(
     tmp_path: Path,
 ) -> None:
     companion_root = tmp_path / "companion"
@@ -718,52 +718,23 @@ async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_r
         assert "sample_id" not in path_arguments
 
         async with create_connected_server_and_client_session(core_server) as core_session:
-            output_rejected = await core_session.call_tool(
+            explicit_output = companion_root / "explicit-core-output"
+            output_result = await core_session.call_tool(
                 "analyze_ko_annotations",
                 {
                     "annotations": {**nested_context, "text": _SMALL_DETAILED_CSV.decode("ascii")},
                     "module_ids": ["M00001"],
                     "pathways": [{"pathway_id": "ko00010"}],
-                    "output_directory": str(companion_root / "not-a-core-output"),
+                    "output_directory": str(explicit_output),
                 },
             )
-            assert output_rejected.isError is True
-            output_rejection = cast(dict[str, object], _wire_payload(output_rejected)["error"])
-            assert output_rejection["message"] == (
-                "A local handoff path is outside the configured allowed roots."
-            )
-            output_details = {
-                cast(str, item["name"]): item["value"]
-                for item in cast(list[dict[str, object]], output_rejection["safe_details"])
-            }
-            assert output_details["field"] == "output_directory"
+            assert output_result.isError is False
+            assert explicit_output.is_dir()
+            assert (explicit_output / "bundle_manifest.json").is_file()
 
-            rejected = await core_session.call_tool("analyze_ko_annotations", path_arguments)
-            assert rejected.isError is True
-            rejection = cast(dict[str, object], _wire_payload(rejected)["error"])
-            assert rejection["code"] == "ANALYSIS_CONFIGURATION_INVALID"
-            assert rejection["message"] == (
-                "A local handoff path is outside the configured allowed roots."
-            )
-            details = {
-                cast(str, item["name"]): item["value"]
-                for item in cast(list[dict[str, object]], rejection["safe_details"])
-            }
-            assert details["field"] == "file_path"
-
-            annotation_text = await _read_annotation_resource(
-                companion_session,
-                handoff.annotations_resource_uri,
-            )
-            assert annotation_text.encode("utf-8") == _SMALL_DETAILED_CSV
-            inline_arguments: dict[str, object] = {
-                "annotations": {**nested_context, "text": annotation_text},
-                "module_ids": ["M00001"],
-                "pathways": [{"pathway_id": "ko00010"}],
-            }
             analyzed = await core_session.call_tool(
                 "analyze_ko_annotations",
-                inline_arguments,
+                path_arguments,
             )
             assert analyzed.isError is False
             analyzed_data = _wire_data(analyzed)
@@ -776,7 +747,7 @@ async def test_disjoint_roots_use_resource_for_nested_analysis_and_result_only_r
 
             normalized = await core_session.call_tool(
                 "normalize_ko_annotations",
-                {**nested_context, "text": annotation_text},
+                {**nested_context, "file_path": handoff.annotations_path},
             )
             assert normalized.isError is False
             normalized_result = cast(dict[str, object], _wire_data(normalized)["result"])

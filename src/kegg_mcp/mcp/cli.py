@@ -166,7 +166,10 @@ def _doctor_document(environment: Mapping[str, str] | None) -> tuple[_DoctorDocu
         ]
     )
     if root_count == 0:
-        next_actions.append("Set KEGG_MCP_ALLOWED_ROOTS to enable file handoff and output bundles.")
+        next_actions.append(
+            "Set KEGG_MCP_ALLOWED_ROOTS only if service-allocated default output directories "
+            "are required; explicit input and output paths remain available."
+        )
     return (
         {
             "status": "ok",
@@ -174,7 +177,7 @@ def _doctor_document(environment: Mapping[str, str] | None) -> tuple[_DoctorDocu
             "configuration_valid": True,
             "access_mode": config.kegg.access.mode.value,
             "network_enabled": network_enabled,
-            "file_handoff_enabled": root_count > 0,
+            "file_handoff_enabled": True,
             "allowed_root_count": root_count,
             "allowed_root_paths": "redacted",
             "network_probe": "not_run",
@@ -196,7 +199,7 @@ def _write_doctor_text(document: _DoctorDocument, stream: TextIO) -> None:
         stream.write(f"network enabled: {str(document['network_enabled']).lower()}\n")
         stream.write(
             f"file handoff enabled: {str(document['file_handoff_enabled']).lower()} "
-            f"({document['allowed_root_count']} configured roots; paths redacted)\n"
+            f"({document['allowed_root_count']} configured default output roots; paths redacted)\n"
         )
     for issue in document.get("issues", []):
         stream.write(f"issue: {issue}\n")

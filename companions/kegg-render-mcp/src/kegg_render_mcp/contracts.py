@@ -115,8 +115,9 @@ class _RenderInputSource(_Model):
         min_length=1,
         max_length=4096,
         description=(
-            "Allowed local path to a current render_input.json handoff. Provide exactly one "
-            "of render_input_path or render_input_json."
+            "Absolute local path to a current render_input.json handoff; ordinary symlinks are "
+            "canonicalized before a bounded read. Provide exactly one of render_input_path or "
+            "render_input_json."
         ),
     )
     render_input_json: str | None = Field(
@@ -143,8 +144,8 @@ class _RenderOutputInput(_RenderInputSource):
         min_length=1,
         max_length=4096,
         description=(
-            "Allowed local directory for published render artifacts. Omit to allocate a fresh "
-            "directory beneath the deployment's default output root."
+            "Absolute local new or empty directory for published render artifacts. Omit to "
+            "allocate a fresh directory beneath the deployment's default output root."
         ),
     )
     formats: tuple[RenderFormat, ...] = Field(
@@ -213,7 +214,11 @@ class RendererStatus(_Model):
     output_formats: tuple[RenderFormat, ...] = (RenderFormat.SVG, RenderFormat.PNG)
     pathway_access_configured: bool
     access_mode: Literal["public_academic", "licensed", "offline_cache", "unconfigured"]
-    allowed_root_count: int = Field(ge=0, le=64)
+    allowed_root_count: int = Field(
+        ge=0,
+        le=64,
+        description="Configured roots available for automatic output allocation.",
+    )
     retention_seconds: int = Field(ge=1)
     retained_result_count: int = Field(ge=0)
     cleanup_pending_result_count: int = Field(ge=0)

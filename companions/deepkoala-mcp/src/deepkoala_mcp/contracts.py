@@ -168,8 +168,8 @@ class RunDeepKoalaInput(FrozenModel):
         min_length=1,
         max_length=4_096,
         description=(
-            "New or empty owner-only directory beneath an allowed output root. Omit to let the "
-            "companion allocate a fresh directory beneath its configured output root."
+            "New or empty explicit absolute output directory. Omit to let the companion allocate "
+            "a fresh directory beneath its configured output root."
         ),
     )
     model: ModelName = "full"

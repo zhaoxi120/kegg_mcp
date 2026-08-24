@@ -118,14 +118,11 @@ The three repository Skills have one MCP dependency each:
 Skills contain instructions, not deterministic implementation code. They do not launch
 subprocesses, manage weights, normalize records, call KEGG directly, parse KGML, calculate analysis,
 construct SVG, manipulate pixels, or invent resource URIs. Stable versioned files in user-selected
-allowed output directories are the durable, default stage handoff. The sole same-task exception is
-an upstream Skill reading its own MCP's bounded controlled resource after a typed downstream
-`file_path` allowed-root rejection, then passing no more than 5,000,000 bytes of byte-identical
-content through the downstream server's bounded inline input. A larger result remains a stable file
-and requires a shared-root deployment repair; it is never paged through the model. Each Skill still
-calls exactly one MCP, and no job or resource identifier crosses into Core. Process-scoped job and
-result identifiers are local optimizations, not cross-process authorization or durable handoff
-tokens.
+explicit output directories are the durable stage handoff. Each downstream server accepts the
+returned absolute local file path without requiring shared configured roots or a resource-to-inline
+fallback. Each Skill still calls exactly one MCP, and no job or resource identifier crosses into
+Core. Process-scoped job and result identifiers are local optimizations, not cross-process
+authorization or durable handoff tokens.
 
 Domain, importer, KEGG client, analysis, reporting, service, and storage code remain independent of
 MCP transport. The low-level KEGG client owns typed endpoint contracts, authorization, request
@@ -300,7 +297,7 @@ Color, Join, and MWsearch targets and KEGG Syntax KO Composition or caller-suppl
 targets validate caller input without KEGG retrieval, upload, browser launch, external execution,
 or downstream-result parsing. Core never infers genomic order or coordinates.
 
-Both tools require an explicit allowed-root output directory, publish files without replacement,
+Both tools require an explicit safe absolute output directory, publish files without replacement,
 bound artifact and total bytes, and install the manifest last. The exact public file and validation
 contracts are in [Core MCP server](mcp-server.md); serializer and publication internals are in
 [Services, result storage, and reporting](services-results-reporting.md).
@@ -396,10 +393,11 @@ action, and redacted details. Inputs, fields, identifiers, target counts, decomp
 outputs, and retained artifacts are bounded by schema or structure. DeepKOALA FASTA intake is the
 one aggregate-byte exception: it is streamed without a total file-size cap while sequence count,
 per-sequence length, header length, path, and replacement-race bounds remain enforced. Filesystem
-output and cross-component handoff access requires direct absolute paths below configured roots.
-DeepKOALA FASTA input instead accepts any explicit absolute direct regular local file readable by
-the companion. All file paths reject traversal, unsafe ancestry, replacement races, and symlinks.
-No component uses `shell=True`.
+output and cross-component handoff access uses explicit absolute local paths without directory
+allowlists. Caller-facing input symlinks resolve to canonical regular files before bounded reading.
+All file operations reject traversal, unsafe filesystem types, replacement races, and target
+changes. Private state and configured default roots retain their stricter ownership and direct-path
+requirements. No component uses `shell=True`.
 
 ## DeepKOALA companion contract
 
@@ -415,19 +413,18 @@ The companion owns direct local-file FASTA validation and private staging, one d
 runner lease, fixed direct subprocess arguments, explicit CPU/CUDA/MPS policy, verification of the
 configured checkout's CLI and device-resolver contract plus its target interpreter platform,
 bounded polling and cleanup, and stable `deepkoala_annotations.csv` and
-`deepkoala_run_report.md` delivery. FASTA input has no directory allowlist. Its output preserves
+`deepkoala_run_report.md` delivery. FASTA input has no directory allowlist and caller-facing
+symlinks resolve canonically. Its output preserves
 detailed source evidence and resolved model provenance; it never normalizes K numbers. Before a
 version 2 handoff is published, private in-memory FASTA IDs are compared with every output row:
 single-domain output requires exactly `topk` rows per input ID, while multi-domain output requires at
 least one row per input ID and permits additional domain or top-k rows. Only aggregate coverage
 counts enter the handoff and report. The companion continues to cap its generated detailed CSV at
-1 GiB and uses bounded-memory validation and no-replace publication. Core streams the stable allowed
-file under matching byte and row limits. The supported suite installer requires Core's allowed
-roots to cover every DeepKOALA output root. Core retains the original FASTA path as provenance
-without opening it under annotation-file path policy. A manual deployment whose output root is
-disjoint can use resource-to-inline recovery only when the successful output is at most 5,000,000
-bytes. Larger disjoint-root outputs require an explicit shared-root deployment repair and are never
-paged through the model or sent as inline MCP JSON.
+1 GiB and uses bounded-memory validation and no-replace publication. Core streams the explicit
+stable file under matching byte and row limits regardless of configured default roots. Core retains
+the canonical FASTA path as provenance rather than opening it as annotation input. No
+resource-to-inline recovery route or shared-root deployment repair is required for disjoint output
+roots.
 
 Multi-domain capability is deployment opt-in and requires separately provided local resources.
 Requests remain single-domain unless the user explicitly selects a ready capability. The
@@ -458,8 +455,10 @@ configuration, public tools, resource lifecycle, and output behavior.
 native Apple Silicon macOS. It creates three independent locked runtimes and one generated local
 plugin containing the canonical Skills and absolute MCP launch commands. Publication is
 transactional, private deployment data stays outside the plugin, and the default dependency path
-is offline. It pins and verifies the reviewed DeepKOALA revision. Native Windows is rejected,
-Windows hosts use WSL2 Linux, and native Intel macOS is unsupported.
+is offline. A complete installer-managed root may be updated in place; an unmanaged or mismatched
+existing root is rejected. Installation and update both require a new Codex task to load the new
+MCP snapshot. The installer pins and verifies the reviewed DeepKOALA revision. Native Windows is
+rejected, Windows hosts use WSL2 Linux, and native Intel macOS is unsupported.
 
 The [installation guide](installation.md) owns operator configuration and lifecycle. The
 [release-readiness checklist](release-readiness.md) owns exact-candidate installation, discovery,

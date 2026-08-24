@@ -108,7 +108,11 @@ class RendererService:
                     ),
                 )
             )
-        output = resolve_output_directory(output_directory, self.config.allowed_roots)
+        output = resolve_output_directory(
+            output_directory,
+            self.config.allowed_roots,
+            self.config.state_root,
+        )
         prepared = preflight_targets(
             source,
             selected,

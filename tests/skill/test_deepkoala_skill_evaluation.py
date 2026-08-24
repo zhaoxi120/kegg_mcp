@@ -65,7 +65,7 @@ def test_default_output_is_fresh_project_local_and_explicit_path_wins() -> None:
         "omit `output_directory`",
         "allocates a fresh directory beneath its configured project output root",
         "Do not guess an output root from the FASTA path",
-        "new or empty and owner-only",
+        "be anywhere local, but it must be new or empty",
         "never select an existing non-empty directory",
         "let Core allocate its fresh project output directory",
         "renderer allocate its fresh project output directory",
@@ -76,9 +76,10 @@ def test_default_output_is_fresh_project_local_and_explicit_path_wins() -> None:
 def test_explicit_local_fasta_path_needs_no_input_root_route() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
-        "DeepKOALA accepts an explicit absolute direct regular local FASTA path",
+        "DeepKOALA accepts an explicit absolute local FASTA path",
         "Pass a Codex drag-and-drop attachment's provided absolute path unchanged",
         "a file under `Downloads`",
+        "resolves caller-facing symlinks to the canonical regular file",
         "`PATH_NOT_ALLOWED`",
         "without an input-directory allowlist",
         "do not classify it as an input-root mismatch or reinstall the suite",
@@ -91,7 +92,7 @@ def test_unready_route_and_handoff_remain_bounded() -> None:
     for fragment in (
         "ask permission only for the missing installation",
         "Never install, download, or replace",
-        "controlled absolute paths",
+        "safe absolute paths",
         'input_format="deepkoala_detailed"',
         "must not parse, transform, or validate CSV rows itself",
     ):
@@ -130,42 +131,29 @@ def test_original_fasta_to_analysis_request_continues_without_reprompting() -> N
         assert fragment in normalized
 
 
-def test_core_allowed_root_rejection_uses_controlled_resource_fallback() -> None:
+def test_core_consumes_stable_path_without_shared_root_or_resource_fallback() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
-        "`ANALYSIS_CONFIGURATION_INVALID`",
-        "`A local handoff path is outside the configured allowed roots.`",
-        '`field="file_path"`',
-        '`field="output_directory"`',
-        "successful job's `output_bytes`",
-        "at most 5,000,000",
-        "`annotations_resource_uri`",
-        '`schema_version="1"`',
-        "require contiguous offsets and stable `total_bytes`",
-        "verify each `returned_bytes` value",
-        "byte-identical strict UTF-8 payload",
-        "nested `annotations.text` rather than `annotations.file_path`",
-        "never send both payload selectors",
-        "do not rerun DeepKOALA",
+        "Core accepts the returned absolute annotation path directly",
+        "configured `allowed_roots` are only default output-allocation roots",
+        "No shared-root coverage or resource-to-inline recovery route is needed",
+        "stable CSV rather than the job identifier",
+        "process-scoped resource URI",
+        "Do not rerun DeepKOALA",
         "copy or rewrite the CSV",
-        "do not read resource pages",
-        "Core allowed roots covering the returned DeepKOALA output path",
-        "original FASTA `input_path` is provenance only and does not trigger this fallback",
-        "before deleting the job record",
+        "directory-root mismatch is not a valid diagnosis",
     ):
         assert fragment in normalized
-    assert "or when the client already knows" not in normalized
-    assert "If a client has no shared filesystem" not in normalized
+    assert "A local handoff path is outside the configured allowed roots." not in normalized
 
 
-def test_large_output_uses_the_shared_file_handoff() -> None:
+def test_large_output_uses_the_direct_stable_file_handoff() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
         "up to 1 GiB",
         "bounded-memory validation and publication",
-        "requires Core's allowed roots to cover every DeepKOALA output root",
-        "need not be accessible beneath a Core allowed root",
-        "resume from the same stable CSV",
+        "No shared-root coverage or resource-to-inline recovery route is needed",
+        "stable CSV rather than the job identifier",
     ):
         assert fragment in normalized
 

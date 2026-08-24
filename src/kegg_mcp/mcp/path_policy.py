@@ -1,4 +1,4 @@
-"""Allowed-root validation and race-resistant annotation-file materialization."""
+"""Race-resistant local annotation input and output path handling."""
 
 from __future__ import annotations
 
@@ -79,15 +79,13 @@ class _BoundedDescriptorReader(io.RawIOBase):
 
 def materialize_annotation_file(
     request: NormalizeAnnotationsRequest,
-    allowed_roots: tuple[str, ...],
 ) -> NormalizeAnnotationsRequest:
-    """Read one direct regular file through a bounded no-follow descriptor walk."""
+    """Read one explicit local regular file through a bounded descriptor walk."""
     if request.file_path is None:
         return request
     try:
-        content, path = _read_allowed_file(
+        content, path = _read_local_file(
             request.file_path,
-            allowed_roots,
             max_bytes=request.import_limits.max_bytes,
         )
     except _InputFileLimit as error:
@@ -123,15 +121,13 @@ def materialize_annotation_file(
 @contextmanager
 def open_annotation_file_stream(
     value: str,
-    allowed_roots: tuple[str, ...],
     *,
     max_bytes: int,
 ) -> Generator[PinnedAnnotationFile, None, None]:
     """Yield a bounded stream while retaining and revalidating the opened file descriptor."""
     try:
-        with _open_allowed_file_descriptor(
+        with _open_local_file_descriptor(
             value,
-            allowed_roots,
             max_bytes=max_bytes,
         ) as pinned:
             raw_stream = _BoundedDescriptorReader(pinned.descriptor, max_bytes)
@@ -173,50 +169,43 @@ def resolve_output_directory(
     *,
     default_prefix: str | None = None,
 ) -> Path | None:
-    """Resolve a new or existing output directory below one private allowed root."""
+    """Resolve an explicit output path or allocate one beneath the default output root."""
     if value is None:
         if default_prefix is None or not allowed_roots:
             return None
         if not default_prefix.isascii() or not default_prefix.replace("-", "").isalnum():
             raise AssertionError("default output prefix must be an ASCII name component")
-        value = str(Path(allowed_roots[-1]) / f"{default_prefix}-{secrets.token_hex(16)}")
+        root = Path(allowed_roots[-1])
+        _validate_default_output_root(root, field="output_directory")
+        return root / f"{default_prefix}-{secrets.token_hex(16)}"
     candidate = Path(value)
-    root = _select_allowed_root(candidate, allowed_roots, field="output_directory")
-    _validate_allowed_root(root, field="output_directory")
-    current = root
-    _validate_private_output_ancestor(current)
-    for component in candidate.relative_to(root).parts:
-        current /= component
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError:
-            return candidate
-        except OSError:
-            _raise_disallowed_path("output_directory")
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            _raise_disallowed_path("output_directory")
-        _validate_private_output_ancestor(current)
-    return candidate
+    if (
+        not candidate.is_absolute()
+        or ".." in candidate.parts
+        or candidate == Path(candidate.anchor)
+    ):
+        _raise_invalid_local_path("output_directory")
+    try:
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        _raise_invalid_local_path("output_directory")
 
 
-def _read_allowed_file(
+def _read_local_file(
     value: str,
-    allowed_roots: tuple[str, ...],
     *,
     max_bytes: int,
 ) -> tuple[bytes, Path]:
-    return _access_allowed_file(value, allowed_roots, max_bytes=max_bytes)
+    return _access_local_file(value, max_bytes=max_bytes)
 
 
-def _access_allowed_file(
+def _access_local_file(
     value: str,
-    allowed_roots: tuple[str, ...],
     *,
     max_bytes: int,
 ) -> tuple[bytes, Path]:
-    with _open_allowed_file_descriptor(
+    with _open_local_file_descriptor(
         value,
-        allowed_roots,
         max_bytes=max_bytes,
     ) as pinned:
         buffered = bytearray()
@@ -234,18 +223,23 @@ def _access_allowed_file(
 
 
 @contextmanager
-def _open_allowed_file_descriptor(
+def _open_local_file_descriptor(
     value: str,
-    allowed_roots: tuple[str, ...],
     *,
     max_bytes: int,
 ) -> Generator[_PinnedDescriptor, None, None]:
-    """Open and finally revalidate one regular file through no-follow directory descriptors."""
+    """Resolve and pin one regular file through no-follow directory descriptors."""
     candidate = Path(value)
-    root = _select_allowed_root(candidate, allowed_roots, field="file_path")
-    parts = candidate.relative_to(root).parts
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise _UnsafeInputFile
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise _UnsafeInputFile from None
+    root = Path(resolved.anchor)
+    parts = resolved.relative_to(root).parts
     if not parts:
-        _raise_disallowed_path("file_path")
+        raise _UnsafeInputFile
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
     file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
@@ -253,7 +247,7 @@ def _open_allowed_file_descriptor(
     directories: list[int] = []
     descriptor: int | None = None
     try:
-        current_fd = _open_allowed_root(root)
+        current_fd = _open_filesystem_anchor(root)
         directories.append(current_fd)
         for component in parts[:-1]:
             current_fd = os.open(component, directory_flags, dir_fd=current_fd)
@@ -273,7 +267,7 @@ def _open_allowed_file_descriptor(
         try:
             yield _PinnedDescriptor(
                 descriptor=descriptor,
-                path=root.joinpath(*parts),
+                path=resolved,
                 byte_size=opened_before.st_size,
             )
         finally:
@@ -291,28 +285,7 @@ def _open_allowed_file_descriptor(
             os.close(directory_fd)
 
 
-def _select_allowed_root(
-    candidate: Path,
-    allowed_roots: tuple[str, ...],
-    *,
-    field: str,
-) -> Path:
-    if not candidate.is_absolute() or ".." in candidate.parts or not allowed_roots:
-        _raise_disallowed_path(field)
-    root = next(
-        (
-            Path(value)
-            for value in allowed_roots
-            if candidate == Path(value) or candidate.is_relative_to(value)
-        ),
-        None,
-    )
-    if root is None:
-        _raise_disallowed_path(field)
-    return root
-
-
-def _open_allowed_root(root: Path) -> int:
+def _open_default_output_root(root: Path) -> int:
     try:
         named_before = root.lstat()
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -343,26 +316,40 @@ def _open_allowed_root(root: Path) -> int:
         raise
 
 
-def _validate_allowed_root(root: Path, *, field: str) -> None:
+def _open_filesystem_anchor(root: Path) -> int:
+    """Open an unchanged filesystem anchor without imposing ownership policy."""
     try:
-        descriptor = _open_allowed_root(root)
-    except (OSError, _UnsafeInputFile):
-        _raise_disallowed_path(field)
-    os.close(descriptor)
-
-
-def _validate_private_output_ancestor(path: Path) -> None:
-    try:
-        metadata = path.lstat()
+        named_before = root.lstat()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(root, flags)
     except OSError:
-        _raise_disallowed_path("output_directory")
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o022
-    ):
-        _raise_disallowed_path("output_directory")
+        raise _UnsafeInputFile from None
+    try:
+        opened = os.fstat(descriptor)
+        named_after = root.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(named_before.st_mode)
+            or stat.S_ISLNK(named_after.st_mode)
+            or _file_identity(named_before) != _file_identity(opened)
+            or _file_identity(opened) != _file_identity(named_after)
+        ):
+            raise _UnsafeInputFile
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _validate_default_output_root(root: Path, *, field: str) -> None:
+    if not root.is_absolute() or ".." in root.parts:
+        _raise_invalid_local_path(field)
+    try:
+        descriptor = _open_default_output_root(root)
+    except (OSError, _UnsafeInputFile):
+        _raise_invalid_local_path(field)
+    os.close(descriptor)
 
 
 def _file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -424,22 +411,20 @@ def _raise_unsafe_annotation_file() -> NoReturn:
     raise KeggMcpError(
         ErrorDetail(
             code=ErrorCode.INVALID_ANNOTATION_TABLE,
-            message="The configured annotation file could not be read safely.",
+            message="The annotation file could not be read safely.",
             recoverable=True,
-            suggested_action=(
-                "Use an unchanged direct regular file beneath a configured allowed root."
-            ),
+            suggested_action=("Use an absolute path to a readable local regular file and retry."),
         )
     ) from None
 
 
-def _raise_disallowed_path(field: str) -> NoReturn:
+def _raise_invalid_local_path(field: str) -> NoReturn:
     raise KeggMcpError(
         ErrorDetail(
             code=ErrorCode.ANALYSIS_CONFIGURATION_INVALID,
-            message="A local handoff path is outside the configured allowed roots.",
+            message="A local handoff path is not a safe absolute path.",
             recoverable=True,
-            suggested_action="Use an absolute direct path beneath KEGG_MCP_ALLOWED_ROOTS.",
+            suggested_action="Use an absolute local path without parent traversal.",
             safe_details=(SafeDetail(name="field", value=field),),
         )
     )

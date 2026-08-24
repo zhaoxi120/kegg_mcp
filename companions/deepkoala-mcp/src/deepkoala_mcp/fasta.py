@@ -224,12 +224,12 @@ def _open_input_file(
     if not path.is_absolute() or ".." in path.parts:
         raise InputPathError("input path is not allowed")
     try:
-        named = path.lstat()
         resolved = path.resolve(strict=True)
-    except OSError as error:
+        named = resolved.lstat()
+    except (OSError, RuntimeError) as error:
         raise InputPathError("input path is unavailable") from error
-    if resolved != path or stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
-        raise InputPathError("input path must be a direct regular file without symlinks")
+    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
+        raise InputPathError("input path must resolve to a regular file")
     root = Path(resolved.anchor)
 
     try:

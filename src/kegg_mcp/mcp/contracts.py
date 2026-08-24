@@ -110,14 +110,22 @@ class NormalizeKoAnnotationsInput(FrozenModel):
     """User-facing normalization input without server tuning or cache controls."""
 
     text: str | None = Field(default=None, min_length=1, max_length=5_000_000)
-    file_path: str | None = Field(default=None, min_length=1, max_length=4_096)
+    file_path: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4_096,
+        description=(
+            "Absolute path to a readable local regular annotation file. User-facing symlinks "
+            "are resolved to their canonical target before bounded reading."
+        ),
+    )
     output_directory: str | None = Field(
         default=None,
         min_length=1,
         max_length=4_096,
         description=(
-            "New or empty allowed bundle directory. Omit to allocate a fresh directory beneath "
-            "the deployment's default output root when file handoff is enabled."
+            "Any safe absolute new or empty bundle directory. Omit to allocate a fresh directory "
+            "beneath the deployment's configured default output root."
         ),
     )
     manifest_path_mode: ManifestPathMode = ManifestPathMode.REDACTED
@@ -200,8 +208,8 @@ class AnalyzeKoAnnotationsInput(FrozenModel):
         min_length=1,
         max_length=4_096,
         description=(
-            "New or empty allowed analysis directory. Omit to allocate a fresh directory beneath "
-            "the deployment's default output root when file handoff is enabled."
+            "Any safe absolute new or empty analysis directory. Omit to allocate a fresh "
+            "directory beneath the deployment's configured default output root."
         ),
     )
 
@@ -273,7 +281,11 @@ CompareKeggReferenceSnapshotsInput = CompareKeggReferenceSnapshotsRequest
 class WriteKeggReferenceBundleInput(WriteKeggReferenceBundleRequest):
     """Persist one current-scope card snapshot as a bounded local reference bundle."""
 
-    output_directory: str = Field(min_length=1, max_length=4_096)
+    output_directory: str = Field(
+        min_length=1,
+        max_length=4_096,
+        description="Any safe absolute new or empty local output directory.",
+    )
 
     def to_service_request(self) -> WriteKeggReferenceBundleRequest:
         return WriteKeggReferenceBundleRequest.model_validate(
@@ -288,8 +300,8 @@ class PrepareKeggHandoffInput(FrozenModel):
         min_length=1,
         max_length=2_048,
         description=(
-            "New or empty directory beneath a configured allowed root. The tighter path bound "
-            "keeps every direct handoff result below the MCP response-size budget."
+            "Any safe absolute new or empty local directory. The tighter path-length bound keeps "
+            "every direct handoff result below the MCP response-size budget."
         ),
     )
     handoff: ExternalHandoffRequest

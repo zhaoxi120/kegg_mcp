@@ -47,8 +47,8 @@ uv run kegg-mcp doctor --json
 ```
 
 The diagnostic validates configuration but performs no KEGG request or SQLite inspection and
-redacts allowed-root paths and endpoint values. `kegg-mcp serve` is an explicit equivalent to the
-default stdio command.
+redacts configured default-output roots and endpoint values. `kegg-mcp serve` is an explicit
+equivalent to the default stdio command.
 
 ## KEGG access configuration
 
@@ -64,7 +64,7 @@ default stdio command.
 | `KEGG_MCP_CACHE_MAX_DATABASE_BYTES` | Optional positive SQLite main-database limit; default 640 MiB |
 | `KEGG_MCP_RATE_LIMIT_ROOT` | Optional owner-only state root shared by Core and Renderer |
 | `KEGG_MCP_RESULT_STORE_PATH` | Optional absolute path to the user-local retained-result database |
-| `KEGG_MCP_ALLOWED_ROOTS` | Path-separated existing directories allowed for file input and output bundles |
+| `KEGG_MCP_ALLOWED_ROOTS` | Optional path-separated existing roots used only for automatic output allocation; the legacy name is retained |
 
 The public KEGG REST service is limited to academic use by academic users. Other deployments must
 use an appropriately licensed endpoint. The live client defaults to two requests per second with
@@ -79,7 +79,8 @@ without repeating network requests. An explicit service caller may still request
 cached-entry resource remains a cache-only read and never falls back to the network.
 
 `get_server_status` and `ko-analysis://cache/info` report redacted configuration state. Status
-includes `file_handoff_enabled` and `allowed_root_count`, but never the configured roots. These
+reports `file_handoff_enabled=true` because explicit local file handoff is always available, plus
+the `allowed_root_count` of configured default output roots, but never the roots themselves. These
 surfaces do not initiate connectivity probes or enumerate cache contents. Server status reports
 the state, time, and stable error code from the latest connectivity probe completed in the current
 stdio process; a new process starts as `not_probed`. Use the explicit connectivity tool when a
@@ -109,7 +110,7 @@ The server exposes eighteen Core tools:
   reduced to the same compact sorted unique accepted-KO analysis view. This workflow does not
   retain normalized records or protein mappings; use `normalize_ko_annotations` or audit when
   record evidence is required.
-- `normalize_ko_annotations`: normalize inline content or an allowed-root file containing plain
+- `normalize_ko_annotations`: normalize inline content or an explicit local file containing plain
   K numbers, generic CSV/TSV, or a DeepKOALA detailed table, then retain the complete dataset.
 - `get_kegg_entries`: retrieve selected allowlisted KEGG entries with `projection="preview"`
   (default), `projection="card"`, or `projection="references"`. Preview returns at most ten
@@ -188,7 +189,7 @@ The server exposes eighteen Core tools:
   difference is not biological gain, loss, validation, or a general KEGG release history.
 - `write_kegg_reference_bundle`: persist one successful canonical `entry_snapshot` from card or
   references projection, an optional selected entry subset, and an optional current-scope BRITE
-  mapping in one explicit allowed-root output directory. It writes `reference_snapshot.json`,
+  mapping in one explicit local output directory. It writes `reference_snapshot.json`,
   `relationships.tsv`, optional
   `brite_paths.tsv`, and the commit-marker `reference_manifest.json`. The snapshot records the
   selected cards, request, parser/schema, sanitized retrieval batches, and optional BRITE detail.
@@ -196,7 +197,7 @@ The server exposes eighteen Core tools:
   summary, and payload size and MIME metadata without result IDs, request keys, endpoint values,
   or local paths. Bundle schema version 2 omits unused content hashes. This local tool makes no
   KEGG request and exports neither the raw cache nor an unbounded KEGG mirror.
-- `prepare_kegg_handoff`: prepare one discriminated local handoff under an explicit allowed-root
+- `prepare_kegg_handoff`: prepare one discriminated local handoff under an explicit local
   output directory. Its seven targets prepare validated input files for KEGG Mapper Reconstruct,
   Search, Color, Join, or MWsearch, or KEGG Syntax KO Composition or caller-ordered KO Sequence.
   Each bundle contains the target-specific data file and commit-marker `handoff_manifest.json`.
@@ -470,16 +471,15 @@ high-level tool, biological context belongs inside that nested object. KO-only M
 accept organism-specific pathway references because they lack gene-level context. Cache tuning,
 refresh flags, and internal limit models are deployment-owned rather than ordinary tool inputs.
 
-File input and explicit `output_directory` paths are disabled until `KEGG_MCP_ALLOWED_ROOTS` is
-configured. When roots are configured and `output_directory` is omitted, Core allocates a fresh
-child beneath the last configured root; root order therefore defines the default output root. Paths
-must be absolute and resolve beneath an allowed root. Traversal, missing files, symlink escapes, and
-unsafe output ancestors are rejected. Once an output path enters a directory owned by the service
-user that is not group- or world-writable, that private directory and every descendant directory
-on the path must retain those ownership and mode constraints. Owner-owned shared ancestors may be
-group-writable before that private boundary; the configured allowed root itself must establish the
-private boundary. An output directory must be new or empty;
-any existing entry causes `OUTPUT_ALREADY_EXISTS`, and this release exposes no overwrite operation.
+Explicit local file inputs and explicit `output_directory` paths do not require
+`KEGG_MCP_ALLOWED_ROOTS`. Input paths must be absolute readable regular files; caller-facing
+symlinks resolve to their canonical targets before bounded descriptor-based reading. An explicit
+output may be any safe absolute local path. When `output_directory` is omitted, Core allocates a
+fresh child beneath the last configured root; root order therefore defines the default output
+root. With no configured roots, only this automatic allocation is unavailable. Traversal, unsafe
+filesystem types, replacement races, and changed input targets are rejected. An output directory
+must be new or empty; any existing entry causes `OUTPUT_ALREADY_EXISTS`, and this release exposes
+no overwrite operation.
 `write_kegg_reference_bundle` and `prepare_kegg_handoff` always require an explicit
 `output_directory`; their selected content and external target are deliberate filesystem
 mutations, so they never infer a destination from retained-result or input paths.

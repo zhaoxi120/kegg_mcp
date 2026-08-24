@@ -172,10 +172,7 @@ class DeepKoalaRuntimeConfig(BaseModel):
                 continue
             if not path.is_absolute() or ".." in path.parts or path == Path(path.anchor):
                 raise ValueError(f"{name} must be an absolute traversal-free non-root path")
-            if any(
-                _overlap(path, root)
-                for root in (self.state_root, *self.output_roots)
-            ):
+            if any(_overlap(path, root) for root in (self.state_root, *self.output_roots)):
                 raise ValueError(f"{name} must not overlap mutable companion roots")
         return self
 

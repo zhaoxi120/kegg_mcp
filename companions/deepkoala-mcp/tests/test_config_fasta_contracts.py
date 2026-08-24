@@ -405,9 +405,7 @@ def test_stage_explicit_path_is_privately_copied(tmp_path: Path) -> None:
 
 
 def test_stage_accepts_a_nested_codex_attachment_path_without_root_config(tmp_path: Path) -> None:
-    attachment_directory = (
-        tmp_path / "attachments" / "01234567-89ab-cdef-0123-456789abcdef"
-    )
+    attachment_directory = tmp_path / "attachments" / "01234567-89ab-cdef-0123-456789abcdef"
     job = tmp_path / "job"
     attachment_directory.mkdir(parents=True)
     job.mkdir(mode=0o700)
@@ -546,7 +544,7 @@ def test_stage_rejects_ancestor_replacement_during_intake(
     assert not (job / "input.fasta").exists()
 
 
-def test_stage_path_rejects_relative_and_symlink_paths(tmp_path: Path) -> None:
+def test_stage_path_rejects_relative_and_resolves_symlink_paths(tmp_path: Path) -> None:
     caller_directory = tmp_path / "caller"
     job = tmp_path / "job"
     caller_directory.mkdir()
@@ -555,10 +553,18 @@ def test_stage_path_rejects_relative_and_symlink_paths(tmp_path: Path) -> None:
     source.write_text(">private\nM\n", encoding="ascii")
     link = caller_directory / "link.faa"
     link.symlink_to(source)
-    for path in (Path("relative.faa"), link):
-        with pytest.raises(InputPathError):
-            stage_fasta(
-                fasta_path=str(path),
-                job_directory=job,
-                max_sequences=10,
-            )
+    with pytest.raises(InputPathError):
+        stage_fasta(
+            fasta_path="relative.faa",
+            job_directory=job,
+            max_sequences=10,
+        )
+
+    staged = stage_fasta(
+        fasta_path=str(link),
+        job_directory=job,
+        max_sequences=10,
+    )
+
+    assert staged.input_path == source.resolve()
+    assert (job / "input.fasta").read_text(encoding="ascii") == ">private\nM\n"

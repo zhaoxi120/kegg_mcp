@@ -596,7 +596,7 @@ async def test_cleanup_validation_failure_still_makes_the_job_terminal(
 
 
 @pytest.mark.asyncio
-async def test_symlink_input_and_nonempty_output_fail_before_runner_start(
+async def test_symlink_input_and_arbitrary_explicit_output_are_accepted(
     runtime_config: DeepKoalaRuntimeConfig,
     tmp_path: Path,
 ) -> None:
@@ -605,26 +605,43 @@ async def test_symlink_input_and_nonempty_output_fail_before_runner_start(
     source.write_text(">p\nM\n", encoding="ascii")
     symlink = tmp_path / "input-link.faa"
     symlink.symlink_to(source)
-    requests = [
-        RunDeepKoalaInput(
-            fasta_path=str(symlink),
-            output_directory=str(runtime_config.output_roots[0] / "outside-input"),
-        ),
-        _request(
-            runtime_config,
-            name="outside-output",
-            output_directory=str(tmp_path / "unapproved" / "run"),
-        ),
-    ]
-    expected = (ErrorCode.PATH_NOT_ALLOWED, ErrorCode.OUTPUT_NOT_ALLOWED)
+    external_parent = tmp_path / "unapproved"
+    external_parent.mkdir()
+    request = RunDeepKoalaInput(
+        fasta_path=str(symlink),
+        output_directory=str(external_parent / "run"),
+    )
+
     async with _manager(runtime_config, runner) as manager:
-        for request, code in zip(requests, expected, strict=True):
-            with pytest.raises(DeepKoalaMcpError) as captured:
-                await manager.run(request)
-            assert captured.value.detail.code is code
-        existing = runtime_config.output_roots[0] / "existing"
-        existing.mkdir(mode=0o700)
-        (existing / "occupied").write_text("x", encoding="ascii")
+        started = await manager.run(request)
+        assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
+        completed = manager.get(started.job.job_id)
+
+    assert completed.handoff is not None
+    assert completed.handoff.input_path == str(source.resolve())
+    assert Path(completed.handoff.annotations_path).parent == external_parent / "run"
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_or_nonempty_output_fails_before_runner_start(
+    runtime_config: DeepKoalaRuntimeConfig,
+    tmp_path: Path,
+) -> None:
+    runner = SuccessfulRunner()
+    missing_parent = _request(
+        runtime_config,
+        name="missing-output-parent",
+        output_directory=str(tmp_path / "missing" / "run"),
+    )
+    existing = runtime_config.output_roots[0] / "existing"
+    existing.mkdir(mode=0o755)
+    (existing / "occupied").write_text("x", encoding="ascii")
+
+    async with _manager(runtime_config, runner) as manager:
+        with pytest.raises(DeepKoalaMcpError) as captured:
+            await manager.run(missing_parent)
+        assert captured.value.detail.code is ErrorCode.OUTPUT_NOT_ALLOWED
         with pytest.raises(DeepKoalaMcpError) as captured:
             await manager.run(_request(runtime_config, name="existing"))
         assert captured.value.detail.code is ErrorCode.OUTPUT_ALREADY_EXISTS

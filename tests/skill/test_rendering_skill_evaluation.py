@@ -80,12 +80,15 @@ def test_preceding_core_handoff_finishes_the_original_graphics_request() -> None
 def test_renderer_output_defaults_to_a_fresh_configured_root_child() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
-        "user-specified output directory wins",
+        "user-specified safe absolute new or empty output directory wins",
+        "may be anywhere local",
         "omit `output_directory`",
         "renderer allocate a fresh directory beneath its configured project output root",
         "Do not guess a root from the handoff path",
         "reuse a non-empty directory",
         "explicit or default output directory",
+        "Caller-facing input symlinks resolve to canonical regular files",
+        "configured roots are only automatic output-allocation defaults",
     ):
         assert fragment in normalized
 

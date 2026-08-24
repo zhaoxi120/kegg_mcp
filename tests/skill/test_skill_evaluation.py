@@ -169,7 +169,7 @@ NORMALIZED_CORPUS = " ".join(CORPUS.split())
         ),
         (
             "Here is detailed DeepKOALA output; analyze KEGG modules.",
-            ("controlled absolute path", "analyze_ko_annotations", "Do not parse"),
+            ("absolute readable local path", "analyze_ko_annotations", "Do not parse"),
         ),
         (
             "I have one column of K numbers; check pathway coverage.",
@@ -259,38 +259,32 @@ def test_analysis_input_branches_never_duplicate_context_or_payload() -> None:
         assert fragment in normalized
 
 
-def test_deepkoala_allowed_root_failure_returns_to_controlled_resource_route() -> None:
+def test_deepkoala_handoff_uses_direct_explicit_input_path() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
-        "`ANALYSIS_CONFIGURATION_INVALID`",
-        "`A local handoff path is outside the configured allowed roots.`",
-        '`field="file_path"`',
-        '`field="output_directory"`',
-        "return control to the installed `deepkoala-annotation` Skill",
-        "bounded `annotations_resource_uri` fallback",
-        "successful job's `output_bytes`",
-        "5,000,000-byte Core inline limit",
-        "stop without reading resource pages",
-        "Core allowed roots that cover the returned DeepKOALA output path",
-        "does not reopen a distinct provenance `input_path`",
-        "original FASTA `input_path` is provenance only and does not trigger this fallback",
+        "Core accepts an explicit readable local annotation path independently",
+        "DeepKOALA CSV passes directly",
+        "without a shared-root deployment or resource-to-inline fallback",
+        "configured `allowed_roots` are only default output-allocation roots",
+        "use its stable `annotations_path` directly",
         "This Skill does not call the companion MCP",
-        "nested `annotations.text`",
-        "omit `annotations.file_path`",
         "Do not rerun annotation or rewrite the CSV",
     ):
         assert fragment in normalized
+    assert "A local handoff path is outside the configured allowed roots." not in normalized
 
 
 def test_core_output_defaults_to_a_fresh_configured_root_child() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
         "user-specified path wins",
+        "it may be anywhere local",
         "omit `output_directory`",
         "Core allocate a fresh directory beneath its configured project output root",
         "Do not guess a root from the input path",
         "reuse a non-empty directory",
         "renderer allocate a fresh project output directory",
+        "Caller-facing symlinks resolve to their canonical regular-file target",
     ):
         assert fragment in normalized
 

@@ -7,15 +7,16 @@ description: Run a configured local DeepKOALA companion on an explicit absolute 
 
 ## Run the local annotation stage
 
-1. Inspect the protein FASTA path and requested output location. Require controlled absolute paths;
+1. Inspect the protein FASTA path and requested output location. Require safe absolute paths;
    do not copy sequences into a prompt or send them to a remote service. A user-specified output
    directory always wins and is passed unchanged. Otherwise, omit `output_directory`; the companion
    allocates a fresh directory beneath its configured project output root. Do not guess an output
    root from the FASTA path or create a directory with a shell command. An explicit directory may
-   be new or empty and owner-only; never select an existing non-empty directory. Pass a Codex
-   drag-and-drop attachment's provided absolute path unchanged; do not copy it into a guessed input
-   root. DeepKOALA accepts explicit absolute direct local FASTA paths without an input-directory
-   allowlist and privately stages the validated file.
+   be anywhere local, but it must be new or empty; never select an existing non-empty directory.
+   Pass a Codex drag-and-drop attachment's provided absolute path unchanged; do not copy it into a
+   guessed input root. DeepKOALA accepts explicit absolute local FASTA paths without an
+   input-directory allowlist, resolves caller-facing symlinks to the canonical regular file, and
+   privately stages the validated content.
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency
@@ -83,29 +84,18 @@ description: Run a configured local DeepKOALA companion on an explicit absolute 
   sorted unique accepted-KO analysis view from this handoff; request full normalization separately
   only when record-level evidence is needed and the file fits that operation's separate intake
   limits. The companion can publish a generated detailed CSV up to 1 GiB with bounded-memory
-  validation and publication. The supported suite installer requires Core's allowed roots to cover
-  every DeepKOALA output root so Core can validate the stable annotation file. The original FASTA
-  `input_path` remains unchanged provenance and need not be accessible beneath a Core allowed root.
+  validation and publication. Core accepts the returned absolute annotation path directly; its
+  configured `allowed_roots` are only default output-allocation roots and do not constrain input
+  files. The resolved FASTA `input_path` remains provenance rather than a second Core input.
   Do not ask the user to copy the path, send another prompt, restate the analysis goal, or confirm
-  continuation. During the normal shared-path transition, do not read, parse, or rewrite the CSV.
+  continuation. During the normal direct-path transition, do not read, parse, or rewrite the CSV.
   Unless the user specified that stage's output directory, let Core allocate its fresh project
   output directory.
-- If Core rejects that successful path handoff with `ANALYSIS_CONFIGURATION_INVALID`, the typed
-  message `A local handoff path is outside the configured allowed roots.`, and a `safe_details`
-  entry of `field="file_path"`, do not rerun DeepKOALA,
-  copy the CSV, change either server's running path policy, or retry the same path. Inspect the
-  successful job's `output_bytes` before reading its resource. Only when `output_bytes` is at most
-  5,000,000 may the retained job use the controlled resource fallback defined in the handoff guide:
-  reconstruct the byte-identical strict UTF-8 payload and resume `kegg-ko-analysis` with nested
-  `annotations.text` rather than `annotations.file_path`. Pass the original `input_format` and
-  `source` unchanged, never send both payload selectors, and keep annotation context only inside
-  the nested `annotations` object. If `output_bytes` is larger, do not read resource pages or place
-  the file in a prompt or inline MCP argument. Stop and report that the deployment must be repaired
-  with Core allowed roots covering the returned DeepKOALA output path, preferably through the
-  complete suite installer;
-  resume from the same stable CSV after the repaired suite is available in a new task.
-  The same message with `field="output_directory"` is an output-location error and must not trigger
-  this annotation-resource fallback.
+- If Core rejects a successful path handoff, report the actual typed file error. Do not rerun
+  DeepKOALA, copy or rewrite the CSV, or substitute the companion's process-scoped resource URI as
+  cross-MCP identity. A directory-root mismatch is not a valid diagnosis under the current Core
+  contract; explicit readable local annotation paths are independent of configured default output
+  roots.
 - If the original request also asks for graphics, preserve its requested formats and target scope
   as a downstream goal. The KO-analysis stage can then continue to the installed
   `kegg-pathway-rendering` Skill after it writes a compatible `render_input.json`; this Skill must

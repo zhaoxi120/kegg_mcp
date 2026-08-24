@@ -52,17 +52,20 @@ bounded `/usr/sbin/sysctl` call without a shell or caller-controlled arguments.
 
 ## Configuration
 
-The state root and at least one allowed file root are required:
+The state root and at least one default output root are required:
 
 ```bash
 export KEGG_RENDER_MCP_STATE_ROOT=/absolute/private/renderer-state
 export KEGG_RENDER_MCP_ALLOWED_ROOTS=/absolute/analysis-results
 ```
 
-`KEGG_RENDER_MCP_ALLOWED_ROOTS` is a platform path-separator-delimited allowlist. Renderer input and
-explicit output directories must be direct, traversal-free paths below an allowed root. The last
-configured root is the default output root when `output_directory` is omitted. The private state
-root must not overlap an allowed root. Symlink escapes and unsafe writable ancestry are rejected.
+`KEGG_RENDER_MCP_ALLOWED_ROOTS` retains its legacy name but is a platform
+path-separator-delimited list used only for automatic output allocation. Renderer input may be any
+absolute readable local regular file, with caller-facing symlinks resolved canonically. An explicit
+output may be any safe absolute new or empty local directory. The last configured root is the
+default output root when `output_directory` is omitted. The private state root must not overlap a
+configured default output root. Traversal, unsafe filesystem types, replacement, and target changes
+are rejected.
 Multiple renderer processes may share one deployment state root. Each process holds an isolated
 live scope, and abandoned-scope cleanup never removes a scope whose lease is still active.
 
@@ -141,9 +144,9 @@ Example high-level input:
 }
 ```
 
-Every render tool accepts exactly one handoff source: an allowed `render_input_path` or bounded
-`render_input_json`. Only schema version 6 is accepted. A schema mismatch returns an actionable
-incompatible-input error; the renderer never repairs or reinterprets the handoff.
+Every render tool accepts exactly one handoff source: an explicit local `render_input_path` or
+bounded `render_input_json`. Only schema version 6 is accepted. A schema mismatch returns an
+actionable incompatible-input error; the renderer never repairs or reinterprets the handoff.
 
 The fixed status resource is `kegg-render://status`. Result templates are:
 

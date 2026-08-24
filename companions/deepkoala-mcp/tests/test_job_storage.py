@@ -51,7 +51,7 @@ def _controlled_output(
     root.mkdir(mode=0o700)
     parent.mkdir(mode=0o700)
     output = parent / "run"
-    return root, parent, output, create_output_directory(output, (root,))
+    return root, parent, output, create_output_directory(output)
 
 
 def _raw_output(tmp_path: Path) -> Path:
@@ -90,14 +90,46 @@ def test_existing_empty_output_is_pinned_and_not_removed_by_cleanup(tmp_path: Pa
     root = tmp_path / "allowed"
     root.mkdir(mode=0o700)
     output = root / "existing"
-    output.mkdir(mode=0o700)
+    output.mkdir(mode=0o777)
+    output.chmod(0o777)
 
-    controlled = create_output_directory(output, (root,))
+    controlled = create_output_directory(output)
     try:
         assert controlled.created_by_service is False
         cleanup_output_directory(controlled)
         assert output.is_dir()
         assert tuple(output.iterdir()) == ()
+    finally:
+        close_output_directory(controlled)
+
+
+def test_output_path_may_use_a_symlinked_parent_outside_default_roots(
+    tmp_path: Path,
+) -> None:
+    actual_parent = tmp_path / "downloads"
+    actual_parent.mkdir()
+    linked_parent = tmp_path / "selected-output"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    controlled = create_output_directory(linked_parent / "run")
+    try:
+        assert controlled.path == actual_parent / "run"
+        assert controlled.created_by_service is True
+    finally:
+        close_output_directory(controlled)
+
+
+def test_output_path_may_name_an_existing_directory_symlink(tmp_path: Path) -> None:
+    actual_output = tmp_path / "shared-output"
+    actual_output.mkdir(mode=0o777)
+    actual_output.chmod(0o777)
+    selected_output = tmp_path / "selected-output"
+    selected_output.symlink_to(actual_output, target_is_directory=True)
+
+    controlled = create_output_directory(selected_output)
+    try:
+        assert controlled.path == actual_output
+        assert controlled.created_by_service is False
     finally:
         close_output_directory(controlled)
 
@@ -110,7 +142,20 @@ def test_existing_nonempty_output_is_rejected(tmp_path: Path) -> None:
     (output / "occupied").write_text("x", encoding="ascii")
 
     with pytest.raises(OutputAlreadyExistsError, match="not empty"):
-        create_output_directory(output, (root,))
+        create_output_directory(output)
+
+
+def test_existing_read_only_output_is_rejected_before_a_job_starts(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can bypass directory write permission bits")
+    output = tmp_path / "read-only-output"
+    output.mkdir(mode=0o500)
+    output.chmod(0o500)
+    try:
+        with pytest.raises(OutputPathError, match="not writable"):
+            create_output_directory(output)
+    finally:
+        output.chmod(0o700)
 
 
 def test_final_output_open_failure_removes_just_created_directory(
@@ -135,7 +180,7 @@ def test_final_output_open_failure_removes_just_created_directory(
 
     monkeypatch.setattr(storage.os, "open", fail_output_open)
     with pytest.raises(OutputPathError, match="opened safely"):
-        create_output_directory(output, (root,))
+        create_output_directory(output)
 
     assert not output.exists()
 
@@ -165,7 +210,7 @@ def test_created_output_replacement_is_rejected_and_preserved(
 
     monkeypatch.setattr(storage.os, "open", replace_before_output_open)
     with pytest.raises(OutputPathError, match="replaced"):
-        create_output_directory(output, (root,))
+        create_output_directory(output)
 
     assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
     assert displaced.is_dir()
@@ -177,7 +222,7 @@ def test_cleanup_preserves_caller_file_in_an_adopted_empty_directory(tmp_path: P
     root.mkdir(mode=0o700)
     output = root / "existing"
     output.mkdir(mode=0o700)
-    controlled = create_output_directory(output, (root,))
+    controlled = create_output_directory(output)
     injected = output / ANNOTATIONS_FILENAME
     injected.write_text("caller-owned\n", encoding="ascii")
 
@@ -196,7 +241,7 @@ def test_cleanup_preserves_replaced_delivered_file_in_adopted_directory(
     root.mkdir(mode=0o700)
     output = root / "existing"
     output.mkdir(mode=0o700)
-    controlled = create_output_directory(output, (root,))
+    controlled = create_output_directory(output)
     _validate_and_publish_artifacts(
         raw_output=_raw_output(tmp_path),
         output_directory=controlled,

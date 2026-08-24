@@ -11,6 +11,7 @@ from kegg_mcp.kegg import contracts as core_contracts
 from pydantic import ValidationError
 
 from kegg_render_mcp import config as config_module
+from kegg_render_mcp import render_input as render_input_module
 from kegg_render_mcp._platform import UnsupportedRendererPlatformError
 from kegg_render_mcp.config import (
     ACADEMIC_CONFIRMATION_ENV,
@@ -29,7 +30,7 @@ from kegg_render_mcp.config import (
 from kegg_render_mcp.contracts import ErrorCode, RenderMcpError
 from kegg_render_mcp.render_input import (
     load_render_input,
-    open_allowed_directory,
+    open_output_directory,
     resolve_output_directory,
 )
 
@@ -117,12 +118,16 @@ def test_darwin_uses_the_shared_core_cache_and_rate_limit_roots(
 def test_omitted_output_selects_fresh_candidate_beneath_last_configured_root(
     tmp_path: Path,
 ) -> None:
-    input_root = tmp_path / "inputs"
+    first_output_root = tmp_path / "older-renders"
     output_root = tmp_path / "renders"
-    input_root.mkdir(mode=0o700)
+    first_output_root.mkdir(mode=0o700)
     output_root.mkdir(mode=0o700)
 
-    output = resolve_output_directory(None, (input_root, output_root))
+    output = resolve_output_directory(
+        None,
+        (first_output_root, output_root),
+        tmp_path / "state",
+    )
 
     assert output.parent == output_root
     assert output.name.startswith("kegg-render-")
@@ -145,13 +150,13 @@ def test_final_output_open_failure_removes_just_created_directory(
         *,
         dir_fd: int | None = None,
     ) -> int:
-        if path == output.name and flags & os.O_DIRECTORY:
+        if path == output.name and flags & os.O_DIRECTORY and output.exists():
             raise OSError("synthetic final open failure")
         return real_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "open", fail_output_open)
     with pytest.raises(RenderMcpError):
-        open_allowed_directory(output, (root,))
+        open_output_directory(output)
 
     assert not output.exists()
 
@@ -173,7 +178,7 @@ def test_created_output_replacement_is_rejected_and_preserved(
         *,
         dir_fd: int | None = None,
     ) -> int:
-        if path == output.name and flags & os.O_DIRECTORY:
+        if path == output.name and flags & os.O_DIRECTORY and output.exists():
             output.rename(displaced)
             output.mkdir(mode=0o700)
             (output / "caller-owned.txt").write_text("keep", encoding="utf-8")
@@ -181,7 +186,7 @@ def test_created_output_replacement_is_rejected_and_preserved(
 
     monkeypatch.setattr(os, "open", replace_before_output_open)
     with pytest.raises(RenderMcpError):
-        open_allowed_directory(output, (root,))
+        open_output_directory(output)
 
     assert (output / "caller-owned.txt").read_text(encoding="utf-8") == "keep"
     assert displaced.is_dir()
@@ -355,14 +360,27 @@ def test_missing_builder_identity_is_rejected(
     assert details["stage"] == "render_input_schema"
 
 
-def test_path_traversal_relative_and_symlink_escape_are_rejected(
-    tmp_path: Path, allowed_root: Path, runtime_config: RendererRuntimeConfig
+def test_absolute_input_outside_default_output_roots_is_accepted(
+    tmp_path: Path,
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
 ) -> None:
-    outside = tmp_path / "outside.json"
-    outside.write_text("{}", encoding="utf-8")
-    link = allowed_root / "link.json"
-    link.symlink_to(outside)
-    for path in ("relative.json", str(allowed_root / ".." / "outside.json"), str(link)):
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    outside = downloads / "render_input.json"
+    outside.write_bytes(render_input_file.read_bytes())
+
+    loaded = load_render_input(str(outside), runtime_config)
+
+    assert loaded.document.schema_version == "6"
+    assert loaded.target_ids == ("ko00010", "M00001")
+
+
+def test_relative_and_traversal_input_paths_are_rejected(
+    tmp_path: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    for path in ("relative.json", str(tmp_path / "Downloads" / ".." / "outside.json")):
         with pytest.raises(RenderMcpError) as raised:
             load_render_input(path, runtime_config)
         assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
@@ -371,16 +389,59 @@ def test_path_traversal_relative_and_symlink_escape_are_rejected(
         }
 
 
-def test_unsafe_writable_intermediate_directory_is_rejected(
-    allowed_root: Path, runtime_config: RendererRuntimeConfig
+def test_input_symlink_is_canonicalized_and_read_safely(
+    tmp_path: Path,
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
 ) -> None:
-    unsafe = allowed_root / "unsafe"
-    unsafe.mkdir(mode=0o777)
-    os.chmod(unsafe, 0o777)
-    path = unsafe / "render_input.json"
-    path.write_text("{}", encoding="utf-8")
-    with pytest.raises(RenderMcpError, match="unsafe writable"):
-        load_render_input(str(path), runtime_config)
+    link = tmp_path / "dragged-render-input.json"
+    link.symlink_to(render_input_file)
+
+    loaded = load_render_input(str(link), runtime_config)
+
+    assert loaded.document.schema_version == "6"
+    assert loaded.target_ids == ("ko00010", "M00001")
+
+
+def test_input_mutation_during_bounded_read_is_rejected(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_bounded_read = render_input_module._bounded_read  # pyright: ignore[reportPrivateUsage]
+
+    def mutate_after_read(descriptor: int, limit: int) -> bytes:
+        payload = real_bounded_read(descriptor, limit)
+        render_input_file.write_bytes(payload + b" ")
+        return payload
+
+    monkeypatch.setattr(render_input_module, "_bounded_read", mutate_after_read)
+
+    with pytest.raises(RenderMcpError) as raised:
+        load_render_input(str(render_input_file), runtime_config)
+
+    assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+    assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+        "field": "render_input_path"
+    }
+
+
+def test_input_rejects_nonregular_or_unavailable_targets(
+    tmp_path: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    directory = tmp_path / "render-input-directory"
+    directory.mkdir()
+    dangling = tmp_path / "dangling-render-input.json"
+    dangling.symlink_to(tmp_path / "missing-render-input.json")
+
+    for path in (directory, dangling):
+        with pytest.raises(RenderMcpError) as raised:
+            load_render_input(str(path), runtime_config)
+        assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+        assert {item.name: item.value for item in raised.value.detail.safe_details} == {
+            "field": "render_input_path"
+        }
 
 
 def test_intermediate_symlink_swap_is_rejected(
@@ -425,19 +486,94 @@ def test_output_directory_creation_is_deferred_to_export(
     allowed_root: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     output = allowed_root / "images"
-    resolved = resolve_output_directory(str(output), runtime_config.allowed_roots)
+    resolved = resolve_output_directory(
+        str(output),
+        runtime_config.allowed_roots,
+        runtime_config.state_root,
+    )
     assert resolved == output.resolve()
     assert not output.exists()
 
 
-def test_output_directory_outside_allowed_roots_names_the_field(
+def test_explicit_output_directory_outside_default_roots_is_accepted(
     tmp_path: Path,
     runtime_config: RendererRuntimeConfig,
 ) -> None:
-    with pytest.raises(RenderMcpError, match="outside the configured allowed roots") as raised:
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    output = downloads / "rendered-pathways"
+
+    resolved = resolve_output_directory(
+        str(output),
+        runtime_config.allowed_roots,
+        runtime_config.state_root,
+    )
+
+    assert resolved == output.resolve()
+    assert not output.exists()
+
+
+def test_existing_writable_explicit_output_directory_is_accepted(
+    tmp_path: Path,
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    output = tmp_path / "shared-render-output"
+    output.mkdir(mode=0o777)
+    output.chmod(0o777)
+
+    resolved = resolve_output_directory(
+        str(output),
+        runtime_config.allowed_roots,
+        runtime_config.state_root,
+    )
+    descriptor, created = open_output_directory(resolved)
+    os.close(descriptor)
+
+    assert resolved == output.resolve()
+    assert created is False
+
+
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_read_only_explicit_output_is_rejected_before_rendering(
+    tmp_path: Path,
+    runtime_config: RendererRuntimeConfig,
+    existing_output: bool,
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can bypass directory write permission bits")
+    parent = tmp_path / "read-only-parent"
+    parent.mkdir(mode=0o500)
+    output = parent / "rendered-pathways"
+    if existing_output:
+        parent.chmod(0o700)
+        output.mkdir(mode=0o500)
+        output.chmod(0o500)
+        parent.chmod(0o500)
+    try:
+        with pytest.raises(RenderMcpError, match="not writable") as raised:
+            resolve_output_directory(
+                str(output),
+                runtime_config.allowed_roots,
+                runtime_config.state_root,
+            )
+    finally:
+        parent.chmod(0o700)
+        if output.exists():
+            output.chmod(0o700)
+
+    assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
+
+
+def test_explicit_output_directory_cannot_overlap_private_state(
+    runtime_config: RendererRuntimeConfig,
+) -> None:
+    runtime_config.state_root.mkdir(mode=0o700)
+
+    with pytest.raises(RenderMcpError, match="must not overlap private state") as raised:
         resolve_output_directory(
-            str(tmp_path / "outside-render-output"),
+            str(runtime_config.state_root / "published-output"),
             runtime_config.allowed_roots,
+            runtime_config.state_root,
         )
 
     assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
@@ -455,7 +591,11 @@ def test_output_directory_reserves_path_space_for_artifact_names(
     entries_before = tuple(allowed_root.iterdir())
 
     with pytest.raises(RenderMcpError, match="insufficient path space") as raised:
-        resolve_output_directory(str(output), runtime_config.allowed_roots)
+        resolve_output_directory(
+            str(output),
+            runtime_config.allowed_roots,
+            runtime_config.state_root,
+        )
 
     assert raised.value.detail.code is ErrorCode.INPUT_PATH_REJECTED
     assert {item.name: item.value for item in raised.value.detail.safe_details} == {
@@ -466,7 +606,6 @@ def test_output_directory_reserves_path_space_for_artifact_names(
 
 def test_output_directory_creation_fsyncs_its_parent(
     allowed_root: Path,
-    runtime_config: RendererRuntimeConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kegg_render_mcp import render_input as module
@@ -482,7 +621,7 @@ def test_output_directory_creation_fsyncs_its_parent(
         real_fsync(descriptor)
 
     monkeypatch.setattr(module.os, "fsync", record_fsync)
-    descriptor, created = open_allowed_directory(output, runtime_config.allowed_roots)
+    descriptor, created = open_output_directory(output)
     os.close(descriptor)
 
     assert created is True

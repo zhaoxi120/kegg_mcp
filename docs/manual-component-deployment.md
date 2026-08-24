@@ -71,18 +71,19 @@ installed Renderer defaults to `unconfigured`, which supports MODULE-only render
 pathway asset access. Set both `KEGG_RENDER_MCP_ACCESS_MODE=public_academic` and
 `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true` only for eligible public-academic use.
 
-File handoff is disabled unless `KEGG_MCP_ALLOWED_ROOTS` lists existing absolute roots separated
-by the platform path separator:
+Explicit local file handoff is always enabled. Set `KEGG_MCP_ALLOWED_ROOTS` only when Core should
+allocate an output automatically after `output_directory` is omitted; the legacy-named variable
+lists existing default output roots separated by the platform path separator:
 
 ```text
-KEGG_MCP_ALLOWED_ROOTS=/absolute/project/inputs:/absolute/project/annotations:/absolute/project/analysis
+KEGG_MCP_ALLOWED_ROOTS=/absolute/project/analysis
 KEGG_MCP_RESULT_STORE_PATH=/absolute/private/core/results.sqlite3
 ```
 
-Inputs and output directories must resolve beneath an allowed root. Traversal, symlink escapes, and
-non-empty output targets are rejected. KO-analysis bundles, selected-reference bundles, and KEGG
-Mapper/Syntax input bundles all use this same boundary; the latter two require an explicit output
-directory.
+Input files may be any absolute readable local regular files, and caller-facing symlinks resolve to
+their canonical targets. Explicit output directories may be any safe absolute new or empty local
+paths. Traversal, unsafe filesystem types, changed targets, and non-empty output destinations are
+rejected. Selected-reference and KEGG Mapper/Syntax bundles require an explicit output directory.
 
 ## Generic JSON client configuration
 
@@ -97,7 +98,7 @@ only when the user and work qualify for public academic KEGG access.
       "env": {
         "KEGG_MCP_ACCESS_MODE": "public_academic",
         "KEGG_MCP_ACADEMIC_USE_CONFIRMED": "true",
-        "KEGG_MCP_ALLOWED_ROOTS": "/absolute/project/inputs:/absolute/project/annotations:/absolute/project/analysis"
+        "KEGG_MCP_ALLOWED_ROOTS": "/absolute/project/analysis"
       }
     },
     "kegg-render-mcp": {
@@ -119,12 +120,10 @@ manual deployment needs an existing official DeepKOALA checkout and Python envir
 licensed/offline configuration, and cache rules are in the
 [Renderer companion README](../companions/kegg-render-mcp/README.md).
 
-When Core will consume DeepKOALA output, include every configured DeepKOALA output root in
-`KEGG_MCP_ALLOWED_ROOTS`. Core validates the generated CSV path while retaining the original FASTA
-path as provenance without reopening it. The shared stable output path is required for files larger
-than 5,000,000 bytes. The controlled resource-to-inline recovery route is only for smaller
-successful outputs after the exact typed Core path rejection; it is not a large-file transport. The
-supported suite installer validates this output-root coverage automatically.
+Core consumes a returned DeepKOALA CSV through its explicit absolute path regardless of the two
+components' configured default output roots. No shared-root coverage or resource-to-inline recovery
+route is required, including for files above the inline-input limit. The resolved FASTA path remains
+provenance rather than another Core input.
 
 Use direct absolute stdio commands. Do not use a remote URL, shell activation wrapper, `module
 load`, or output redirection. Stdout is reserved for MCP protocol messages; diagnostics use stderr.

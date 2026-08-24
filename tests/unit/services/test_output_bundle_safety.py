@@ -7,7 +7,6 @@ import pytest
 
 from kegg_mcp.domain.errors import ErrorCode, KeggMcpError
 from kegg_mcp.services._atomic_bundle import (
-    _validate_output_directory_fd,  # pyright: ignore[reportPrivateUsage]
     preflight_text_bundle_output,
 )
 from kegg_mcp.services.output_bundle import _write_files  # pyright: ignore[reportPrivateUsage]
@@ -92,47 +91,24 @@ def test_directory_open_rejects_symlink_components(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", [0o770, 0o707])
-def test_writable_user_owned_ancestor_does_not_start_private_boundary(
+def test_explicit_output_beneath_a_writable_directory_is_accepted(
     tmp_path: Path,
     mode: int,
 ) -> None:
     shared = tmp_path / "shared"
     shared.mkdir(mode=mode)
     shared.chmod(mode)
-    descriptor = os.open(shared, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        assert _validate_output_directory_fd(descriptor, private_boundary=False) is False
-    finally:
-        os.close(descriptor)
+    output = shared / "bundle"
 
+    _write_files(
+        output,
+        {
+            "one.txt": "one",
+            "bundle_manifest.json": "manifest",
+        },
+    )
 
-@pytest.mark.parametrize("mode", [0o770, 0o707])
-def test_writable_user_owned_ancestor_is_rejected_below_private_boundary(
-    tmp_path: Path,
-    mode: int,
-) -> None:
-    unsafe = tmp_path / "unsafe"
-    unsafe.mkdir(mode=mode)
-    unsafe.chmod(mode)
-    descriptor = os.open(unsafe, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        with pytest.raises(OSError):
-            _validate_output_directory_fd(descriptor, private_boundary=True)
-    finally:
-        os.close(descriptor)
-
-
-def test_directory_validation_rejects_non_owner_below_private_boundary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        monkeypatch.setattr(os, "geteuid", lambda: os.fstat(descriptor).st_uid + 1)
-        with pytest.raises(OSError):
-            _validate_output_directory_fd(descriptor, private_boundary=True)
-    finally:
-        os.close(descriptor)
+    assert (output / "one.txt").read_text(encoding="utf-8") == "one"
 
 
 def test_existing_bundle_is_rejected_without_modification(tmp_path: Path) -> None:

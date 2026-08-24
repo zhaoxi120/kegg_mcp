@@ -139,8 +139,8 @@ core MCP tool, and the renderer does not implement a second network client.
 ### `kegg-render-mcp`
 
 The renderer is an independently packaged local stdio MCP server requiring a compatible core
-library. It validates exactly one version-5 handoff supplied as an allowed absolute path or bounded
-inline JSON document.
+library. It validates exactly one version-6 handoff supplied as an explicit absolute local path or
+bounded inline JSON document.
 
 Status is redacted and closed-world. A connectivity probe performs one explicit `INFO` request in a
 live access mode and zero requests in `offline_cache` or `unconfigured` mode. MODULE rendering is
@@ -224,7 +224,8 @@ All three servers use local stdio transport and reserve stdout for protocol traf
 
 Renderer input and output enforce:
 
-- absolute allowed-root paths with lexical traversal, unsafe ancestry, and symlink-escape rejection;
+- explicit absolute local paths without a directory allowlist, canonical input-symlink resolution,
+  and traversal, unsafe filesystem type, replacement-race, and target-change rejection;
 - strict UTF-8 and schema-version validation;
 - bounds on source bytes, targets, identifiers, XML structure, coordinate characters and tokens,
   polyline points and total length, graphic-to-KO associations, dimensions, pixels, SVG nodes,
@@ -285,8 +286,10 @@ renderer. Missing, failed, or incompatible stages stop with their specific diagn
 
 ## Unified Codex deployment
 
-`scripts/install-suite.py` creates three separate runtimes and one generated local plugin without
-merging component processes or state. The [installation guide](installation.md) owns operator
+`scripts/install-suite.py` creates or updates three separate runtimes and one generated local plugin
+without merging component processes or state. It updates only a complete installer-managed root;
+an unmanaged existing root is rejected, and a new Codex task is required after publication. The
+[installation guide](installation.md) owns operator
 configuration and lifecycle; generic clients use
 [manual component deployment](manual-component-deployment.md).
 

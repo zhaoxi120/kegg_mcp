@@ -23,8 +23,8 @@ stream_deepkoala_analysis_view(...)
 
 The three full-record importers accept only inline `str` or `bytes` payloads. The streaming analysis
 entry point consumes a pinned binary stream plus its exact byte count. The service/MCP layer owns
-allowed-root path resolution, descriptor pinning, and final file-identity verification before and
-after streaming intake.
+canonical explicit-local-path resolution, descriptor pinning, and final file-identity verification
+before and after streaming intake.
 
 ## Input limits
 
@@ -117,9 +117,9 @@ row is structurally skipped. Every emitted record source must also appear in thi
 Nullable provenance fields remain `None` when the source did not provide them. Importers never
 infer a tool version, model name, model/database version, annotation date, organism, or domain
 coordinate. Workflow digests are not part of source provenance. A caller may provide an absolute
-`input_path` as provenance. The MCP boundary does not open a distinct provenance path or validate it
-against deployment allowed roots; allowed-root file policy applies to the actual annotation
-`file_path`.
+`input_path` as provenance. The MCP boundary does not open a distinct provenance path. The actual
+annotation `file_path` may be any explicit absolute readable local regular file, and a caller-facing
+symlink resolves to its canonical target.
 
 `SourceProvenance.input_uri` is a sanitized logical identifier and remains distinct from
 `input_path`. It accepts a simple basename or the `inline`, `mcp`, `resource`, and `urn` schemes.
@@ -349,11 +349,11 @@ Downstream analysis consumes this one accepted-KO abstraction. Reports and manif
 a large-file/small-file retention selector or claim that omitted evidence was retained.
 
 The separate `deepkoala-mcp` companion enforces a deployment-selected detailed-output limit no
-greater than 1 GiB and validates and publishes generated files with bounded memory. The supported
-suite installer requires Core's allowed roots to cover every DeepKOALA output root so Core can
-validate and stream the stable companion file directly. A distinct original FASTA path remains
-unchanged provenance and is not reopened under Core's annotation-file path policy. This does not
-expand the separate 5,000,000-byte full-record normalization or bounded-inline contracts.
+greater than 1 GiB and validates and publishes generated files with bounded memory. Core validates
+and streams the stable companion file directly without requiring shared configured roots. The
+canonical FASTA path remains provenance and is not reopened under Core's annotation-file path
+policy. This does not expand the separate 5,000,000-byte full-record normalization or bounded-inline
+contracts.
 
 Compact intake does not change KEGG request, relationship-row, reference-loading, ranking, or
 output budgets. A view that fits the local limits may still contain too many accepted K numbers for

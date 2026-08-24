@@ -145,6 +145,8 @@ Validate `scripts/install-suite.py` independently from the three Python distribu
 - [ ] confirm multi-domain capability defaults off, requires explicit deployment resources, and is
       enabled per request only after status reports it ready;
 - [ ] confirm neither the default nor opt-in path downloads HMMER or KOfam profiles;
+- [ ] update one complete installer-managed suite in place, reject an unmanaged existing root, and
+      preserve or restore the prior managed registration when update publication fails;
 - [ ] when publishing multi-domain support, use operator-provided HMMER, KOfam profiles, and a small
       private FASTA for one real `multi=true` run; verify model and multi provenance without adding
       inputs, profiles, or results to the repository or release artifacts;
@@ -218,12 +220,12 @@ advice.
 - [ ] Native Windows startup fails closed rather than substituting weaker path, ownership, locking,
       or atomic-publication behavior.
 - [ ] DeepKOALA FASTA intake remains streamed and structurally bounded without an aggregate byte
-      cap. It accepts explicit absolute direct regular local files without an input-directory
-      allowlist; other inputs, identifiers, resources, retained bytes, outputs, and summaries
-      remain bounded.
-- [ ] Configured output and handoff roots reject traversal, unsafe ancestry, replacement races,
-      and symlink escape. Direct DeepKOALA inputs retain the same path-shape and race checks without
-      a directory allowlist.
+      cap. It accepts explicit absolute local files without an input-directory allowlist and
+      resolves caller-facing symlinks canonically; other inputs, identifiers, resources, retained
+      bytes, outputs, and summaries remain bounded.
+- [ ] Core and Renderer explicit local inputs and all explicit output destinations work without
+      directory allowlists. Configured roots control only omitted-output allocation. Traversal,
+      unsafe filesystem types, replacement races, and target changes remain rejected.
 - [ ] Outputs never replace existing entries and publish their manifest last.
 - [ ] Result IDs remain opaque, scoped, expiring, and safely indistinguishable when unavailable.
 - [ ] Status, logs, and errors redact credentials, endpoints, environment values, and local paths.
@@ -245,10 +247,9 @@ advice.
       memory under a deployment-selected limit no greater than 1 GiB, 10,000,000 rows, 20,000,000
       expanded assignments, 64 columns, 256 characters per non-empty column name, and 16,384
       characters per NUL-free field. Publication remains no-replace and race-safe.
-- [ ] Suite installation requires Core's allowed roots to cover every DeepKOALA output root. A
-      distinct original FASTA path remains provenance without Core reopening it. The manual
-      output-disjoint resource-to-inline recovery route is limited to 5,000,000 bytes and larger
-      results fail before resource paging with a shared-root repair action.
+- [ ] Core consumes a stable DeepKOALA output directly even when component default output roots are
+      disjoint. The canonical FASTA path remains provenance without Core reopening it, and no
+      resource-to-inline recovery route is used for cross-MCP transport.
 - [ ] DeepKOALA handoff schema version 2 proves exact input/output sequence-ID coverage before
       publication. Single-domain output has exactly `topk` rows per input; multi-domain output has
       at least one row per input. Only bounded aggregate counts enter the handoff and run report.
@@ -272,9 +273,10 @@ advice.
       KEGG request, upload, start a browser, execute an external tool, or parse a downstream result;
       Syntax KO Sequence order is explicitly caller supplied.
 - [ ] All selected-reference and input-handoff files are bounded, owner-only, non-overwriting,
-      transactionally rolled back on failure, and committed by a manifest installed last beneath
-      an allowed root. Reference and report TSV cells are spreadsheet-safe; Mapper/Syntax caller
-      fields remain verbatim after format-breaking control characters are rejected.
+      transactionally rolled back on failure, and committed by a manifest installed last in an
+      explicit safe absolute output directory. Reference and report TSV cells are spreadsheet-safe;
+      Mapper/Syntax caller fields remain verbatim after format-breaking control characters are
+      rejected.
 - [ ] Substance resolution distinguishes PubChem SID from CID and preserves all ChEBI/PubChem
       crosswalk candidates without chemical-identification claims.
 - [ ] KO/pathway-to-gene LINK requires one matching organism scope; unbounded KO-to-all-genes,

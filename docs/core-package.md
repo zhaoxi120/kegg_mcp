@@ -58,14 +58,14 @@ kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
 
 `normalize_ko_annotations` always retains complete bounded evidence.
 `analyze_ko_annotations` always derives a compact sorted unique accepted-KO analysis view. For an
-allowed `annotations.file_path` using `input_format="deepkoala_detailed"`, streaming intake is
+explicit local `annotations.file_path` using `input_format="deepkoala_detailed"`, streaming intake is
 bounded to 1 GiB, 10 million source rows, 20 million expanded assignments, 100,000 unique accepted
 K numbers, 64 columns, 16,384 characters per field, and a 100-item diagnostic preview. The view
 retains aggregate counts and provenance but no record evidence, protein-to-KO mapping, or
 duplicate/conflict accounting. The separate DeepKOALA companion can publish a generated detailed
-CSV up to the same 1 GiB ceiling with bounded-memory validation and publication. The supported suite
-installer ensures the stable output path is covered by Core's allowed roots; Core's inline input
-limit remains separate and smaller.
+CSV up to the same 1 GiB ceiling with bounded-memory validation and publication. Core accepts the
+stable output path directly without requiring shared configured roots; its inline input limit
+remains separate and smaller.
 
 Compact-view bounds do not change any KEGG request, relationship, reference-loading, ranking, or
 output budget. A large accepted-KO set can still exceed automatic KO-to-target mapping limits;
@@ -94,9 +94,11 @@ and work qualify for public academic KEGG access. Non-academic deployments requi
 licensed endpoint. See the [Core MCP contract](mcp-server.md) for the complete environment, tool,
 resource, output-bundle, and retention contract.
 
-Inputs and output directories remain disabled until `KEGG_MCP_ALLOWED_ROOTS` identifies controlled
-absolute roots. KEGG cache payloads, result databases, annotation inputs, and output bundles must
-remain local and out of version control, packages, examples, CI artifacts, and releases.
+Explicit local file inputs are available without `KEGG_MCP_ALLOWED_ROOTS`. Explicit output
+directories may be any safe absolute new or empty local directory. The legacy-named variable only
+configures roots for service-allocated outputs when `output_directory` is omitted. KEGG cache
+payloads, result databases, annotation inputs, and output bundles must remain local and out of
+version control, packages, examples, CI artifacts, and releases.
 
 ## Rights and interpretation
 

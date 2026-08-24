@@ -99,7 +99,6 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
             stream_limits = AnalysisViewImportLimits()
             with open_annotation_file_stream(
                 normalization.file_path,
-                runtime.allowed_roots,
                 max_bytes=stream_limits.max_bytes,
             ) as pinned:
                 source = bind_annotation_file_source(
@@ -119,7 +118,7 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
                 )
             normalization = normalization.model_copy(update={"source": source})
         else:
-            normalization = materialize_annotation_file(normalization, runtime.allowed_roots)
+            normalization = materialize_annotation_file(normalization)
     else:
         if request.ko_text is None:  # pragma: no cover - guarded by the input model
             raise AssertionError("validated analysis input omitted its annotation source")
@@ -168,7 +167,7 @@ def analyze_annotations(context: ToolContext, model: BaseModel) -> ToolOutcome:
 def normalize(context: ToolContext, model: BaseModel) -> ToolOutcome:
     request = cast(NormalizeKoAnnotationsInput, model)
     runtime = context.runtime
-    materialized = materialize_annotation_file(request.to_service_request(), runtime.allowed_roots)
+    materialized = materialize_annotation_file(request.to_service_request())
     resolved_output = resolve_output_directory(
         request.output_directory,
         runtime.allowed_roots,

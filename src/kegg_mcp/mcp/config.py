@@ -38,7 +38,7 @@ ALLOWED_ROOTS_ENV = "KEGG_MCP_ALLOWED_ROOTS"
 
 
 class McpRuntimeConfig(BaseModel):
-    """Validated server dependencies without exposing paths through status."""
+    """Validated server dependencies and optional default output roots."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

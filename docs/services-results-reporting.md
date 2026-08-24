@@ -247,10 +247,11 @@ evidence, protein mappings, and duplicate/conflict accounting were not retained.
 
 ## Output bundles and renderer handoff
 
-The bundle writer serializes service-owned tables and reports into a new or empty allowed-root
-directory, validates the complete planned artifact set, publishes files without replacement, and
-installs the manifest last as the transaction marker. Source-path redaction is applied while
-constructing the manifest rather than by MCP transport.
+The bundle writer serializes service-owned tables and reports into any safe absolute new or empty
+local directory, validates the complete planned artifact set, publishes files without replacement,
+and installs the manifest last as the transaction marker. Configured roots are used only when a
+service allocates an omitted output destination. Source-path redaction is applied while constructing
+the manifest rather than by MCP transport.
 
 Every analysis bundle includes `unique_accepted_kos.tsv` and omits
 `normalized_annotations.tsv` and `protein_ko_mapping.tsv`. Bundle schema version 5 does not expose

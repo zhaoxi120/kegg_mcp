@@ -178,6 +178,7 @@ class InstallRequest:
     allow_locked_dependency_downloads: bool
     dry_run: bool
     allow_deepkoala_install: bool = False
+    previous_version: str | None = None
 
 
 @dataclass
@@ -219,12 +220,15 @@ def _parser() -> argparse.ArgumentParser:
         "--install-root",
         required=True,
         type=Path,
-        help="new absolute private directory for runtimes and the generated local marketplace",
+        help=(
+            "absolute private directory for runtimes and the generated local marketplace; "
+            "an existing installer-managed suite is updated in place"
+        ),
     )
     parser.add_argument(
         "--marketplace-name",
         default=DEFAULT_MARKETPLACE_NAME,
-        help="new Codex marketplace name; existing names are never replaced",
+        help="Codex marketplace name; only the same installer-managed suite may be updated",
     )
     parser.add_argument("--uv", required=True, type=Path, help="absolute uv executable")
     parser.add_argument("--codex", required=True, type=Path, help="absolute Codex executable")
@@ -247,9 +251,8 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-deepkoala-install",
         action="store_true",
         help=(
-            "confirm the first-time fetch of the pinned official DeepKOALA revision and "
-            "installation of its upstream requirements; model updates and multi-domain "
-            "dependencies are excluded"
+            "confirm fetching the pinned official DeepKOALA revision and installing its "
+            "upstream requirements; model updates and multi-domain dependencies are excluded"
         ),
     )
     parser.add_argument(
@@ -680,21 +683,7 @@ def _overlap(first: Path, second: Path) -> bool:
     return first == second or first.is_relative_to(second) or second.is_relative_to(first)
 
 
-def _covered(path: Path, roots: tuple[Path, ...]) -> bool:
-    return any(path == root or path.is_relative_to(root) for root in roots)
-
-
 def _validate_cross_component_paths(config: DeploymentConfig) -> None:
-    if any(not _covered(root, config.core.allowed_roots) for root in config.deepkoala.output_roots):
-        _error(
-            "deployment_path_invalid",
-            "core.allowed_roots must cover every DeepKOALA output root",
-        )
-    if any(not _covered(root, config.core.allowed_roots) for root in config.renderer.allowed_roots):
-        _error(
-            "deployment_path_invalid",
-            "core.allowed_roots must cover every renderer handoff root",
-        )
     states = (config.deepkoala.state_root, config.renderer.state_root, config.kegg.rate_limit_root)
     if any(
         _overlap(first, second)
@@ -963,10 +952,56 @@ def _validate_uv(uv: Path) -> None:
         _error("uv_runtime_unsupported", "the selected uv sync command lacks required controls")
 
 
-def _validate_install_root(install_root: Path, config_path: Path, config: DeploymentConfig) -> Path:
+def _managed_install_version(install_root: Path, marketplace_name: str) -> str:
+    if any(
+        (install_root / name).exists() or (install_root / name).is_symlink()
+        for name in (".incomplete", ".rollback-required")
+    ):
+        _error(
+            "install_root_unmanaged",
+            "the existing install root is not a complete managed suite",
+        )
+    try:
+        manifest_path = _existing_regular_file(
+            install_root / "installation.json",
+            "installation manifest",
+            executable=False,
+            private=True,
+        )
+    except InstallError:
+        _error("install_root_unmanaged", "the existing install root has no valid managed manifest")
+    try:
+        if manifest_path.stat().st_size > MAX_GENERATED_JSON_BYTES:
+            raise ValueError("manifest is too large")
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        _error("install_root_unmanaged", "the existing install root has no valid managed manifest")
+    if not isinstance(document, dict):
+        _error("install_root_unmanaged", "the existing install root has no valid managed manifest")
+    manifest = cast(dict[str, object], document)
+    versions = manifest.get("distribution_versions")
+    core_version = versions.get("kegg-mcp") if isinstance(versions, dict) else None
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("status") != "complete"
+        or manifest.get("marketplace") != marketplace_name
+        or manifest.get("plugin") != PLUGIN_NAME
+        or manifest.get("servers") != list(SERVER_NAMES)
+        or manifest.get("skills") != list(SKILL_NAMES)
+        or not isinstance(core_version, str)
+        or VERSION_PATTERN.fullmatch(core_version) is None
+    ):
+        _error("install_root_unmanaged", "the existing install root is not this managed suite")
+    return core_version
+
+
+def _validate_install_root(
+    install_root: Path,
+    config_path: Path,
+    config: DeploymentConfig,
+    marketplace_name: str,
+) -> tuple[Path, str | None]:
     checked = _absolute_path(str(install_root), "install root")
-    if checked.exists() or checked.is_symlink():
-        _error("install_root_exists", "the install root must not already exist")
     parent = _existing_directory(checked.parent, "install root parent", private=True, writable=True)
     if checked.parent != parent:
         _error("deployment_path_invalid", "the install root parent is invalid")
@@ -978,6 +1013,8 @@ def _validate_install_root(install_root: Path, config_path: Path, config: Deploy
         config.kegg.rate_limit_root,
         config.core.result_store_path,
         *config.core.allowed_roots,
+        *config.deepkoala.output_roots,
+        *config.renderer.allowed_roots,
     )
     if config.kegg.cache_path is not None:
         protected = (*protected, config.kegg.cache_path)
@@ -987,7 +1024,18 @@ def _validate_install_root(install_root: Path, config_path: Path, config: Deploy
         protected = (*protected, config.deepkoala.hmmsearch_executable)
     if any(_overlap(checked, path) for path in protected):
         _error("deployment_path_invalid", "the install root overlaps source or deployment data")
-    return checked
+    backup_root = checked.with_name(f".{checked.name}.update-backup")
+    if backup_root.exists() or backup_root.is_symlink():
+        _error(
+            "update_backup_exists",
+            "a previous update backup must be recovered before installation continues",
+        )
+    if checked.exists() or checked.is_symlink():
+        existing = _existing_directory(checked, "install root", private=True, writable=True)
+        if existing != checked:
+            _error("install_root_unmanaged", "the existing install root is not directly managed")
+        return checked, _managed_install_version(checked, marketplace_name)
+    return checked, None
 
 
 def _request_from_arguments(
@@ -1000,7 +1048,7 @@ def _request_from_arguments(
     if not dry_run and not allow_deepkoala_install:
         _error(
             "deepkoala_install_confirmation_required",
-            "first-time DeepKOALA installation requires explicit user confirmation",
+            "installing the managed DeepKOALA runtime requires explicit user confirmation",
         )
     marketplace_name = cast(str, arguments.marketplace_name)
     if NAME_PATTERN.fullmatch(marketplace_name) is None:
@@ -1008,7 +1056,12 @@ def _request_from_arguments(
     config_path = _existing_regular_file(
         cast(Path, arguments.config), "config", executable=False, private=True
     )
-    install_root = _validate_install_root(cast(Path, arguments.install_root), config_path, config)
+    install_root, previous_version = _validate_install_root(
+        cast(Path, arguments.install_root),
+        config_path,
+        config,
+        marketplace_name,
+    )
     uv = _resolve_executable(cast(Path, arguments.uv), "uv")
     codex = _resolve_executable(cast(Path, arguments.codex), "codex")
     git = _resolve_executable(cast(Path, arguments.git), "git")
@@ -1026,6 +1079,7 @@ def _request_from_arguments(
         allow_locked_dependency_downloads=cast(bool, arguments.allow_locked_dependency_downloads),
         dry_run=dry_run,
         allow_deepkoala_install=allow_deepkoala_install,
+        previous_version=previous_version,
     )
 
 
@@ -1180,13 +1234,48 @@ def _codex_mcp_entries(request: InstallRequest) -> dict[str, dict[str, object]]:
 
 
 def _preflight_codex(request: InstallRequest) -> None:
-    if request.marketplace_name in _codex_marketplaces(request):
-        _error("marketplace_conflict", "the requested Codex marketplace name already exists")
-    if any(name == PLUGIN_NAME for name, _ in _codex_plugins(request)):
-        _error("plugin_conflict", "an installed Codex plugin already uses the suite plugin name")
-    collisions = set(SERVER_NAMES) & _codex_mcps(request)
-    if collisions:
-        _error("mcp_name_conflict", "one or more suite MCP names are already registered in Codex")
+    marketplaces = _codex_marketplaces(request)
+    plugins = _codex_plugins(request)
+    if request.previous_version is None:
+        if request.marketplace_name in marketplaces:
+            _error("marketplace_conflict", "the requested Codex marketplace name already exists")
+        if any(name == PLUGIN_NAME for name, _ in plugins):
+            _error(
+                "plugin_conflict", "an installed Codex plugin already uses the suite plugin name"
+            )
+        collisions = set(SERVER_NAMES) & _codex_mcps(request)
+        if collisions:
+            _error(
+                "mcp_name_conflict", "one or more suite MCP names are already registered in Codex"
+            )
+        return
+
+    registered_root = marketplaces.get(request.marketplace_name)
+    expected_root = request.install_root / "marketplace"
+    try:
+        marketplace_matches = isinstance(registered_root, str) and Path(registered_root).resolve(
+            strict=True
+        ) == expected_root.resolve(strict=True)
+    except OSError:
+        marketplace_matches = False
+    expected_plugin = (PLUGIN_NAME, request.marketplace_name)
+    entries = _codex_mcp_entries(request)
+    if (
+        not marketplace_matches
+        or expected_plugin not in plugins
+        or any(identity[0] == PLUGIN_NAME and identity != expected_plugin for identity in plugins)
+        or not _plugin_is_ready(request, request.previous_version)
+        or not _codex_mcp_bindings_match(request, entries)
+        or not _codex_plugin_cache_matches(
+            expected_root / "plugins" / PLUGIN_NAME,
+            request.previous_version,
+            entries,
+        )
+    ):
+        _error(
+            "managed_install_registration_invalid",
+            "the existing managed suite does not match its active Codex registration",
+        )
 
 
 def _managed_deepkoala_paths(install_root: Path) -> tuple[Path, Path]:
@@ -1989,6 +2078,67 @@ def _register_plugin(
         _error("plugin_verification_failed", "Codex did not cache the exact suite Skill bundle")
 
 
+def _remove_managed_registration(request: InstallRequest) -> None:
+    selector = f"{PLUGIN_NAME}@{request.marketplace_name}"
+    plugin_result = _run_command([str(request.codex), "plugin", "remove", selector, "--json"])
+    if plugin_result.returncode != 0 or _plugin_is_installed(request):
+        _error("update_registration_failed", "the managed Codex plugin could not be removed")
+    marketplace_result = _run_command(
+        [
+            str(request.codex),
+            "plugin",
+            "marketplace",
+            "remove",
+            request.marketplace_name,
+            "--json",
+        ]
+    )
+    if marketplace_result.returncode != 0 or request.marketplace_name in _codex_marketplaces(
+        request
+    ):
+        _error("update_registration_failed", "the managed Codex marketplace could not be removed")
+
+
+def _restore_managed_registration(request: InstallRequest, expected_version: str) -> bool:
+    marketplace_root = request.install_root / "marketplace"
+    selector = f"{PLUGIN_NAME}@{request.marketplace_name}"
+    try:
+        marketplaces = _codex_marketplaces(request)
+        registered_root = marketplaces.get(request.marketplace_name)
+        if request.marketplace_name in marketplaces:
+            if not isinstance(registered_root, str) or Path(registered_root).resolve(
+                strict=True
+            ) != marketplace_root.resolve(strict=True):
+                return False
+        else:
+            result = _run_command(
+                [
+                    str(request.codex),
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    str(marketplace_root),
+                    "--json",
+                ]
+            )
+            if result.returncode != 0:
+                return False
+        if not _plugin_is_installed(request):
+            result = _run_command([str(request.codex), "plugin", "add", selector, "--json"])
+            if result.returncode != 0:
+                return False
+        if not _plugin_is_ready(request, expected_version):
+            return False
+        entries = _codex_mcp_entries(request)
+        return _codex_mcp_bindings_match(request, entries) and _codex_plugin_cache_matches(
+            marketplace_root / "plugins" / PLUGIN_NAME,
+            expected_version,
+            entries,
+        )
+    except (InstallError, OSError):
+        return False
+
+
 def _rollback_codex(request: InstallRequest, journal: RegistrationJournal) -> bool:
     selector = f"{PLUGIN_NAME}@{request.marketplace_name}"
     try:
@@ -2118,7 +2268,7 @@ def _perform_install(
     if not request.allow_deepkoala_install:
         _error(
             "deepkoala_install_confirmation_required",
-            "first-time DeepKOALA installation requires explicit user confirmation",
+            "installing the managed DeepKOALA runtime requires explicit user confirmation",
         )
     identity = _create_install_root(request.install_root)
     journal = RegistrationJournal()
@@ -2198,9 +2348,124 @@ def _perform_install(
     _error("installation_failed", "installation failed unexpectedly and was rolled back")
 
 
-def _safe_summary(snapshot: SourceSnapshot, *, dry_run: bool) -> dict[str, object]:
+def _perform_update(
+    request: InstallRequest, config: DeploymentConfig, snapshot: SourceSnapshot
+) -> None:
+    previous_version = request.previous_version
+    if previous_version is None:
+        _error("install_root_unmanaged", "an update requires an existing managed suite")
+    backup_root = request.install_root.with_name(f".{request.install_root.name}.update-backup")
+    if backup_root.exists() or backup_root.is_symlink():
+        _error("update_backup_exists", "a previous update backup must be recovered first")
+    try:
+        metadata = request.install_root.lstat()
+    except OSError:
+        _error("install_root_unmanaged", "the managed install root is unavailable")
+    identity = (metadata.st_dev, metadata.st_ino)
+
+    try:
+        _remove_managed_registration(request)
+    except BaseException as error:
+        if not _restore_managed_registration(request, previous_version):
+            _record_rollback_failure(
+                request.install_root,
+                request.marketplace_name,
+                error,
+                RegistrationJournal(),
+            )
+            _error(
+                "installation_rollback_failed",
+                "the update could not restore the previous Codex registration",
+            )
+        raise
+
+    moved = False
+    try:
+        request.install_root.replace(backup_root)
+        moved = True
+        _fsync_directory(request.install_root.parent)
+    except (OSError, InstallError) as error:
+        if moved:
+            try:
+                backup_root.replace(request.install_root)
+                _fsync_directory(request.install_root.parent)
+            except (OSError, InstallError):
+                _record_rollback_failure(
+                    backup_root,
+                    request.marketplace_name,
+                    error,
+                    RegistrationJournal(),
+                )
+                _error(
+                    "installation_rollback_failed",
+                    "the managed install root could not be restored after staging failed",
+                )
+        if not _restore_managed_registration(request, previous_version):
+            _record_rollback_failure(
+                request.install_root,
+                request.marketplace_name,
+                error,
+                RegistrationJournal(),
+            )
+            _error(
+                "installation_rollback_failed",
+                "the update could not restore the previous Codex registration",
+            )
+        _error("installation_write_failed", "the managed install root could not be staged")
+
+    try:
+        _perform_install(request, config, snapshot)
+    except BaseException as error:
+        if request.install_root.exists() or request.install_root.is_symlink():
+            _record_rollback_failure(
+                backup_root,
+                request.marketplace_name,
+                error,
+                RegistrationJournal(),
+            )
+            _error(
+                "installation_rollback_failed",
+                "the failed update and previous managed suite require manual recovery",
+            )
+        try:
+            backup_root.replace(request.install_root)
+            _fsync_directory(request.install_root.parent)
+        except (OSError, InstallError):
+            _record_rollback_failure(
+                backup_root,
+                request.marketplace_name,
+                error,
+                RegistrationJournal(),
+            )
+            _error(
+                "installation_rollback_failed",
+                "the previous managed suite could not be restored after a failed update",
+            )
+        if not _restore_managed_registration(request, previous_version):
+            _record_rollback_failure(
+                request.install_root,
+                request.marketplace_name,
+                error,
+                RegistrationJournal(),
+            )
+            _error(
+                "installation_rollback_failed",
+                "the previous Codex registration could not be restored after a failed update",
+            )
+        raise
+
+    if not _remove_install_root(backup_root, identity):
+        _error(
+            "installation_cleanup_failed",
+            "the update completed but its previous managed root could not be removed",
+        )
+
+
+def _safe_summary(
+    snapshot: SourceSnapshot, *, dry_run: bool, updated: bool = False
+) -> dict[str, object]:
     return {
-        "status": "validated" if dry_run else "installed",
+        "status": "validated" if dry_run else ("updated" if updated else "installed"),
         "distribution_versions": snapshot.versions,
         "plugin": PLUGIN_NAME,
         "server_count": len(SERVER_NAMES),
@@ -2224,8 +2489,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         _preflight_codex(request)
         snapshot = _prepare_source_snapshot()
         if not request.dry_run:
-            _perform_install(request, config, snapshot)
-        print(json.dumps(_safe_summary(snapshot, dry_run=request.dry_run), sort_keys=True))
+            if request.previous_version is None:
+                _perform_install(request, config, snapshot)
+            else:
+                _perform_update(request, config, snapshot)
+        print(
+            json.dumps(
+                _safe_summary(
+                    snapshot,
+                    dry_run=request.dry_run,
+                    updated=request.previous_version is not None,
+                ),
+                sort_keys=True,
+            )
+        )
         return 0
     except InstallError as error:
         print(f"ERROR [{error.code}] {error}", file=sys.stderr)

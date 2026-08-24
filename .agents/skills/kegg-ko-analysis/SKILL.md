@@ -23,14 +23,10 @@ description: Search bounded KEGG entries, retrieve typed cards or KEGG-listed Pu
 
 Apply the canonical continuation rules in
 [workflow-selection.md](references/workflow-selection.md#automatic-cross-skill-continuation).
-Cross a Skill boundary only through a successful versioned handoff. Prefer the stable file handoff;
-the only non-file transition is the canonical bounded-resource fallback after Core rejects a
-successful DeepKOALA handoff with the exact typed `file_path` allowed-root error. The preceding
-`deepkoala-annotation` Skill completes that resource read and returns the unchanged inline payload
-only when the successful output is at most 5,000,000 bytes. Larger outputs require a shared stable
-output path covered by Core; the unchanged original input path remains provenance only. Large
-outputs never pass through the model or an inline MCP argument. This Skill never calls an upstream
-or rendering MCP.
+Cross a Skill boundary only through a successful versioned stable file handoff. Core accepts an
+explicit readable local annotation path independently of its configured default output roots, so
+the DeepKOALA CSV passes directly without a shared-root deployment or resource-to-inline fallback.
+The FASTA input path remains provenance only. This Skill never calls an upstream or rendering MCP.
 
 ## Call only core `kegg-mcp`
 

@@ -1,4 +1,4 @@
-"""Private race-resistant writer for committed local text bundles."""
+"""Race-resistant writer for committed local text bundles."""
 
 from __future__ import annotations
 
@@ -93,9 +93,7 @@ def preflight_text_bundle_output(output_directory: Path) -> None:
         fail(
             ErrorCode.OUTPUT_WRITE_FAILED,
             "The requested output bundle directory could not be validated safely.",
-            suggested_action=(
-                "Use a new or empty private directory beneath a configured allowed root."
-            ),
+            suggested_action="Use a safe absolute new or empty local directory.",
         )
 
 
@@ -260,10 +258,7 @@ def _open_pinned_output_directory(
         raise OSError("output directory must be an absolute normalized path")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     current_fd = os.open(os.sep, flags)
-    private_boundary = _validate_output_directory_fd(
-        current_fd,
-        private_boundary=False,
-    )
+    _validate_output_directory_fd(current_fd)
     try:
         components = path.parts[1:]
         if not components:
@@ -310,10 +305,7 @@ def _open_pinned_output_directory(
                         opened_metadata.st_uid,
                     ) != created_identity:
                         raise OSError("created output directory was replaced before opening")
-                private_boundary = _validate_output_directory_fd(
-                    next_fd,
-                    private_boundary=private_boundary,
-                )
+                _validate_output_directory_fd(next_fd)
             except BaseException:
                 os.close(next_fd)
                 if created and created_identity is not None:
@@ -324,9 +316,6 @@ def _open_pinned_output_directory(
                     )
                 raise
             if index == len(components) - 1:
-                if not private_boundary:
-                    os.close(next_fd)
-                    raise OSError("output directory must establish a private ownership boundary")
                 opened_metadata = os.fstat(next_fd)
                 return _PinnedOutputDirectory(
                     descriptor=next_fd,
@@ -350,10 +339,7 @@ def _preflight_output_directory(path: Path) -> None:
         raise OSError("output directory must be an absolute normalized path")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     current_fd = os.open(os.sep, flags)
-    private_boundary = _validate_output_directory_fd(
-        current_fd,
-        private_boundary=False,
-    )
+    _validate_output_directory_fd(current_fd)
     try:
         components = path.parts[1:]
         if not components:
@@ -364,24 +350,18 @@ def _preflight_output_directory(path: Path) -> None:
             try:
                 next_fd = os.open(component, flags, dir_fd=current_fd)
             except FileNotFoundError:
-                # Missing components will be created with mode 0700 by the final
-                # writer and therefore establish a private boundary.
+                # Missing components will be created with mode 0700 by the final writer.
                 if not _directory_allows_creation(os.fstat(current_fd)):
                     raise OSError("output ancestor does not allow directory creation") from None
                 return
             try:
-                private_boundary = _validate_output_directory_fd(
-                    next_fd,
-                    private_boundary=private_boundary,
-                )
+                _validate_output_directory_fd(next_fd)
             except BaseException:
                 os.close(next_fd)
                 raise
             os.close(current_fd)
             current_fd = next_fd
             if index == len(components) - 1:
-                if not private_boundary:
-                    raise OSError("output directory must establish a private ownership boundary")
                 if not _directory_allows_creation(os.fstat(current_fd)):
                     raise OSError("output directory does not allow file creation")
                 if _directory_has_entries(current_fd):
@@ -505,17 +485,10 @@ def _remove_named_empty_directory_if_identity(
         return False
 
 
-def _validate_output_directory_fd(descriptor: int, *, private_boundary: bool) -> bool:
+def _validate_output_directory_fd(descriptor: int) -> None:
     metadata = os.fstat(descriptor)
     if not stat.S_ISDIR(metadata.st_mode):
         raise OSError("output ancestor must be a directory")
-    owned = metadata.st_uid == os.geteuid()
-    privately_owned = owned and not stat.S_IMODE(metadata.st_mode) & 0o022
-    if private_boundary and not owned:
-        raise OSError("output ancestors below the private boundary must retain ownership")
-    if private_boundary and not privately_owned:
-        raise OSError("output ancestors must not be group- or world-writable")
-    return private_boundary or privately_owned
 
 
 __all__ = ["preflight_text_bundle_output", "write_text_bundle"]

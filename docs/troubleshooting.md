@@ -23,8 +23,8 @@ Check the deployment in this order and stop at the first failure:
 4. **MCP startup** — each absolute launcher starts and completes MCP initialization.
 5. **Runtime readiness** — each status tool reports the expected access, roots, and external runtime
    state.
-6. **Handoff roots** — adjacent processes can read the intended stable file while private state
-   roots remain separate.
+6. **Local handoff** — adjacent processes can read the intended explicit stable file while private
+   state roots remain separate.
 7. **External resources** — the configured DeepKOALA checkout, Python environment, and `202502`
    resources are locally ready.
 
@@ -59,10 +59,10 @@ absence in the original installation task alone is never evidence that the insta
 If a fresh task exposes only Core while both inventories remain complete, classify the state as
 `companion_startup_failed`, not `task_reload_required`. Inspect redacted client-side startup logs and
 the component diagnostics. A state-root `already active or unsafe` failure that appears only while
-another task is loaded indicates an installed build without concurrent process scopes; install a
-fixed complete suite into a new private root after every process using the current deployment has
-stopped. Do not assign a different state root to every task, because DeepKOALA's single-runner
-guarantee is deployment-wide. The same error with no other active task still requires ownership,
+another task is loaded indicates an installed build without concurrent process scopes; update the
+installer-managed suite from a fixed complete source after every process using the current
+deployment has stopped. Do not assign a different state root to every task, because DeepKOALA's
+single-runner guarantee is deployment-wide. The same error with no other active task still requires ownership,
 permissions, symlink, and bounded-content checks before replacement.
 
 ### Only the core server is discovered for a FASTA-to-graphic request
@@ -84,9 +84,9 @@ only artifacts required by checked-in lockfiles and declared build requirements.
 authorize Python, Codex, model updates, optional multi-domain resources, or KEGG data. Optional
 resources may be provisioned separately after explicit user authorization.
 
-`--allow-deepkoala-install` is separate: it confirms the initial pinned DeepKOALA revision fetch
-and upstream requirements for one new suite root. Later models and optional multi-domain
-dependencies remain operator-managed.
+`--allow-deepkoala-install` is separate: it confirms the pinned DeepKOALA revision fetch and
+upstream requirements for a new suite or managed in-place update. Later models and optional
+multi-domain dependencies remain operator-managed.
 
 ### Multi-domain mode is unavailable
 
@@ -99,15 +99,16 @@ authorization; the companion and suite installer do not manage that provisioning
 Use the redacted `route_state`, `issue`, and `next_action` returned by
 `get_deepkoala_runner_status`. Repair or replace the configured external resource, restart the
 companion, and check status again. Do not pass a profile or executable path through an MCP request.
-Because the suite installer is fresh-install only, an existing default suite must be replaced by a
-new suite root or a separately managed companion deployment; it cannot be reconfigured in place.
+For an installer-managed suite, update the deployment TOML and rerun the installer against the same
+root and marketplace. An unmanaged or incompletely recorded root cannot be updated in place and
+must be repaired manually before retrying.
 
 ### The deployment TOML is rejected
 
 Use the exact fields documented in [Installation and operation](installation.md). The TOML must be
 an owner-owned non-symlink regular file with no group or other permissions inside a direct
 owner-only parent. Configured paths must be absolute. Private state roots may not overlap each
-other, handoff roots, caches, source trees, or the install root.
+other, configured output roots, caches, source trees, or the install root.
 
 Fix the unsafe path or permission. Do not bypass validation with a symlink alias, unknown key,
 duplicated environment override, or group-writable directory.
@@ -128,8 +129,10 @@ codex mcp list --json
 ```
 
 Do not publish that output. Do not delete or move the install root while Codex still references it.
-The installer has no automatic resume, update, uninstall, or hard-crash recovery command. Escalate
-ambiguous ownership to the maintainer instead of guessing from a matching name.
+The installer has no automatic resume, uninstall, or hard-crash recovery command. Its in-place
+update route accepts only a complete installer-managed root whose active Codex registration matches
+its manifest. Escalate ambiguous ownership to the maintainer instead of guessing from a matching
+name.
 
 ## Startup and configuration
 
@@ -187,36 +190,37 @@ complete cache safety contract.
 ### A local FASTA path is rejected
 
 DeepKOALA FASTA input has no directory allowlist. `PATH_NOT_ALLOWED` with `The FASTA path is
-unavailable or not a supported direct local file.` means the path is not an absolute readable direct
-regular file, contains traversal, uses a symlink, is unavailable, or changed during intake. A Codex
-drag-and-drop path or a file under `Downloads` does not need to be copied or added to deployment
-configuration. Pass its provided absolute path unchanged after correcting the actual file or path
-condition.
+unavailable or not a supported local file.` means the path is not absolute, contains traversal,
+does not resolve to a readable regular file, is unavailable, or changed during intake. A Codex
+drag-and-drop path, a file under `Downloads`, or a caller-facing symlink to such a file does not
+need to be copied or added to deployment configuration. Pass its provided absolute path unchanged
+after correcting the actual file or path condition; the companion records the canonical target.
 
 ### A Core path is rejected
 
-`KEGG_MCP_ALLOWED_ROOTS` contains existing absolute directories separated by the platform path
-separator. Inputs and output directories must remain beneath those roots. Relative paths, missing
-roots, traversal, symlink escapes, and unsafe output ancestry are rejected. `doctor` reports only
-whether handoff is enabled and the number of accepted roots.
+Core accepts explicit absolute local annotation files and explicit safe absolute output directories
+without a directory allowlist. `KEGG_MCP_ALLOWED_ROOTS` retains its legacy name but contains only
+existing roots for automatic output allocation when `output_directory` is omitted. Relative paths,
+traversal, unavailable or non-regular input targets, changed targets, and unsafe filesystem types
+are rejected. Caller-facing input symlinks resolve canonically. `doctor` reports that direct file
+handoff is enabled and the number of configured default output roots without revealing them.
 
-`allowed_root_count=0` with `file_handoff_enabled=false` means only that Core has no configured
-handoff root. It does not establish whether any Skill, companion, or complete suite is installed
-or discovered.
+`allowed_root_count=0` with `file_handoff_enabled=true` means that explicit file handoff remains
+available but automatic output allocation is unavailable. It does not establish whether any Skill,
+companion, or complete suite is installed or discovered.
 
 ### `OUTPUT_ALREADY_EXISTS`
 
 KO-analysis, selected-reference, and external-input bundles do not overwrite entries. Choose a new
 or empty directory; there is no overwrite flag.
 
-### `OUTPUT_WRITE_FAILED` with an allowed output root
+### `OUTPUT_WRITE_FAILED` with an explicit output directory
 
-The bundle writer checks the complete ancestor chain, not only the configured allowed root. From
-the first directory that is both owned by the service user and not group- or world-writable onward,
-every directory must retain those ownership and mode constraints. An owner-owned shared parent such
-as `/lab/<user>` with mode `775` is allowed when the configured root beneath it is private, such as
-mode `700`. If this error persists, verify that the configured root and output descendants are
-user-owned direct directories with no group/world write bit or symlink component.
+The bundle writer opens the complete absolute path without following filesystem entries during
+publication, verifies that the destination is new or empty, and never replaces an existing entry.
+If this error persists, verify that the parent is accessible and writable, every existing path
+component is a directory, and the target did not change during the operation. The output need not
+be beneath a configured default root.
 
 ### `RESULT_NOT_FOUND`
 
@@ -253,6 +257,6 @@ Malformed JSON-RPC commonly means a wrapper wrote banners or debug output to std
 for protocol traffic and send diagnostics to stderr.
 
 A safe support report contains only versions, operating system, redacted `doctor --json` output,
-the structured error code and safe details, and whether input was inline or an allowed-root file.
+the structured error code and safe details, and whether input was inline or an explicit local file.
 Never include tokens, endpoints, environment dumps, usernames, paths, private FASTA/KO data, KEGG
 payloads, or SQLite databases.
