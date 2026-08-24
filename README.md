@@ -82,7 +82,9 @@ step is skipped. Rendering is always optional.
 ## Try it
 
 Once the suite is installed and your files are inside folders allowed by your local configuration,
-prompts can focus on the research task.
+prompts can focus on the research task. Codex desktop drag-and-drop works when the active Codex
+data directory's `attachments` child is included in `deepkoala.input_roots`; the companion accepts
+the generated nested attachment path and privately stages the FASTA itself.
 
 ### Protein FASTA
 

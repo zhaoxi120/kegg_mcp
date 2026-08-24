@@ -184,7 +184,21 @@ complete cache safety contract.
 
 ## File handoff and retained results
 
-### A path is rejected
+### A dragged or uploaded FASTA path is rejected
+
+Codex desktop stores a dragged or uploaded file below a generated child of the active Codex data
+directory's `attachments` directory. `PATH_NOT_ALLOWED` with `The FASTA path is unavailable or
+outside the deployment policy.` means that DeepKOALA could not open that direct file beneath one
+of `DEEPKOALA_MCP_INPUT_ROOTS`. It is not a FASTA-extension allowlist.
+
+For a Codex attachment, configure the stable `attachments` directory itself as one DeepKOALA input
+root through the suite deployment TOML, while retaining any project input roots. Do not add the
+attachment root to DeepKOALA output roots or Core allowed roots, allow the entire home or temporary
+directory, or copy the FASTA with an LLM-launched shell command. The companion already validates
+and privately stages accepted input. Because suite installation is fresh-install only, activate
+the corrected configuration through a new installation root and continue in a new Codex task.
+
+### A Core path is rejected
 
 `KEGG_MCP_ALLOWED_ROOTS` contains existing absolute directories separated by the platform path
 separator. Inputs and output directories must remain beneath those roots. Relative paths, missing

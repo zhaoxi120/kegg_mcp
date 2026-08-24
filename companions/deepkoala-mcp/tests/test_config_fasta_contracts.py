@@ -412,6 +412,26 @@ def test_stage_path_is_allowlisted_and_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
+def test_stage_accepts_a_nested_codex_attachment_path(tmp_path: Path) -> None:
+    attachments = tmp_path / "attachments"
+    attachment_directory = attachments / "01234567-89ab-cdef-0123-456789abcdef"
+    job = tmp_path / "job"
+    attachment_directory.mkdir(parents=True)
+    job.mkdir(mode=0o700)
+    source = attachment_directory / "proteins.faa"
+    source.write_text(">p\nMPEPTIDE\n", encoding="ascii")
+
+    staged_result = stage_fasta(
+        fasta_path=str(source),
+        input_roots=(attachments.resolve(),),
+        job_directory=job,
+        max_sequences=10,
+    )
+
+    assert staged_result.input_path == source.resolve()
+    assert (job / "input.fasta").read_text(encoding="ascii") == ">p\nMPEPTIDE\n"
+
+
 def test_stage_accepts_large_valid_fasta_within_sequence_limits(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     job = tmp_path / "job"
