@@ -615,7 +615,7 @@ async def test_symlink_input_and_arbitrary_explicit_output_are_accepted(
     async with _manager(runtime_config, runner) as manager:
         started = await manager.run(request)
         assert await _wait_terminal(manager, started.job.job_id) is JobState.SUCCEEDED
-        completed = manager.get(started.job.job_id)
+        completed = await manager.get_job(started.job.job_id)
 
     assert completed.handoff is not None
     assert completed.handoff.input_path == str(source.resolve())

@@ -980,7 +980,9 @@ def _managed_install_version(install_root: Path, marketplace_name: str) -> str:
         _error("install_root_unmanaged", "the existing install root has no valid managed manifest")
     manifest = cast(dict[str, object], document)
     versions = manifest.get("distribution_versions")
-    core_version = versions.get("kegg-mcp") if isinstance(versions, dict) else None
+    core_version = (
+        cast(dict[str, object], versions).get("kegg-mcp") if isinstance(versions, dict) else None
+    )
     if (
         manifest.get("schema_version") != 1
         or manifest.get("status") != "complete"

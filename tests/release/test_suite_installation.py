@@ -1771,6 +1771,9 @@ def test_failed_managed_update_restores_previous_suite(
         registrations_restored += 1
         return True
 
+    def rollback(*_: object) -> bool:
+        return True
+
     monkeypatch.setattr(INSTALLER_MODULE, "_install_runtimes", install_runtimes)
     monkeypatch.setattr(INSTALLER_MODULE, "_install_managed_deepkoala", no_op)
     monkeypatch.setattr(INSTALLER_MODULE, "_verify_distribution_versions", no_op)
@@ -1778,7 +1781,7 @@ def test_failed_managed_update_restores_previous_suite(
     monkeypatch.setattr(INSTALLER_MODULE, "_register_plugin", register)
     monkeypatch.setattr(INSTALLER_MODULE, "_remove_managed_registration", no_op)
     monkeypatch.setattr(INSTALLER_MODULE, "_restore_managed_registration", restore)
-    monkeypatch.setattr(INSTALLER_MODULE, "_rollback_codex", lambda *_: True)
+    monkeypatch.setattr(INSTALLER_MODULE, "_rollback_codex", rollback)
 
     INSTALLER_MODULE._perform_install(request, config, snapshot)
     sentinel = request.install_root / "previous-suite.txt"
