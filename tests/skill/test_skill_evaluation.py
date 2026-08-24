@@ -267,7 +267,7 @@ def test_deepkoala_handoff_uses_direct_explicit_input_path() -> None:
         "without a shared-root deployment or resource-to-inline fallback",
         "configured `allowed_roots` are only default output-allocation roots",
         "use its stable `annotations_path` directly",
-        "This Skill does not call the companion MCP",
+        "Do not call the companion MCP",
         "Do not rerun annotation or rewrite the CSV",
     ):
         assert fragment in normalized

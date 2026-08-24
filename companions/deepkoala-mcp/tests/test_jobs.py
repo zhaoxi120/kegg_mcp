@@ -602,7 +602,7 @@ async def test_symlink_input_and_arbitrary_explicit_output_are_accepted(
 ) -> None:
     runner = SuccessfulRunner()
     source = tmp_path / "source.faa"
-    source.write_text(">p\nM\n", encoding="ascii")
+    source.write_text(">protein-1\nMPEPTIDE\n", encoding="ascii")
     symlink = tmp_path / "input-link.faa"
     symlink.symlink_to(source)
     external_parent = tmp_path / "unapproved"
