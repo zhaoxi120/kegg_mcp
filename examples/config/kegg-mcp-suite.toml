@@ -32,7 +32,14 @@ allowed_roots = [
 # The suite installer creates a private DeepKOALA checkout and environment under
 # the installation root after --allow-deepkoala-install is explicitly supplied.
 state_root = "/absolute/private/path/to/kegg-suite/deepkoala-state"
-input_roots = ["/absolute/shared/path/to/kegg-suite/inputs"]
+# Include the active Codex data directory's attachments child to accept files
+# added through desktop drag and drop. DeepKOALA validates and privately stages
+# the attached file; it does not require a caller-created copy. Replace the
+# placeholder with the resolved absolute path; TOML does not expand `~`.
+input_roots = [
+  "/absolute/path/to/codex/attachments",
+  "/absolute/shared/path/to/kegg-suite/inputs",
+]
 output_roots = ["/absolute/shared/path/to/kegg-suite/analysis"]
 allowed_models = ["full", "frag"]
 cpu_threads = 2

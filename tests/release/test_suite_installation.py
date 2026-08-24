@@ -73,6 +73,7 @@ def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
     private = _mkdir(tmp_path / "private", private=True)
     shared = _mkdir(tmp_path / "shared")
     input_root = _mkdir(shared / "input")
+    attachment_root = _mkdir(shared / "codex-attachments")
     output_root = _mkdir(shared / "output")
     external_python = tmp_path / "deepkoala-python"
     external_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -84,6 +85,7 @@ def _deployment_paths(tmp_path: Path) -> dict[str, Path]:
         "private": private,
         "shared": shared,
         "input": input_root,
+        "attachments": attachment_root,
         "output": output_root,
         "python": external_python,
         "profiles": _mkdir(tmp_path / "profiles"),
@@ -238,6 +240,7 @@ def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path
             core_state / "results.sqlite3"
         ),
         "/absolute/shared/path/to/kegg-suite/inputs": str(paths["input"]),
+        "/absolute/path/to/codex/attachments": str(paths["attachments"]),
         "/absolute/shared/path/to/kegg-suite/analysis": str(paths["output"]),
         "/absolute/private/path/to/kegg-suite/deepkoala-state": str(paths["deep_state"]),
         "/absolute/private/path/to/kegg-suite/renderer-state": str(paths["render_state"]),
@@ -258,7 +261,10 @@ def test_tracked_example_config_is_accepted_by_the_real_installer(tmp_path: Path
     assert config.kegg.rate_limit_root == paths["rate"].resolve()
     assert config.core.result_store_path == (core_state / "results.sqlite3").resolve()
     assert config.core.allowed_roots == (paths["output"].resolve(),)
-    assert config.deepkoala.input_roots == (paths["input"].resolve(),)
+    assert config.deepkoala.input_roots == (
+        paths["attachments"].resolve(),
+        paths["input"].resolve(),
+    )
     assert config.deepkoala.output_roots == (paths["output"].resolve(),)
     assert config.renderer.allowed_roots == (paths["output"].resolve(),)
 

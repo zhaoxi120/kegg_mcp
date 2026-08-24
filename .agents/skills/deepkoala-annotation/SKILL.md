@@ -12,7 +12,10 @@ description: Run a configured local DeepKOALA companion on an allowlisted protei
    directory always wins and is passed unchanged. Otherwise, omit `output_directory`; the companion
    allocates a fresh directory beneath its configured project output root. Do not guess an output
    root from the FASTA path or create a directory with a shell command. An explicit directory may
-   be new or empty and owner-only; never select an existing non-empty directory.
+   be new or empty and owner-only; never select an existing non-empty directory. Pass a Codex
+   drag-and-drop attachment's provided absolute path unchanged; do not copy it into a guessed input
+   root. The deployment may explicitly allow the stable Codex `attachments` directory, including
+   its generated child directories, as a DeepKOALA input root.
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency

@@ -61,10 +61,17 @@ Example manual configuration:
 export DEEPKOALA_MCP_CHECKOUT=/absolute/path/to/DeepKOALA
 export DEEPKOALA_MCP_PYTHON=/absolute/path/to/deepkoala-env/bin/python
 export DEEPKOALA_MCP_STATE_ROOT=/absolute/private/deepkoala-mcp-state
-export DEEPKOALA_MCP_INPUT_ROOTS=/absolute/project/inputs
+export DEEPKOALA_MCP_INPUT_ROOTS=/absolute/path/to/codex/attachments:/absolute/project/inputs
 export DEEPKOALA_MCP_OUTPUT_ROOTS=/absolute/project/results
 deepkoala-mcp doctor --json
 ```
+
+For Codex desktop drag and drop, explicitly include the existing `attachments` directory beneath
+the active Codex data directory as an input root. Codex-generated child directories are accepted;
+the file itself must remain a direct regular file. Use the resolved absolute path because shell
+examples and deployment TOML must not rely on `~` expansion. Do not allow the entire Codex data
+directory or use the attachment root for output. The companion validates and privately stages
+accepted FASTA input, so the client does not need to copy it into a project input root.
 
 For a non-Codex MCP client, configure the absolute installed command with `args: ["serve"]` and the
 same environment. The generated Codex plugin already provides this registration for suite installs.
