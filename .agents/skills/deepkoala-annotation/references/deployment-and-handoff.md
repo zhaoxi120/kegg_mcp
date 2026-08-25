@@ -51,10 +51,10 @@ network requests.
 ## Direct local FASTA intake
 
 DeepKOALA accepts an explicit absolute local FASTA path without an input-directory allowlist and
-privately stages the validated file before execution. Pass a Codex drag-and-drop path, a file under
-`Downloads`, or a project path unchanged; do not create a shell copy or add its parent directory to
-deployment configuration. A caller-facing symlink resolves to its canonical readable regular-file
-target, which is retained as provenance without being reopened by Core.
+privately stages the validated file before execution. Pass the provided path unchanged; no
+input-root configuration or caller-created copy is needed. A caller-facing symlink resolves to its
+canonical readable regular-file target, which is retained as provenance without being reopened by
+Core.
 
 If `run_deepkoala_job` returns `PATH_NOT_ALLOWED` with `The FASTA path is unavailable or not a
 supported local file.`, the path is relative, contains traversal, does not resolve to a readable

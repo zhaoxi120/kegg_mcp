@@ -404,12 +404,12 @@ def test_stage_explicit_path_is_privately_copied(tmp_path: Path) -> None:
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600
 
 
-def test_stage_accepts_a_nested_codex_attachment_path_without_root_config(tmp_path: Path) -> None:
-    attachment_directory = tmp_path / "attachments" / "01234567-89ab-cdef-0123-456789abcdef"
+def test_stage_accepts_a_nested_explicit_path_without_root_config(tmp_path: Path) -> None:
+    caller_directory = tmp_path / "caller-files" / "nested"
     job = tmp_path / "job"
-    attachment_directory.mkdir(parents=True)
+    caller_directory.mkdir(parents=True)
     job.mkdir(mode=0o700)
-    source = attachment_directory / "proteins.faa"
+    source = caller_directory / "proteins.faa"
     source.write_text(">p\nMPEPTIDE\n", encoding="ascii")
 
     staged_result = stage_fasta(

@@ -77,8 +77,7 @@ def test_explicit_local_fasta_path_needs_no_input_root_route() -> None:
     normalized = " ".join(CORPUS.split())
     for fragment in (
         "DeepKOALA accepts an explicit absolute local FASTA path",
-        "Pass a Codex drag-and-drop attachment's provided absolute path unchanged",
-        "a file under `Downloads`",
+        "Pass the provided absolute FASTA path unchanged",
         "resolves caller-facing symlinks to the canonical regular file",
         "`PATH_NOT_ALLOWED`",
         "without an input-directory allowlist",
