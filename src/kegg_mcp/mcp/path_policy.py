@@ -84,7 +84,7 @@ def materialize_annotation_file(
     if request.file_path is None:
         return request
     try:
-        content, path = _read_local_file(
+        content, path = _access_local_file(
             request.file_path,
             max_bytes=request.import_limits.max_bytes,
         )
@@ -189,14 +189,6 @@ def resolve_output_directory(
         return candidate.resolve(strict=False)
     except (OSError, RuntimeError):
         _raise_invalid_local_path("output_directory")
-
-
-def _read_local_file(
-    value: str,
-    *,
-    max_bytes: int,
-) -> tuple[bytes, Path]:
-    return _access_local_file(value, max_bytes=max_bytes)
 
 
 def _access_local_file(

@@ -13,10 +13,9 @@ description: Run a configured local DeepKOALA companion on an explicit absolute 
    allocates a fresh directory beneath its configured project output root. Do not guess an output
    root from the FASTA path or create a directory with a shell command. An explicit directory may
    be anywhere local, but it must be new or empty; never select an existing non-empty directory.
-   Pass a Codex drag-and-drop attachment's provided absolute path unchanged; do not copy it into a
-   guessed input root. DeepKOALA accepts explicit absolute local FASTA paths without an
-   input-directory allowlist, resolves caller-facing symlinks to the canonical regular file, and
-   privately stages the validated content.
+   Pass the provided absolute FASTA path unchanged. DeepKOALA accepts explicit absolute local FASTA
+   paths without an input-directory allowlist, resolves caller-facing symlinks to the canonical
+   regular file, and privately stages the validated content.
 2. DeepKOALA is the preferred first FASTA annotation route unless the user explicitly selected
    another annotator. In that case, stop this Skill and resume core analysis only after the selected
    route supplies supported KO evidence. Otherwise require the declared `deepkoala-mcp` dependency

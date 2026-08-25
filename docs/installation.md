@@ -172,13 +172,10 @@ beneath `/absolute/project/annotations`, while Core and Renderer output goes ben
 `/absolute/project/analysis`. Any safe absolute explicit output path still takes precedence and
 need not be beneath a configured root.
 
-Pass an explicit absolute FASTA path unchanged, whether it comes from Codex desktop drag and drop,
-`Downloads`, or a project directory. DeepKOALA accepts direct readable regular local files without
-an input-root setting, then validates and stages the FASTA into private job state before running the
-annotator. Caller-facing FASTA symlinks resolve to their canonical readable regular-file targets.
-Omit `output_directory` unless the user selected an explicit output location. Core consumes the
-generated annotation at its returned absolute path regardless of root configuration and treats the
-resolved FASTA path as provenance rather than another input.
+DeepKOALA accepts the explicit absolute FASTA path supplied with each job and needs no input-root
+setting. Omit `output_directory` unless the user selected an explicit output location. Core
+consumes the generated annotation at its returned absolute path regardless of root configuration
+and treats the resolved FASTA path as provenance rather than another input.
 
 Protect the file and its direct parent:
 
