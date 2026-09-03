@@ -40,7 +40,7 @@ protein FASTA
   -> deepkoala-mcp
   -> deepkoala_annotations.csv plus source provenance
   -> kegg-mcp
-  -> output bundle plus render_input.json version 6
+  -> output bundle plus render_input.json version 7
   -> kegg-render-mcp
   -> bounded static SVG or PNG artifacts
 ```
@@ -80,7 +80,7 @@ The repository keeps three process boundaries:
 | --- | --- | --- |
 | `kegg-mcp` | Import KO evidence, perform bounded typed KEGG query and evidence routing, analyze, retain results, and prepare controlled local handoffs | Running an annotator, parsing KGML, rendering images, executing statistical enrichment or external KEGG web tools, or performing arbitrary graph analysis |
 | `deepkoala-mcp` | Validate an explicit local FASTA, run one controlled external DeepKOALA job, and deliver detailed annotation files | KEGG analysis, KO decision normalization, model updates, or multi-domain installation |
-| `kegg-render-mcp` | Validate a version 6 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
+| `kegg-render-mcp` | Validate a version 7 handoff, retrieve allowed pathway assets, and render static artifacts | Annotation inference, KO normalization, MODULE recomputation, or pathway-coverage recomputation |
 
 ### Platform boundary
 
@@ -333,7 +333,7 @@ support an organism-specific pathway claim.
 `PathwaySpec` validates the namespace, canonicalizes an omitted `map` view to `ko`, and
 de-duplicates paired views by pathway number. Global and overview references require explicit core
 analysis opt-in and a warning. A canonical KO target with an evaluated denominator and complete
-detected evidence is renderable through the version 6 handoff; `map` and organism references remain
+detected evidence is renderable through the version 7 handoff; `map` and organism references remain
 summary-only renderer targets.
 
 Pathway output does not contain `pathway_present`. Coverage must not be described as pathway
@@ -433,13 +433,13 @@ configuration, tool, lifecycle, and detailed handoff behavior.
 
 ## Renderer contract
 
-The renderer consumes the Core's immutable `render_input.json` schema version 6 and
+The renderer consumes the Core's immutable `render_input.json` schema version 7 and
 `AnalysisExecutionProvenance` version 5. It never normalizes annotations, chooses another KO
 selection policy, or recomputes MODULE completion, block coverage, pathway denominators, or
 coverage ratios.
-It produces bounded static regular-pathway box overlays, explicitly opted-in canonical KO
-global/overview line overlays, and project-owned MODULE logic diagrams. Broad maps remain excluded
-from automatic Top-N selection and carry conservative descriptive warnings when explicitly used.
+It produces bounded static regular-pathway box overlays and explicitly opted-in canonical KO
+global/overview line overlays. Broad maps remain excluded from automatic Top-N selection and carry
+conservative descriptive warnings when explicitly used.
 
 BRITE hierarchy results and annotation mapping audits are not renderer inputs. The renderer does
 not query or visualize those artifacts, traverse their relationships, or recompute their counts.

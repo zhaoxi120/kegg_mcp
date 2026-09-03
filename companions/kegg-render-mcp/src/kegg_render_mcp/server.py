@@ -41,7 +41,6 @@ from kegg_render_mcp.contracts import (
     RenderAnalysisBundleInput,
     RendererStatus,
     RenderMcpError,
-    RenderModuleInput,
     RenderPathwayInput,
     RenderResult,
     SafeDetail,
@@ -128,7 +127,7 @@ async def _handle_bundle(runtime: RendererRuntime, request: BaseModel) -> _ToolE
         formats=request.formats,
         output_directory=request.output_directory,
     )
-    return _ToolExecution(result, f"Rendered {len(result.target_ids)} bounded target(s).")
+    return _ToolExecution(result, f"Rendered {len(result.target_ids)} bounded pathway target(s).")
 
 
 async def _handle_pathway(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
@@ -141,18 +140,6 @@ async def _handle_pathway(runtime: RendererRuntime, request: BaseModel) -> _Tool
         output_directory=request.output_directory,
     )
     return _ToolExecution(result, "Rendered one pathway evidence overlay.")
-
-
-async def _handle_module(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
-    assert isinstance(request, RenderModuleInput)
-    result = await runtime.service.render(
-        render_input_path=request.render_input_path,
-        render_input_json=request.render_input_json,
-        target_ids=(request.target_id,),
-        formats=request.formats,
-        output_directory=request.output_directory,
-    )
-    return _ToolExecution(result, "Rendered one MODULE evidence logic diagram.")
 
 
 async def _handle_delete(runtime: RendererRuntime, request: BaseModel) -> _ToolExecution:
@@ -180,12 +167,6 @@ _PATHWAY_ANNOTATIONS = types.ToolAnnotations(
     destructiveHint=False,
     idempotentHint=False,
     openWorldHint=True,
-)
-_MODULE_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=False,
 )
 _DELETE_ANNOTATIONS = types.ToolAnnotations(
     readOnlyHint=False,
@@ -215,10 +196,10 @@ _TOOL_SPECS = (
     ),
     _ToolSpec(
         name="render_analysis_bundle",
-        title="Render selected analysis targets",
+        title="Render selected pathway targets",
         description=(
             "Validate exactly one path or inline handoff and render one through "
-            f"{MAX_TARGETS} selected targets."
+            f"{MAX_TARGETS} selected pathway targets."
         ),
         input_model=RenderAnalysisBundleInput,
         output_model=RenderResult,
@@ -236,15 +217,6 @@ _TOOL_SPECS = (
         output_model=RenderResult,
         annotations=_PATHWAY_ANNOTATIONS,
         handler=_handle_pathway,
-    ),
-    _ToolSpec(
-        name="render_module",
-        title="Render one MODULE",
-        description="Render one closed-world logic diagram from authoritative core AST and states.",
-        input_model=RenderModuleInput,
-        output_model=RenderResult,
-        annotations=_MODULE_ANNOTATIONS,
-        handler=_handle_module,
     ),
     _ToolSpec(
         name="delete_render_result",
@@ -342,9 +314,8 @@ def create_server(runtime: RendererRuntime | None = None) -> Server[object]:
             "Render current kegg-mcp render_input.json version "
             f"{REQUIRED_RENDER_INPUT_SCHEMA_VERSION} handoffs as bounded static SVG and PNG "
             "artifacts. "
-            "Pathway graphics visualize unique accepted K-number annotations; "
-            "MODULE diagrams preserve the authoritative core AST and completion results. "
-            "Graphics do not prove biological activity or phenotype."
+            "Pathway graphics visualize unique accepted K-number annotations without proving "
+            "biological activity or phenotype."
         ),
         lifespan=lifespan,
     )
@@ -491,7 +462,6 @@ def _mcp_input_schema(input_model: type[BaseModel]) -> dict[str, object]:
     if input_model in {
         RenderAnalysisBundleInput,
         RenderPathwayInput,
-        RenderModuleInput,
     }:
         _expand_render_source_alternatives(schema)
     return schema

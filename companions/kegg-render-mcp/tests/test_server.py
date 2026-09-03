@@ -264,7 +264,7 @@ async def test_core_asset_errors_keep_stable_actionable_renderer_structure(
 
 
 @pytest.mark.asyncio
-async def test_discovery_declares_six_strict_tools_and_two_resources(
+async def test_discovery_declares_five_strict_tools_and_two_resources(
     runtime_config: RendererRuntimeConfig,
 ) -> None:
     runtime = RendererRuntime(runtime_config, RendererService(runtime_config, SyntheticProvider()))
@@ -285,7 +285,6 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert probe_annotations.idempotentHint is False
         assert probe_annotations.openWorldHint is True
         assert _tool(tools, "render_pathway").annotations.openWorldHint is True  # type: ignore[union-attr]
-        assert _tool(tools, "render_module").annotations.openWorldHint is False  # type: ignore[union-attr]
         delete_annotations = _tool(tools, "delete_render_result").annotations
         assert delete_annotations is not None
         assert delete_annotations.destructiveHint is True
@@ -322,9 +321,7 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
         assert target_array["minItems"] == 1
         assert target_array["maxItems"] == 32
         assert target_ids["uniqueItems"] is True
-        assert cast(dict[str, object], target_array["items"])["pattern"] == (
-            r"^(?:ko[0-9]{5}|M[0-9]{5})$"
-        )
+        assert cast(dict[str, object], target_array["items"])["pattern"] == r"^ko[0-9]{5}$"
 
         alternatives = cast(list[dict[str, object]], render_schema["oneOf"])
         assert [item["required"] for item in alternatives] == [
@@ -360,21 +357,26 @@ async def test_discovery_declares_six_strict_tools_and_two_resources(
             )
         )
         assert empty_target_errors
-
-        for name in ("render_pathway", "render_module"):
-            one_schema = _tool(tools, name).inputSchema
-            assert set(cast(dict[str, object], one_schema["properties"])) == {
-                "render_input_path",
-                "render_input_json",
-                "target_id",
-                "output_directory",
-                "formats",
-            }
-            assert all(
-                set(cast(dict[str, object], branch["properties"]))
-                == set(cast(dict[str, object], one_schema["properties"]))
-                for branch in cast(list[dict[str, object]], one_schema["oneOf"])
+        module_target_errors = list(
+            validator.iter_errors(  # pyright: ignore[reportUnknownMemberType]
+                {"render_input_path": "/allowed/render_input.json", "target_ids": ["M00001"]}
             )
+        )
+        assert module_target_errors
+
+        one_schema = _tool(tools, "render_pathway").inputSchema
+        assert set(cast(dict[str, object], one_schema["properties"])) == {
+            "render_input_path",
+            "render_input_json",
+            "target_id",
+            "output_directory",
+            "formats",
+        }
+        assert all(
+            set(cast(dict[str, object], branch["properties"]))
+            == set(cast(dict[str, object], one_schema["properties"]))
+            for branch in cast(list[dict[str, object]], one_schema["oneOf"])
+        )
 
 
 @pytest.mark.asyncio
@@ -392,7 +394,7 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
             cast(dict[str, object], status.structuredContent["result"])["data"],  # type: ignore[index]
         )
         bounds = cast(dict[str, object], status_data["bounds"])
-        assert status_data["render_input_schema_version"] == "6"
+        assert status_data["render_input_schema_version"] == "7"
         assert "render_input_schema_version" in RendererStatus.model_json_schema()["required"]
         assert bounds["max_results"] == runtime_config.limits.max_results
         assert bounds["max_xml_depth"] == runtime_config.limits.max_xml_depth
@@ -416,7 +418,7 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
             {
                 "render_input_path": str(render_input_file),
                 "formats": ["svg", "png"],
-                "target_ids": ["ko00010", "M00001"],
+                "target_ids": ["ko00010"],
             },
         )
         _validate(_tool(tools, "render_analysis_bundle"), rendered)
@@ -437,21 +439,11 @@ async def test_memory_transport_renders_reads_binary_and_deletes(
         assert isinstance(png_content, types.BlobResourceContents)
         assert png_content.mimeType == "image/png"
         assert isinstance(png_content.blob, str)
-        svg = await session.read_resource(AnyUrl(f"kegg-render://results/{render_id}/M00001.svg"))
+        svg = await session.read_resource(AnyUrl(f"kegg-render://results/{render_id}/ko00010.svg"))
         svg_content = svg.contents[0]
         assert isinstance(svg_content, types.TextResourceContents)
         assert svg_content.mimeType == "image/svg+xml"
         assert "<svg" in svg_content.text
-
-        inline = await session.call_tool(
-            "render_module",
-            {
-                "render_input_json": render_input_file.read_text(encoding="utf-8"),
-                "target_id": "M00001",
-            },
-        )
-        _validate(_tool(tools, "render_module"), inline)
-        assert inline.isError is False
 
         pathway = await session.call_tool(
             "render_pathway",
@@ -508,11 +500,11 @@ async def test_invalid_request_is_actionable_and_unconfigured_probe_is_classifie
     async with create_connected_server_and_client_session(create_server(runtime)) as session:
         tools = (await session.list_tools()).tools
         invalid = await session.call_tool(
-            "render_module",
-            {"render_input_path": str(render_input_file), "target_id": "ko00010"},
+            "render_pathway",
+            {"render_input_path": str(render_input_file), "target_id": "M00001"},
         )
         assert invalid.isError is True
-        _validate(_tool(tools, "render_module"), invalid)
+        _validate(_tool(tools, "render_pathway"), invalid)
         invalid_error = cast(dict[str, object], invalid.structuredContent["error"])  # type: ignore[index]
         invalid_details = cast(list[dict[str, str]], invalid_error["safe_details"])
         assert {item["name"]: item["value"] for item in invalid_details} == {

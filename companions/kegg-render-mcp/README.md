@@ -1,23 +1,32 @@
 # kegg-render-mcp
 
 `kegg-render-mcp` is the independently packaged local stdio renderer for KEGG annotation-evidence
-graphics. It consumes the compact `render_input.json` schema version 6 handoff produced by a
+graphics. It consumes the compact `render_input.json` schema version 7 handoff produced by a
 compatible `kegg-mcp` analysis. It never imports annotation tables, assigns K numbers, evaluates
 MODULE completion, or recomputes pathway coverage.
 
-It supports regular canonical `koNNNNN` box overlays, explicitly opted-in canonical KO
-global/overview total-map line overlays from one matching KEGG PNG/KGML pair, and project-owned
-MODULE logic diagrams from the authoritative core AST. SVG is canonical, PNG is an optional bounded
-derivative, and artifacts are available through local directories and scoped MCP resources.
+It supports regular canonical `koNNNNN` box overlays and explicitly opted-in canonical KO
+global/overview total-map line overlays from one matching KEGG PNG/KGML pair. SVG is canonical,
+PNG is an optional bounded derivative, and artifacts are available through local directories and
+scoped MCP resources.
 
 Unique accepted K numbers use a solid vivid-red (`#FF0000`) overlay. Duplicate annotation records
 do not create duplicate evidence or overlays. Rejected records are excluded, and unmatched graphics
 remain unchanged. Original pathway-category colors in the source PNG are background context, not
 evidence of biological presence or absence.
 
+The pathway footer leads with a bold pathway identifier and name, followed by core-supplied
+descriptive KO coverage on its own line. The heading, coverage, annotation credit, legend labels,
+and evidence key use one enlarged font size. The footer credits DeepKOALA and its `full` or
+display-normalized `fragment` model when the handoff source provenance supports that attribution,
+then ends with the accepted-annotation evidence key. It omits interpretation text, reference
+namespace, and analysis-unit labels; the upstream analysis report and renderer manifest retain the
+necessary interpretation and provenance. Warnings remain available in result metadata and
+`render_manifest.json` rather than being drawn into the image footer.
+
 Core continues to exclude Global, Overview, and higher-level Overview maps from automatic Top-N
 selection. An explicit broad target is renderable only when Core evaluated a canonical KO reference
-with `allow_global_or_overview=true` and emitted complete target evidence in the version 6 handoff.
+with `allow_global_or_overview=true` and emitted complete target evidence in the version 7 handoff.
 The renderer follows bounded KGML line coordinates while preserving arrows already present in the
 source PNG; it does not reconstruct arrow direction or infer pathway direction, activity,
 completeness, flux, phenotype, or experimental validation. `map` and organism-specific targets
@@ -80,7 +89,7 @@ access mode explicitly.
 | `public_academic` | Live public KEGG access for eligible academic use; requires `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true`. |
 | `licensed` | Set `KEGG_RENDER_MCP_LICENSED_USE_CONFIRMED=true` and `KEGG_RENDER_MCP_LICENSED_ENDPOINT` for an authorized HTTPS endpoint. |
 | `offline_cache` | Set `KEGG_RENDER_MCP_CACHE_PATH` to one existing Core-compatible cache; access is network-disabled and read-only. |
-| `unconfigured` | Default; MODULE-only rendering with no pathway asset access. |
+| `unconfigured` | Default; no rendering until authorized pathway access is configured. |
 
 Select another mode with `KEGG_RENDER_MCP_ACCESS_MODE`. `public_academic` never activates from the
 mode alone; the explicit confirmation is mandatory.
@@ -110,8 +119,8 @@ Run the manually configured stdio server with:
 uv run kegg-render-mcp
 ```
 
-The six tools are `get_renderer_status`, `probe_renderer_kegg_connectivity`,
-`render_analysis_bundle`, `render_pathway`, `render_module`, and `delete_render_result`.
+The five tools are `get_renderer_status`, `probe_renderer_kegg_connectivity`,
+`render_analysis_bundle`, `render_pathway`, and `delete_render_result`.
 
 `tools/list` publishes self-contained Draft 2020-12 input schemas with explicit properties,
 bounds, descriptions, and inline format enums. Each path-or-inline alternative repeats the full
@@ -121,11 +130,10 @@ Pydantic references are not exposed. This compatibility shape was reviewed again
 [OpenAI Codex `rust-v0.144.6` source](https://github.com/openai/codex/tree/rust-v0.144.6/codex-rs/tools/src)
 retrieved on 2026-07-22.
 
-`render_analysis_bundle` is the normal multi-target entry point. `render_pathway` and
-`render_module` render one canonical target. A live connectivity probe makes exactly one explicit
-KEGG `INFO` request; `offline_cache` and `unconfigured` probes make zero requests. MODULE rendering
-is closed-world. A pathway render may retrieve one image and one KGML document through the typed
-Core client.
+`render_analysis_bundle` is the normal multi-pathway entry point. `render_pathway` renders one
+canonical target. A live connectivity probe makes exactly one explicit KEGG `INFO` request;
+`offline_cache` and `unconfigured` probes make zero requests. A pathway render may retrieve one
+image and one KGML document through the typed Core client.
 
 The multi-target operation is all-or-nothing. It preflights every selected target's capability,
 encodes all requested artifacts, and only then retains and publishes one result. Failure of any
@@ -140,12 +148,12 @@ Example high-level input:
   "render_input_path": "/absolute/analysis-results/render_input.json",
   "output_directory": "/absolute/analysis-results/images",
   "formats": ["svg", "png"],
-  "target_ids": ["ko00010", "M00001"]
+  "target_ids": ["ko00010"]
 }
 ```
 
 Every render tool accepts exactly one handoff source: an explicit local `render_input_path` or
-bounded `render_input_json`. Only schema version 6 is accepted. A schema mismatch returns an
+bounded `render_input_json`. Only schema version 7 is accepted. A schema mismatch returns an
 actionable incompatible-input error; the renderer never repairs or reinterprets the handoff.
 
 The fixed status resource is `kegg-render://status`. Result templates are:

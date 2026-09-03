@@ -279,13 +279,13 @@ def test_render_input_strictly_validates_schema(
     render_input_file: Path, runtime_config: RendererRuntimeConfig
 ) -> None:
     loaded = load_render_input(str(render_input_file), runtime_config)
-    assert loaded.document.schema_version == "6"
+    assert loaded.document.schema_version == "7"
     assert loaded.document.evidence.accepted_ko_ids == ("K00001", "K00002")
     status_counts = {
         item.status.value: item.count for item in loaded.document.evidence.status_counts
     }
     assert status_counts["accepted"] == 3
-    assert loaded.target_ids == ("ko00010", "M00001")
+    assert loaded.target_ids == ("ko00010",)
 
 
 def test_inline_render_input_uses_the_same_bounded_strict_parser(
@@ -295,8 +295,8 @@ def test_inline_render_input_uses_the_same_bounded_strict_parser(
     payload = render_input_file.read_text(encoding="utf-8")
     loaded = load_render_input(None, runtime_config, render_input_json=payload)
 
-    assert loaded.document.schema_version == "6"
-    assert loaded.target_ids == ("ko00010", "M00001")
+    assert loaded.document.schema_version == "7"
+    assert loaded.target_ids == ("ko00010",)
     with pytest.raises(RenderMcpError) as ambiguous:
         load_render_input(
             str(render_input_file),
@@ -329,7 +329,7 @@ def test_handoff_requires_current_schema_literal(
     runtime_config: RendererRuntimeConfig,
 ) -> None:
     original = json.loads(render_input_file.read_text(encoding="utf-8"))
-    for version in ("5", "unsupported", None):
+    for version in ("6", "unsupported", None):
         payload = dict(original)
         if version is None:
             payload.pop("schema_version")
@@ -372,8 +372,8 @@ def test_absolute_input_outside_default_output_roots_is_accepted(
 
     loaded = load_render_input(str(outside), runtime_config)
 
-    assert loaded.document.schema_version == "6"
-    assert loaded.target_ids == ("ko00010", "M00001")
+    assert loaded.document.schema_version == "7"
+    assert loaded.target_ids == ("ko00010",)
 
 
 def test_relative_and_traversal_input_paths_are_rejected(
@@ -399,8 +399,8 @@ def test_input_symlink_is_canonicalized_and_read_safely(
 
     loaded = load_render_input(str(link), runtime_config)
 
-    assert loaded.document.schema_version == "6"
-    assert loaded.target_ids == ("ko00010", "M00001")
+    assert loaded.document.schema_version == "7"
+    assert loaded.target_ids == ("ko00010",)
 
 
 def test_input_mutation_during_bounded_read_is_rejected(

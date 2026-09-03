@@ -11,10 +11,6 @@ from typing import Literal, Self, cast
 
 from kegg_mcp.kegg import CachePolicy, LicensedAccess, RateLimitPolicy
 from kegg_mcp.kegg.contracts import default_cache_path, default_rate_limit_root
-from kegg_mcp.services.render_contracts import (
-    MODULE_RENDER_MAX_CANVAS_PIXELS,
-    MODULE_RENDER_MAX_SVG_NODES,
-)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kegg_render_mcp._filesystem import open_absolute_directory
@@ -54,7 +50,7 @@ class RendererLimits(BaseModel):
     max_asset_bytes: int = Field(default=DEFAULT_MAX_ASSET_BYTES, ge=1, le=50_000_000)
     max_pixels: int = Field(
         default=DEFAULT_MAX_PIXELS,
-        ge=MODULE_RENDER_MAX_CANVAS_PIXELS,
+        ge=1,
         le=100_000_000,
     )
     max_svg_bytes: int = Field(default=DEFAULT_MAX_SVG_BYTES, ge=1, le=64 * 1024 * 1024)
@@ -106,7 +102,7 @@ class RendererLimits(BaseModel):
     )
     max_svg_nodes: int = Field(
         default=50_000,
-        ge=MODULE_RENDER_MAX_SVG_NODES,
+        ge=1,
         le=200_000,
     )
 

@@ -13,7 +13,7 @@ discovery before creating the next tag. Record the final evidence in the release
 | --- | --- | --- | --- |
 | `kegg-mcp` | `0.10.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Core query, selected-reference/input handoff, and accepted unique-KO analysis server; `RenderInput` producer |
 | `deepkoala-mcp` | `0.6.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional controlled detailed-CSV handoff with explicit CPU/CUDA/MPS policy |
-| `kegg-render-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional renderer requiring `kegg-mcp>=0.10,<0.11` and `RenderInput` v6 |
+| `kegg-render-mcp` | `0.5.0` | Linux and Apple Silicon macOS 14+, CPython 3.11.x | Optional pathway renderer requiring `kegg-mcp>=0.10,<0.11` and `RenderInput` v7 |
 
 The distributions remain independently packaged, locked, installed, and executed as separate stdio
 processes. The suite installer provisions all three together on Linux or Apple Silicon macOS and
@@ -24,7 +24,7 @@ The core Python wheel does not install either companion or any repository-scoped
 installer is the supported complete-suite Codex installation path on Linux and Apple Silicon
 macOS. Other MCP clients register independently installed stdio servers manually.
 
-The core produces `render_input.json` version 6 and preserves
+The core produces `render_input.json` version 7 and preserves
 `AnalysisExecutionProvenance` version 5 in output-bundle schema version 5. The renderer consumes
 that authoritative handoff and publishes render-manifest schema version 4 without normalizing
 evidence or recomputing analysis.
@@ -289,8 +289,8 @@ advice.
       instruction to the LLM, MCP client, parser, or service.
 - [ ] Only sorted unique accepted K numbers enter MODULE, pathway, ranking, comparison, and
       rendering analysis; rejected, unclassified, and invalid records never enter those results.
-- [ ] Renderer handoff schema version 6 and render-manifest schema version 4 expose one accepted
-      visual state and one MODULE evaluation per target.
+- [ ] Renderer handoff schema version 7 and render-manifest schema version 4 expose one accepted
+      pathway visual state per target.
 - [ ] Exact MODULE completion and block coverage remain separate.
 - [ ] Unsupported MODULE syntax is preserved; a required block whose truth cannot be established
       safely because of it is not evaluable and retains a reason. The aggregate is

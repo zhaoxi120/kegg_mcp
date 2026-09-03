@@ -43,8 +43,6 @@ _DETAILED_CSV = (
 _EXPECTED_ARTIFACTS = {
     "ko00010.svg",
     "ko00010.png",
-    "M00001.svg",
-    "M00001.png",
     "render_manifest.json",
 }
 
@@ -122,9 +120,8 @@ async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
         render_input_path.read_text(encoding="utf-8"),
         strict=True,
     )
-    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "6"
+    assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION == "7"
     assert render_input.evidence.accepted_ko_ids == ("K00001",)
-    assert [item.module_id for item in render_input.modules] == ["M00001"]
     assert [item.pathway_id for item in render_input.pathways] == ["ko00010"]
     assert reference_client.call_log == [
         ("get", "M00001"),
@@ -151,7 +148,7 @@ async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
         assert rendered.isError is False
         render_data = _wire_data(rendered)
 
-    assert render_data["target_ids"] == ["ko00010", "M00001"]
+    assert render_data["target_ids"] == ["ko00010"]
     artifacts = cast(list[dict[str, object]], render_data["artifacts"])
     assert {cast(str, item["name"]) for item in artifacts} == _EXPECTED_ARTIFACTS
     assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
@@ -164,15 +161,13 @@ async def test_fasta_handoff_accepted_ko_view_flows_into_safe_renderer_output(
         assert path.resolve(strict=True).is_relative_to(resolved_output)
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
-    for name in ("ko00010.svg", "M00001.svg"):
-        svg = (render_output / name).read_text(encoding="utf-8")
-        assert "<svg" in svg
-        assert "<script" not in svg.lower()
-        assert 'href="http://' not in svg.lower()
-        assert 'href="https://' not in svg.lower()
-        assert "url(http" not in svg.lower()
-    for name in ("ko00010.png", "M00001.png"):
-        assert (render_output / name).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    svg = (render_output / "ko00010.svg").read_text(encoding="utf-8")
+    assert "<svg" in svg
+    assert "<script" not in svg.lower()
+    assert 'href="http://' not in svg.lower()
+    assert 'href="https://' not in svg.lower()
+    assert "url(http" not in svg.lower()
+    assert (render_output / "ko00010.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
     manifest_text = (render_output / "render_manifest.json").read_text(encoding="utf-8")
     manifest = cast(dict[str, object], json.loads(manifest_text))

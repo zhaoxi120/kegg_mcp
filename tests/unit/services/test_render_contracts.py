@@ -13,11 +13,7 @@ from kegg_mcp.analysis import (
     PATHWAY_RANKING_METHOD,
     PATHWAY_RANKING_VERSION,
     ModuleAnalysisLimits,
-    ModuleBlockState,
-    ModuleDefinition,
-    ModuleDefinitionCollection,
     ModuleEvaluationLimits,
-    ModuleEvaluationResult,
     ModuleSelection,
     PathwayCoverageLimits,
     PathwayCoverageParameters,
@@ -26,10 +22,7 @@ from kegg_mcp.analysis import (
     PathwayReferenceNamespace,
     PathwayReferenceScope,
     PathwaySelection,
-    ResolvedModuleGraph,
-    evaluate_module,
     evaluate_pathway_coverage,
-    resolve_module_definitions,
 )
 from kegg_mcp.domain import (
     CANONICAL_SOURCE_STATUS,
@@ -72,7 +65,6 @@ from kegg_mcp.services.render_contracts import (
     RENDER_INPUT_BUILDER_VERSION,
     RENDER_INPUT_MIME_TYPE,
     RENDER_INPUT_SCHEMA_VERSION,
-    ModuleRenderTarget,
     RenderabilityStatus,
     RenderInput,
     RenderInputLimits,
@@ -108,25 +100,6 @@ def _dataset() -> AnnotationDataset:
         policy=CANONICAL_SOURCE_STATUS,
         limits=_IMPORT_LIMITS,
     )
-
-
-def _module_values(
-    view: KoAnalysisView,
-) -> tuple[ResolvedModuleGraph, ModuleEvaluationResult]:
-    graph = resolve_module_definitions(
-        ModuleDefinitionCollection(
-            root_module_id="M00001",
-            definitions=(
-                ModuleDefinition.from_text(
-                    module_id="M00001",
-                    module_name="Synthetic module",
-                    definition="K00001-K00004 K00002 K00003",
-                ),
-            ),
-        ),
-        _MODULE_LIMITS,
-    )
-    return graph, evaluate_module(graph, view, _MODULE_LIMITS)
 
 
 def _view(dataset: AnnotationDataset) -> KoAnalysisView:
@@ -263,36 +236,34 @@ def _render_input(
 ) -> RenderInput:
     dataset = _dataset()
     view = _view(dataset)
-    graph, _ = _module_values(view)
     reference, _ = _pathway_values(view)
     return build_render_input(
         view,
-        (graph,),
         (reference,),
         _execution(ranking_view=view if include_rankings else None),
         limits=limits,
     )
 
 
-def test_version_6_schema_and_canonical_json_round_trip() -> None:
+def test_version_7_schema_and_canonical_json_round_trip() -> None:
     value = _render_input()
     serialized = serialize_render_input(value)
     schema = RenderInput.model_json_schema()
 
-    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:6"
+    assert schema["$id"] == "urn:kegg-mcp:schema:render-input:7"
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["$defs"]["PathwayRenderTarget"]["$id"] == (
         "urn:kegg-mcp:schema:pathway-render-target:4"
     )
     assert "workflow_digest" not in json.dumps(schema)
-    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "6"
-    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "5"
+    assert value.schema_version == RENDER_INPUT_SCHEMA_VERSION == "7"
+    assert value.execution.handoff_builder_version == RENDER_INPUT_BUILDER_VERSION == "6"
     assert RenderInput.model_validate_json(serialized, strict=True) == value
     assert (
         serialize_render_input(RenderInput.model_validate_json(serialized, strict=True))
         == serialized
     )
-    assert RENDER_INPUT_MIME_TYPE.endswith("version=6")
+    assert RENDER_INPUT_MIME_TYPE.endswith("version=7")
 
     assert "schema_version" in schema["required"]
     assert "name" in schema["$defs"]["RenderProducer"]["required"]
@@ -302,26 +273,23 @@ def test_version_6_schema_and_canonical_json_round_trip() -> None:
     )
 
 
-def test_version_6_handoff_accepts_the_compact_analysis_view() -> None:
+def test_version_7_handoff_accepts_the_compact_analysis_view() -> None:
     dataset = _dataset()
     view = _view(dataset)
-    graph, _ = _module_values(view)
     reference, _ = _pathway_values(view)
     value = build_render_input(
         view,
-        (graph,),
         (reference,),
         _execution(),
     )
 
     assert value.evidence.accepted_ko_ids == ("K00001",)
-    assert value.modules[0].completion.block_coverage == 1 / 3
     assert value.pathways[0].detected_ko_ids == ("K00001",)
 
 
-def test_current_render_input_rejects_version_5_or_missing_wire_versions() -> None:
+def test_current_render_input_rejects_version_6_or_missing_wire_versions() -> None:
     payload = json.loads(serialize_render_input(_render_input()))
-    payload["schema_version"] = "5"
+    payload["schema_version"] = "6"
     with pytest.raises(ValidationError):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
@@ -357,9 +325,6 @@ def test_current_render_targets_reject_fabricated_analysis_identity() -> None:
     mutations = (
         ("pathways", 0, "calculation_method", "fabricated_method"),
         ("pathways", 0, "calculation_version", "999"),
-        ("modules", 0, "parser_name", "fabricated_parser"),
-        ("modules", 0, "parser_version", "999"),
-        ("modules", 0, "resolver_version", "999"),
     )
     for collection, index, field, replacement in mutations:
         payload = json.loads(serialize_render_input(_render_input()))
@@ -371,23 +336,6 @@ def test_current_render_targets_reject_fabricated_analysis_identity() -> None:
     payload["pathways"][0]["reference_link_provenance"][0]["operation"] = "get"
     payload["pathways"][0]["reference_metadata_provenance"][0]["operation"] = "link"
     with pytest.raises(ValidationError, match="only LINK provenance"):
-        RenderInput.model_validate_json(json.dumps(payload), strict=True)
-
-    payload = json.loads(serialize_render_input(_render_input()))
-    payload["modules"][0]["definitions"][0]["parse_result"]["parser_name"] = "fabricated_parser"
-    with pytest.raises(ValidationError, match="definition parser identity"):
-        RenderInput.model_validate_json(json.dumps(payload), strict=True)
-
-    payload = json.loads(serialize_render_input(_render_input()))
-    payload["modules"][0]["completion"]["calculation_method"]["name"] = "fabricated_method"
-    with pytest.raises(ValidationError, match="calculation identity"):
-        RenderInput.model_validate_json(json.dumps(payload), strict=True)
-
-    payload = json.loads(serialize_render_input(_render_input()))
-    payload["modules"][0]["reference_retrieval_provenance"] = [
-        _provenance(KeggOperation.LINK).model_dump(mode="json")
-    ]
-    with pytest.raises(ValidationError, match="only GET retrieval provenance"):
         RenderInput.model_validate_json(json.dumps(payload), strict=True)
 
 
@@ -441,7 +389,6 @@ def test_opted_in_global_or_overview_ko_pathway_is_renderable() -> None:
     )
     value = build_render_input(
         view,
-        (),
         (reference,),
         _execution(allow_global_or_overview=True),
     )
@@ -480,7 +427,6 @@ def test_unevaluable_global_or_overview_ko_pathway_remains_summary_only() -> Non
     )
     value = build_render_input(
         view,
-        (),
         (reference,),
         _execution(allow_global_or_overview=True),
     )
@@ -499,19 +445,6 @@ def test_accepted_evidence_and_complete_renderer_targets_exclude_other_statuses(
     assert value.evidence.status_counts[2].count == 2
     assert value.evidence.status_counts[3].count == 1
 
-    module = value.modules[0]
-    assert module.renderability is RenderabilityStatus.RENDERABLE
-    assert module.required_block_states_complete is True
-    assert tuple(item.block_index for item in module.required_block_states) == (1, 2, 3)
-    assert tuple(item.state for item in module.required_block_states) == (
-        ModuleBlockState.COMPLETE,
-        ModuleBlockState.INCOMPLETE,
-        ModuleBlockState.INCOMPLETE,
-    )
-    assert module.completion.block_coverage == 1 / 3
-    assert module.optional_component_states_complete is True
-    assert len(module.optional_component_states) == 1
-
     pathway = value.pathways[0]
     assert pathway.renderability is RenderabilityStatus.RENDERABLE
     assert pathway.coverage_numerator == 1
@@ -524,16 +457,9 @@ def test_accepted_evidence_and_complete_renderer_targets_exclude_other_statuses(
 def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> None:
     value = _render_input(
         limits=RenderInputLimits(
-            max_module_required_blocks_per_target=2,
             max_pathway_detected_ko_ids_per_target=0,
         )
     )
-
-    module = value.modules[0]
-    assert module.renderability is RenderabilityStatus.NOT_RENDERABLE
-    assert module.not_renderable_reason == "module_required_block_limit_exceeded"
-    assert module.required_block_states_complete is False
-    assert module.required_block_states == ()
 
     pathway = value.pathways[0]
     assert pathway.renderability is RenderabilityStatus.NOT_RENDERABLE
@@ -541,41 +467,6 @@ def test_oversized_targets_are_explicit_and_never_retain_partial_vectors() -> No
     assert pathway.detected_ko_ids_complete is False
     assert pathway.detected_ko_ids == ()
     assert pathway.coverage_numerator == 1
-
-
-def test_module_renderer_layout_bound_is_authoritative_in_builder_and_schema() -> None:
-    dataset = _dataset()
-    view = _view(dataset)
-    graph = resolve_module_definitions(
-        ModuleDefinitionCollection(
-            root_module_id="M00001",
-            definitions=(
-                ModuleDefinition.from_text(
-                    module_id="M00001",
-                    module_name="Oversized renderer layout",
-                    definition="+".join("K00001" for _ in range(450)),
-                ),
-            ),
-        ),
-        _MODULE_LIMITS,
-    )
-    value = build_render_input(
-        view,
-        (graph,),
-        (),
-        _execution(),
-    )
-
-    oversized = value.modules[0]
-    assert oversized.renderability is RenderabilityStatus.NOT_RENDERABLE
-    assert oversized.not_renderable_reason == "module_renderer_layout_limit_exceeded"
-    assert oversized.required_block_states == ()
-    assert oversized.optional_component_states == ()
-
-    payload = _render_input().modules[0].model_dump(mode="json")
-    payload["definitions"] = [item.model_dump(mode="json") for item in graph.modules]
-    with pytest.raises(ValidationError, match="normative renderer layout"):
-        ModuleRenderTarget.model_validate_json(json.dumps(payload), strict=True)
 
 
 def test_serialized_byte_limit_fails_with_dedicated_error() -> None:
@@ -588,26 +479,6 @@ def test_serialized_byte_limit_fails_with_dedicated_error() -> None:
         "limit_name",
         "limit",
     }
-
-
-def test_execution_provenance_must_match_module_graph_limits() -> None:
-    dataset = _dataset()
-    view = _view(dataset)
-    graph, _ = _module_values(view)
-    mismatched_graph = graph.model_copy(
-        update={
-            "limits": graph.limits.model_copy(update={"max_modules": graph.limits.max_modules + 1})
-        }
-    )
-    with pytest.raises(KeggMcpError) as raised:
-        build_render_input(
-            view,
-            (mismatched_graph,),
-            (),
-            _execution(),
-        )
-
-    assert raised.value.detail.code is ErrorCode.INCOMPATIBLE_ANALYSIS_PROVENANCE
 
 
 def test_visualization_accepted_evidence_must_be_sorted_and_unique() -> None:
@@ -636,7 +507,6 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
     )
     value = build_render_input(
         view,
-        (),
         (map_reference,),
         _execution(),
     )
@@ -648,15 +518,13 @@ def test_non_ko_reference_pathway_is_explicitly_summary_only() -> None:
 def test_analysis_bundle_limit_failure_writes_no_partial_directory(tmp_path: Path) -> None:
     dataset = _dataset()
     view = _view(dataset)
-    graph, evaluation = _module_values(view)
     reference, coverage = _pathway_values(view)
     output_directory = tmp_path / "bounded-analysis"
 
     with pytest.raises(KeggMcpError) as error:
         write_analysis_bundle(
             view,
-            (graph,),
-            (evaluation,),
+            (),
             (reference,),
             (coverage,),
             execution=_execution(),

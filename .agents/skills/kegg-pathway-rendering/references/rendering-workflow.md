@@ -2,14 +2,14 @@
 
 ## Compatible handoff
 
-1. Call `get_renderer_status` and require readiness plus the current schema version 6.
+1. Call `get_renderer_status` and require readiness plus the current schema version 7.
 2. Pass exactly one absolute local `render_input.json` path or bounded inline handoff to
-   `render_analysis_bundle`, `render_pathway`, or `render_module`. Caller-facing input symlinks
+   `render_analysis_bundle` or `render_pathway`. Caller-facing input symlinks
    resolve to canonical regular files. An explicit output may be any safe absolute new or empty
    local directory; configured roots are only automatic output-allocation defaults.
 3. Let the renderer validate schema, targets, evidence states, paths, output limits, and assets.
 
-Accept only schema version 6. Do not patch, repair, or reinterpret a schema-mismatched handoff.
+Accept only schema version 7. Do not patch, repair, or reinterpret a schema-mismatched handoff.
 Stop and request a current bundle from the independent KO-analysis stage.
 
 ## Atomic multi-target rendering
@@ -27,7 +27,7 @@ Read `get_renderer_status` before probing or rendering. In `public_academic` or 
 mode, an explicit connectivity probe makes one bounded INFO request. In `offline_cache`, the same
 probe makes zero requests and reports the network-disabled deployment policy; it does not inspect
 the cache or establish that a target's PNG and KGML entries are present. `unconfigured` supports
-MODULE diagrams only.
+no rendering until authorized pathway access is configured.
 
 The cache path, public-versus-licensed namespace, and stale policy are deployment settings. Never
 add them to a render call. Report a typed miss, unsafe cache, invalid cached asset, or

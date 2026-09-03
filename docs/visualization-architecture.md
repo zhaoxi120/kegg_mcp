@@ -1,4 +1,4 @@
-# KEGG Pathway and MODULE Visualization Architecture
+# KEGG Pathway Visualization Architecture
 
 This document owns the implemented renderer handoff, typed pathway-asset boundary, rendering
 semantics, graphics security, and visualization-specific rights rules. The cross-component
@@ -27,7 +27,7 @@ Protein FASTA
     -> deepkoala-mcp
     -> deepkoala_annotations.csv plus source provenance
     -> kegg-mcp
-    -> render_input.json schema version 6
+    -> render_input.json schema version 7
     -> kegg-render-mcp
     -> static SVG, optional PNG, and render_manifest.json
 ```
@@ -36,11 +36,11 @@ Existing K numbers or annotation tables enter at `kegg-mcp`. An existing compati
 `render_input.json` enters directly at `kegg-render-mcp`. Earlier stages are not repeated when a
 valid stable handoff already exists.
 
-The supported scope covers regular canonical `koNNNNN` reference-pathway box overlays, explicitly
-opted-in canonical KO global/overview total-map line overlays from one matching KEGG PNG/KGML pair,
-and project-owned MODULE logic diagrams from the core AST and evaluation states. Only sorted unique
-accepted K numbers enter visualization. SVG is canonical, PNG is a bounded derivative, and
-artifacts are available through local output directories and scoped MCP resources.
+The supported scope covers regular canonical `koNNNNN` reference-pathway box overlays and
+explicitly opted-in canonical KO global/overview total-map line overlays from one matching KEGG
+PNG/KGML pair. Only sorted unique accepted K numbers enter visualization. SVG is canonical, PNG is
+a bounded derivative, and artifacts are available through local output directories and scoped MCP
+resources.
 
 The following remain unsupported:
 
@@ -88,10 +88,9 @@ automatic Top-N truncation. Explicit broad-map analysis requires
 MODULE completion and project block coverage are calculated separately after reference loading.
 
 The core exposes transport-independent Pydantic models in `kegg_mcp.services.render_contracts`.
-`RenderInput` schema version 6 contains producer and dataset identity, analysis unit, taxonomic and
-source provenance, decision-policy identity, sorted unique accepted K numbers, bounded MODULE and
-pathway targets, and serializable parameters, intake limits, ranking provenance, and
-calculation versions.
+`RenderInput` schema version 7 contains producer and dataset identity, analysis unit, taxonomic and
+source provenance, decision-policy identity, sorted unique accepted K numbers, bounded pathway
+targets, and serializable parameters, intake limits, ranking provenance, and calculation versions.
 
 Rejected, unclassified, and invalid records remain available in analysis summaries but never enter
 renderer evidence. Every tuple is deterministically ordered, and total serialized size is bounded.
@@ -106,15 +105,9 @@ Global/Overview subtype. An explicitly opted-in global/overview target is render
 is a canonical KO reference with an evaluated denominator and complete detected evidence.
 Non-`ko` references and unevaluable or incomplete targets remain summary-only or not-renderable.
 
-A MODULE render target carries the root and reachable definitions, authoritative AST, reference
-edges and issues, accepted-evidence completion, project block coverage, complete bounded block and
-optional-component states, unsupported content, and parser/evaluator provenance.
-Oversized content is marked `not_renderable`; a truncated preview is never relabeled as complete
-renderer evidence.
-
-The output-bundle manifest records renderer schema version 6 and its MIME type independently from
+The output-bundle manifest records renderer schema version 7 and its MIME type independently from
 the output-bundle schema. Graph, reference, result, target-count, and byte-limit validation completes
-before publication. The bundle manifest is published last. Only schema version 6 is accepted. A
+before publication. The bundle manifest is published last. Only schema version 7 is accepted. A
 schema-mismatched handoff is rejected with an action to rerun core analysis; it is not repaired or
 reinterpreted.
 
@@ -139,15 +132,14 @@ core MCP tool, and the renderer does not implement a second network client.
 ### `kegg-render-mcp`
 
 The renderer is an independently packaged local stdio MCP server requiring a compatible core
-library. It validates exactly one version-6 handoff supplied as an explicit absolute local path or
+library. It validates exactly one version-7 handoff supplied as an explicit absolute local path or
 bounded inline JSON document.
 
 Status is redacted and closed-world. A connectivity probe performs one explicit `INFO` request in a
-live access mode and zero requests in `offline_cache` or `unconfigured` mode. MODULE rendering is
-closed-world when its handoff is complete. Pathway rendering is open-world when it retrieves KEGG
-assets. Tool annotations reflect these effects.
+live access mode and zero requests in `offline_cache` or `unconfigured` mode. Pathway rendering is
+open-world when it retrieves KEGG assets. Tool annotations reflect these effects.
 
-Successful operations produce bounded static artifacts and a schema-version-3
+Successful operations produce bounded static artifacts and a schema-version-4
 `render_manifest.json` in a new or empty durable output directory. Its image records contain only a
 controlled relative path, MIME type, byte size, width, and height. Opaque render IDs,
 expiry timestamps, and resource URIs remain process-scoped result metadata; they are excluded from
@@ -173,8 +165,15 @@ For a renderable canonical KO pathway, the renderer:
 3. parses bounded KGML under the typed asset and security policy above;
 4. identifies KO-bearing graphics from canonical `ko:KNNNNN` values;
 5. overlays only the authoritative detected evidence from the core handoff;
-6. adds a versioned legend, warnings, provenance, and conservative caption; and
+6. adds a bold identifier/name heading, a separate descriptive-coverage line, source-provenance
+   credit when available, and a larger versioned legend using one footer font size while retaining
+   interpretation, reference-namespace, and analysis-unit provenance outside the image; and
 7. emits static SVG and any requested bounded PNG derivative.
+
+Pathway warnings remain in the structured result and durable manifest but are not drawn into the
+image footer. The footer ends with its evidence key and omits interpretation text and a separate
+unmatched-graphics disclaimer. The renderer still preserves unmatched graphics unchanged; the
+upstream analysis report and renderer manifest retain the conservative interpretation.
 
 Regular maps use bounded KGML rectangle geometry. Explicit canonical KO global/overview maps use
 bounded `graphics type="line"` `coords` polylines, while retaining bounded boxes when KGML declares
@@ -198,24 +197,6 @@ source PNG; it does not reconstruct arrows, direction, reaction semantics, or ca
 descriptive KO coverage does not establish pathway presence, completeness, expression, activity,
 flux, phenotype, or statistical significance. A summary-only broad target is never promoted or
 replaced with a model-native conceptual drawing.
-
-### MODULE logic diagrams
-
-MODULE graphics are project-owned logic diagrams, not KEGG pathway maps or biochemical topology
-claims. They preserve the authoritative core syntax and state:
-
-- top-level spaces and plus signs represent AND;
-- commas represent OR;
-- a minus sign marks an optional component;
-- parentheses preserve grouping;
-- MODULE references remain distinct and use the resolved graph;
-- unsupported, unresolved, and cyclic content remains visible; and
-- optional components stay outside the required completion denominator.
-
-The graphic displays one accepted-evidence exact-completion result separately from project block
-coverage. Partially evaluable, not evaluable, summary-only, and not-renderable states include their
-reasons. Minimal missing alternatives are bounded requirements under one evaluated definition, not
-proof that adding genes activates a biological process.
 
 ## Security and operational contract
 
@@ -255,7 +236,7 @@ Renderer pathway access supports:
 - `public_academic` for eligible academic use;
 - `licensed` with an explicitly authorized HTTPS endpoint;
 - `offline_cache` for an existing safe read-only cache; and
-- `unconfigured` for MODULE-only rendering.
+- `unconfigured` for a network-disabled deployment with no rendering capability.
 
 Core and Renderer share the same endpoint-scoped, owner-only rate-limit state and never exceed three
 requests per second. The default is safer and has no burst. One pathway PNG and one KGML document
@@ -297,9 +278,9 @@ configuration and lifecycle; generic clients use
 
 The visualization implementation is covered by:
 
-- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 6
+- core unit, integration, MCP contract, output-bundle, and release tests for `RenderInput` version 7
   and typed pathway assets;
-- renderer schema, pathway, MODULE, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
+- renderer schema, pathway, KGML, PNG, SVG, filesystem, cache, retention, resource, stdio,
   and distribution tests using only synthetic assets;
 - static Skill contract and route-evaluation tests; and
 - the synthetic three-process composition test.

@@ -56,7 +56,7 @@ A request can produce three kinds of output:
 
 - **A readable report** that explains what was analyzed and summarizes the main results.
 - **Inspectable evidence files** in CSV, TSV, or JSON format, including decisions and provenance.
-- **Optional static graphics** in SVG or PNG format for selected pathway overlays or MODULE logic.
+- **Optional static graphics** in SVG or PNG format for selected pathway overlays.
 
 Not every request creates every output. If you already have KO evidence, the optional DeepKOALA
 step is skipped. Rendering is always optional.
@@ -90,11 +90,11 @@ canonical regular-file targets and the companion privately stages the FASTA itse
 
 > Annotate `/absolute/project/inputs/proteins.faa` as an isolate proteome. Analyze the resulting KO
 > evidence, summarize selected MODULE results and descriptive pathway KO coverage, and render
-> selected results as SVG. Report the resolved DeepKOALA model version.
+> selected pathways as SVG. Report the resolved DeepKOALA model version.
 
 Expected files include `deepkoala_annotations.csv`, `deepkoala_run_report.md`,
 `unique_accepted_kos.tsv`, `analysis_report.md`, `render_input.json`, selected SVG files, and
-`render_manifest.json`. Exact target files depend on the selected MODULEs and pathways.
+`render_manifest.json`. Exact image files depend on the selected pathways.
 
 ### Existing KO evidence
 
@@ -107,7 +107,7 @@ audit workflow.
 
 ### Existing render handoff
 
-> Render the selected targets from `/absolute/project/results/render_input.json` as SVG. Preserve
+> Render the selected pathways from `/absolute/project/results/render_input.json` as SVG. Preserve
 > the Core evidence and calculations unchanged.
 
 Expected renderer files are the selected static SVG artifacts plus `render_manifest.json`.

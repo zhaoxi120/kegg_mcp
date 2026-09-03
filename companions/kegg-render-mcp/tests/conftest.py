@@ -8,12 +8,9 @@ from pathlib import Path
 
 import pytest
 from kegg_mcp.analysis import (
-    ModuleDefinition,
-    ModuleDefinitionCollection,
     PathwayKoReference,
     PathwayReferenceNamespace,
     PathwayReferenceScope,
-    resolve_module_definitions,
 )
 from kegg_mcp.domain import CANONICAL_SOURCE_STATUS, build_ko_analysis_view
 from kegg_mcp.execution import (
@@ -179,19 +176,6 @@ def make_render_input(
         limits=import_limits,
         source=SourceProvenanceInput(source_name="synthetic_annotations", source_version="1"),
     )
-    graph = resolve_module_definitions(
-        ModuleDefinitionCollection(
-            root_module_id="M00001",
-            definitions=(
-                ModuleDefinition.from_text(
-                    module_id="M00001",
-                    module_name="Synthetic MODULE",
-                    definition="K00001+K00001 (K00002,K00003) -K00003 M00002",
-                ),
-                ModuleDefinition.from_text(module_id="M00002", definition="K00001"),
-            ),
-        )
-    )
     reference = PathwayKoReference(
         reference_namespace=PathwayReferenceNamespace.KO,
         reference_scope=pathway_scope,
@@ -224,7 +208,6 @@ def make_render_input(
     )
     return build_render_input(
         build_ko_analysis_view(dataset),
-        (graph,),
         (reference,),
         execution,
     )

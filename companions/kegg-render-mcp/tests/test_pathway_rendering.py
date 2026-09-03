@@ -9,7 +9,6 @@ from xml.etree import ElementTree
 
 import pytest
 from kegg_mcp.analysis import PathwayReferenceScope
-from kegg_mcp.domain import AnalysisUnit
 from kegg_mcp.services.render_contracts import PathwayRenderTarget, RenderabilityStatus
 from PIL import Image
 
@@ -43,8 +42,8 @@ async def test_unique_accepted_kos_overlay_each_matching_graphic_once(
         ("K00002",),
     )
     assert synthetic_provider.calls == [("ko00010", "image"), ("ko00010", "kgml")]
-    assert "not pathway presence" in scene.caption
-    assert "ko00010 - Synthetic pathway" in scene.caption
+    assert scene.headline == "ko00010: Synthetic pathway"
+    assert scene.coverage_summary == "Descriptive KO coverage: 2/3 (66.7%)"
     assert scene.retained_box_graphic_count == 2
     assert scene.retained_polyline_graphic_count == 0
     assert scene.mapped_detected_ko_ids == ("K00001", "K00002")
@@ -144,56 +143,36 @@ async def test_pathway_svg_is_static_accessible_and_evidence_calibrated(
     assert ACCEPTED_COLOR in text
     assert "#0057FF" not in text
     assert "Accepted annotation" in text
-    assert "not evidence of biological absence" in text
+    assert "Descriptive KO coverage: 2/3 (66.7%)" in text
+    assert 'font-size="16" font-weight="700">ko00010: Synthetic pathway</text>' in text
+    assert 'font-size="16">Descriptive KO coverage: 2/3 (66.7%)</text>' in text
+    assert 'font-size="16">Accepted annotation</text>' in text
+    assert "This visualization represents annotation evidence" not in text
+    assert "Unmatched graphics" not in text
     assert "<script" not in text.lower()
     assert "javascript:" not in text.lower()
     assert "https://" not in text.lower()
     assert "data:image/png;base64," in text
-    assert "Warnings:" in text
     warned = render_pathway_svg(
         replace(scene, warnings=("Synthetic stale-reference warning.",)),
         max_bytes=4_000_000,
         max_nodes=10_000,
     )
-    assert "Warnings: Synthetic stale-reference warning." in warned.content.decode()
+    assert "Warnings:" not in warned.content.decode()
+    assert warned.content == svg.content
     long_warned = render_pathway_svg(
         replace(scene, warnings=(("Synthetic bounded warning text. " * 80).strip(),)),
         max_bytes=4_000_000,
         max_nodes=10_000,
     )
-    assert long_warned.height > warned.height
+    assert long_warned.height == warned.height
+    assert long_warned.content == warned.content
 
     node_count = sum(1 for _ in ElementTree.fromstring(svg.content).iter())
     render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=node_count)
     with pytest.raises(RenderMcpError) as bounded:
         render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=node_count - 1)
     assert bounded.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
-
-
-@pytest.mark.asyncio
-async def test_pathway_caption_preserves_community_analysis_unit(
-    render_input_file: Path,
-    runtime_config: RendererRuntimeConfig,
-    synthetic_provider: SyntheticProvider,
-) -> None:
-    loaded = load_render_input(str(render_input_file), runtime_config)
-    community_document = loaded.document.model_copy(
-        update={
-            "dataset": loaded.document.dataset.model_copy(
-                update={"analysis_unit": AnalysisUnit.METAGENOMIC_COMMUNITY}
-            )
-        }
-    )
-    community_input = replace(loaded, document=community_document)
-    scene = await construct_pathway_scene(
-        community_input,
-        community_input.pathway("ko00010"),
-        synthetic_provider,
-        limits=runtime_config.limits,
-    )
-
-    assert "analysis unit: metagenomic_community" in scene.caption
-    assert "pooled encoded potential" in scene.caption
 
 
 @pytest.mark.asyncio
@@ -211,8 +190,8 @@ async def test_pathway_png_contains_bounded_raster_derivative(
     )
     png = render_pathway_png(scene, max_pixels=2_000_000, max_output_bytes=4_000_000)
     assert png.content.startswith(PNG_SIGNATURE)
-    assert (png.width, png.height) == (760, 360)
-    assert validate_png(png.content, max_bytes=4_000_000, max_pixels=2_000_000) == (760, 360)
+    assert (png.width, png.height) == (760, 250)
+    assert validate_png(png.content, max_bytes=4_000_000, max_pixels=2_000_000) == (760, 250)
     with Image.open(io.BytesIO(png.content)) as rendered:
         rgb = rendered.convert("RGB")
         assert rgb.getpixel((30, 50)) == tuple(bytes.fromhex(ACCEPTED_COLOR.removeprefix("#")))
@@ -230,21 +209,22 @@ async def test_pathway_png_contains_bounded_raster_derivative(
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
-    assert warned.height == 360
-    assert warned.content != png.content
+    assert warned.height == 250
+    assert warned.content == png.content
     without_warning = render_pathway_png(
         replace(scene, warnings=()),
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
-    assert without_warning.height == 320
-    assert without_warning.content != png.content
+    assert without_warning.height == 250
+    assert without_warning.content == png.content
     long_warning = render_pathway_png(
         replace(scene, warnings=(("Synthetic bounded warning text. " * 80).strip(),)),
         max_pixels=2_000_000,
         max_output_bytes=4_000_000,
     )
-    assert long_warning.height > warned.height
+    assert long_warning.height == warned.height
+    assert long_warning.content == warned.content
 
 
 def test_png_validation_rejects_signature_truncation_and_pixel_limit() -> None:
@@ -270,8 +250,7 @@ async def test_svg_allows_url_like_text_and_replaces_invalid_xml_characters(
     artifact = render_pathway_svg(
         replace(
             scene,
-            title="Reference text https://example.invalid",
-            warnings=("The literal onload= token is harmless text.\x01",),
+            title="Reference text https://example.invalid with onload= token\x01",
         ),
         max_bytes=4_000_000,
         max_nodes=10_000,
@@ -281,6 +260,38 @@ async def test_svg_allows_url_like_text_and_replaces_invalid_xml_characters(
     assert "https://example.invalid" in text
     assert "onload= token" in text
     assert "\ufffd" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_name", "expected_credit"),
+    (("full", "Annotated by DeepKOALA (full)"), ("frag", "Annotated by DeepKOALA (fragment)")),
+)
+async def test_pathway_credits_deepkoala_model_from_handoff_provenance(
+    render_input_file: Path,
+    runtime_config: RendererRuntimeConfig,
+    synthetic_provider: SyntheticProvider,
+    model_name: str,
+    expected_credit: str,
+) -> None:
+    loaded = load_render_input(str(render_input_file), runtime_config)
+    source = loaded.document.dataset.sources[0].model_copy(
+        update={"source_name": "deepkoala", "model_name": model_name}
+    )
+    document = loaded.document.model_copy(
+        update={"dataset": loaded.document.dataset.model_copy(update={"sources": (source,)})}
+    )
+    scene = await construct_pathway_scene(
+        replace(loaded, document=document),
+        document.pathways[0],
+        synthetic_provider,
+        limits=runtime_config.limits,
+    )
+
+    assert scene.annotation_credit == expected_credit
+    svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
+    assert expected_credit in svg.content.decode()
+    assert f'font-size="16">{expected_credit}</text>' in svg.content.decode()
 
 
 @pytest.mark.asyncio
@@ -325,7 +336,6 @@ async def test_renderable_global_target_uses_tagged_polyline_overlays(
     assert scene.box_overlay_count == 0
     assert scene.polyline_overlay_count == 5
     assert any("KEGG contextual colors and arrowheads" in warning for warning in scene.warnings)
-    assert "without inferring direction or activity" in scene.caption
 
     svg = render_pathway_svg(scene, max_bytes=4_000_000, max_nodes=10_000)
     root = ElementTree.fromstring(svg.content)

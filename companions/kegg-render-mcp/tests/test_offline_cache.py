@@ -23,7 +23,6 @@ from kegg_mcp.kegg.cache import SQLiteKeggCache
 from kegg_mcp.kegg.contracts import HttpMetadata
 from kegg_mcp.kegg.pathway_assets import prepare_pathway_asset
 from kegg_mcp.kegg.transport import TransportResponse
-from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from conftest import synthetic_kgml, synthetic_png
@@ -290,7 +289,7 @@ async def test_stale_offline_assets_require_deployment_permission_and_remain_vis
 
 
 @pytest.mark.asyncio
-async def test_offline_status_probe_miss_and_module_rendering_are_redacted_and_network_free(
+async def test_offline_status_probe_and_miss_are_redacted_and_network_free(
     tmp_path: Path,
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
@@ -318,10 +317,6 @@ async def test_offline_status_probe_miss_and_module_rendering_are_redacted_and_n
             "render_pathway",
             {"render_input_path": str(render_input_file), "target_id": "ko00010"},
         )
-        module = await session.call_tool(
-            "render_module",
-            {"render_input_path": str(render_input_file), "target_id": "M00001"},
-        )
 
     assert status_tool.outputSchema is not None
     assert probe_tool.outputSchema is not None
@@ -346,8 +341,6 @@ async def test_offline_status_probe_miss_and_module_rendering_are_redacted_and_n
     assert missing.isError is True
     missing_error = cast(dict[str, object], missing.structuredContent["error"])  # type: ignore[index]
     assert missing_error["code"] == "ASSET_UNAVAILABLE"
-    assert module.isError is False
     assert transport.request_count == 0
     assert not cache_path.exists()
     assert not cache_path.parent.exists()
-    assert isinstance(module.content[0], types.TextContent)

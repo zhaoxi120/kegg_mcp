@@ -157,7 +157,7 @@ steps with LLM ranking, ad hoc chunk merging, or inferred database content.
   retained ranking but excludes them before Top-N target truncation. If the user explicitly
   requests a canonical KO total map such as `ko01100`, pass that explicit pathway target with
   `allow_global_or_overview=True`. Continue to rendering only after Core emits a complete,
-  renderable version 6 handoff. Do not substitute a `map` or organism reference, promote a
+  renderable version 7 handoff. Do not substitute a `map` or organism reference, promote a
   summary-only result, or request a model-native conceptual fallback.
 - Treat MODULE overlap ranking as target selection, not MODULE completion or enrichment. Evaluate
   exact completion and required-block coverage separately from the selected MODULE definitions.
