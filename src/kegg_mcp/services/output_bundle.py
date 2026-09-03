@@ -22,7 +22,6 @@ from kegg_mcp.analysis import (
     PathwayKoReference,
     PathwayRankingResult,
     PathwayRankingRow,
-    ResolvedModuleGraph,
 )
 from kegg_mcp.domain.analysis_view import KoAnalysisView
 from kegg_mcp.domain.annotations import (
@@ -111,7 +110,6 @@ def write_normalization_bundle(
 
 def write_analysis_bundle(
     evidence: KoAnalysisView,
-    module_graphs: tuple[ResolvedModuleGraph, ...],
     modules: tuple[ModuleEvaluationResult, ...],
     pathway_references: tuple[PathwayKoReference, ...],
     pathways: tuple[PathwayCoverageResult, ...],
@@ -128,7 +126,6 @@ def write_analysis_bundle(
     """Write canonical handoff tables, report, and renderer input as one stable bundle."""
     render_input = build_render_input(
         evidence,
-        module_graphs,
         pathway_references,
         execution,
         limits=render_limits,

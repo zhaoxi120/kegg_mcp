@@ -6,7 +6,7 @@ capabilities are separate local stdio processes and independently reviewed distr
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 7 -> kegg-render-mcp
 ```
 
 See the [DeepKOALA companion README](../companions/deepkoala-mcp/README.md) and
@@ -456,7 +456,7 @@ requested count from subsequent regular references; the complete overlap ranking
 The fixed identifier set was checked against the official KEGG PATHWAY identifier classes and map
 list on 2026-07-22. An explicitly requested canonical KO total map such as `ko01100` requires
 `allow_global_or_overview=true`; when its denominator is evaluated and detected evidence is
-complete, Core emits a renderable version 6 handoff. Its renderer overlay follows bounded KGML line
+complete, Core emits a renderable version 7 handoff. Its renderer overlay follows bounded KGML line
 coordinates and does not infer arrow direction, pathway activity, completeness, or flux. `map` and
 organism references remain summary-only. The server loads pathway LINK/GET references only for the
 selected targets. Duplicate annotation records and duplicate LINK rows cannot increase the detected
@@ -490,9 +490,9 @@ and `render_input.json`.
 Automatic MODULE selection also adds `module_ranking.tsv` and `ko_module_relationships.tsv`;
 server-ranked pathway selection adds `pathway_ranking.tsv` and `ko_pathway_relationships.tsv`.
 The report records the original absolute input path when source provenance supplies it.
-`render_input.json` is an immutable renderer-specific version 6 contract: it carries sorted unique
-accepted K numbers, complete-within-limit pathway evidence, authoritative MODULE states, and
-producer and calculation provenance. An explicitly
+`render_input.json` is an immutable renderer-specific version 7 contract: it carries sorted unique
+accepted K numbers, complete-within-limit pathway evidence, and producer and calculation
+provenance. An explicitly
 requested canonical KO global or overview target is renderable when
 `allow_global_or_overview=true`, its denominator was evaluated, and its detected evidence is
 complete; the Renderer maps that evidence onto bounded KGML line-coordinate polylines while
@@ -596,7 +596,7 @@ transport and service API.
 
 ## Independent renderer MCP
 
-`kegg-render-mcp` is a separate distribution and process. It accepts the core's version 6 handoff,
+`kegg-render-mcp` is a separate distribution and process. It accepts the core's version 7 handoff,
 renders bounded static SVG or PNG, and never normalizes evidence or recomputes analysis. Its tools,
 resources, access modes, result lifecycle, and security contract are documented in the
 [renderer README](../companions/kegg-render-mcp/README.md) and

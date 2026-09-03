@@ -1,6 +1,6 @@
 interface:
   display_name: "KEGG Pathway Rendering"
-  short_description: "Render static KEGG pathway and MODULE evidence graphics"
+  short_description: "Render static KEGG pathway evidence graphics"
   default_prompt: "Use $kegg-pathway-rendering to render this validated KEGG analysis bundle as conservative static graphics."
 
 dependencies:

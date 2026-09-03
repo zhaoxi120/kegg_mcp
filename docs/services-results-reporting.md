@@ -266,8 +266,8 @@ preserve caller text verbatim after validation rejects tabs, line breaks, NUL, a
 format-breaking controls. A failed transaction removes only files and a fresh directory proven to
 belong to that transaction.
 
-The renderer handoff is a separate typed version 6 service model. It contains sorted unique
-accepted K numbers plus complete-within-limit authoritative analysis state; rejected,
+The renderer handoff is a separate typed version 7 service model. It contains sorted unique
+accepted K numbers plus complete-within-limit authoritative pathway state; rejected,
 unclassified, and invalid records never enter visualization evidence. Its detailed schema and
 renderability semantics are owned by
 [Visualization architecture](visualization-architecture.md).

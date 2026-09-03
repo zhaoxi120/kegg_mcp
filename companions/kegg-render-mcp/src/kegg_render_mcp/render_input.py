@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from kegg_mcp.services.render_contracts import (
-    ModuleRenderTarget,
     PathwayRenderTarget,
     RenderInput,
 )
@@ -43,17 +42,9 @@ class ValidatedRenderInput:
                 return target
         raise _target_not_found(pathway_id)
 
-    def module(self, module_id: str) -> ModuleRenderTarget:
-        for target in self.document.modules:
-            if target.module_id == module_id:
-                return target
-        raise _target_not_found(module_id)
-
     @property
     def target_ids(self) -> tuple[str, ...]:
-        values = [item.pathway_id for item in self.document.pathways]
-        values.extend(item.module_id for item in self.document.modules)
-        return tuple(values)
+        return tuple(item.pathway_id for item in self.document.pathways)
 
 
 def load_render_input(

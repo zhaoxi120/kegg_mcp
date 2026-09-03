@@ -2244,7 +2244,7 @@ async def test_high_level_file_workflow_defaults_to_top_five_targets_and_writes_
             strict=True,
         )
         assert render_input.schema_version == RENDER_INPUT_SCHEMA_VERSION
-        assert render_input.modules[0].module_id == "M00001"
+        assert "modules" not in render_input.model_dump()
         assert render_input.pathways[0].detected_ko_ids == ("K00001",)
         pathway_parameters = render_input.execution.analysis.pathway_parameters
         assert pathway_parameters.ranking is not None
@@ -2348,7 +2348,7 @@ async def test_high_level_analysis_accepts_an_empty_accepted_ko_set(
         strict=True,
     )
     assert render_input.evidence.accepted_ko_ids == ()
-    assert render_input.modules == ()
+    assert "modules" not in render_input.model_dump()
     assert render_input.pathways == ()
 
 
@@ -2448,9 +2448,7 @@ async def test_default_workflow_caps_both_automatic_target_types_at_five(
             Path(data["output_bundle"]["render_input"]).read_text(encoding="utf-8"),
             strict=True,
         )
-        assert [item.module_id for item in render_input.modules] == [
-            f"M{index:05d}" for index in range(1, 6)
-        ]
+        assert "modules" not in render_input.model_dump()
         assert [item.pathway_id for item in render_input.pathways] == [
             f"ko{index:05d}" for index in range(1, 6)
         ]

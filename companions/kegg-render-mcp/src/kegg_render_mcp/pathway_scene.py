@@ -20,6 +20,7 @@ from kegg_mcp.kegg import (
 )
 from kegg_mcp.services.render_contracts import PathwayRenderTarget
 
+from kegg_render_mcp._presentation import annotation_credit
 from kegg_render_mcp.config import RendererLimits
 from kegg_render_mcp.contracts import (
     ConnectivityStatus,
@@ -131,7 +132,7 @@ class UnconfiguredAssetProvider:
             ErrorDetail(
                 code=ErrorCode.ASSET_UNAVAILABLE,
                 message="Pathway asset access is not configured for this renderer.",
-                suggested_action="Configure authorized KEGG access or render a MODULE target.",
+                suggested_action="Configure authorized KEGG pathway access.",
             )
         )
 
@@ -143,11 +144,14 @@ class UnconfiguredAssetProvider:
 class PathwayScene:
     target_id: str
     title: str
+    coverage_numerator: int
+    coverage_denominator: int
+    coverage_ratio: float
+    annotation_credit: str | None
     width: int
     height: int
     source_png: bytes
     overlays: tuple[KgmlGraphic, ...]
-    caption: str
     retained_box_graphic_count: int
     retained_polyline_graphic_count: int
     mapped_detected_ko_ids: tuple[str, ...]
@@ -155,6 +159,17 @@ class PathwayScene:
     polyline_overlay_count: int
     asset_provenance: tuple[dict[str, object], ...]
     warnings: tuple[str, ...]
+
+    @property
+    def headline(self) -> str:
+        return f"{self.target_id}: {self.title}"
+
+    @property
+    def coverage_summary(self) -> str:
+        return (
+            f"Descriptive KO coverage: {self.coverage_numerator}/{self.coverage_denominator} "
+            f"({self.coverage_ratio:.1%})"
+        )
 
     @property
     def retained_geometry_kinds(self) -> frozenset[str]:
@@ -201,8 +216,6 @@ async def construct_pathway_scene(
     overlays = _accepted_overlays(kgml, detected)
     ratio = cast(float, target.coverage_ratio)
     name = target.pathway_name
-    namespace = target.reference_namespace.value
-    analysis_unit = render_input.document.dataset.analysis_unit.value
     warnings: list[str] = []
     if any(bool(asset.provenance.get("is_stale")) for asset in (image, kgml_asset)):
         warnings.append(
@@ -224,25 +237,6 @@ async def construct_pathway_scene(
             "Base-map direction must not be interpreted as evidence of "
             "directionality or activity."
         )
-    community_limit = (
-        " Community-level evidence represents pooled encoded potential, not a complete pathway "
-        "in one organism."
-        if analysis_unit == "metagenomic_community"
-        else ""
-    )
-    caption = (
-        f"{target_id} - {name}. Core descriptive KO coverage: {numerator}/{denominator} "
-        f"({ratio:.1%}); reference namespace: {namespace}; analysis unit: "
-        f"{analysis_unit}.{community_limit} "
-        "This visualization represents annotation evidence, not pathway presence, activity, "
-        "flux, phenotype, or experimental validation."
-        + (
-            " Existing base-map colors and arrowheads are KEGG context; only solid overlays "
-            "encode the supplied evidence, without inferring direction or activity."
-            if broad_map
-            else ""
-        )
-    )
     retained_box_graphic_count = sum(graphic.kind == "box" for graphic in kgml.graphics)
     retained_polyline_graphic_count = len(kgml.graphics) - retained_box_graphic_count
     box_overlay_count = sum(graphic.kind == "box" for graphic in overlays)
@@ -250,11 +244,14 @@ async def construct_pathway_scene(
     return PathwayScene(
         target_id=target_id,
         title=name,
+        coverage_numerator=numerator,
+        coverage_denominator=denominator,
+        coverage_ratio=ratio,
+        annotation_credit=annotation_credit(render_input.document.dataset.sources),
         width=image.width,
         height=image.height,
         source_png=image.content,
         overlays=overlays,
-        caption=caption,
         retained_box_graphic_count=retained_box_graphic_count,
         retained_polyline_graphic_count=retained_polyline_graphic_count,
         mapped_detected_ko_ids=mapped_detected_ko_ids,

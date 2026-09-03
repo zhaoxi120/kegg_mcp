@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from kegg_mcp.services.render_contracts import ModuleRenderTarget, PathwayRenderTarget
+from kegg_mcp.services.render_contracts import PathwayRenderTarget
 
 from kegg_render_mcp._render_preflight import preflight_targets, with_target_context
 from kegg_render_mcp.artifacts import (
@@ -26,16 +26,15 @@ from kegg_render_mcp.contracts import (
     SafeDetail,
 )
 from kegg_render_mcp.kgml import KGML_PARSER_NAME, KGML_PARSER_VERSION
-from kegg_render_mcp.module_scene import ModuleScene
 from kegg_render_mcp.pathway_scene import PathwayAssetProvider, construct_pathway_scene
 from kegg_render_mcp.provenance import safe_batch_provenance
-from kegg_render_mcp.raster import render_module_png, render_pathway_png, validate_png
+from kegg_render_mcp.raster import render_pathway_png, validate_png
 from kegg_render_mcp.render_input import (
     ValidatedRenderInput,
     load_render_input,
     resolve_output_directory,
 )
-from kegg_render_mcp.svg import render_module_svg, render_pathway_svg
+from kegg_render_mcp.svg import render_pathway_svg
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +103,7 @@ class RendererService:
                         "The selected target or format set is empty, duplicated, or too large."
                     ),
                     suggested_action=(
-                        f"Select one through {MAX_TARGETS} retained target identifiers."
+                        f"Select one through {MAX_TARGETS} retained pathway identifiers."
                     ),
                 )
             )
@@ -117,7 +116,6 @@ class RendererService:
             source,
             selected,
             provider=self.provider,
-            max_svg_nodes=self.config.limits.max_svg_nodes,
         )
         artifacts: list[ArtifactBlob] = []
         remaining_artifact_bytes = self.config.limits.max_result_bytes - manifest_byte_reserve(
@@ -127,25 +125,14 @@ class RendererService:
         target_provenance: list[dict[str, object]] = []
         for target_id in selected:
             try:
-                if target := prepared.pathways.get(target_id):
-                    rendered = await _render_pathway_target(
-                        source,
-                        target,
-                        formats=formats,
-                        config=self.config,
-                        provider=self.provider,
-                        max_artifact_bytes=remaining_artifact_bytes,
-                    )
-                elif target := prepared.modules.get(target_id):
-                    rendered = _render_module_target(
-                        target,
-                        scene=prepared.module_scenes[target_id],
-                        formats=formats,
-                        config=self.config,
-                        max_artifact_bytes=remaining_artifact_bytes,
-                    )
-                else:
-                    raise AssertionError("preflight target lookup unexpectedly changed")
+                rendered = await _render_pathway_target(
+                    source,
+                    prepared.pathways[target_id],
+                    formats=formats,
+                    config=self.config,
+                    provider=self.provider,
+                    max_artifact_bytes=remaining_artifact_bytes,
+                )
             except RenderMcpError as error:
                 raise with_target_context(error, target_id) from None
             rendered_bytes = sum(len(item.content) for item in rendered.artifacts)
@@ -243,49 +230,6 @@ async def _render_pathway_target(
                 safe_batch_provenance(item) for item in target.reference_metadata_provenance
             ],
             "assets": scene.asset_provenance,
-        },
-    )
-
-
-def _render_module_target(
-    target: ModuleRenderTarget,
-    *,
-    scene: ModuleScene,
-    formats: tuple[RenderFormat, ...],
-    config: RendererRuntimeConfig,
-    max_artifact_bytes: int,
-) -> RenderedTarget:
-    target_id = str(target.module_id)
-    artifacts = _render_target_artifacts(
-        target_id,
-        formats,
-        max_artifact_bytes=max_artifact_bytes,
-        max_svg_bytes=config.limits.max_svg_bytes,
-        svg_encoder=lambda limit: render_module_svg(
-            scene, max_bytes=limit, max_nodes=config.limits.max_svg_nodes
-        ),
-        png_encoder=lambda limit: render_module_png(
-            scene,
-            max_pixels=config.limits.max_pixels,
-            max_output_bytes=limit,
-        ),
-    )
-    return RenderedTarget(
-        artifacts=artifacts,
-        warnings=scene.warnings,
-        provenance={
-            "target_id": target_id,
-            "kind": "module",
-            "evaluation_status": scene.status,
-            "exact_completion": scene.exact_completion,
-            "block_coverage": scene.block_coverage,
-            "parser_name": target.parser_name,
-            "parser_version": target.parser_version,
-            "resolver_version": target.resolver_version,
-            "calculation_method": target.completion.calculation_method.model_dump(mode="json"),
-            "reference_retrieval_provenance": [
-                safe_batch_provenance(item) for item in target.reference_retrieval_provenance
-            ],
         },
     )
 

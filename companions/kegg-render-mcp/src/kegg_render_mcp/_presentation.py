@@ -2,35 +2,39 @@
 
 from __future__ import annotations
 
+from kegg_mcp.domain import SourceProvenance
+
 ACCEPTED_COLOR = "#FF0000"
-UNSUPPORTED_COLOR = "#7F7F7F"
-EMPTY_BLOCK_COLOR = "#FFFFFF"
+LEGEND_FONT_SIZE = 16
+LEGEND_ROW_HEIGHT = 24
 
 
-def ratio_text(value: float | None) -> str:
-    """Format a project block-coverage ratio for a static graphic."""
-    return "not evaluable" if value is None else f"{value:.1%}"
+def pathway_footer_height(*, has_annotation_credit: bool) -> int:
+    """Return the shared compact footer height for both pathway backends."""
+    return max(110, 92 + (LEGEND_ROW_HEIGHT if has_annotation_credit else 0))
 
 
-def exact_completion_text(value: bool | None) -> str:
-    """Format exact MODULE completion without collapsing unknown into false."""
-    return "complete" if value is True else "incomplete" if value is False else "not evaluable"
-
-
-def block_color(state: str) -> str:
-    """Choose the shared evidence color for one authoritative MODULE block state."""
-    if state == "complete":
-        return ACCEPTED_COLOR
-    if state == "not_evaluable":
-        return UNSUPPORTED_COLOR
-    return EMPTY_BLOCK_COLOR
+def annotation_credit(sources: tuple[SourceProvenance, ...]) -> str | None:
+    """Return a display-safe DeepKOALA credit when every source supports it."""
+    if not sources or any(source.source_name.casefold() != "deepkoala" for source in sources):
+        return None
+    model_names = tuple(
+        sorted(
+            {
+                "fragment" if source.model_name == "frag" else source.model_name
+                for source in sources
+                if source.model_name is not None
+            }
+        )
+    )
+    suffix = f" ({', '.join(model_names)})" if model_names else ""
+    return f"Annotated by DeepKOALA{suffix}"
 
 
 __all__ = [
     "ACCEPTED_COLOR",
-    "EMPTY_BLOCK_COLOR",
-    "UNSUPPORTED_COLOR",
-    "block_color",
-    "exact_completion_text",
-    "ratio_text",
+    "LEGEND_FONT_SIZE",
+    "LEGEND_ROW_HEIGHT",
+    "annotation_credit",
+    "pathway_footer_height",
 ]

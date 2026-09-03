@@ -472,7 +472,6 @@ def analyze_annotation_targets(
             )
             output_bundle = write_analysis_bundle(
                 evidence,
-                graphs,
                 modules,
                 references,
                 coverages,

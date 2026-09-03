@@ -382,7 +382,7 @@ def test_renderer_has_an_independent_synthetic_release_boundary() -> None:
     for document in (installation, server_doc, readiness, renderer_readme):
         normalized = re.sub(r"\s+", " ", document)
         assert "render_input.json" in normalized
-        assert "version 6" in normalized
+        assert "version 7" in normalized
         assert "separate" in normalized or "independent" in normalized
     for document in (installation, server_doc, readiness):
         assert "AnalysisExecutionProvenance` version 5" in re.sub(r"\s+", " ", document)

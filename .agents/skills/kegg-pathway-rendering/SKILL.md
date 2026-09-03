@@ -1,13 +1,13 @@
 ---
 name: kegg-pathway-rendering
-description: Render a validated KEGG render_input.json analysis handoff as bounded static SVG or PNG pathway overlays and MODULE logic diagrams through the local kegg-render-mcp server. Use when the user supplies a compatible renderer handoff or asks to render, draw, color, visualize, or export an already completed KO analysis. Do not use for protein annotation, KO normalization, KEGG biological analysis, statistical enrichment, flux inference, arbitrary image editing, interactive HTML, or non-KEGG diagrams.
+description: Render a validated KEGG render_input.json analysis handoff as bounded static SVG or PNG pathway overlays through the local kegg-render-mcp server. Use when the user supplies a compatible renderer handoff or asks to render, draw, color, visualize, or export pathway graphics from an already completed KO analysis. Do not use for protein annotation, KO normalization, KEGG biological analysis, statistical enrichment, flux inference, arbitrary image editing, interactive HTML, or non-KEGG diagrams.
 ---
 
 # KEGG pathway rendering
 
 ## Require an authoritative handoff
 
-1. Accept an absolute local `render_input.json` version 6 path or the renderer's bounded inline input
+1. Accept an absolute local `render_input.json` version 7 path or the renderer's bounded inline input
    transport. If the original request starts with only protein FASTA or KO evidence, route those
    earlier stages through the installed focused Skills and enter this Skill only after the core
    returns a compatible stable handoff; never call those MCP servers here. Read the missing-stage
@@ -15,10 +15,10 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
    on an unavailable focused Skill or declared MCP dependency.
 2. Require the declared `kegg-render-mcp` dependency and `get_renderer_status` tool to be exposed.
    Follow the reference's activation-versus-repair classification when it is absent. Otherwise call
-   `get_renderer_status`. Require readiness, schema version 6, the requested static output format,
+   `get_renderer_status`. Require readiness, schema version 7, the requested static output format,
    and compatible bounds.
 3. Let the renderer validate the handoff. Never parse, repair, reinterpret, or recompute its
-   evidence in the Skill. Stop on a schema mismatch and request a current version 6 handoff. A
+   evidence in the Skill. Stop on a schema mismatch and request a current version 7 handoff. A
    user-specified safe absolute new or empty output directory wins and may be anywhere local.
    Otherwise, omit `output_directory` and let the renderer
    allocate a fresh directory beneath its configured project output root. Do not guess a root from
@@ -32,13 +32,12 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
   publication fails, do not return or reconstruct a partial result. Surface its typed `target_id`
   context and, when appropriate, retry an explicitly smaller `target_ids` set rather than merging
   partial work into the failed bundle.
-- Use `render_pathway` or `render_module` only for one canonical target.
+- Use `render_pathway` only for one canonical pathway target.
 - Inspect renderer status before considering a connectivity probe. In a live access mode, use
   `probe_renderer_kegg_connectivity` only for an explicit preflight or after a classified
   connectivity failure; it makes one bounded INFO request. In `offline_cache`, the probe makes
   zero requests and confirms only that network access is disabled. It does not prove that the
-  requested cache entries exist. MODULE rendering needs no KEGG request when its handoff is
-  complete.
+  requested cache entries exist.
 - Use `delete_render_result` only for requested cleanup. Treat result identifiers and resource
   URIs as opaque and process-scoped; return only URIs supplied by the renderer.
 - Follow discovered schemas. Do not add arbitrary URLs, endpoint details, cache controls, style
@@ -47,14 +46,13 @@ description: Render a validated KEGG render_input.json analysis handoff as bound
   Do not request a per-call cache path, endpoint, refresh, or stale override; those choices belong
   to deployment configuration.
 
-Read [pathway-rendering.md](references/pathway-rendering.md) for pathways and
-[module-rendering.md](references/module-rendering.md) for MODULE diagrams.
+Read [pathway-rendering.md](references/pathway-rendering.md) for pathway rendering.
 
 ## Finish an original cross-stage request
 
 Apply the canonical continuation rules in
 [rendering-workflow.md](references/rendering-workflow.md#automatic-cross-skill-continuation).
-Render only targets present in the handoff and selected by the original bounded request, then
+Render only pathway targets present in the handoff and selected by the original bounded request, then
 return the renderer-provided stable image files and manifest.
 
 ## Report conservative graphics

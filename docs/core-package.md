@@ -53,7 +53,7 @@ remain independent stdio processes connected by stable versioned files:
 
 ```text
 deepkoala-mcp -> detailed annotation CSV -> kegg-mcp
-kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 7 -> kegg-render-mcp
 ```
 
 `normalize_ko_annotations` always retains complete bounded evidence.

@@ -59,8 +59,9 @@ For live KEGG access, the deployment must use either:
 - an HTTPS endpoint authorized under the operator's KEGG license.
 
 A direct Core installation defaults to network-disabled `offline_cache`. A direct Renderer
-installation defaults to `unconfigured`, which permits MODULE rendering but no pathway asset
-access. Selecting `public_academic` requires the component's explicit confirmation variable:
+installation defaults to `unconfigured`, which provides no rendering until authorized pathway
+access is configured. Selecting `public_academic` requires the component's explicit confirmation
+variable:
 `KEGG_MCP_ACADEMIC_USE_CONFIRMED=true` for Core or
 `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true` for Renderer. The suite TOML always requires an
 explicit access mode and confirmation; it never inherits component defaults.
@@ -71,7 +72,7 @@ The complete FASTA-to-image workflow remains three separate processes:
 
 ```text
 deepkoala-mcp -> deepkoala_annotations.csv -> kegg-mcp
-kegg-mcp      -> render_input.json version 6 -> kegg-render-mcp
+kegg-mcp      -> render_input.json version 7 -> kegg-render-mcp
 ```
 
 Each process has its own runtime, state, input validation, and MCP entry point. The core never
@@ -89,7 +90,7 @@ For a direct, manually configured Core server, explicit local file handoff is al
 `output_directory`; the complete manual environment belongs in
 [Manual component deployment](manual-component-deployment.md).
 
-`render_input.json` uses the renderer-specific version 6 contract and carries
+`render_input.json` uses the renderer-specific version 7 contract and carries
 `AnalysisExecutionProvenance` version 5. Source KEGG PNG and KGML assets remain local and are not
 included in tests, packages, or releases.
 

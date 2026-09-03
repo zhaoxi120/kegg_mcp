@@ -131,7 +131,7 @@ async def test_preflight_rejects_a_later_invalid_target_before_assets_or_output(
         )
         document = document.model_copy(update={"pathways": (summary,)})
         render_input_file.write_text(serialize_render_input(document), encoding="utf-8")
-        target_ids = ("M00001", "ko00010")
+        target_ids = ("ko00010",)
 
     allocated_before = tuple(allowed_root.glob("kegg-render-*"))
     service = RendererService(runtime_config, synthetic_provider)
@@ -157,7 +157,7 @@ async def test_preflight_rejects_a_later_invalid_target_before_assets_or_output(
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_mixed_bundle_fails_before_output_allocation(
+async def test_unconfigured_pathway_bundle_fails_before_output_allocation(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     allowed_root: Path,
@@ -169,7 +169,7 @@ async def test_unconfigured_mixed_bundle_fails_before_output_allocation(
         with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
-                target_ids=("M00001", "ko00010"),
+                target_ids=("ko00010",),
                 formats=(RenderFormat.SVG,),
                 output_directory=None,
             )
@@ -202,12 +202,12 @@ async def test_second_format_budget_failure_names_target_and_format(
 
     monkeypatch.setattr(
         render_service_module,
-        "render_module_svg",
+        "render_pathway_svg",
         render_svg,
     )
     monkeypatch.setattr(
         render_service_module,
-        "render_module_png",
+        "render_pathway_png",
         render_png,
     )
     service = RendererService(config, SyntheticProvider())
@@ -216,13 +216,13 @@ async def test_second_format_budget_failure_names_target_and_format(
         with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
-                target_ids=("M00001",),
+                target_ids=("ko00010",),
                 formats=(RenderFormat.SVG, RenderFormat.PNG),
                 output_directory=None,
             )
         assert raised.value.detail.code is ErrorCode.OUTPUT_LIMIT_EXCEEDED
         assert {item.name: item.value for item in raised.value.detail.safe_details} == {
-            "target_id": "M00001",
+            "target_id": "ko00010",
             "asset_kind": "png_output",
         }
         _assert_no_partial_result(service, allowed_root, allocated_before)
@@ -241,8 +241,8 @@ def test_manifest_reserve_failure_retains_no_partial_result(
     try:
         with pytest.raises(RenderMcpError) as raised:
             store.retain(
-                target_ids=("M00001",),
-                artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"x", 1, 1),),
+                target_ids=("ko00010",),
+                artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"x", 1, 1),),
                 warnings=(),
                 manifest_context={"padding": "x" * 600},
                 output_directory=explicit_output,
@@ -382,7 +382,7 @@ def _synthetic_overview_kgml() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_service_renders_both_targets_formats_and_durable_manifest(
+async def test_service_renders_pathway_formats_and_durable_manifest(
     runtime_config: RendererRuntimeConfig,
     render_input_file: Path,
     tmp_path: Path,
@@ -398,16 +398,14 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
     try:
         result = await service.render(
             render_input_path=str(render_input_file),
-            target_ids=("ko00010", "M00001"),
+            target_ids=None,
             formats=(RenderFormat.SVG, RenderFormat.PNG),
             output_directory=str(output),
         )
-        assert len(result.artifacts) == 5
+        assert len(result.artifacts) == 3
         assert {item.name for item in result.artifacts} == {
             "ko00010.svg",
             "ko00010.png",
-            "M00001.svg",
-            "M00001.png",
             "render_manifest.json",
         }
         for metadata in result.artifacts:
@@ -438,7 +436,7 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         assert "record_level_evidence_retained" not in provenance
         targets = cast(list[dict[str, object]], provenance["targets"])
         pathway = next(item for item in targets if item["target_id"] == "ko00010")
-        module = next(item for item in targets if item["target_id"] == "M00001")
+        assert [item["target_id"] for item in targets] == ["ko00010"]
         assert pathway["kgml_parser_name"] == "kegg_render_safe_kgml"
         assert pathway["kgml_parser_version"] == "1.3"
         assert pathway["retained_box_graphic_count"] == 2
@@ -447,14 +445,8 @@ async def test_service_renders_both_targets_formats_and_durable_manifest(
         assert pathway["box_overlay_count"] == 2
         assert pathway["polyline_overlay_count"] == 0
         assert "evidence_mode" not in pathway
-        assert module["evaluation_status"] == "complete"
-        assert module["exact_completion"] is True
-        assert module["block_coverage"] == 1.0
-        assert "strict_exact_completion" not in module
-        assert "lenient_exact_completion" not in module
-
         artifact_records = cast(list[dict[str, object]], manifest["artifacts"])
-        assert len(artifact_records) == 4
+        assert len(artifact_records) == 2
         for record in artifact_records:
             assert set(record) == {
                 "path",
@@ -490,7 +482,7 @@ async def test_result_is_process_scoped_and_deletion_uses_safe_not_found(
     first.open()
     first_result = await first.render(
         render_input_path=str(render_input_file),
-        target_ids=("M00001",),
+        target_ids=("ko00010",),
         formats=(RenderFormat.SVG,),
         output_directory=None,
     )
@@ -502,7 +494,7 @@ async def test_result_is_process_scoped_and_deletion_uses_safe_not_found(
         assert missing.value.detail.code is ErrorCode.RESULT_NOT_FOUND
         second_result = await second.render(
             render_input_path=str(render_input_file),
-            target_ids=("M00001",),
+            target_ids=("ko00010",),
             formats=(RenderFormat.SVG,),
             output_directory=None,
         )
@@ -512,7 +504,7 @@ async def test_result_is_process_scoped_and_deletion_uses_safe_not_found(
         assert first.store.delete(first_result.render_id).deleted is True
         for operation in (
             lambda: first.store.get(first_result.render_id),
-            lambda: first.store.read(first_result.render_id, "M00001.svg"),
+            lambda: first.store.read(first_result.render_id, "ko00010.svg"),
             lambda: first.store.delete(first_result.render_id),
         ):
             with pytest.raises(RenderMcpError) as deleted:
@@ -545,7 +537,7 @@ def test_state_root_skips_live_scopes_and_cleans_an_unlocked_scope(
     os.chmod(lease, 0o600)
     result = abandoned / ("render_" + "a" * 32)
     result.mkdir(mode=0o700)
-    artifact = result / "M00001.svg"
+    artifact = result / "ko00010.svg"
     artifact.write_text("<svg/>", encoding="utf-8")
     os.chmod(artifact, 0o600)
     third = RenderArtifactStore(runtime_config)
@@ -636,8 +628,8 @@ def test_close_releases_scope_lease_when_result_cleanup_is_unsafe(
     store = RenderArtifactStore(runtime_config)
     store.open()
     result = store.retain(
-        target_ids=("M00001",),
-        artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+        target_ids=("ko00010",),
+        artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
         warnings=(),
         manifest_context={},
         output_directory=None,
@@ -669,8 +661,8 @@ def test_result_replacement_is_not_removed(
     store = RenderArtifactStore(runtime_config)
     store.open()
     result = store.retain(
-        target_ids=("M00001",),
-        artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+        target_ids=("ko00010",),
+        artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
         warnings=(),
         manifest_context={},
         output_directory=None,
@@ -752,14 +744,14 @@ async def test_export_rejects_nonempty_symlink_destination_without_following_it(
     output.mkdir(mode=0o700)
     outside = tmp_path / "outside.svg"
     outside.write_text("private", encoding="utf-8")
-    (output / "M00001.svg").symlink_to(outside)
+    (output / "ko00010.svg").symlink_to(outside)
     service = RendererService(runtime_config, SyntheticProvider())
     service.open()
     try:
         with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
-                target_ids=("M00001",),
+                target_ids=("ko00010",),
                 formats=(RenderFormat.SVG,),
                 output_directory=str(output),
             )
@@ -772,7 +764,7 @@ async def test_export_rejects_nonempty_symlink_destination_without_following_it(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "existing_name",
-    ("existing.txt", "M00001.svg", "M00001.png", "render_manifest.json"),
+    ("existing.txt", "ko00010.svg", "ko00010.png", "render_manifest.json"),
 )
 async def test_export_rejects_every_nonempty_regular_directory_without_changes(
     existing_name: str,
@@ -790,7 +782,7 @@ async def test_export_rejects_every_nonempty_regular_directory_without_changes(
         with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
-                target_ids=("M00001",),
+                target_ids=("ko00010",),
                 formats=(RenderFormat.SVG, RenderFormat.PNG),
                 output_directory=str(output),
             )
@@ -901,7 +893,7 @@ async def test_failed_export_rolls_back_new_files_and_commit_manifest(
         with pytest.raises(RenderMcpError) as raised:
             await service.render(
                 render_input_path=str(render_input_file),
-                target_ids=("M00001",),
+                target_ids=("ko00010",),
                 formats=(RenderFormat.SVG, RenderFormat.PNG),
                 output_directory=(str(output) if output_mode != "automatic" else None),
             )
@@ -1077,7 +1069,7 @@ def test_store_rejects_nonunique_image_artifact_names_before_result_allocation(
     reserved_name: bool,
     runtime_config: RendererRuntimeConfig,
 ) -> None:
-    name = "render_manifest.json" if reserved_name else "M00001.svg"
+    name = "render_manifest.json" if reserved_name else "ko00010.svg"
     first = ArtifactBlob(
         name,
         "application/json" if reserved_name else "image/svg+xml",
@@ -1095,7 +1087,7 @@ def test_store_rejects_nonunique_image_artifact_names_before_result_allocation(
         entries_before = {item.name for item in scope.iterdir()}
         with pytest.raises(ValueError, match="must be unique"):
             store.retain(
-                target_ids=("M00001",),
+                target_ids=("ko00010",),
                 artifacts=artifacts,
                 warnings=(),
                 manifest_context={},
@@ -1214,16 +1206,16 @@ def test_result_count_quota_is_checked_before_allocating_a_directory(
     store.open()
     try:
         store.retain(
-            target_ids=("M00001",),
-            artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+            target_ids=("ko00010",),
+            artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
             warnings=(),
             manifest_context={},
             output_directory=None,
         )
         with pytest.raises(RenderMcpError) as raised:
             store.retain(
-                target_ids=("M00002",),
-                artifacts=(ArtifactBlob("M00002.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+                target_ids=("ko00020",),
+                artifacts=(ArtifactBlob("ko00020.svg", "image/svg+xml", b"<svg/>", 1, 1),),
                 warnings=(),
                 manifest_context={},
                 output_directory=None,
@@ -1254,8 +1246,8 @@ def test_storage_quota_reserves_blocks_and_metadata_before_mkdir(
     try:
         with pytest.raises(RenderMcpError) as raised:
             store.retain(
-                target_ids=("M00001",),
-                artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+                target_ids=("ko00010",),
+                artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
                 warnings=(),
                 manifest_context={},
                 output_directory=None,
@@ -1294,8 +1286,8 @@ def test_failed_deletion_remains_accounted_and_retryable(
     store = RenderArtifactStore(runtime_config)
     store.open()
     result = store.retain(
-        target_ids=("M00001",),
-        artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+        target_ids=("ko00010",),
+        artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
         warnings=(),
         manifest_context={},
         output_directory=None,
@@ -1323,8 +1315,8 @@ def test_read_only_snapshot_does_not_delete_expired_files_and_explains_quota(
     store = RenderArtifactStore(runtime_config)
     store.open()
     result = store.retain(
-        target_ids=("M00001",),
-        artifacts=(ArtifactBlob("M00001.svg", "image/svg+xml", b"<svg/>", 1, 1),),
+        target_ids=("ko00010",),
+        artifacts=(ArtifactBlob("ko00010.svg", "image/svg+xml", b"<svg/>", 1, 1),),
         warnings=(),
         manifest_context={},
         output_directory=None,

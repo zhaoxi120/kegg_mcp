@@ -67,8 +67,8 @@ KEGG_MCP_CACHE_PATH=/absolute/private/cache/kegg.sqlite3
 ```
 
 `public_academic` never activates without the explicit `true` confirmation shown above. A directly
-installed Renderer defaults to `unconfigured`, which supports MODULE-only rendering without
-pathway asset access. Set both `KEGG_RENDER_MCP_ACCESS_MODE=public_academic` and
+installed Renderer defaults to `unconfigured`, which provides no rendering until authorized
+pathway access is configured. Set both `KEGG_RENDER_MCP_ACCESS_MODE=public_academic` and
 `KEGG_RENDER_MCP_ACADEMIC_USE_CONFIRMED=true` only for eligible public-academic use.
 
 Explicit local file handoff is always enabled. Set `KEGG_MCP_ALLOWED_ROOTS` only when Core should

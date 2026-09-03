@@ -10,7 +10,6 @@ EXPECTED_FILES = {
     "SKILL.md",
     "agents/openai.yaml",
     "references/evidence-color-policy.md",
-    "references/module-rendering.md",
     "references/pathway-rendering.md",
     "references/rendering-workflow.md",
     "references/rights-and-reporting.md",
@@ -21,7 +20,6 @@ RENDERER_TOOLS = {
     "probe_renderer_kegg_connectivity",
     "render_analysis_bundle",
     "render_pathway",
-    "render_module",
     "delete_render_result",
 }
 
@@ -119,7 +117,7 @@ def test_rendering_skill_treats_multi_target_bundle_as_atomic() -> None:
 def test_rendering_skill_requires_authoritative_v6_total_map_handoff() -> None:
     corpus = _corpus()
     for fragment in (
-        "version 6 handoff",
+        "version 7 handoff",
         "`allow_global_or_overview=True`",
         "bounded KGML `line` coordinates",
         "overlay highlights accepted KO annotation",

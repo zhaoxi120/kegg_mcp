@@ -121,7 +121,6 @@ def test_ko_analysis_skill_references_only_core_tools_and_all_guides() -> None:
         "run_deepkoala_job",
         "render_analysis_bundle",
         "render_pathway",
-        "render_module",
     ):
         assert forbidden not in corpus
     skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -154,7 +153,7 @@ def test_ko_analysis_routes_explicit_ko01100_through_opted_in_v6_handoff() -> No
         "`ko01100`",
         "excludes them before Top-N target truncation",
         "`allow_global_or_overview=True`",
-        "renderable version 6 handoff",
+        "renderable version 7 handoff",
         "Do not substitute a `map` or organism reference",
         "request a model-native conceptual fallback",
     ):
